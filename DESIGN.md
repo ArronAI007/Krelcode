@@ -390,6 +390,17 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   session.cost，/cost 与 -m [usage] 显示 `估算成本 $x.xxxx`，
   JSON 输出带 cost_usd 字段
 
+## REPL 运维命令（Step 32）
+
+- **/model [provider/]model**：运行时热切换——重建 provider（保留重试包装）→
+  原子替换 loop.llm 与 ContextManager.llm → 同步 UsageTracker.model（成本核算）→
+  预算未显式指定时按新模型窗口重新推导。缺 API key / 未知 provider →
+  返回失败描述且**不破坏原 provider**（先建新再替换）；mock 基座要求显式
+  provider（"openai/gpt-4o-mini"）
+- **/allow [add|remove <程序名>]**：审批白名单的用户管理面（此前只能靠
+  审批时答 always 累积）；持久化到 <workspace>/.krelcode/allow_rules.json
+  （该文件对 LLM 写保护——管理权只属于用户）
+
 ## 分层测试策略（每层可独立验证）
 
 | 层 | 测试方式 |

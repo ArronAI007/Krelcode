@@ -65,7 +65,9 @@
 
 | 31 | 模型感知深化 | 上下文窗口目录 CONTEXT_WINDOWS（18 型号）+ default_budget_for（窗口×75%）→ --context-tokens 未显式指定时按模型自适应（未知模型兜底 100k）· doctor 显示窗口与推导预算 · OpenAI prompt_tokens_details.cached_tokens 规范化为统一 Anthropic 语义（input 扣除缓存部分，防成本双计；total 保留原值） | 6 个新测试：窗口匹配/预算比例/app 三级预算解析（兜底/显式/目录推导 96k）/doctor 显示；OpenAI 缓存 usage 规范化断言 + 成本不双计对比 | ✅ |
 
-| 测试总数：434（离线 432 + 本地端口集成 2，沙箱内自动 skip） |
+| 32 | REPL 运维增强 | /allow 审批规则管理（list/add/remove，AllowRules.add_program/remove_program 持久化到工作区，--no-sandbox 时提示不适用）· /model 运行时热切换（build_model_switcher：支持 "model"（沿用当前 provider）与 "provider/model" 跨切换；重建 provider 含重试包装、替换 loop.llm 与压缩器 llm、同步 usage.model、未显式指定预算时按新模型窗口自适应；缺 key/未知 provider 优雅失败不破坏原 provider；mock 基座要求显式 provider） | 11 个新测试：规则增删幂等/持久化重载/REPL 全流程/无沙箱提示；切换当前信息/mock 裸切拦截/切 openai 联动预算 96k+重试包装/同 provider 沿用/缺 key 优雅失败且原 provider 完好/未知 provider/显式预算不被覆盖/REPL 集成 | ✅ |
+
+| 测试总数：445（离线 443 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

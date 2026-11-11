@@ -42,9 +42,25 @@ class AllowRules:
     def add(self, command: str) -> bool:
         """记录命令的程序名并落盘；返回是否新增了规则。"""
         prog = command_program(command)
-        if prog is None or prog in self.programs:
+        if prog is None:
+            return False
+        return self.add_program(prog)
+
+    def add_program(self, prog: str) -> bool:
+        """直接按程序名添加规则（/allow add 用）；返回是否新增。"""
+        prog = (prog or "").strip()
+        if not prog or prog in self.programs:
             return False
         self.programs.add(prog)
+        self._save()
+        return True
+
+    def remove_program(self, prog: str) -> bool:
+        """移除规则（/allow remove 用）；返回是否确实移除了。"""
+        prog = (prog or "").strip()
+        if prog not in self.programs:
+            return False
+        self.programs.discard(prog)
         self._save()
         return True
 

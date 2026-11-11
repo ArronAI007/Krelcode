@@ -32,7 +32,11 @@ HELP_TEXT = """可用命令：
   /mcp           查看 MCP 服务器状态；/mcp reload 重读配置并热重启
   /agents        列出子代理（后台任务）状态
   /undo          回滚上一轮对话的文件改动（检查点恢复；/undo list 查看栈）
-  /cost          显示 token 用量（本轮 + 会话累计）
+  /cost          显示 token 用量（本轮 + 会话累计 + 估算成本）
+  /model [p/m]   查看/热切换模型（"gpt-4o" 沿用当前 provider，
+                 "anthropic/claude-sonnet-4-5" 跨 provider）
+  /allow         查看命令审批白名单；/allow add <程序名> 添加、
+                 /allow remove <程序名> 移除（持久化到工作区）
   /context       显示上下文统计；/context refresh 重新采集工作区上下文
   /export [路径] 把当前会话导出为 Markdown（缺省存 .krelcode/exports/）
   /compact       立即压缩对话历史（LLM 摘要，不必等预算超限）
@@ -56,6 +60,7 @@ async def run_repl(
     subagents=None,
     checkpoints=None,
     usage=None,
+    model_switch=None,
     input_fn=None,
 ) -> int:
     from ..app import restore_session  # 延迟导入避免 ui→app 循环依赖
@@ -172,6 +177,7 @@ async def run_repl(
                 mcp_supervisor=mcp_supervisor, mcp_reload=mcp_reload,
                 subagents=subagents, checkpoints=checkpoints, usage=usage,
                 restore_session=restore_session, workspace_root=workspace_root,
+                model_switch=model_switch,
             )
             if handled is not None:
                 if handled is False:      # /reset 等已处理
@@ -191,7 +197,7 @@ async def run_repl(
 
 async def _handle_command(user_input, loop, renderer, *, session_path, sessions_dir,
                           mcp_supervisor, mcp_reload, subagents, checkpoints,
-                          usage, restore_session, workspace_root):
+                          usage, restore_session, workspace_root, model_switch=None):
     """处理 IDLE 态斜杠命令；非命令返回 None。"""
     if not user_input.startswith("/"):
         return None
@@ -260,6 +266,31 @@ async def _handle_command(user_input, loop, renderer, *, session_path, sessions_
                         parts_desc.append(f"删除新建 {len(result.deleted)} 个: {', '.join(result.deleted)}")
                     label = f"（{result.label}）" if result.label else ""
                     print(f"  [undo] 已回滚上一轮{label}: {'；'.join(parts_desc) if parts_desc else '无文件变化'}")
+    elif user_input == "/model" or user_input.startswith("/model "):
+        if model_switch is None:
+            print("  （模型切换不可用）")
+        else:
+            parts = user_input.split(maxsplit=1)
+            target = parts[1].strip() if len(parts) > 1 else None
+            print(f"  [model] {model_switch(target)}")
+    elif user_input == "/allow" or user_input.startswith("/allow "):
+        rules = getattr(loop.policy, "rules", None)
+        if rules is None:
+            print("  （安全策略未启用（--no-sandbox），无审批白名单）")
+        else:
+            parts = user_input.split()
+            if len(parts) == 1:
+                listed = rules.as_list()
+                print("  已允许的程序: " + (", ".join(listed) if listed else "（空）"))
+                print(f"  规则文件: {rules.path or '（仅内存）'}")
+            elif len(parts) == 3 and parts[1] == "add":
+                added = rules.add_program(parts[2])
+                print(f"  [allow] {'已添加' if added else '已存在，无需重复添加'}: {parts[2]}")
+            elif len(parts) == 3 and parts[1] == "remove":
+                removed = rules.remove_program(parts[2])
+                print(f"  [allow] {'已移除' if removed else '规则不存在'}: {parts[2]}")
+            else:
+                print("  用法: /allow | /allow add <程序名> | /allow remove <程序名>")
     elif user_input == "/cost":
         print(f"  [cost] {usage.summary()}" if usage else "  （用量统计不可用）")
     elif user_input == "/context" or user_input.startswith("/context "):

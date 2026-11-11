@@ -211,6 +211,58 @@ class _RunSummary:
             self.denied += 1
 
 
+def build_model_switcher(args: argparse.Namespace, config: Dict[str, Any],
+                         loop: AgentLoop, usage: UsageTracker):
+    """/model 热切换：返回 callable(new_spec|None) -> 结果描述文本。
+
+    new_spec 支持 "model"（沿用当前 provider）或 "provider/model"。
+    切换动作：重建 provider（含重试包装）→ 替换 loop.llm 与压缩器 llm →
+    同步 usage.model（成本核算）→ 预算未显式指定时按新模型窗口自适应。
+    """
+    def current_base() -> str:
+        return getattr(loop.llm, "name", "?")
+
+    def switch(new_spec: Optional[str]) -> str:
+        if not new_spec:
+            model = getattr(loop.llm, "model", "?")
+            return f"当前: {current_base()} / {model}（/model <名称> 或 <provider>/<名称> 切换）"
+        if "/" in new_spec:
+            provider_name, model_name = new_spec.split("/", 1)
+        else:
+            provider_name, model_name = current_base(), new_spec
+        if provider_name == "mock":
+            return ("mock 模式请显式指定目标 provider，如: /model openai/gpt-4o-mini")
+        try:
+            settings = resolve_settings(
+                provider=provider_name, model=model_name,
+                base_url=args.base_url, config=config)
+            inner = create_provider(settings)
+            if getattr(inner, "api_key", None) is None:
+                return f"切换失败: {provider_name} 缺少 API key（设置对应环境变量后重试）"
+            provider: LLMProvider = inner
+            if args.retries > 0:
+                provider = RetryingProvider(
+                    inner, RetryPolicy(max_retries=args.retries),
+                    on_retry=lambda a, d, e: print(
+                        f"[retry] LLM 调用失败（{type(e).__name__}），第 {a} 次重试，{d:g}s 后…"))
+        except Exception as e:
+            return f"切换失败: {type(e).__name__}: {e}"
+
+        loop.llm = provider
+        budget_note = ""
+        if loop.context_manager is not None:
+            loop.context_manager.llm = provider
+            if args.context_tokens is None:
+                new_budget = (default_budget_for(getattr(inner, "model", None))
+                              or DEFAULT_CONTEXT_BUDGET)
+                loop.context_manager.max_tokens = new_budget
+                budget_note = f"，压缩预算 {new_budget}"
+        usage.model = getattr(inner, "model", None)
+        return f"已切换: {provider.name} / {getattr(inner, 'model', '?')}{budget_note}"
+
+    return switch
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="krelcode", description="Krelcode coding agent (统一 Provider + tool-calling 循环 + MCP)"
@@ -283,6 +335,7 @@ async def async_main(args: argparse.Namespace) -> int:
         checkpoints.attach(loop.bus)
     usage = UsageTracker(model=getattr(loop.llm, "model", None))
     usage.attach(loop.bus)
+    model_switch = build_model_switcher(args, config, loop, usage)
     hook_specs = parse_hooks(config)
     if hook_specs:
         hooks = HookRunner(loop.tool_context.workspace_root, hook_specs, log=note)
@@ -346,6 +399,7 @@ async def async_main(args: argparse.Namespace) -> int:
             subagents=subagents,
             checkpoints=checkpoints,
             usage=usage,
+            model_switch=model_switch,
         )
     finally:
         await subagents.shutdown()
