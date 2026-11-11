@@ -9,7 +9,7 @@
 ## 快速开始
 
 ```bash
-# 运行全部测试（190 个，全离线）
+# 运行全部测试（218 个，全离线）
 /opt/anaconda3/bin/pytest tests/ -v
 
 # 离线体验 mock 模式：第一轮会演示完整 tool-call 循环（LLM→审批→执行get_time→回填→总结）
@@ -27,9 +27,27 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --mode
 #   api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-REPL 内置命令：`/help`、`/history`、`/tools`、`/session`、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/tools`、`/session`、`/sessions`（列出全部会话）、`/resume <n|latest|path>`（会话内切换）、`/reset`、`/exit`。
 
-当前工具（7 个）：`get_time`、`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`。
+### MCP 远程工具
+
+在配置文件里声明 MCP 服务器（stdio），远程工具自动以 `<server>__<tool>` 命名注册，与本地工具无差别执行：
+
+```toml
+[mcp_servers.fetch]
+command = "uvx"
+args = ["mcp-server-fetch"]
+env = { SOME_KEY = "value" }
+timeout = 30
+```
+
+`--no-mcp` 可跳过启动；单个服务器启动失败只警告不阻断。
+
+### repo_map
+
+内置 `repo_map` 工具：Python 用 ast 精确提取类/函数/方法+行号（零依赖，不引 tree-sitter），JS/TS 用正则，20K 字符预算，LLM 可按行号接 `read_file` 精读。
+
+当前内置工具（8 个）：`get_time`、`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`、`repo_map`；另加 MCP 远程工具。
 文件与命令操作限定在工作区内（相对路径基于 `--workspace`），自动跳过 `.git`/`node_modules` 等目录。
 
 安全策略（默认开启）：只读命令静默放行；执行代码/删文件/网络访问等 ASK 级操作弹 `[y]是/[n]否/[a]始终允许` 审批，"始终允许"按程序名持久化到 `<workspace>/.krelcode/allow_rules.json`；`sudo`、`rm -rf /`、`curl|sh` 等 DENY 级无条件拒绝。`--auto-approve` 自动批准 ASK 级，`--no-sandbox` 完全关闭。

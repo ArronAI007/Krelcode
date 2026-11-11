@@ -2,23 +2,28 @@
 
 阻塞的 input() 经 asyncio.to_thread 桥接。最终回复由渲染器流式打印，
 REPL 不再重复输出（未经流式的系统消息由渲染器在 RunFinished 兜底打印）。
+多会话：/sessions 列表、/resume <n|latest|path> 会话内切换。
 """
 
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Optional
 
 from ..agent.loop import AgentLoop
+from ..session.manager import format_sessions, list_sessions
 from .render import StreamRenderer
 
 HELP_TEXT = """可用命令：
-  /help     显示本帮助
-  /history  查看当前对话历史
-  /tools    列出已注册工具
-  /session  显示当前会话文件路径
-  /reset    清空对话历史
-  /exit     退出（Ctrl-D / Ctrl-C 同样有效）
+  /help          显示本帮助
+  /history       查看当前对话历史
+  /tools         列出已注册工具
+  /session       显示当前会话文件路径
+  /sessions      列出工作区的全部会话
+  /resume <n>    切换到第 n 个会话（/sessions 里的序号；latest=最新）
+  /reset         清空对话历史
+  /exit          退出（Ctrl-D / Ctrl-C 同样有效）
 其他任何输入都会作为消息发给 agent。"""
 
 
@@ -26,7 +31,10 @@ async def run_repl(
     loop: AgentLoop,
     tool_names: Optional[list] = None,
     session_path: Optional[str] = None,
+    sessions_dir: Optional[Path] = None,
 ) -> int:
+    from ..app import restore_session  # 延迟导入避免 ui→app 循环依赖
+
     renderer = StreamRenderer()
     unsubscribe = loop.bus.subscribe(renderer)
     tools_note = f"，工具: {', '.join(tool_names)}" if tool_names else ""
@@ -51,7 +59,21 @@ async def run_repl(
                     print(f"  {name}: {tool.description}")
                 continue
             if user_input == "/session":
-                print(f"  会话文件: {session_path or '（未启用，--no-session）'}")
+                print(f"  当前会话文件: {session_path or '（未启用，--no-session）'}")
+                continue
+            if user_input == "/sessions":
+                if sessions_dir is None:
+                    print("  （会话目录未知）")
+                else:
+                    print(format_sessions(list_sessions(sessions_dir)))
+                continue
+            if user_input.startswith("/resume"):
+                target = user_input.split(maxsplit=1)[1].strip() if len(user_input.split(maxsplit=1)) > 1 else "latest"
+                path = _resolve_resume_target(target, sessions_dir)
+                if path is None:
+                    print(f"  （找不到会话: {target}；用 /sessions 查看列表）")
+                else:
+                    restore_session(loop, path)
                 continue
             if user_input == "/history":
                 for m in loop.history:
@@ -70,3 +92,20 @@ async def run_repl(
                 print(f"错误：{type(e).__name__}: {e}")
     finally:
         unsubscribe()
+
+
+def _resolve_resume_target(target: str, sessions_dir: Optional[Path]) -> Optional[Path]:
+    """latest / 序号 / 文件路径 → 会话文件。"""
+    if sessions_dir is None:
+        return Path(target) if Path(target).is_file() else None
+    if target == "latest":
+        infos = list_sessions(sessions_dir)
+        return infos[0].path if infos else None
+    if target.isdigit():
+        infos = list_sessions(sessions_dir)
+        idx = int(target)
+        if 1 <= idx <= len(infos):
+            return infos[idx - 1].path
+        return None
+    path = Path(target)
+    return path if path.is_file() else None

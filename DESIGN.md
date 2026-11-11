@@ -169,6 +169,22 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   损坏行跳过、写失败静默（持久化永不阻断对话）
 - 消息编解码（session/codec.py）是 session 私有格式，与 provider wire format 无关
 
+## 进阶能力（Step 9-11）
+
+- **MCP 客户端**（mcp/）：stdio 子进程 + 换行分隔 JSON-RPC 2.0；
+  initialize 握手 → tools/list 发现 → tools/call 调用；reader task 按 id 配对
+  Future；服务器 EOF/崩溃时 pending 全部立即失败（不悬挂）；
+  MCPTool 适配器实现本地 Tool 端口（远程 inputSchema 直通统一 ToolSpec，
+  命名 `<server>__<tool>` 并清洗非法字符），注册进同一 ToolRegistry，
+  AgentLoop 对"远程/本地"零感知；TOML `[mcp_servers.*]` 配置驱动，
+  单服务器失败不阻断启动，退出时优雅关闭
+- **repo_map**（tools/builtin/repo_map.py）：零依赖代码地图——Python 走 ast
+  （类/函数/方法、参数签名去默认值、嵌套缩进），JS/TS 走正则；
+  剪枝目录、跳过语法错误文件、20K 字符预算截断；行号可接 read_file(offset)
+- **多会话**（session/manager.py + REPL）：/sessions 按 mtime 列会话
+  （轮数/消息数/首条输入预览），/resume <n|latest|path> 会话内切换，
+  与 --resume 共用 restore_session；当前录制不中断
+
 ## 分层测试策略（每层可独立验证）
 
 | 层 | 测试方式 |

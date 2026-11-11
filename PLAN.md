@@ -15,7 +15,17 @@
 | 7 | 上下文管理 | CJK 感知 token 估算(零依赖启发式) · ContextManager 预算压缩(system+LLM摘要+keep_recent，切点不拆 tool_call/result 配对，摘要失败退化占位) · 大工具输出全文落盘留引用 · ContextCompressed 事件 · --context-tokens/--no-compress | 11 个新测试：估算、预算触发/不触发、太短不压缩、孤儿 tool 边界、失败安全、循环集成(事件+token下降)、50K 输出落盘/小输出不落盘 | ✅ |
 | 8 | 交互增强 | StreamRenderer 流式渲染(LLMStreamDelta 逐字输出、工具活动打断续流) · edit_file diff 红绿高亮(tty/NO_COLOR 感知) · SessionRecorder JSONL 审计流+历史快照 · --resume/--no-session · /session 命令 | 16 个新测试：渲染器注入 write 断言逐字输出/兜底打印/打断续流、codec roundtrip、快照取最后、损坏行跳过、录制→恢复→续聊集成；终端演示 录制+恢复 全链路 | ✅ |
 
-🎉 路线图 8 个阶段全部完成。| 测试总数：190（全离线） |
+🎉 基础路线图 8 个阶段全部完成。
+
+## 进阶阶段
+
+| 阶段 | 内容 | 验证方式 | 状态 |
+|------|------|----------|------|
+| 9 | MCP 客户端：stdio JSON-RPC 2.0（initialize 握手/tools list/call、EOF 崩溃处理、超时）、MCPTool 适配器（远程 inputSchema 直通统一 ToolSpec、server__tool 命名）、TOML [mcp_servers.*] 配置驱动、单服务器失败不阻断 | stub MCP 服务器真实子进程集成测试 ×12：握手/发现/调用/isError/JSON-RPC 错误/kill 崩溃/坏命令/AgentLoop 集成/config 启动 | ✅ |
+| 10 | repo_map 工具：Python ast 精确提取（类/函数/方法/签名/嵌套缩进）、JS/TS 正则提取、剪枝+20K 字符预算、行号可直接接 read_file(offset) | 符号/行号/签名/剪枝/预算截断/损坏文件跳过 ×8；对 Krelcode 仓库自身生成地图验证 | ✅ |
+| 11 | 多会话管理：/sessions 列表（时间/轮数/消息数/预览）、/resume <n\|latest\|path> 会话内切换（与 --resume 共用 restore_session） | manager/inspect/format/目标解析/历史切换 ×7 + 终端演示 | ✅ |
+
+| 测试总数：218（全离线） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·
