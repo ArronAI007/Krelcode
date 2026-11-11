@@ -35,7 +35,9 @@
 
 | 16 | 检查点与回滚 | CheckpointManager（事件总线旁路订阅者，内核/工具层零改动）：RunStarted 开组 / write_file·edit_file 首次修改前快照 / RunFinished 关组（空组丢弃）；快照落盘 .krelcode/checkpoints/（meta.json+字节备份）；undo_last LIFO 恢复（改过的还原、新建的删除）；跨重启重建组栈；REPL /undo、/undo list；--no-checkpoint | 10 个新测试：修改恢复/新建删除/同组保最早版本/空组丢弃/越界路径忽略/LIFO 多轮/跨重启/损坏组跳过/事件驱动/AgentLoop 端到端（edit+write 一轮 undo 全恢复） | ✅ |
 
-| 测试总数：271（离线 269 + 本地端口集成 2，沙箱内自动 skip） |
+| 17 | 用量统计与 git 自动提交 | UsageTracker（LLMResponseReceived.usage 累计，本轮+会话双账本，/cost、-m 模式摘要）· AutoCommitter（Aider 风格：RunFinished 有变更即 add -A + commit "krelcode: <输入预览>"；.krelcode/ 自动进 .git/info/exclude 仅本地生效；非仓库/无变更/失败全静默）· --auto-commit | 8 个新测试：turn 清零/缺失 usage 键容错/MockProvider 集成；真 git 仓库 e2e（写入触发提交、log 含 label、工作区变干净、.krelcode 不进版本库、幂等 exclude、无变更不提交） | ✅ |
+
+| 测试总数：279（离线 277 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

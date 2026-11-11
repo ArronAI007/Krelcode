@@ -237,6 +237,19 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   路径解析与工具层同规则（越界路径静默跳过）
 - REPL：`/undo`（回滚上一轮）、`/undo list`（查看检查点栈）、`--no-checkpoint` 关闭
 
+## 用量统计与 git 自动提交（Step 17）
+
+- **UsageTracker**（agent/usage.py）：订阅 LLMResponseReceived，累计规范化
+  usage（input/output/total tokens + 调用次数）；RunStarted 清零本轮账本，
+  会话账本持续累计；provider 未上报 usage 时为 0（不估算不造假）。
+  REPL /cost、`-m` 模式结束打印摘要
+- **AutoCommitter**（session/autocommit.py，--auto-commit 开启）：
+  订阅 RunStarted（记录 label=用户输入预览）与 RunFinished（触发提交）；
+  `git status --porcelain` 有变更才 add -A + commit，消息 `krelcode: <label>`；
+  首次提交前把 `.krelcode/` 追加进 `.git/info/exclude`（仅本地，幂等，
+  不污染用户 .gitignore）；非 git 仓库/无变更/提交失败全部静默跳过；
+  与 CheckpointManager 互补：checkpoint 管文件级回滚，auto-commit 管历史留痕
+
 ## 分层测试策略（每层可独立验证）
 
 | 层 | 测试方式 |

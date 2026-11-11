@@ -28,10 +28,12 @@ class MockProvider:
         scripted: Optional[Sequence[ScriptItem]] = None,
         fallback: str = "[mock] 收到",
         chunk_size: int = 0,
+        usage: Optional[dict] = None,
     ) -> None:
         self._scripted: List[ScriptItem] = list(scripted or [])
         self._fallback = fallback
         self._chunk_size = chunk_size  # >0 时把文本切片，模拟逐 token 流式
+        self._usage = dict(usage or {})
         self.calls: List[List[Message]] = []
         self.tools_seen: List[Optional[List[ToolSpec]]] = []
         self.model = "mock-model"
@@ -54,4 +56,4 @@ class MockProvider:
                     yield TextDelta(text[i:i + self._chunk_size])
             else:
                 yield TextDelta(text)
-        yield StreamFinished(message=message, finish_reason=FINISH_STOP, usage={})
+        yield StreamFinished(message=message, finish_reason=FINISH_STOP, usage=dict(self._usage))

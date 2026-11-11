@@ -26,6 +26,7 @@ HELP_TEXT = """可用命令：
   /agents        列出子代理（后台任务）状态
   /compact       立即压缩对话历史（LLM 摘要，不必等预算超限）
   /undo          回滚上一轮对话的文件改动（检查点恢复；/undo list 查看栈）
+  /cost          显示 token 用量（本轮 + 会话累计）
   /reset         清空对话历史
   /exit          退出（Ctrl-D / Ctrl-C 同样有效）
 其他任何输入都会作为消息发给 agent。"""
@@ -40,6 +41,7 @@ async def run_repl(
     mcp_reload=None,
     subagents=None,
     checkpoints=None,
+    usage=None,
 ) -> int:
     from ..app import restore_session  # 延迟导入避免 ui→app 循环依赖
 
@@ -82,6 +84,9 @@ async def run_repl(
                     print(f"  （找不到会话: {target}；用 /sessions 查看列表）")
                 else:
                     restore_session(loop, path)
+                continue
+            if user_input == "/cost":
+                print(f"  [cost] {usage.summary()}" if usage else "  （用量统计不可用）")
                 continue
             if user_input == "/undo" or user_input.startswith("/undo "):
                 if checkpoints is None:

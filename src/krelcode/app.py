@@ -17,6 +17,7 @@ from .agent.compression import ContextManager
 from .agent.context import build_workspace_context
 from .agent.loop import AgentLoop
 from .agent.prompts import build_system_prompt
+from .agent.usage import UsageTracker
 from .config import load_config
 from .core.events import EventBus
 from .core.messages import Message, ToolCall
@@ -25,6 +26,7 @@ from .llm.providers.mock import MockProvider
 from .llm.registry import create_provider, resolve_settings
 from .mcp.supervisor import MCPSupervisor
 from .safety.policy import AllowAllPolicy, SandboxPolicy
+from .session.autocommit import AutoCommitter
 from .session.checkpoint import CheckpointManager
 from .session.recorder import (
     SessionRecorder, latest_session, load_history, new_session_path,
@@ -204,6 +206,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="关闭会话 JSONL 录制（默认写入 <workspace>/.krelcode/sessions/）")
     p.add_argument("--no-checkpoint", action="store_true",
                    help="关闭文件检查点（/undo 回滚功能）")
+    p.add_argument("--auto-commit", action="store_true",
+                   help="每轮结束若有文件变更自动 git 提交（需工作区是 git 仓库）")
     p.add_argument("-m", "--message", default=None, help="单次提问模式：执行完直接退出")
     p.add_argument("--version", action="version", version=f"krelcode {__version__}")
     return p
@@ -227,6 +231,16 @@ async def async_main(args: argparse.Namespace) -> int:
     if not args.no_checkpoint:
         checkpoints = CheckpointManager(loop.tool_context.workspace_root)
         checkpoints.attach(loop.bus)
+    usage = UsageTracker()
+    usage.attach(loop.bus)
+    if args.auto_commit:
+        committer = AutoCommitter(loop.tool_context.workspace_root)
+        if await committer.is_git_repo():
+            await committer.ensure_local_exclude()
+            loop.bus.subscribe(committer.on_event)
+            print("[git] 自动提交已开启（每轮有变更时 commit；.krelcode/ 已本地排除）")
+        else:
+            print("[git] 工作区不是 git 仓库，--auto-commit 未生效")
     try:
         session_path = setup_session(args, loop)
         sessions_dir = loop.tool_context.workspace_root / ".krelcode" / "sessions"
@@ -237,6 +251,8 @@ async def async_main(args: argparse.Namespace) -> int:
             except Exception as e:
                 print(f"错误：{type(e).__name__}: {e}")
                 return 1
+            if usage.session.calls:
+                print(f"[usage] {usage.session.text()}")
             return 0
         print(f"[provider: {loop.llm.name} | model: {model}]")
         return await run_repl(
@@ -248,6 +264,7 @@ async def async_main(args: argparse.Namespace) -> int:
             mcp_reload=reload_mcp,
             subagents=subagents,
             checkpoints=checkpoints,
+            usage=usage,
         )
     finally:
         await subagents.shutdown()

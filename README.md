@@ -18,7 +18,7 @@ krelcode --version
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（271 个，全离线*）
+# 运行全部测试（279 个，全离线*）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -37,7 +37,7 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --mode
 #   api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-REPL 内置命令：`/help`、`/history`、`/tools`、`/session`、`/sessions`、`/resume <n|latest|path>`、`/mcp`（状态）、`/mcp reload`（热重载）、`/agents`（子代理状态）、`/compact`（立即压缩历史）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/tools`、`/session`、`/sessions`、`/resume <n|latest|path>`、`/mcp`（状态）、`/mcp reload`（热重载）、`/agents`（子代理状态）、`/compact`（立即压缩历史）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量）、`/reset`、`/exit`。
 
 ### MCP 远程工具
 
@@ -68,6 +68,10 @@ transport = "sse"
 内置 `repo_map` 工具：Python 用 ast 精确提取类/函数/方法+行号（零依赖，不引 tree-sitter），JS/TS 用正则，20K 字符预算，LLM 可按行号接 `read_file` 精读。
 
 当前内置工具（12 个）：`get_time`、`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`、`repo_map`，以及子代理工具 `spawn_agent`、`wait_agent`、`send_to_agent`、`list_agents`；另加 MCP 远程工具。
+
+### git 自动提交（可选）
+
+`--auto-commit`：每轮对话结束若工作区有变更，自动 `git add -A && commit -m "krelcode: <你的输入>"`（Aider 风格）。`.krelcode/` 运行时目录自动写入 `.git/info/exclude`（仅本地生效）。与 `/undo` 互补：checkpoint 管文件级回滚，auto-commit 管历史留痕。
 
 ### 检查点与回滚
 
