@@ -69,7 +69,9 @@
 
 | 33 | 真模型验收准备 + 项目回顾 | scripts/real_acceptance.py：7 阶段自动验收（基础对话/get_time 工具/文件写读/命令执行/上下文注入/会话录制恢复/用量成本），退出码=失败数，临时工作区默认用后即焚（--keep 保留），与 Mock 验收套件互补（机制 vs 行为）· BUILD.md：统计（8083 行源码/445+ 测试）、14 条架构决策时间线、文件导览、测试方法论（注入点清单）、诚实的已知边界清单 | 脚本 ast 结构守护测试（7 阶段函数+装配+主流程齐全）；真跑需 API key（唯一外部依赖项） | ✅（脚本就绪，待 key 实跑） |
 
-| 测试总数：446（离线 444 + 本地端口集成 2，沙箱内自动 skip） |
+| 34 | Anthropic 扩展思考回传 | Message.provider_meta 不透明状态位（core 只携带、adapter 独占读写、session codec 持久化）· thinking/signature/redacted_thinking 块捕获 → StreamFinished 挂 meta · 回传时 thinking 块置于 assistant content 最前（API 强制顺序）· thinking_budget 配置（TOML [providers.anthropic]，钳制 ≥1024，max_tokens 自动保证 > budget） | 8 个新测试：捕获（含签名拼接）、回传块顺序（thinking→text→tool_use）、redacted 透传、budget 钳制与 max_tokens 三态、默认不带 thinking 参数、registry 配置透传、codec roundtrip | ✅ |
+
+| 测试总数：453（离线 451 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

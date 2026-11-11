@@ -44,6 +44,7 @@ core 只有 276 行——内核极小、能力在边缘，正是当初对标 pi/
 | v0.26 | REPL 架构 | 从「读一行跑一轮」重构为常驻 reader + 状态机，才可能有运行中 steering |
 | v0.30 | usage 语义分裂 | OpenAI prompt_tokens 含缓存、Anthropic input_tokens 不含 → 统一为 Anthropic 语义（input 扣除 cache_read），成本公式两家通用且防双计 |
 | v0.31 | 热切换原子性 | /model 先建新 provider 并验证 key，成功才替换——切换失败不破坏会话 |
+| v0.33 | 扩展思考回传 | Anthropic thinking 块（含 signature/redacted）挂 Message.provider_meta 不透明状态位随历史回传——core 只携带不解读，wire 知识仍锁在 adapter 内 |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -110,7 +111,8 @@ python scripts/real_acceptance.py --provider anthropic --keep
 - Windows：进程终止退化为主进程 kill（无进程组）；未在真机验证
 - grep/repo_map 为纯 Python 实现，超大仓库性能弱于 ripgrep/tree-sitter
 - 价目表/上下文窗口是内置近似值，会过时（`agent/pricing.py` 一处可改）
-- thinking 流不进历史：跨轮不保留思考内容（Anthropic 扩展思考的
-  thinking 块回传未实现，多轮工具调用场景对该能力有损）
+- 思考流的展示文本不进对话历史（设计如此）；但 Anthropic 扩展思考的
+  thinking 块（含签名/redacted）经 Message.provider_meta 完整回传（Step 34），
+  其他 provider 无此要求
 - MCP 未实现 sampling/roots（服务器反向请求一律 -32601）
 - 上下文压缩的摘要质量依赖所用模型；小模型摘要可能丢细节（有占位兜底）

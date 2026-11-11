@@ -16,6 +16,8 @@ def message_to_dict(m: Message) -> Dict[str, Any]:
         ]
     if m.tool_call_id is not None:
         d["tool_call_id"] = m.tool_call_id
+    if m.provider_meta:
+        d["provider_meta"] = m.provider_meta
     return d
 
 
@@ -30,11 +32,13 @@ def message_from_dict(d: Dict[str, Any]) -> Message:
             )
             for tc in d["tool_calls"]
         ]
+    meta = d.get("provider_meta")
     return Message(
         role=d.get("role", "assistant"),
         content=d.get("content"),
         tool_calls=tool_calls,
         tool_call_id=d.get("tool_call_id"),
+        provider_meta=meta if isinstance(meta, dict) else None,
     )
 
 

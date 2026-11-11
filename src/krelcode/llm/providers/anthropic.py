@@ -82,6 +82,12 @@ def to_anthropic_request_messages(
             wire.append({"role": ROLE_USER, "content": m.content or ""})
         elif m.role == ROLE_ASSISTANT:
             blocks: List[Dict[str, Any]] = []
+            # 扩展思考回传：thinking/redacted_thinking 块必须位于 content 最前
+            # （工具调用续轮时 API 强制要求；provider_meta 仅本 adapter 读写）
+            meta = m.provider_meta or {}
+            for block in meta.get("anthropic_thinking") or []:
+                if isinstance(block, dict):
+                    blocks.append(block)
             if m.content:
                 blocks.append({"type": "text", "text": m.content})
             for tc in m.tool_calls or []:
@@ -126,6 +132,7 @@ class AnthropicProvider:
         timeout: float = 120.0,
         max_tokens: Optional[int] = None,
         prompt_cache: bool = True,
+        thinking_budget: Optional[int] = None,
         transport: Optional[Transport] = None,
     ) -> None:
         self.model = model or os.environ.get("KRELCODE_MODEL") or self.DEFAULT_MODEL
@@ -136,6 +143,9 @@ class AnthropicProvider:
         self.timeout = timeout
         self.max_tokens = max_tokens or self.DEFAULT_MAX_TOKENS
         self.prompt_cache = prompt_cache
+        # 扩展思考预算（None=不启用）。启用时 Anthropic 要求
+        # max_tokens > budget_tokens，build_request 会自动保证。
+        self.thinking_budget = thinking_budget
         self._transport: Transport = transport or UrllibTransport()
 
     # -- 请求构造（纯函数，可单测） ---------------------------------------------
@@ -148,12 +158,18 @@ class AnthropicProvider:
                 "缺少 API key：请设置 ANTHROPIC_API_KEY（或配置文件；--mock 可离线体验）"
             )
         system, wire_messages = to_anthropic_request_messages(messages)
+        max_tokens = self.max_tokens
         payload: Dict[str, Any] = {
             "model": self.model,
-            "max_tokens": self.max_tokens,
+            "max_tokens": max_tokens,
             "messages": wire_messages,
             "stream": True,
         }
+        if self.thinking_budget:
+            budget = max(1024, int(self.thinking_budget))   # API 最小 1024
+            payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            if max_tokens <= budget:
+                payload["max_tokens"] = budget + 1024        # 必须大于思考预算
         # prompt caching：3 个 ephemeral 断点（tools 末尾 / system / 最后一条消息末尾）。
         # 缓存命中部分按 ~10% 计价，长会话显著省钱；不足最小缓存长度时服务端自动忽略，无害。
         if system is not None:
@@ -199,6 +215,7 @@ class AnthropicProvider:
 
             content_parts: List[str] = []
             tool_blocks: Dict[int, Dict[str, str]] = {}  # block index -> {id,name,json}
+            thinking_blocks: Dict[int, Dict[str, Any]] = {}  # index -> thinking/redacted 块
             stop_reason: Optional[str] = None
             usage: Dict[str, int] = {}
 
@@ -211,11 +228,20 @@ class AnthropicProvider:
                     usage.update(normalize_usage(msg_usage))
                 elif etype == "content_block_start":
                     block = event.get("content_block") or {}
-                    if block.get("type") == "tool_use":
+                    btype = block.get("type")
+                    if btype == "tool_use":
                         tool_blocks[event.get("index", 0)] = {
                             "id": block.get("id", ""),
                             "name": block.get("name", ""),
                             "json": "",
+                        }
+                    elif btype == "thinking":
+                        thinking_blocks[event.get("index", 0)] = {
+                            "type": "thinking", "thinking": "", "signature": None,
+                        }
+                    elif btype == "redacted_thinking":
+                        thinking_blocks[event.get("index", 0)] = {
+                            "type": "redacted_thinking", "data": block.get("data", ""),
                         }
                 elif etype == "content_block_delta":
                     delta = event.get("delta") or {}
@@ -229,11 +255,17 @@ class AnthropicProvider:
                         thinking = delta.get("thinking") or ""
                         if thinking:
                             yield ThinkingDelta(thinking)
+                            slot = thinking_blocks.get(event.get("index", 0))
+                            if slot is not None:
+                                slot["thinking"] += thinking
+                    elif dtype == "signature_delta":
+                        slot = thinking_blocks.get(event.get("index", 0))
+                        if slot is not None:
+                            slot["signature"] = delta.get("signature")
                     elif dtype == "input_json_delta":
                         slot = tool_blocks.get(event.get("index", 0))
                         if slot is not None:
                             slot["json"] += delta.get("partial_json") or ""
-                    # signature_delta 等：忽略
                 elif etype == "message_delta":
                     delta = event.get("delta") or {}
                     if delta.get("stop_reason"):
@@ -256,6 +288,11 @@ class AnthropicProvider:
             message = Message.assistant(
                 "".join(content_parts) or None, tool_calls=tool_calls
             )
+            if thinking_blocks:
+                # 完整块（含签名）挂到 provider_meta，随历史回传给下一轮
+                message.provider_meta = {
+                    "anthropic_thinking": [thinking_blocks[i] for i in sorted(thinking_blocks)],
+                }
             yield StreamFinished(
                 message=message,
                 finish_reason=_STOP_REASON_MAP.get(stop_reason or "", stop_reason),

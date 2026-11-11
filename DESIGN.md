@@ -322,6 +322,11 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   只经 `LLMThinkingDelta` 事件流向 UI（渲染器 dim `[thinking]` 前缀流式展示，
   内部换行压平防串行，任意其他事件到达即收束思考行）
 - RetryingProvider/collect 等对 ThinkingDelta 天然透明
+- **Anthropic 扩展思考回传**（Step 34）：thinking/signature/redacted_thinking
+  块捕获后挂 `Message.provider_meta`（core 的不透明状态位：只携带、不解读，
+  session codec 负责持久化）；回传时 thinking 块置于 assistant content 最前
+  （工具调用续轮时 API 强制要求）。`thinking_budget` 配置启用
+  （钳制 ≥1024，max_tokens 自动抬到 budget+1024 以上）
 
 ## 交互层增强（Step 22）
 

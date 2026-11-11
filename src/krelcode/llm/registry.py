@@ -116,5 +116,7 @@ def create_provider(settings: ProviderSettings, **overrides: Any) -> LLMProvider
                 kwargs["max_tokens"] = settings.max_tokens
             if "prompt_cache" in settings.extra:
                 kwargs["prompt_cache"] = bool(settings.extra["prompt_cache"])
+            if settings.extra.get("thinking_budget"):
+                kwargs["thinking_budget"] = int(settings.extra["thinking_budget"])
     kwargs.update(overrides)
     return factory(**kwargs)  # type: ignore[operator]

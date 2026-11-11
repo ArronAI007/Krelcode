@@ -19,6 +19,7 @@ api_key_env = "OPENAI_API_KEY"
 # model = "claude-sonnet-4-5"
 api_key_env = "ANTHROPIC_API_KEY"
 # prompt_cache = true      # 提示缓存（默认开）：长会话可省 ~90% 重复输入成本
+# thinking_budget = 10000  # 扩展思考预算（tokens，>=1024；缺省不启用）
 
 [providers.gemini]
 # model = "gemini-2.5-flash"

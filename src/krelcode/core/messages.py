@@ -34,12 +34,19 @@ class ToolCall:
 
 @dataclass
 class Message:
-    """一条对话消息。四种 role：system / user / assistant / tool。"""
+    """一条对话消息。四种 role：system / user / assistant / tool。
+
+    provider_meta：不透明的 provider 私有状态（如 Anthropic 扩展思考的
+    thinking 块与签名——多轮工具调用时 API 要求原样回传）。
+    约定：只有产生它的 provider adapter 可以读写；core/agent/tools
+    对其内容零感知，仅负责携带与持久化（session codec）。
+    """
 
     role: str
     content: Optional[str] = None
     tool_calls: Optional[List[ToolCall]] = None  # 仅 assistant
     tool_call_id: Optional[str] = None           # 仅 tool（结果回填）
+    provider_meta: Optional[Dict[str, Any]] = None
 
     # -- 便捷构造 -------------------------------------------------------------
 
