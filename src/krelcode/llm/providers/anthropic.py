@@ -133,6 +133,7 @@ class AnthropicProvider:
         max_tokens: Optional[int] = None,
         prompt_cache: bool = True,
         thinking_budget: Optional[int] = None,
+        generation: Optional[Dict[str, Any]] = None,
         transport: Optional[Transport] = None,
     ) -> None:
         self.model = model or os.environ.get("KRELCODE_MODEL") or self.DEFAULT_MODEL
@@ -146,6 +147,7 @@ class AnthropicProvider:
         # 扩展思考预算（None=不启用）。启用时 Anthropic 要求
         # max_tokens > budget_tokens，build_request 会自动保证。
         self.thinking_budget = thinking_budget
+        self.generation: Dict[str, Any] = dict(generation or {})
         self._transport: Transport = transport or UrllibTransport()
 
     # -- 请求构造（纯函数，可单测） ---------------------------------------------
@@ -160,6 +162,7 @@ class AnthropicProvider:
         system, wire_messages = to_anthropic_request_messages(messages)
         max_tokens = self.max_tokens
         payload: Dict[str, Any] = {
+            **self.generation,          # temperature/top_p 等；显式键后置不可覆盖
             "model": self.model,
             "max_tokens": max_tokens,
             "messages": wire_messages,
@@ -211,7 +214,8 @@ class AnthropicProvider:
         try:
             if resp.status != 200:
                 body = (await aread(resp)).decode("utf-8", "replace")
-                raise LLMHTTPError(resp.status, body, self.name)
+                raise LLMHTTPError(resp.status, body, self.name,
+                                   headers=dict(getattr(resp, "headers", {}) or {}))
 
             content_parts: List[str] = []
             tool_blocks: Dict[int, Dict[str, str]] = {}  # block index -> {id,name,json}

@@ -93,10 +93,12 @@ class OpenAIProvider:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: float = 120.0,
+        generation: Optional[Dict[str, Any]] = None,
         transport: Optional[Transport] = None,
     ) -> None:
         self.model = model or os.environ.get("KRELCODE_MODEL") or self.DEFAULT_MODEL
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        self.generation: Dict[str, Any] = dict(generation or {})
         self.base_url = (
             base_url or os.environ.get("OPENAI_BASE_URL") or self.DEFAULT_BASE_URL
         ).rstrip("/")
@@ -112,7 +114,10 @@ class OpenAIProvider:
             raise ConfigError(
                 "缺少 API key：请设置 OPENAI_API_KEY（或配置文件；--mock 可离线体验）"
             )
+        # generation 参数（temperature/top_p/…）来自用户配置；
+        # 显式键（model/messages/stream/tools）在其后设置，不可被覆盖
         payload: Dict[str, Any] = {
+            **self.generation,
             "model": self.model,
             "messages": to_openai_messages(messages),
             "stream": True,
@@ -142,7 +147,8 @@ class OpenAIProvider:
         try:
             if resp.status != 200:
                 body = (await aread(resp)).decode("utf-8", "replace")
-                raise LLMHTTPError(resp.status, body, self.name)
+                raise LLMHTTPError(resp.status, body, self.name,
+                                   headers=dict(getattr(resp, "headers", {}) or {}))
 
             content_parts: List[str] = []
             tool_acc: Dict[int, Dict[str, str]] = {}  # index -> {id,name,args}

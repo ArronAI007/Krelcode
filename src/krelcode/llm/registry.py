@@ -111,6 +111,9 @@ def create_provider(settings: ProviderSettings, **overrides: Any) -> LLMProvider
             base_url=settings.base_url,
             timeout=settings.timeout,
         )
+        generation = settings.extra.get("generation")
+        if isinstance(generation, dict) and generation:
+            kwargs["generation"] = generation
         if settings.provider == "anthropic":
             if settings.max_tokens:
                 kwargs["max_tokens"] = settings.max_tokens

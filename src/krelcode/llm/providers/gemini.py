@@ -125,11 +125,13 @@ class GeminiProvider:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: float = 120.0,
+        generation: Optional[Dict[str, Any]] = None,
         transport: Optional[Transport] = None,
     ) -> None:
         self.model = model or os.environ.get("KRELCODE_MODEL") or self.DEFAULT_MODEL
         self.api_key = (api_key or os.environ.get("GEMINI_API_KEY")
                         or os.environ.get("GOOGLE_API_KEY"))
+        self.generation: Dict[str, Any] = dict(generation or {})
         self.base_url = (
             base_url or os.environ.get("GEMINI_BASE_URL") or self.DEFAULT_BASE_URL
         ).rstrip("/")
@@ -148,6 +150,9 @@ class GeminiProvider:
             )
         system_instruction, contents = to_gemini_contents(messages)
         payload: Dict[str, Any] = {"contents": contents}
+        if self.generation:
+            # Gemini 的生成参数在独立 generationConfig 段（temperature/topP/…）
+            payload["generationConfig"] = dict(self.generation)
         if system_instruction is not None:
             payload["systemInstruction"] = system_instruction
         if tools:
@@ -176,7 +181,8 @@ class GeminiProvider:
         try:
             if resp.status != 200:
                 body = (await aread(resp)).decode("utf-8", "replace")
-                raise LLMHTTPError(resp.status, body, self.name)
+                raise LLMHTTPError(resp.status, body, self.name,
+                                   headers=dict(getattr(resp, "headers", {}) or {}))
 
             content_parts: List[str] = []
             tool_calls: List[ToolCall] = []

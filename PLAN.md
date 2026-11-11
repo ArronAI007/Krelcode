@@ -73,7 +73,9 @@
 
 | 35 | MCP 反向请求（sampling/roots/ping） | MCPClient 路由服务器→客户端请求：sampling/createMessage（回调 app 注入的 sampler，用共享 LLM 完成补全）、roots/list（工作区根）、ping、未知方法回 -32601；initialize 声明客户端能力（sampling/roots）；streamable 传输层自动应答上收到 client 统一处理；**修复协议时序 bug**：notifications/initialized 由 fire-and-forget 改为 await（规范要求其先于一切请求，调度延迟曾致乱序）；stub 服务器扩展 4 个反向探测工具 + 按 id 匹配应答（对时序鲁棒） | 9 个新测试：sampling 往返（sampler 收到原始 messages/params）、无 sampler 拒绝、roots 应答、ping、未知方法、initialize 能力声明、sampler 闭包（systemPrompt/user 消息构造）、roots 构造；既有 streamable 服务器请求测试经由 client 路径继续通过 | ✅ |
 
-| 测试总数：462（离线 460 + 本地端口集成 2，沙箱内自动 skip） |
+| 36 | 真实使用就绪 | Retry-After：LLMHTTPError 携带响应头（三家 provider 透传），retry_after 属性解析秒数（HTTP-date/非法值→None 退回退避）；RetryingProvider 取 max(退避, Retry-After)，超过 120s 硬上限快速失败 · generation 参数透传：TOML [providers.X] generation = { temperature = … } → OpenAI/Anthropic payload 合并（显式键 model/stream/messages 后置不可覆盖，防误配劫持）、Gemini 进 generationConfig 段 | 11 个新测试：retry_after 解析 5 态、provider 头透传（429+头→retry_after=11）、退避取大/取退避/硬上限放弃/无头回退；三家 generation 形态、恶意键不可覆盖、registry 透传、默认零污染 | ✅ |
+
+| 测试总数：473（离线 471 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

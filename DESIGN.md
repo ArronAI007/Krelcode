@@ -313,6 +313,13 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
     常见瞬态故障（HTTP 层）都发生在首事件前，覆盖面足够
   · 指数退避 base*backoff^attempt（封顶 max_delay），sleep 可注入（测试零等待），
     on_retry 回调接 UI 日志
+  · **Retry-After**（Step 36）：LLMHTTPError 携带响应头，retry_after 解析秒数
+    （HTTP-date/非法值 → None 退回退避）；实际等待 = max(退避, Retry-After)，
+    超过 120s 硬上限则快速失败（不让用户干等）
+- **generation 参数透传**（Step 36）：TOML `[providers.X] generation = {...}`
+  （temperature/top_p/max_tokens…）经 settings.extra 到各 provider——
+  OpenAI/Anthropic 合并进 payload 顶层（显式键 model/messages/stream/max_tokens
+  后置设置，**配置无法覆盖协议关键字段**）；Gemini 进 generationConfig 段
 - **edit_file 失败辅助**：多处匹配 → 错误信息带每次出现的**精确行号**
   （LLM 可据此扩大上下文）；未匹配 → difflib.get_close_matches 给出
   最接近的行（带行号）提示缩进/拼写差异。目标：把「edit 失败 → 盲改重试」

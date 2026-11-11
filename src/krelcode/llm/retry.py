@@ -20,6 +20,8 @@ from .base import LLMEvent, ProviderCapabilities, ToolSpec
 from ..core.messages import Message
 
 RETRYABLE_STATUSES = frozenset({408, 409, 425, 429})
+# Retry-After 超过该值则放弃重试（让用户等 2 分钟以上不如快速失败）
+RETRY_AFTER_HARD_CAP = 120.0
 
 
 @dataclass(frozen=True)
@@ -93,6 +95,11 @@ class RetryingProvider:
                 if not retryable:
                     raise
                 delay = self._policy.delay_for(attempt)
+                retry_after = getattr(e, "retry_after", None)
+                if retry_after is not None:
+                    if retry_after > RETRY_AFTER_HARD_CAP:
+                        raise   # 服务器要求等待过久，快速失败
+                    delay = max(delay, retry_after)   # 尊重服务器指定等待
                 attempt += 1
                 self.retry_count += 1
                 if self._on_retry is not None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Dict, Optional
 
 
 class KrelcodeError(Exception):
@@ -18,14 +18,28 @@ class LLMError(KrelcodeError):
 
 
 class LLMHTTPError(LLMError):
-    """LLM 端点返回非 2xx：带 status 与响应体，便于诊断。"""
+    """LLM 端点返回非 2xx：带 status、响应体与响应头，便于诊断与重试决策。"""
 
-    def __init__(self, status: int, body: str, provider: str = "") -> None:
+    def __init__(self, status: int, body: str, provider: str = "",
+                 headers: Optional[Dict[str, str]] = None) -> None:
         prefix = f"[{provider}] " if provider else ""
         super().__init__(f"{prefix}LLM HTTP {status}: {body[:2000]}")
         self.status = status
         self.body = body
         self.provider = provider
+        self.headers = {k.lower(): v for k, v in (headers or {}).items()}
+
+    @property
+    def retry_after(self) -> Optional[float]:
+        """Retry-After 头（秒）；缺失/不可解析（含 HTTP-date 形式）返回 None。"""
+        raw = self.headers.get("retry-after")
+        if raw is None:
+            return None
+        try:
+            value = float(str(raw).strip())
+            return value if value >= 0 else None
+        except ValueError:
+            return None
 
 
 class ToolNotFoundError(KrelcodeError):

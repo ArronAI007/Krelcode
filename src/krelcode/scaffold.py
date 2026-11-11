@@ -14,6 +14,7 @@ CONFIG_TEMPLATE = '''# Krelcode 配置（krelcode --config 或放在工作区根
 # model = "gpt-4o-mini"
 # base_url = "https://api.openai.com/v1"   # 任意 OpenAI 兼容端点
 api_key_env = "OPENAI_API_KEY"
+# generation = { temperature = 0.3 }       # 生成参数透传（top_p、max_tokens…）
 
 [providers.anthropic]
 # model = "claude-sonnet-4-5"
