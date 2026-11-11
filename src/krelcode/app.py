@@ -27,6 +27,7 @@ from .core.messages import Message, ToolCall
 from .llm.base import LLMProvider
 from .llm.providers.mock import MockProvider
 from .llm.registry import create_provider, resolve_settings
+from .llm.retry import RetryPolicy, RetryingProvider
 from .mcp.supervisor import MCPSupervisor
 from .safety.policy import AllowAllPolicy, SandboxPolicy
 from .session.autocommit import AutoCommitter
@@ -57,7 +58,7 @@ def default_tools() -> List[Tool]:
     ]
 
 
-def build_llm(args: argparse.Namespace, config: Dict[str, Any]) -> LLMProvider:
+def build_llm(args: argparse.Namespace, config: Dict[str, Any], log=print) -> LLMProvider:
     if args.provider == "mock" or args.mock:
         # 演示脚本：第一轮 LLM 决定调用 get_time，拿到结果后给出最终回复
         return MockProvider(
@@ -77,7 +78,14 @@ def build_llm(args: argparse.Namespace, config: Dict[str, Any]) -> LLMProvider:
         base_url=args.base_url,
         config=config,
     )
-    return create_provider(settings)
+    provider = create_provider(settings)
+    if args.retries > 0:
+        def on_retry(attempt: int, delay: float, error: BaseException) -> None:
+            log(f"[retry] LLM 调用失败（{type(error).__name__}: {error}），"
+                f"第 {attempt} 次重试，{delay:g}s 后…")
+        provider = RetryingProvider(
+            provider, RetryPolicy(max_retries=args.retries), on_retry=on_retry)
+    return provider
 
 
 def build_policy(args: argparse.Namespace, workspace_root: Path, bus: EventBus):
@@ -96,6 +104,7 @@ async def build_loop(
     args: argparse.Namespace,
     config: Dict[str, Any],
     extra_tools: Optional[List[Tool]] = None,
+    log=print,
 ):
     """返回 (AgentLoop, SubagentManager)。
 
@@ -108,7 +117,7 @@ async def build_loop(
         # 启动时一次性收集：目录树 + git 状态 + AGENTS.md（失败安全）
         context = await build_workspace_context(workspace_root)
     bus = EventBus()
-    llm = build_llm(args, config)
+    llm = build_llm(args, config, log=log)
     context_manager = None
     if not args.no_compress:
         context_manager = ContextManager(llm, max_tokens=args.context_tokens)
@@ -208,6 +217,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="同一调用连续失败多少次判定卡死并中止（默认 3）")
     p.add_argument("--token-budget", type=int, default=None,
                    help="单轮任务的 token 预算，超限中止（默认不限）")
+    p.add_argument("--retries", type=int, default=2,
+                   help="LLM 瞬态失败（429/5xx/网络）自动重试次数，指数退避（默认 2，0 关闭）")
     p.add_argument("--no-context", action="store_true",
                    help="跳过启动时的工作区上下文注入（目录树/git/AGENTS.md）")
     p.add_argument("--auto-approve", action="store_true",
@@ -240,7 +251,7 @@ async def async_main(args: argparse.Namespace) -> int:
     note = (lambda msg: print(msg, file=sys.stderr)) if quiet else print
     config_path = Path(args.config) if args.config else None
     config = load_config(config_path)
-    loop, subagents = await build_loop(args, config)
+    loop, subagents = await build_loop(args, config, log=note)
     supervisor = MCPSupervisor(loop.registry, log=note)
     if not args.no_mcp:
         await supervisor.sync(config.get("mcp_servers") or {})

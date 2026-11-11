@@ -65,15 +65,18 @@ class EditFileTool:
 
         count = text.count(old)
         if count == 0:
+            hint = _close_line_hint(text, old)
             return ToolResult(
-                content=f"未找到 old_string（需逐字符一致，注意缩进与空白）。文件: {path}",
+                content=(f"未找到 old_string（需逐字符一致，注意缩进与空白）。"
+                         f"{hint}文件: {path}"),
                 is_error=True,
             )
         if count > 1 and not replace_all:
+            lines_at = _occurrence_lines(text, old)
             return ToolResult(
                 content=(
-                    f"old_string 在文件中出现 {count} 次，为避免误改已中止。"
-                    "请扩大上下文使其唯一，或传 replace_all=true 全量替换。"
+                    f"old_string 在文件中出现 {count} 次（第 {lines_at} 行），"
+                    "为避免误改已中止。请扩大上下文使其唯一，或传 replace_all=true 全量替换。"
                 ),
                 is_error=True,
             )
@@ -89,6 +92,44 @@ class EditFileTool:
             content=f"已编辑 {path}（替换 {count if replace_all else 1} 处）\n{diff}",
             data={"path": str(path), "replacements": count if replace_all else 1, "diff": diff},
         )
+
+
+def _occurrence_lines(text: str, old: str, limit: int = 10) -> str:
+    """old 每次出现的起始行号列表（字符串形式，超过 limit 截断）。"""
+    lines: List[str] = []
+    start = 0
+    while True:
+        pos = text.find(old, start)
+        if pos < 0:
+            break
+        lines.append(str(text.count("\n", 0, pos) + 1))
+        start = pos + max(1, len(old))
+        if len(lines) >= limit:
+            lines.append("…")
+            break
+    return "、".join(lines)
+
+
+def _close_line_hint(text: str, old: str) -> str:
+    """未匹配时，用首行做近似匹配给 LLM 修正线索（difflib，零依赖）。"""
+    stripped = old.strip()
+    if not stripped:
+        return ""
+    first = stripped.splitlines()[0].strip()
+    if not first:
+        return ""
+    file_lines = text.splitlines()
+    close = difflib.get_close_matches(
+        first, [l.strip() for l in file_lines], n=3, cutoff=0.6)
+    if not close:
+        return ""
+    entries = []
+    for match in close:
+        for i, line in enumerate(file_lines, start=1):
+            if line.strip() == match:
+                entries.append(f"L{i}: {match[:80]}")
+                break
+    return "最接近的行 → " + " | ".join(entries) + "。请用文件中的精确原文（含缩进）。"
 
 
 def _unified_diff(before: str, after: str, path: str) -> str:

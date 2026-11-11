@@ -277,6 +277,21 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   模板变量值来自 LLM 工具参数，**一律 shlex.quote** 防命令注入；
   钩子失败/超时只记日志（executions 留审计），绝不影响主循环
 
+## 韧性与自我修正辅助（Step 20）
+
+- **RetryingProvider**（llm/retry.py）：LLMProvider 的透明装饰器，
+  组装根按 `--retries`（默认 2）包装真实 provider（mock 不包装）：
+  · 可重试：HTTP 408/409/425/429/5xx、网络/超时类 LLMError
+  · 不重试：401/403/400、ConfigError（确定性错误重试无意义）
+  · **emitted 标志**：已产出 TextDelta 后绝不重试（重放会重复输出）；
+    常见瞬态故障（HTTP 层）都发生在首事件前，覆盖面足够
+  · 指数退避 base*backoff^attempt（封顶 max_delay），sleep 可注入（测试零等待），
+    on_retry 回调接 UI 日志
+- **edit_file 失败辅助**：多处匹配 → 错误信息带每次出现的**精确行号**
+  （LLM 可据此扩大上下文）；未匹配 → difflib.get_close_matches 给出
+  最接近的行（带行号）提示缩进/拼写差异。目标：把「edit 失败 → 盲改重试」
+  变成「edit 失败 → 一轮定向修正」
+
 ## 分层测试策略（每层可独立验证）
 
 | 层 | 测试方式 |

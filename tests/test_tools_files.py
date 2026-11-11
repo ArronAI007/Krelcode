@@ -161,3 +161,32 @@ def test_edit_missing_file(ws):
     r = run(EditFileTool().execute(
         {"path": "ghost.txt", "old_string": "a", "new_string": "b"}, ws))
     assert r.is_error and "不存在" in r.content
+
+
+# -- edit_file 失败辅助提示（Step 20b）-----------------------------------------------------------
+
+def test_edit_multiple_matches_error_lists_line_numbers(ws, tmp_path):
+    (tmp_path / "f.py").write_text("dup = 1\nmid = 2\ndup = 1\n", encoding="utf-8")
+    r = run(EditFileTool().execute(
+        {"path": "f.py", "old_string": "dup = 1", "new_string": "x = 1"}, ws))
+    assert r.is_error
+    assert "第 1、3 行" in r.content        # 精确行号帮助 LLM 扩大上下文
+    assert "replace_all" in r.content
+
+
+def test_edit_not_found_shows_close_line_hint(ws, tmp_path):
+    (tmp_path / "f.py").write_text(
+        "def hello(name):\n    return name\n", encoding="utf-8")
+    r = run(EditFileTool().execute(
+        {"path": "f.py", "old_string": "def hello(nam):", "new_string": "x"}, ws))
+    assert r.is_error
+    assert "最接近的行" in r.content and "L1" in r.content
+    assert "def hello(name):" in r.content
+
+
+def test_edit_not_found_without_close_match_has_no_hint(ws, tmp_path):
+    (tmp_path / "f.py").write_text("alpha\nbeta\n", encoding="utf-8")
+    r = run(EditFileTool().execute(
+        {"path": "f.py", "old_string": "zzzz completely different", "new_string": "x"}, ws))
+    assert r.is_error and "未找到" in r.content
+    assert "最接近的行" not in r.content

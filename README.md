@@ -18,7 +18,7 @@ krelcode --version
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（308 个，全离线*）
+# 运行全部测试（320 个，全离线*）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -76,7 +76,7 @@ krelcode --provider openai -m "修复 tests/ 下失败的测试" --output-format
 # stdout 输出单行 JSON: {"ok": true, "reply": ..., "usage": {...}, "tools_used": [...], "denied": 0, "session": null}
 ```
 
-`--token-budget N` 可限制单轮 token 用量（超限优雅中止）；启动提示走 stderr，stdout 保持纯净可管道。
+`--token-budget N` 可限制单轮 token 用量（超限优雅中止）；`--retries N`（默认 2）对 429/5xx/网络错误自动指数退避重试；启动提示走 stderr，stdout 保持纯净可管道。
 
 ### Hooks（事件钩子）
 
