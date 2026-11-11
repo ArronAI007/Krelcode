@@ -159,3 +159,35 @@ def test_response_stream_closed_after_consumption():
     provider, transport = make_provider(sse({"choices": [{"delta": {"content": "x"}}]}))
     asyncio.run(collect(provider, [Message.user("q")]))
     assert transport.responses[0].closed
+
+
+# -- OpenAI 自动缓存 usage 规范化（Step 31）---------------------------------------------------------
+
+def test_openai_cached_tokens_normalized_anthropic_style():
+    """prompt_tokens 含 cached_tokens → input 扣除（统一 Anthropic 语义，防成本双计）。"""
+    body = sse(
+        {"choices": [{"delta": {"content": "x"}}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}],
+         "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120,
+                   "prompt_tokens_details": {"cached_tokens": 80}}},
+    )
+    provider, _ = make_provider(body)
+    finished = asyncio.run(collect(provider, [Message.user("q")]))
+    assert finished.usage == {
+        "input_tokens": 20,        # 100 - 80（缓存部分单列）
+        "output_tokens": 20,
+        "cache_read": 80,
+        "total_tokens": 120,       # 总量保留 provider 原值
+    }
+
+
+def test_openai_cached_tokens_cost_no_double_count():
+    from krelcode.agent.pricing import estimate_cost
+    cached_usage = {"input_tokens": 20, "output_tokens": 20,
+                    "cache_read": 80, "total_tokens": 120}
+    plain_usage = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+    cost_cached = estimate_cost("gpt-4o-mini", cached_usage)
+    cost_plain = estimate_cost("gpt-4o-mini", plain_usage)
+    # 缓存命中 80 tokens 按 10% 计价 → 明显更便宜
+    assert cost_cached < cost_plain
+    assert cost_plain == pytest.approx((100 * 0.15 + 20 * 0.60) / 1e6)

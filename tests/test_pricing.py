@@ -100,3 +100,63 @@ def test_tracker_cache_tokens_in_text():
     text = tracker.session.text()
     assert "cache 读 5000 / 写 200" in text
     assert tracker.session.cache_read == 5000
+
+
+# -- 上下文窗口与自适应预算（Step 31）--------------------------------------------------------------
+
+def test_match_context_window():
+    from krelcode.agent.pricing import CONTEXT_WINDOWS, match_context_window
+    assert match_context_window("gpt-4o") == CONTEXT_WINDOWS["gpt-4o"]
+    assert match_context_window("claude-sonnet-4-5-20250929") == 200_000  # 最长前缀
+    assert match_context_window("unknown-x") is None
+    assert match_context_window(None) is None
+
+
+def test_default_budget_ratio():
+    from krelcode.agent.pricing import BUDGET_RATIO, default_budget_for
+    assert default_budget_for("gpt-4o") == int(128_000 * BUDGET_RATIO)   # 96_000
+    assert default_budget_for("gpt-4o-mini-2024-07-18") == 96_000       # 前缀命中 mini
+    assert default_budget_for("unknown-x") is None
+
+
+def test_app_budget_resolution(tmp_path):
+    """预算优先级：显式 --context-tokens > 模型目录 > 兜底默认。"""
+    import asyncio as _asyncio
+    from krelcode.app import build_loop, build_parser
+    from krelcode.agent.compression import DEFAULT_MAX_TOKENS
+
+    parser = build_parser()
+    base = ["--workspace", str(tmp_path), "--no-context", "--no-session"]
+
+    # mock（模型不在目录）+ 未显式指定 → 兜底默认
+    args = parser.parse_args(["--mock"] + base)
+    loop, _ = _asyncio.run(build_loop(args, {}))
+    assert loop.context_manager.max_tokens == DEFAULT_MAX_TOKENS
+
+    # 显式指定优先
+    args2 = parser.parse_args(["--mock", "--context-tokens", "5000"] + base)
+    loop2, _ = _asyncio.run(build_loop(args2, {}))
+    assert loop2.context_manager.max_tokens == 5000
+
+    # 已知模型（openai+key）→ 目录推导：gpt-4o-mini 128k × 0.75
+    import os
+    old = os.environ.get("OPENAI_API_KEY")
+    os.environ["OPENAI_API_KEY"] = "sk-test"
+    try:
+        args3 = parser.parse_args(["--provider", "openai",
+                                   "--model", "gpt-4o-mini"] + base)
+        loop3, _ = _asyncio.run(build_loop(args3, {}))
+        assert loop3.context_manager.max_tokens == 96_000
+    finally:
+        if old is None:
+            os.environ.pop("OPENAI_API_KEY")
+        else:
+            os.environ["OPENAI_API_KEY"] = old
+
+
+def test_doctor_shows_context_window(monkeypatch, tmp_path):
+    from krelcode.doctor import check_default_provider
+    monkeypatch.delenv("KRELCODE_PROVIDER", raising=False)
+    r = check_default_provider({"providers": {"openai": {"model": "gpt-4o"}}})
+    assert r.status == "ok"
+    assert "上下文 128k" in r.detail and "压缩预算 96k" in r.detail

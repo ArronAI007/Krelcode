@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import __version__
+from .agent.compression import DEFAULT_MAX_TOKENS as DEFAULT_CONTEXT_BUDGET
 from .agent.compression import ContextManager
+from .agent.pricing import default_budget_for
 from .agent.context import build_workspace_context
 from .agent.loop import AgentLoop
 from .agent.prompts import build_system_prompt
@@ -124,7 +126,11 @@ async def build_loop(
     llm = build_llm(args, config, log=log)
     context_manager = None
     if not args.no_compress:
-        context_manager = ContextManager(llm, max_tokens=args.context_tokens)
+        # 预算优先级：显式 --context-tokens > 模型目录推导（窗口×75%）> 兜底默认
+        budget = (args.context_tokens
+                  or default_budget_for(getattr(llm, "model", None))
+                  or DEFAULT_CONTEXT_BUDGET)
+        context_manager = ContextManager(llm, max_tokens=budget)
     tool_context = ToolContext(workspace_root=workspace_root)
     policy = build_policy(args, workspace_root, bus)
     registry = ToolRegistry(default_tools() + list(extra_tools or []))
@@ -233,8 +239,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="ASK 级操作自动批准（信任模式；DENY 级仍然拒绝）")
     p.add_argument("--no-sandbox", action="store_true",
                    help="关闭安全策略（AllowAll，仅建议在隔离环境中使用）")
-    p.add_argument("--context-tokens", type=int, default=100_000,
-                   help="上下文 token 预算，超限自动摘要压缩（默认 100000）")
+    p.add_argument("--context-tokens", type=int, default=None,
+                   help="上下文 token 预算，超限自动压缩（默认: 模型上下文窗口×75%%，"
+                        "未知模型回退 %d）" % DEFAULT_CONTEXT_BUDGET)
     p.add_argument("--no-compress", action="store_true",
                    help="关闭上下文自动压缩")
     p.add_argument("--no-mcp", action="store_true",

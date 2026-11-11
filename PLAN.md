@@ -63,7 +63,9 @@
 
 | 30 | 成本感知 | Anthropic prompt caching（默认开：tools 末尾/system/最后一条消息 3 个 ephemeral 断点，str content 自动 block 化，tool_result 列表只标最后一块；prompt_cache=false 可关，TOML [providers.anthropic] 透传）· usage 规范化新增 cache_read/cache_creation 键 · 内置价目表 agent/pricing.py（18 个主流型号 USD/1M，精确→**最长前缀**匹配防 gpt-4o 误吞 mini，未知返回 None 不造假；cache_read 10%/cache_creation 125% 计价）· UsageTracker 带 model 累计成本，/cost 与 -m [usage] 显示估算 $，JSON 输出含 cost_usd | 13 个新测试 + 1 处更新：3 断点形态/tool_result 只标末块/关闭无标记/cache usage 规范化；价目精确与前缀匹配/未知 None/基础与缓存数学/Tracker 累计与摘要/未知模型不算钱；JSON cost_usd 键 | ✅ |
 
-| 测试总数：428（离线 426 + 本地端口集成 2，沙箱内自动 skip） |
+| 31 | 模型感知深化 | 上下文窗口目录 CONTEXT_WINDOWS（18 型号）+ default_budget_for（窗口×75%）→ --context-tokens 未显式指定时按模型自适应（未知模型兜底 100k）· doctor 显示窗口与推导预算 · OpenAI prompt_tokens_details.cached_tokens 规范化为统一 Anthropic 语义（input 扣除缓存部分，防成本双计；total 保留原值） | 6 个新测试：窗口匹配/预算比例/app 三级预算解析（兜底/显式/目录推导 96k）/doctor 显示；OpenAI 缓存 usage 规范化断言 + 成本不双计对比 | ✅ |
+
+| 测试总数：434（离线 432 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

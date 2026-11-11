@@ -17,7 +17,7 @@ agent 层只消费统一事件，对 provider 差异零感知。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Dict, List, Optional, Protocol, Sequence, Union
+from typing import Any, AsyncIterator, Dict, List, Optional, Protocol, Sequence, Union
 
 from ..core.messages import Message
 
@@ -104,16 +104,29 @@ async def collect(
     return finished
 
 
-def normalize_usage(raw: Dict[str, int]) -> Dict[str, int]:
-    """把 provider 的 usage 映射到统一键名（缺失的键不补造）。"""
+def normalize_usage(raw: Dict[str, Any]) -> Dict[str, int]:
+    """把 provider 的 usage 映射到统一键名（缺失的键不补造）。
+
+    统一语义（Anthropic 风格）：input_tokens **不含** cache_read/cache_creation。
+    OpenAI 的 prompt_tokens 含 cached_tokens → 这里减去，防止成本双计；
+    total_tokens 保留 provider 原值（含缓存部分的真实总量）。
+    """
     out: Dict[str, int] = {}
+    details = raw.get("prompt_tokens_details")
+    cached = details.get("cached_tokens") if isinstance(details, dict) else None
+
     if "input_tokens" in raw or "prompt_tokens" in raw:
-        out[USAGE_INPUT] = raw.get("input_tokens", raw.get("prompt_tokens", 0))
+        value = raw.get("input_tokens", raw.get("prompt_tokens", 0)) or 0
+        if cached and "prompt_tokens" in raw:      # OpenAI：从 input 中扣除
+            value = max(0, int(value) - int(cached))
+        out[USAGE_INPUT] = value
     if "output_tokens" in raw or "completion_tokens" in raw:
         out[USAGE_OUTPUT] = raw.get("output_tokens", raw.get("completion_tokens", 0))
-    # 缓存 tokens（Anthropic prompt caching；OpenAI 侧自动缓存暂不采集）
+    # 缓存 tokens：Anthropic 显式键 / OpenAI prompt_tokens_details.cached_tokens
     if "cache_read_input_tokens" in raw:
         out[USAGE_CACHE_READ] = raw["cache_read_input_tokens"]
+    elif cached:
+        out[USAGE_CACHE_READ] = int(cached)
     if "cache_creation_input_tokens" in raw:
         out[USAGE_CACHE_CREATION] = raw["cache_creation_input_tokens"]
     if "total_tokens" in raw:

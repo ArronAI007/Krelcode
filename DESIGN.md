@@ -377,6 +377,12 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   tool_result 合并消息只标末块）；`prompt_cache = false`（TOML）可关。
   缓存命中 input 按 ~10% 计价，长会话成本大幅下降；
   usage 新增规范化键 cache_read / cache_creation
+- **模型目录**（agent/pricing.py）：价目 + 上下文窗口双表，共享「精确→最长前缀」
+  匹配；`default_budget_for(model)` = 窗口×75% → --context-tokens 未显式指定时
+  按模型自适应压缩预算（未知模型兜底 100k）；doctor 显示窗口与推导预算
+- **OpenAI 缓存 usage 归一**：prompt_tokens_details.cached_tokens →
+  cache_read，且从 input_tokens 扣除——统一为 Anthropic 语义（input 不含缓存），
+  成本公式对两家一致且不双计；total_tokens 保留 provider 原值
 - **价目表与成本估算**（agent/pricing.py）：内置主流型号 USD/1M 参考价
   （标注为估算，非计费依据）；匹配规则精确 → **最长前缀**
   （gpt-4o-mini-2024-07-18 → mini 价而非 gpt-4o 价）；未知模型返回 None，

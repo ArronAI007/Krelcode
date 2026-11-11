@@ -38,18 +38,58 @@ PRICING: Dict[str, Tuple[float, float]] = {
 CACHE_READ_FACTOR = 0.1       # 缓存命中折扣
 CACHE_CREATION_FACTOR = 1.25  # 缓存写入溢价
 
+# model → 上下文窗口（tokens，近似参考值）
+CONTEXT_WINDOWS: Dict[str, int] = {
+    "gpt-4o-mini": 128_000,
+    "gpt-4o": 128_000,
+    "gpt-4.1-nano": 1_000_000,
+    "gpt-4.1-mini": 1_000_000,
+    "gpt-4.1": 1_000_000,
+    "gpt-5-mini": 400_000,
+    "gpt-5": 400_000,
+    "o3-mini": 200_000,
+    "o4-mini": 200_000,
+    "claude-opus-4-1": 200_000,
+    "claude-sonnet-4-5": 200_000,
+    "claude-haiku-4-5": 200_000,
+    "claude-3-5-haiku": 200_000,
+    "gemini-2.5-pro": 1_000_000,
+    "gemini-2.5-flash": 1_000_000,
+    "gemini-2.0-flash": 1_000_000,
+    "deepseek-chat": 64_000,
+    "deepseek-reasoner": 64_000,
+}
 
-def match_pricing(model: Optional[str]) -> Optional[Tuple[float, float]]:
-    """精确 → 最长前缀匹配；未知返回 None。"""
+# 自适应预算比例：留 25% 给输出与安全余量
+BUDGET_RATIO = 0.75
+
+
+def _match_model(model: Optional[str], table: Dict):
+    """精确 → 最长前缀匹配（gpt-4o-mini-2024-07-18 → gpt-4o-mini 而非 gpt-4o）。"""
     if not model:
         return None
-    if model in PRICING:
-        return PRICING[model]
+    if model in table:
+        return table[model]
     best: Optional[str] = None
-    for key in PRICING:
+    for key in table:
         if model.startswith(key) and (best is None or len(key) > len(best)):
             best = key
-    return PRICING[best] if best else None
+    return table[best] if best else None
+
+
+def match_pricing(model: Optional[str]) -> Optional[Tuple[float, float]]:
+    return _match_model(model, PRICING)
+
+
+def match_context_window(model: Optional[str]) -> Optional[int]:
+    """模型上下文窗口（tokens）；未知返回 None。"""
+    return _match_model(model, CONTEXT_WINDOWS)
+
+
+def default_budget_for(model: Optional[str]) -> Optional[int]:
+    """自适应压缩预算：窗口 × BUDGET_RATIO；未知模型返回 None（由调用方兜底）。"""
+    window = match_context_window(model)
+    return int(window * BUDGET_RATIO) if window else None
 
 
 def estimate_cost(model: Optional[str], usage: Dict[str, int]) -> Optional[float]:

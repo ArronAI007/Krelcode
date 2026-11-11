@@ -23,8 +23,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .agent.pricing import match_context_window
 from .config import DEFAULT_PATHS
-from .llm.registry import API_KEY_ENV, resolve_settings
+from .llm.registry import API_KEY_ENV, PROVIDERS, resolve_settings
 
 STATUS_OK = "ok"
 STATUS_WARN = "warn"
@@ -77,9 +78,14 @@ def check_default_provider(config: Dict[str, Any]) -> CheckResult:
         settings = resolve_settings(config=config)
     except Exception as e:
         return CheckResult("默认 provider", STATUS_FAIL, f"{type(e).__name__}: {e}")
+    provider_cls = PROVIDERS.get(settings.provider)
+    model = settings.model or getattr(provider_cls, "DEFAULT_MODEL", None)
     detail = f"{settings.provider}"
-    if settings.model:
-        detail += f" / {settings.model}"
+    if model:
+        detail += f" / {model}"
+        window = match_context_window(model)
+        if window:
+            detail += f"（上下文 {window // 1000}k，压缩预算 {int(window * 0.75) // 1000}k）"
     if settings.api_key:
         detail += f"（key {mask_key(settings.api_key)}）"
     return CheckResult("默认 provider", STATUS_OK, detail)
