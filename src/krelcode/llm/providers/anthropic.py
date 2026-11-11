@@ -26,7 +26,7 @@ from ...core.messages import (
 )
 from ..base import (
     FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, ProviderCapabilities,
-    StreamFinished, TextDelta, ToolSpec, normalize_usage,
+    StreamFinished, TextDelta, ThinkingDelta, ToolSpec, normalize_usage,
 )
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
@@ -210,11 +210,15 @@ class AnthropicProvider:
                         if text:
                             content_parts.append(text)
                             yield TextDelta(text)
+                    elif dtype == "thinking_delta":
+                        thinking = delta.get("thinking") or ""
+                        if thinking:
+                            yield ThinkingDelta(thinking)
                     elif dtype == "input_json_delta":
                         slot = tool_blocks.get(event.get("index", 0))
                         if slot is not None:
                             slot["json"] += delta.get("partial_json") or ""
-                    # thinking_delta 等：预留，当前忽略
+                    # signature_delta 等：忽略
                 elif etype == "message_delta":
                     delta = event.get("delta") or {}
                     if delta.get("stop_reason"):

@@ -42,6 +42,18 @@ class TextDelta:
 
 
 @dataclass(frozen=True)
+class ThinkingDelta:
+    """一段增量思考/推理文本（reasoning 模型的中间思维）。
+
+    统一层承诺：ThinkingDelta 永远不进入 message.content——
+    OpenAI 兼容的 reasoning_content/reasoning 字段与 Anthropic 的
+    thinking 块都在各自 adapter 里翻译到这里，仅用于 UI 展示。
+    """
+
+    text: str
+
+
+@dataclass(frozen=True)
 class StreamFinished:
     """一次 LLM 响应结束：完整 assistant 消息 + 规范化 finish_reason + usage。"""
 
@@ -50,7 +62,7 @@ class StreamFinished:
     usage: Dict[str, int] = field(default_factory=dict)
 
 
-LLMEvent = Union[TextDelta, StreamFinished]
+LLMEvent = Union[TextDelta, ThinkingDelta, StreamFinished]
 
 
 @dataclass(frozen=True)

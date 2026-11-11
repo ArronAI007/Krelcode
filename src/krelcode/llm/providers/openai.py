@@ -16,7 +16,7 @@ from ...core.messages import (
 )
 from ..base import (
     FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, ProviderCapabilities,
-    StreamFinished, TextDelta, ToolSpec, normalize_usage,
+    StreamFinished, TextDelta, ThinkingDelta, ToolSpec, normalize_usage,
 )
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
@@ -155,6 +155,11 @@ class OpenAIProvider:
                     usage = normalize_usage(chunk["usage"])
                 for choice in chunk.get("choices") or []:
                     delta = choice.get("delta") or {}
+                    # reasoning 模型的思考流（DeepSeek/Qwen: reasoning_content，
+                    # OpenRouter 等: reasoning）——只展示，不进 content
+                    thinking = delta.get("reasoning_content") or delta.get("reasoning")
+                    if thinking:
+                        yield ThinkingDelta(thinking)
                     text = delta.get("content")
                     if text:
                         content_parts.append(text)

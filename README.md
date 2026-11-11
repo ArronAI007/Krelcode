@@ -18,7 +18,7 @@ krelcode --version
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（320 个，全离线*）
+# 运行全部测试（326 个，全离线*）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -112,7 +112,7 @@ LLM 可用 `spawn_agent` 把自包含的子任务委派给后台子代理（独�
 
 上下文管理：CJK 感知 token 估算；历史超过 `--context-tokens`（默认 10 万）自动把中段摘要压缩（`--no-compress` 关闭）；超长工具输出全文落盘 `.krelcode/tool_outputs/` 并只在上下文留引用。
 
-体验：LLM 回复逐字流式渲染；edit_file 的 diff 红绿高亮（尊重 `NO_COLOR`）；会话自动录制为 JSONL（`<workspace>/.krelcode/sessions/`，审计事件流 + 历史快照），`--resume` 恢复最近会话继续聊（`--resume <path>` 指定文件，`--no-session` 关闭）。
+体验：LLM 回复逐字流式渲染；reasoning 模型（DeepSeek-R1/Qwen 思考模式/Claude thinking）的思考过程以 `[thinking]` 暗色流展示（统一 ThinkingDelta 事件，思考不进对话历史）；edit_file 的 diff 红绿高亮（尊重 `NO_COLOR`）；会话自动录制为 JSONL（`<workspace>/.krelcode/sessions/`，审计事件流 + 历史快照），`--resume` 恢复最近会话继续聊（`--resume <path>` 指定文件，`--no-session` 关闭）。
 
 启动时自动注入工作区上下文（目录树 + git 分支/状态 + `AGENTS.md` 项目规则），`--no-context` 可关闭；同批工具调用并行执行，同一调用连续失败 3 次判定卡死自动中止（`--repeat-failure-limit` 可调）。
 

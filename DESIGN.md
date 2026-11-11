@@ -127,7 +127,9 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
    - OpenAI: choices[].delta.content / delta.tool_calls（按 index 聚合分片 arguments）
    - Anthropic: content_block_delta(text_delta / input_json_delta.partial_json)
 3. **语义规范化**：finish_reason（end_turn→stop, tool_use→tool_calls, max_tokens→length）；
-   usage（prompt_tokens→input_tokens 等，缺失不补造）
+   usage（prompt_tokens→input_tokens 等，缺失不补造）；
+   **思考流**（reasoning_content/reasoning、Anthropic thinking 块）→ 统一
+   ThinkingDelta 事件——只用于 UI 展示，永不进入 message.content/history
 4. **错误规范化**：非 2xx → `LLMHTTPError(status, body, provider)`；网络错误 → `LLMError`
 
 配套机制：
@@ -291,6 +293,16 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   （LLM 可据此扩大上下文）；未匹配 → difflib.get_close_matches 给出
   最接近的行（带行号）提示缩进/拼写差异。目标：把「edit 失败 → 盲改重试」
   变成「edit 失败 → 一轮定向修正」
+
+## 思考模型支持（Step 21）
+
+- llm 层新增 `ThinkingDelta` 事件；DeepSeek/Qwen 的 `reasoning_content`、
+  OpenRouter 系的 `reasoning`、Anthropic 的 `thinking_delta` 都在各自
+  adapter 内翻译到统一事件（signature_delta 忽略）
+- 约定：思考文本**不进** message.content、不进 history、不进会话快照——
+  只经 `LLMThinkingDelta` 事件流向 UI（渲染器 dim `[thinking]` 前缀流式展示，
+  内部换行压平防串行，任意其他事件到达即收束思考行）
+- RetryingProvider/collect 等对 ThinkingDelta 天然透明
 
 ## 分层测试策略（每层可独立验证）
 

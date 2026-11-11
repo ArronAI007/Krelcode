@@ -38,6 +38,12 @@ class LLMStreamDelta(AgentEvent):
 
 
 @dataclass(frozen=True)
+class LLMThinkingDelta(AgentEvent):
+    """reasoning 模型的增量思考文本（仅展示用，不进历史）。"""
+    text: str
+
+
+@dataclass(frozen=True)
 class LLMResponseReceived(AgentEvent):
     message: Message
     usage: Dict[str, int] = field(default_factory=dict)

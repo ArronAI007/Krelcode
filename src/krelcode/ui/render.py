@@ -15,6 +15,7 @@ from ..core.events import (
     ContextCompressed,
     ErrorOccurred,
     LLMStreamDelta,
+    LLMThinkingDelta,
     PermissionDenied,
     RunFinished,
     SubagentFinished,
@@ -72,9 +73,20 @@ class StreamRenderer:
         self._write = write or _default_write
         self._color = auto_color() if color is None else color
         self._streaming = False
+        self._thinking = False
 
     # EventBus handler（同步即可）
     def __call__(self, event: AgentEvent) -> None:
+        if isinstance(event, LLMThinkingDelta):
+            if not self._thinking:
+                self._end_stream_only()
+                prefix = "  [thinking] " if not self._color else f"  {DIM}[thinking]{RESET} "
+                self._write(prefix)
+                self._thinking = True
+            self._write(event.text.replace("\n", " "))
+            return
+        # 任何非思考事件：先收束思考行
+        self._end_thinking()
         if isinstance(event, LLMStreamDelta):
             if not self._streaming:
                 self._write("agent> ")
@@ -118,9 +130,18 @@ class StreamRenderer:
 
     def end_stream(self) -> None:
         """结束当前流式行（工具活动插入前调用）。"""
+        self._end_thinking()
+        self._end_stream_only()
+
+    def _end_stream_only(self) -> None:
         if self._streaming:
             self._write("\n")
             self._streaming = False
+
+    def _end_thinking(self) -> None:
+        if self._thinking:
+            self._write("\n")
+            self._thinking = False
 
     def _render_tool_result(self, event: ToolCallCompleted) -> None:
         mark = "✗" if event.is_error else "✓"

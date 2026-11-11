@@ -20,6 +20,7 @@ from ..core.events import (
     EventBus,
     LLMResponseReceived,
     LLMStreamDelta,
+    LLMThinkingDelta,
     PermissionDenied,
     RunFinished,
     RunStarted,
@@ -29,7 +30,7 @@ from ..core.events import (
 )
 from ..core.textutil import truncate_middle
 from ..core.messages import INVALID_ARGUMENTS_KEY, Message, ToolCall
-from ..llm.base import LLMProvider, StreamFinished, TextDelta
+from ..llm.base import LLMProvider, StreamFinished, TextDelta, ThinkingDelta
 from .compression import ContextManager
 from .tokens import estimate_history_tokens
 from ..safety.policy import ApprovalPolicy
@@ -124,6 +125,8 @@ class AgentLoop:
         async for event in self.llm.stream(self.history, tools):
             if isinstance(event, TextDelta):
                 await self._emit(LLMStreamDelta(event.text))
+            elif isinstance(event, ThinkingDelta):
+                await self._emit(LLMThinkingDelta(event.text))
             elif isinstance(event, StreamFinished):
                 finished = event
         if finished is None:  # provider 违反契约

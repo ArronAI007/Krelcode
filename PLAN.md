@@ -43,7 +43,9 @@
 
 | 20 | 韧性与自我修正辅助 | RetryingProvider（LLMProvider 透明装饰器：429/408/409/425/5xx/网络错误指数退避重试，401/400/ConfigError 不重试，**已产出 delta 绝不重试**防重复输出，sleep 可注入，--retries 默认 2）· edit_file 失败辅助：多处匹配报精确行号、未匹配给 difflib 相近行提示（帮 LLM 一轮自我修正） | 12 个新测试：可重试分类/退避序列 [1,2]/精确错误单次尝试/重试耗尽/中途产出不重试/0 关闭/属性透传/on_retry 回调/app 接线；行号与提示断言 | ✅ |
 
-| 测试总数：320（离线 318 + 本地端口集成 2，沙箱内自动 skip） |
+| 21 | 思考模型统一支持 | 统一 ThinkingDelta 事件（llm 层）：OpenAI 兼容 reasoning_content/reasoning（DeepSeek/Qwen/OpenRouter）与 Anthropic thinking 块（thinking_delta，signature_delta 忽略）都翻译到同一事件流；约定思考**永不进入** message.content/history；core LLMThinkingDelta 事件转发；渲染器 dim [thinking] 流（前缀一次、换行压平、任意其他事件收束） | 6 个新测试：两 provider 的 SSE 思考流解析、思考不混入 content、loop 转发与历史洁净、渲染器收束与压平 | ✅ |
+
+| 测试总数：326（离线 324 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·
