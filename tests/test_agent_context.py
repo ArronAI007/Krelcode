@@ -48,16 +48,44 @@ def test_render_tree_entry_cap(ws):
     assert "目录树截断" in tree
 
 
-def test_read_agents_md(ws):
-    assert read_agents_md(ws) == ""
+@pytest.fixture
+def empty_home(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    return home
+
+
+def test_read_agents_md(ws, empty_home):
+    assert read_agents_md(ws, home=empty_home) == ""
     (ws / "AGENTS.md").write_text("永远用中文注释。", encoding="utf-8")
-    out = read_agents_md(ws)
+    out = read_agents_md(ws, home=empty_home)
     assert "AGENTS.md" in out and "永远用中文注释" in out
 
 
-def test_read_agents_md_size_cap(ws):
+def test_read_agents_md_size_cap(ws, empty_home):
     (ws / "AGENTS.md").write_text("r" * 20000, encoding="utf-8")
-    assert len(read_agents_md(ws)) < 9000
+    assert len(read_agents_md(ws, home=empty_home)) < 9000
+
+
+def test_read_agents_md_global_and_project_layering(ws, tmp_path):
+    """全局 ~/.krelcode/AGENTS.md + 项目 AGENTS.md 分层注入，全局在前。"""
+    home = tmp_path / "home"
+    (home / ".krelcode").mkdir(parents=True)
+    (home / ".krelcode" / "AGENTS.md").write_text("全局偏好：简洁回复", encoding="utf-8")
+    (ws / "AGENTS.md").write_text("项目约定：中文注释", encoding="utf-8")
+
+    out = read_agents_md(ws, home=home)
+    assert "全局规则" in out and "全局偏好：简洁回复" in out
+    assert "项目规则" in out and "项目约定：中文注释" in out
+    assert out.index("全局偏好") < out.index("项目约定")   # 更具体的项目规则在后
+
+
+def test_read_agents_md_global_only(ws, tmp_path):
+    home = tmp_path / "home"
+    (home / ".krelcode").mkdir(parents=True)
+    (home / ".krelcode" / "AGENTS.md").write_text("只有全局", encoding="utf-8")
+    out = read_agents_md(ws, home=home)
+    assert "只有全局" in out and "项目规则" not in out
 
 
 def test_git_snapshot_non_repo(ws):
@@ -73,8 +101,10 @@ def test_git_snapshot_real_repo(tmp_path):
     assert "dirty.txt" in snap  # porcelain 状态包含未跟踪文件
 
 
-def test_build_workspace_context_wraps_sections(ws):
+def test_build_workspace_context_wraps_sections(ws, tmp_path):
     (ws / "AGENTS.md").write_text("规则A", encoding="utf-8")
-    ctx = asyncio.run(build_workspace_context(ws))
+    home = tmp_path / "home"
+    home.mkdir()
+    ctx = asyncio.run(build_workspace_context(ws, home=home))
     assert ctx.startswith("<workspace_context>") and ctx.endswith("</workspace_context>")
     assert "工作区目录树" in ctx and "规则A" in ctx

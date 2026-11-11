@@ -7,7 +7,8 @@ from typing import Any, Dict
 import pytest
 
 from krelcode.agent.compression import (
-    SUMMARY_PREFIX, ContextManager, MIN_MESSAGES_TO_COMPRESS, render_messages,
+    EVICTION_MARKER, SUMMARY_PREFIX, ContextManager, MIN_EVICT_CHARS,
+    MIN_MESSAGES_TO_COMPRESS, render_messages,
 )
 from krelcode.agent.loop import AgentLoop
 from krelcode.agent.tokens import (
@@ -207,3 +208,67 @@ def test_small_tool_output_not_persisted(tmp_path):
     # 该 loop 无 system prompt：history = user, assistant(tc), tool, assistant
     assert loop.history[2].content == "just a little"
     assert not (tmp_path / ".krelcode" / "tool_outputs").exists()
+
+
+# -- 工具结果驱逐（第一道防线，Step 25）----------------------------------------------------------
+
+def make_tool_history(n_tools=8, size=500):
+    """system + n_tools 轮（user → assistant(tool_calls) → tool(大输出)）+ 收尾。"""
+    h = [Message.system("SYS")]
+    for i in range(n_tools):
+        h.append(Message.user(f"q{i}"))
+        h.append(Message.assistant(tool_calls=[ToolCall(f"c{i}", "t", {})]))
+        h.append(Message.tool_result(f"c{i}", "x" * size))
+    h.append(Message.assistant("done"))
+    return h
+
+
+def test_evict_keeps_recent_marks_old_and_preserves_structure():
+    h = make_tool_history(8, size=500)
+    roles_before = [m.role for m in h]
+    cm = ContextManager(MockProvider(), max_tokens=10**9, keep_recent_tools=3)
+
+    n = cm.evict_old_tool_results(h)
+    assert n == 5
+    tools = [m for m in h if m.role == "tool"]
+    for m in tools[:5]:
+        assert m.content.startswith("[旧工具输出已驱逐") and "500" in m.content
+    for m in tools[5:]:
+        assert m.content == "x" * 500                 # 最近 3 条原样保留
+    assert [m.role for m in h] == roles_before        # 配对结构未动
+    assert cm.evict_old_tool_results(h) == 0          # 幂等：已驱逐的不再处理
+
+
+def test_evict_skips_short_results():
+    h = make_tool_history(6, size=MIN_EVICT_CHARS - 1)
+    cm = ContextManager(MockProvider(), max_tokens=10**9, keep_recent_tools=2)
+    assert cm.evict_old_tool_results(h) == 0          # 太短，驱逐无收益
+
+
+def test_eviction_resolves_budget_without_llm_call():
+    h = make_tool_history(10, size=5000)              # ~12.5K tokens
+    provider = MockProvider(scripted=["不该被消费的摘要"])
+    cm = ContextManager(provider, max_tokens=6000, keep_recent_tools=3)
+
+    assert asyncio.run(cm.maybe_compress(h)) is True
+    assert provider.calls == []                       # 零 LLM 调用（免费防线生效）
+    assert not cm.over_budget(h)
+
+
+def test_evict_then_summarize_when_still_over_budget():
+    h = make_tool_history(10, size=5000)
+    provider = MockProvider(scripted=["兜底摘要"])
+    cm = ContextManager(provider, max_tokens=100, keep_recent_tools=3, keep_recent=4)
+
+    assert asyncio.run(cm.maybe_compress(h)) is True
+    assert len(provider.calls) == 1                   # 驱逐不够 → LLM 摘要兜底
+    assert h[1].content.startswith(SUMMARY_PREFIX)
+    assert "兜底摘要" in h[1].content
+
+
+def test_evicted_marker_mentions_reread():
+    h = make_tool_history(4, size=1000)
+    cm = ContextManager(MockProvider(), max_tokens=10**9, keep_recent_tools=1)
+    cm.evict_old_tool_results(h)
+    evicted = [m for m in h if m.role == "tool" and "已驱逐" in (m.content or "")]
+    assert evicted and "read_file" in evicted[0].content   # 提示可重新获取

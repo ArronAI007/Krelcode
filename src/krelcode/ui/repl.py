@@ -31,6 +31,7 @@ HELP_TEXT = """可用命令：
   /compact       立即压缩对话历史（LLM 摘要，不必等预算超限）
   /undo          回滚上一轮对话的文件改动（检查点恢复；/undo list 查看栈）
   /cost          显示 token 用量（本轮 + 会话累计）
+  /context       显示上下文统计；/context refresh 重新采集工作区上下文
   /export [路径] 把当前会话导出为 Markdown（缺省存 .krelcode/exports/）
 消息里可用 @路径 引用文件（如: 解释 @src/main.py），内容随消息注入。
   /reset         清空对话历史
@@ -93,6 +94,26 @@ async def run_repl(
                     print(f"  （找不到会话: {target}；用 /sessions 查看列表）")
                 else:
                     restore_session(loop, path)
+                continue
+            if user_input == "/context" or user_input.startswith("/context "):
+                from ..agent.tokens import estimate_history_tokens
+                sub = user_input.split(maxsplit=1)[1].strip() if len(user_input.split(maxsplit=1)) > 1 else ""
+                if sub == "refresh":
+                    from ..agent.context import build_workspace_context
+                    from ..agent.prompts import build_system_prompt
+                    ctx_text = await build_workspace_context(workspace_root)
+                    if loop.history and loop.history[0].role == "system":
+                        loop.history[0].content = build_system_prompt(ctx_text)
+                        print("  [context] 工作区上下文已刷新（目录树/git/规则文件）")
+                    else:
+                        print("  [context] 历史中无 system 消息，未刷新")
+                else:
+                    total = estimate_history_tokens(loop.history)
+                    budget = (loop.context_manager.max_tokens
+                              if loop.context_manager else "未启用压缩")
+                    tool_msgs = sum(1 for m in loop.history if m.role == "tool")
+                    print(f"  [context] 历史 {len(loop.history)} 条消息（含 {tool_msgs} 条工具结果）"
+                          f" · 估算 {total} tokens · 预算 {budget}")
                 continue
             if user_input == "/cost":
                 print(f"  [cost] {usage.summary()}" if usage else "  （用量统计不可用）")

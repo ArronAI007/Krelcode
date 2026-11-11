@@ -22,6 +22,7 @@ TREE_MAX_ENTRIES = 150
 AGENTS_MD_MAX_CHARS = 8_000
 GIT_STATUS_MAX_CHARS = 2_000
 AGENTS_MD_NAMES = ("AGENTS.md", "KRELCODE.md")
+GLOBAL_RULES_RELPATH = Path(".krelcode") / "AGENTS.md"   # ~/.krelcode/AGENTS.md
 
 
 # ---------------------------------------------------------------------------
@@ -64,17 +65,36 @@ def render_tree(root: Path) -> str:
 # 项目规则文件
 # ---------------------------------------------------------------------------
 
-def read_agents_md(root: Path) -> str:
+def read_agents_md(root: Path, home: Optional[Path] = None) -> str:
+    """分层规则加载（主流约定）：全局 ~/.krelcode/AGENTS.md + 项目级文件。
+
+    两段都注入（全局在前、项目在后=更具体者优先级更高）；各自限字符数。
+    home 可注入（测试确定性）；缺省 Path.home()。
+    """
+    home_dir = Path.home() if home is None else Path(home)
+    sections: List[str] = []
+
+    global_path = home_dir / GLOBAL_RULES_RELPATH
+    global_text = _read_capped(global_path)
+    if global_text:
+        sections.append(
+            f"全局规则（来自 ~/.krelcode/AGENTS.md，务必遵守）:\n{global_text}")
+
     for name in AGENTS_MD_NAMES:
-        path = root / name
-        if path.is_file():
-            try:
-                text = path.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                continue
-            text = text[:AGENTS_MD_MAX_CHARS]
-            return f"项目规则（来自 {name}，务必遵守）:\n{text}"
-    return ""
+        project_text = _read_capped(root / name)
+        if project_text:
+            sections.append(f"项目规则（来自 {name}，务必遵守）:\n{project_text}")
+            break   # AGENTS.md 与 KRELCODE.md 只取先命中的
+    return "\n\n".join(sections)
+
+
+def _read_capped(path: Path) -> str:
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8", errors="ignore")[:AGENTS_MD_MAX_CHARS]
+    except OSError:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +136,7 @@ async def git_snapshot(root: Path) -> str:
 # 汇总
 # ---------------------------------------------------------------------------
 
-async def build_workspace_context(root: Path) -> str:
+async def build_workspace_context(root: Path, home: Optional[Path] = None) -> str:
     """组装 <workspace_context> 注入块；空工作区/全失败时返回空串。"""
     sections: List[str] = []
     try:
@@ -126,7 +146,7 @@ async def build_workspace_context(root: Path) -> str:
     git_part = await git_snapshot(root)
     if git_part:
         sections.append(git_part)
-    agents_part = read_agents_md(root)
+    agents_part = read_agents_md(root, home=home)
     if agents_part:
         sections.append(agents_part)
     if not sections:

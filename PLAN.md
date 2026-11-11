@@ -51,7 +51,9 @@
 
 | 24 | Gemini provider | 第三种 wire format 验证统一抽象：contents/parts（text/functionCall/functionResponse）、systemInstruction 独立字段、functionCall **无 id** → 合成 gem-N + 转换历史时重建 id→name 映射、连续 tool 结果合并、finishReason 规范化（有调用即 tool_calls / MAX_TOKENS→length / 其余小写透传）、usageMetadata 三键规范化、x-goog-api-key 鉴权、:streamGenerateContent?alt=sse；GOOGLE_API_KEY 兜底；FakeTransport 升级为响应队列 | 14 个新测试：全形态历史转换、请求形态、流式文本+usage、合成 id 多调用、非法 args 标记、finish 映射×2、HTTP 错误、key 缺失/env 兜底、registry 接入、**AgentLoop 全链路 wire roundtrip**（functionCall→get_time→functionResponse 按 name 配对→文本） | ✅ |
 
-| 测试总数：373（离线 371 + 本地端口集成 2，沙箱内自动 skip） |
+| 25 | 上下文管理二期 | 工具结果驱逐（LLM 摘要前的免费第一道防线：只留最近 N 条工具输出，更早的换占位标记，配对结构不动、幂等、短结果跳过；驱逐后仍超预算才 LLM 摘要）· AGENTS.md 分层（全局 ~/.krelcode/AGENTS.md + 项目级，各自限字符，全局在前项目在后）· REPL /context（历史/工具消息数、估算 tokens、预算）与 /context refresh（重采目录树/git/规则并重建 system prompt） | 8 个新测试：驱逐保结构/保最近/幂等/短结果跳过/零 LLM 调用解决预算/驱逐后摘要兜底/标记含重读提示；分层规则全局+项目顺序/仅全局；/context 统计与刷新进 system | ✅ |
+
+| 测试总数：381（离线 379 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

@@ -193,3 +193,18 @@ def test_undo_command_restores_file(tmp_path, capsys):
     assert "[undo] 已回滚上一轮" in out and "a.txt" in out
     assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "原始"
     assert "无可回滚的检查点" in out      # /undo list 此时已空
+
+
+# -- /context 统计与刷新（Step 25）-------------------------------------------------------------------
+
+def test_context_stats_and_refresh(tmp_path, capsys):
+    (tmp_path / "proj.py").write_text("x = 1", encoding="utf-8")
+    loop = make_loop(tmp_path, scripted=["r1"])
+    drive(loop, ["/context", "/context refresh", "/exit"])
+    out = capsys.readouterr().out
+    assert "[context] 历史" in out and "tokens" in out          # 统计
+    assert "已刷新" in out                                        # refresh
+    system_msg = loop.history[0]
+    assert system_msg.role == "system"
+    assert "<workspace_context>" in system_msg.content
+    assert "proj.py" in system_msg.content                      # 目录树已进 system

@@ -110,7 +110,9 @@ run(user_input):
 
 启动时上下文注入（agent/context.py，失败安全）：
 目录树快照（剪枝隐藏/依赖目录，限深 3、限 150 项）+ git 分支与 porcelain 状态
-+ AGENTS.md/KRELCODE.md 项目规则（限 8K 字符），包成 <workspace_context> 注入 system prompt。
++ **分层规则文件**（全局 ~/.krelcode/AGENTS.md + 项目 AGENTS.md/KRELCODE.md，
+全局在前=项目更具体者优先，各自限 8K 字符），包成 <workspace_context> 注入
+system prompt；REPL `/context` 查看统计、`/context refresh` 重采并重建。
 
 错误恢复原则：工具抛异常/被拒绝/未知工具，都转成 `ToolResult(is_error=True)`
 回填给 LLM，让它自我修正，而不是中断循环。
@@ -152,6 +154,10 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
 
 - **token 估算**（agent/tokens.py，零依赖）：CJK ≈ 1 token/字，其他 ≈ 4 字符/token，
   精度足够做预算决策；消息含 tool_calls 参数序列化
+- **两道防线**（Step 25）：超预算先做**工具结果驱逐**——只保留最近
+  keep_recent_tools（默认 6）条工具输出，更早的 content 替换为占位标记
+  （消息本身保留 → tool_call/result 配对永远完整；零 LLM 调用、幂等、
+  短于 200 字符的结果跳过）；驱逐后仍超预算（或 /compact 强制）才走 LLM 摘要
 - **预算压缩**（agent/compression.py ContextManager）：超 `--context-tokens`（默认 10 万）时，
   把「中段历史」渲染后交给 LLM 摘要成一条 `[上下文摘要]` 消息，
   结构变为 `[system] + [摘要] + [最近 keep_recent 条]`；
