@@ -1,12 +1,12 @@
 """MCP 客户端测试：用 stub 服务器跑真实子进程（stdio JSON-RPC），全离线。
 
 覆盖：握手、工具发现、远程调用、isError、JSON-RPC 错误、服务器崩溃、
-MCPTool 适配（命名/schema/Tool 端口兼容）、与 AgentLoop 集成、config 启动。
+MCPTool 适配（命名/schema/Tool 端口兼容）、与 AgentLoop 集成。
+config 驱动/热重载见 test_mcp_supervisor.py；resources/prompts 见
+test_mcp_capabilities.py；SSE 见 test_mcp_sse.py。
 """
 
 import asyncio
-import os
-import signal
 import sys
 from pathlib import Path
 
@@ -86,7 +86,7 @@ def test_server_crash_fails_requests():
     async def go():
         client = MCPClient(make_config())
         await client.start()
-        client._proc.kill()               # 模拟服务器崩溃
+        client._transport._proc.kill()    # 模拟服务器崩溃
         await asyncio.sleep(0.3)          # 等 reader 观察到 EOF
         with pytest.raises(MCPError):
             await client.call_tool("echo", {"text": "x"})
@@ -156,34 +156,3 @@ def test_mcp_tool_in_agent_loop(tmp_path):
         assert provider.tools_seen[0][0]["name"] == "stub__add"
 
     run(go)
-
-
-# -- 配置驱动启动（app.start_mcp_servers）----------------------------------------------------
-
-def test_start_mcp_servers_from_config():
-    from krelcode.app import close_mcp_clients, start_mcp_servers
-
-    config = {"mcp_servers": {
-        "stub": {"command": sys.executable, "args": [str(STUB)]},
-        "broken": {"command": "/nonexistent/server-binary"},
-        "invalid": {},
-    }}
-
-    async def go():
-        clients, tools = await start_mcp_servers(config)
-        try:
-            names = sorted(t.name for t in tools)
-            assert names == ["stub__add", "stub__boom", "stub__echo"]
-            assert len(clients) == 1  # broken/invalid 被跳过，不阻断
-        finally:
-            await close_mcp_clients(clients)
-        return names
-
-    assert asyncio.run(go()) == ["stub__add", "stub__boom", "stub__echo"]
-
-
-def test_start_mcp_servers_disabled():
-    from krelcode.app import start_mcp_servers
-    clients, tools = asyncio.run(start_mcp_servers(
-        {"mcp_servers": {"stub": {"command": "x"}}}, disabled=True))
-    assert clients == [] and tools == []

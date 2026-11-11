@@ -25,7 +25,9 @@
 | 10 | repo_map 工具：Python ast 精确提取（类/函数/方法/签名/嵌套缩进）、JS/TS 正则提取、剪枝+20K 字符预算、行号可直接接 read_file(offset) | 符号/行号/签名/剪枝/预算截断/损坏文件跳过 ×8；对 Krelcode 仓库自身生成地图验证 | ✅ |
 | 11 | 多会话管理：/sessions 列表（时间/轮数/消息数/预览）、/resume <n\|latest\|path> 会话内切换（与 --resume 共用 restore_session） | manager/inspect/format/目标解析/历史切换 ×7 + 终端演示 | ✅ |
 
-| 测试总数：218（全离线） |
+| 12 | MCP 进阶 | MCPTransport 端口拆分（StdioTransport/SSETransport：endpoint 事件、reader 线程→call_soon_threadsafe 回投、connector 可注入）· capabilities 门控 · resources/prompts 四类能力工具 · MCPSupervisor 热重载（配置 diff 增/删/改、崩溃自动重启+工具重注册、/mcp 状态与 reload）· ToolRegistry.unregister_prefix | 34 个新测试：FakeConnector 内存 SSE（握手/urljoin/断流/JSON-RPC 错误）、真实 http.server SSE 集成（沙箱自动 skip，提权 234 全过）、supervisor 增删改/崩溃复活后工具可调用、能力门控、resources/prompts 端到端 | ✅ |
+
+| 测试总数：234（离线 233 + 本地端口集成 1，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

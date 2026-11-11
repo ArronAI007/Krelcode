@@ -9,7 +9,8 @@
 ## 快速开始
 
 ```bash
-# 运行全部测试（218 个，全离线）
+# 运行全部测试（234 个，全离线*）
+# *SSE 真实服务器集成测试需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
 # 离线体验 mock 模式：第一轮会演示完整 tool-call 循环（LLM→审批→执行get_time→回填→总结）
@@ -27,21 +28,27 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --mode
 #   api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-REPL 内置命令：`/help`、`/history`、`/tools`、`/session`、`/sessions`（列出全部会话）、`/resume <n|latest|path>`（会话内切换）、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/tools`、`/session`、`/sessions`、`/resume <n|latest|path>`、`/mcp`（状态）、`/mcp reload`（热重载）、`/reset`、`/exit`。
 
 ### MCP 远程工具
 
 在配置文件里声明 MCP 服务器（stdio），远程工具自动以 `<server>__<tool>` 命名注册，与本地工具无差别执行：
 
 ```toml
-[mcp_servers.fetch]
+[mcp_servers.fetch]          # stdio 传输
 command = "uvx"
 args = ["mcp-server-fetch"]
 env = { SOME_KEY = "value" }
 timeout = 30
+
+[mcp_servers.remote]         # SSE 传输（HTTP+SSE）
+url = "http://localhost:3000/sse"
+headers = { Authorization = "Bearer ..." }
 ```
 
-`--no-mcp` 可跳过启动；单个服务器启动失败只警告不阻断。
+- 按服务器 capabilities 自动注册：远程工具 + `list_resources`/`read_resource` + `list_prompts`/`get_prompt`
+- 热重载：REPL 内 `/mcp` 查看状态，`/mcp reload` 重读配置（增/删/改 diff 同步）；崩溃的服务器自动重启并重注册工具
+- `--no-mcp` 跳过启动；单服务器失败只警告不阻断
 
 ### repo_map
 

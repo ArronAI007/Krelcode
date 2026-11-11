@@ -185,6 +185,23 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   （轮数/消息数/首条输入预览），/resume <n|latest|path> 会话内切换，
   与 --resume 共用 restore_session；当前录制不中断
 
+## MCP 进阶（Step 12）
+
+- **传输抽象**：MCPClient 只做 JSON-RPC 协议层（id 配对 Future、超时、
+  disconnect 时 pending 全部失败）；MCPTransport 端口两实现：
+  · StdioTransport：子进程管道 + asyncio reader task
+  · SSETransport（HTTP+SSE 2024-11-05 规范）：GET 长连接收 `endpoint` 事件
+    （urljoin 解析 POST 目标）与 `message` 事件；reader 跑独立线程，经
+    loop.call_soon_threadsafe 回投；connector 可注入（单测零 socket）
+  配置 `command` → stdio，`url` → SSE，二选一
+- **capabilities 门控**：initialize 握手的 capabilities 决定注册哪些工具——
+  tools → 每远程工具一个 MCPTool；resources → list_resources/read_resource；
+  prompts → list_prompts/get_prompt；全部 `<server>__<tool>` 命名进同一注册表
+- **热重载**（MCPSupervisor）：sync() 配置 diff（dataclass 相等判断：
+  未变保持连接、变更先停后启、移除即注销）；check_and_restart() 复活崩溃
+  服务器并重注册工具；工具注销走 registry.unregister_prefix("<server>__")；
+  REPL /mcp 查看状态、/mcp reload 重读配置触发同步
+
 ## 分层测试策略（每层可独立验证）
 
 | 层 | 测试方式 |

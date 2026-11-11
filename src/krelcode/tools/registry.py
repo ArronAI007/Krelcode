@@ -21,6 +21,17 @@ class ToolRegistry:
     def get(self, name: str) -> Optional[Tool]:
         return self._tools.get(name)
 
+    def unregister(self, name: str) -> bool:
+        """移除一个工具；返回是否存在过。"""
+        return self._tools.pop(name, None) is not None
+
+    def unregister_prefix(self, prefix: str) -> int:
+        """移除所有以 prefix 开头的工具（MCP 服务器下线/热重启用）；返回移除数。"""
+        names = [n for n in self._tools if n.startswith(prefix)]
+        for n in names:
+            del self._tools[n]
+        return len(names)
+
     def names(self) -> List[str]:
         return sorted(self._tools)
 

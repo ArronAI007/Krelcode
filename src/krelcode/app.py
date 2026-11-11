@@ -22,8 +22,7 @@ from .core.messages import Message, ToolCall
 from .llm.base import LLMProvider
 from .llm.providers.mock import MockProvider
 from .llm.registry import create_provider, resolve_settings
-from .mcp.client import MCPClient, MCPServerConfig
-from .mcp.tools import MCPTool
+from .mcp.supervisor import MCPSupervisor
 from .safety.policy import AllowAllPolicy, SandboxPolicy
 from .session.recorder import (
     SessionRecorder, latest_session, load_history, new_session_path,
@@ -83,49 +82,6 @@ def build_policy(args: argparse.Namespace, workspace_root: Path, bus: EventBus):
         bus=bus,
         auto_approve=args.auto_approve,
     )
-
-
-async def start_mcp_servers(
-    config: Dict[str, Any], disabled: bool = False
-) -> Tuple[List[MCPClient], List[Tool]]:
-    """按 [mcp_servers.*] 启动客户端并收集远程工具（单服务器失败不阻断启动）。"""
-    if disabled:
-        return [], []
-    clients: List[MCPClient] = []
-    tools: List[Tool] = []
-    servers: Dict[str, Any] = config.get("mcp_servers") or {}
-    for name, spec in servers.items():
-        if not isinstance(spec, dict) or not spec.get("command"):
-            print(f"[mcp] 跳过 {name}: 配置缺少 command")
-            continue
-        client = MCPClient(MCPServerConfig(
-            name=name,
-            command=str(spec["command"]),
-            args=[str(a) for a in spec.get("args", [])],
-            env=dict(spec.get("env") or {}),
-            timeout=float(spec.get("timeout", 30.0)),
-        ))
-        try:
-            await client.start()
-            specs = await client.list_tools()
-        except Exception as e:
-            print(f"[mcp] 服务器 {name} 启动失败，已跳过: {type(e).__name__}: {e}")
-            await client.close()
-            continue
-        clients.append(client)
-        for spec in specs:
-            tools.append(MCPTool(client, spec))
-        info = client.server_info.get("name", name)
-        print(f"[mcp] {name}（{info}）已连接，{len(specs)} 个远程工具")
-    return clients, tools
-
-
-async def close_mcp_clients(clients: List[MCPClient]) -> None:
-    for client in clients:
-        try:
-            await client.close()
-        except Exception:
-            pass
 
 
 async def build_loop(
@@ -230,10 +186,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def async_main(args: argparse.Namespace) -> int:
-    config = load_config(Path(args.config) if args.config else None)
-    mcp_clients, mcp_tools = await start_mcp_servers(config, disabled=args.no_mcp)
+    config_path = Path(args.config) if args.config else None
+    config = load_config(config_path)
+    loop = await build_loop(args, config)
+    supervisor = MCPSupervisor(loop.registry)
+    if not args.no_mcp:
+        await supervisor.sync(config.get("mcp_servers") or {})
+
+    async def reload_mcp():
+        """REPL /mcp reload：重读配置 → diff 同步 → 重启已断开的服务器。"""
+        new_config = load_config(config_path)
+        await supervisor.sync(new_config.get("mcp_servers") or {})
+        return await supervisor.check_and_restart()
+
     try:
-        loop = await build_loop(args, config, extra_tools=mcp_tools)
         session_path = setup_session(args, loop)
         sessions_dir = loop.tool_context.workspace_root / ".krelcode" / "sessions"
         model = getattr(loop.llm, "model", "?")
@@ -250,9 +216,11 @@ async def async_main(args: argparse.Namespace) -> int:
             tool_names=loop.registry.names(),
             session_path=str(session_path) if session_path else None,
             sessions_dir=sessions_dir,
+            mcp_supervisor=supervisor,
+            mcp_reload=reload_mcp,
         )
     finally:
-        await close_mcp_clients(mcp_clients)
+        await supervisor.close_all()
 
 
 def main(argv=None) -> int:

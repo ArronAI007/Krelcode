@@ -1,10 +1,20 @@
-"""MCP (Model Context Protocol) 客户端：stdio JSON-RPC 2.0。
+"""MCP (Model Context Protocol) 客户端：stdio / SSE 双传输。
 
-远程工具经 MCPTool 适配器实现本地 Tool 端口，
-注册进 ToolRegistry 后与本地工具在 AgentLoop 里无差别执行。
+远程 tools/resources/prompts 经适配器实现本地 Tool 端口，
+注册进 ToolRegistry 后与本地工具在 AgentLoop 里无差别执行；
+MCPSupervisor 负责配置同步与崩溃热重启。
 """
 
-from .client import MCPClient, MCPError, MCPServerConfig
-from .tools import MCPTool, sanitize_tool_name
+from .client import MCPClient, MCPServerConfig
+from .stdio_transport import StdioTransport
+from .sse_transport import SSETransport
+from .supervisor import MCPSupervisor
+from .tools import MCPTool, discover_tools, sanitize_tool_name, server_prefix
+from .transport import MCPError, MCPTransport
 
-__all__ = ["MCPClient", "MCPError", "MCPServerConfig", "MCPTool", "sanitize_tool_name"]
+__all__ = [
+    "MCPClient", "MCPServerConfig", "MCPError", "MCPTransport",
+    "StdioTransport", "SSETransport",
+    "MCPTool", "discover_tools", "sanitize_tool_name", "server_prefix",
+    "MCPSupervisor",
+]

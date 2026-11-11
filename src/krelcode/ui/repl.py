@@ -22,6 +22,7 @@ HELP_TEXT = """可用命令：
   /session       显示当前会话文件路径
   /sessions      列出工作区的全部会话
   /resume <n>    切换到第 n 个会话（/sessions 里的序号；latest=最新）
+  /mcp           查看 MCP 服务器状态；/mcp reload 重读配置并热重启
   /reset         清空对话历史
   /exit          退出（Ctrl-D / Ctrl-C 同样有效）
 其他任何输入都会作为消息发给 agent。"""
@@ -32,6 +33,8 @@ async def run_repl(
     tool_names: Optional[list] = None,
     session_path: Optional[str] = None,
     sessions_dir: Optional[Path] = None,
+    mcp_supervisor=None,
+    mcp_reload=None,
 ) -> int:
     from ..app import restore_session  # 延迟导入避免 ui→app 循环依赖
 
@@ -74,6 +77,22 @@ async def run_repl(
                     print(f"  （找不到会话: {target}；用 /sessions 查看列表）")
                 else:
                     restore_session(loop, path)
+                continue
+            if user_input == "/mcp" or user_input.startswith("/mcp "):
+                if mcp_supervisor is None:
+                    print("  （MCP 未启用）")
+                    continue
+                sub = user_input.split(maxsplit=1)[1].strip() if len(user_input.split(maxsplit=1)) > 1 else ""
+                if sub == "reload":
+                    restarted = await mcp_reload() if mcp_reload else []
+                    note = f"，重启: {', '.join(restarted)}" if restarted else ""
+                    print(f"  [mcp] 配置已同步{note}")
+                for item in mcp_supervisor.status():
+                    state = "在线" if item["alive"] else "已断开"
+                    print(f"  {item['name']}（{item['server']}，{item['transport']}）"
+                          f"{state}，{item['tools']} 个工具")
+                if not mcp_supervisor.status():
+                    print("  （没有配置 MCP 服务器；在 krelcode.toml 的 [mcp_servers.*] 里声明）")
                 continue
             if user_input == "/history":
                 for m in loop.history:

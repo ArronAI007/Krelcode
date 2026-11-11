@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import sys
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,9 @@ from krelcode.tools.registry import ToolRegistry
 
 BUGGY = "def add(a, b):\n    return a - b\n"
 FIXED = "def add(a, b):\n    return a + b\n"
-CHECK = "python3 -c 'from func import add; assert add(2, 3) == 5; print(\"PASS\")'"
+# sys.executable: 不依赖测试环境 PATH；-B: 禁写字节码缓存——
+# 否则「编辑后同秒内重跑且文件大小不变」会命中 stale __pycache__（真实陷阱）
+CHECK = f"'{sys.executable}' -B -c 'from func import add; assert add(2, 3) == 5; print(\"PASS\")'"
 
 
 def test_fix_bug_until_check_passes(tmp_path):
