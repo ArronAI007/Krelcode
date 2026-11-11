@@ -30,7 +30,21 @@ from ..transport import (
 def to_openai_messages(messages: Sequence[Message]) -> List[Dict[str, Any]]:
     wire = []
     for m in messages:
-        msg: Dict[str, Any] = {"role": m.role, "content": m.content}
+        content: Any = m.content
+        if m.images and m.role == "user":
+            # 多模态：content 转 blocks（text + image_url data URI）
+            blocks: List[Dict[str, Any]] = []
+            if m.content:
+                blocks.append({"type": "text", "text": m.content})
+            for img in m.images:
+                blocks.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{img.media_type};base64,{img.data_b64}",
+                    },
+                })
+            content = blocks
+        msg: Dict[str, Any] = {"role": m.role, "content": content}
         if m.tool_calls:
             msg["tool_calls"] = [
                 {

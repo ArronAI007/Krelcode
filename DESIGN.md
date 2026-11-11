@@ -418,6 +418,17 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   审批时答 always 累积）；持久化到 <workspace>/.krelcode/allow_rules.json
   （该文件对 LLM 写保护——管理权只属于用户）
 
+## 多模态图片输入（Step 37）
+
+- core 新增 `ImageRef(media_type, data_b64, source_path)` 与
+  `Message.images`（仅 user 消息有意义）；wire 转换锁在各 adapter：
+  OpenAI `image_url` data URI / Anthropic `source.base64` / Gemini
+  `inline_data`；非 user 角色挂 images 时防御性忽略
+- 入口：`@shot.png` 自动识别图片扩展名（png/jpeg/webp/gif）→ base64
+  附件（5MB/4 张上限），正文留 `[图片 x 已附件]` 占位；文本与图片配额独立
+- 持久化：JSONL 只存 source_path（每轮全量快照 × base64 会撑爆文件），
+  恢复时按路径重载，源文件已删则静默丢弃；Markdown 导出以 🖼 占位
+
 ## 分层测试策略（每层可独立验证）
 
 | 层 | 测试方式 |

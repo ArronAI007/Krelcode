@@ -183,12 +183,12 @@ async def run_repl(
                 if handled is False:      # /reset 等已处理
                     continue
                 continue
-            # 普通消息：@展开 → 后台任务启动
-            expanded, at_notes = expand_at_files(user_input, workspace_root)
+            # 普通消息：@展开（文本注入 + 图片附件）→ 后台任务启动
+            expanded, at_notes, at_images = expand_at_files(user_input, workspace_root)
             for note_text in at_notes:
                 print(f"  [@] {note_text}")
             state["running"] = True
-            running = asyncio.create_task(loop.run(expanded))
+            running = asyncio.create_task(loop.run(expanded, images=at_images or None))
     finally:
         reader_task.cancel()
         inbox_get.cancel()

@@ -21,6 +21,8 @@ def render_markdown(history: List[Message], title: str = "Krelcode 会话") -> s
             lines += ["## System", "", "```", m.content or "", "```", ""]
         elif m.role == "user":
             lines += ["## 👤 User", "", m.content or "", ""]
+            for img in m.images or []:
+                lines += [f"🖼 _图片附件: {img.source_path or '(内联)'} ({img.media_type})_", ""]
         elif m.role == "assistant":
             lines += ["## 🤖 Assistant", ""]
             if m.content:

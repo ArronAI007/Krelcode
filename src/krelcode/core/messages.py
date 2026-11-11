@@ -20,6 +20,20 @@ INVALID_ARGUMENTS_KEY = "__invalid_arguments__"
 
 
 @dataclass(frozen=True)
+class ImageRef:
+    """用户消息附带的图片（多模态输入）。
+
+    data_b64 在内存中携带；会话持久化只存 source_path（防 JSONL 膨胀），
+    恢复时按路径重载，源文件已删则丢弃该图。wire 转换在各 provider
+    adapter 内完成（OpenAI image_url / Anthropic source / Gemini inline_data）。
+    """
+
+    media_type: str            # image/png | image/jpeg | image/webp | image/gif
+    data_b64: str
+    source_path: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class ToolCall:
     """assistant 消息里的一次工具调用请求。arguments 已解析为 dict。"""
 
@@ -47,6 +61,7 @@ class Message:
     tool_calls: Optional[List[ToolCall]] = None  # 仅 assistant
     tool_call_id: Optional[str] = None           # 仅 tool（结果回填）
     provider_meta: Optional[Dict[str, Any]] = None
+    images: Optional[List[ImageRef]] = None      # 仅 user（多模态输入）
 
     # -- 便捷构造 -------------------------------------------------------------
 
@@ -55,8 +70,9 @@ class Message:
         return cls(role=ROLE_SYSTEM, content=content)
 
     @classmethod
-    def user(cls, content: str) -> "Message":
-        return cls(role=ROLE_USER, content=content)
+    def user(cls, content: str,
+             images: Optional[List[ImageRef]] = None) -> "Message":
+        return cls(role=ROLE_USER, content=content, images=images)
 
     @classmethod
     def assistant(

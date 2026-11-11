@@ -87,13 +87,15 @@ class AgentLoop:
 
     # -- 对外主入口 -----------------------------------------------------------
 
-    async def run(self, user_input: str) -> str:
+    async def run(self, user_input: str, images: Optional[list] = None) -> str:
         """处理一轮用户输入：内部可能经历多次 LLM 调用与工具执行。
 
+        images: 可选 ImageRef 列表（@图片附件），挂在 user 消息上由
+        provider adapter 转成各自的多模态 wire 格式。
         被 cancel 时（REPL /stop）：消毒历史（弹掉不配对的尾部消息），
         若结尾是未答完的 user 消息则补一条中止说明（保角色交替），再重抛。
         """
-        self.history.append(Message.user(user_input))
+        self.history.append(Message.user(user_input, images=images or None))
         self._failure_counts = {}
         self._token_total = 0
         await self._emit(RunStarted(user_input))

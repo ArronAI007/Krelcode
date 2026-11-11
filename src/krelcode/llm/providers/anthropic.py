@@ -79,7 +79,22 @@ def to_anthropic_request_messages(
             continue
         flush_tool_results()
         if m.role == ROLE_USER:
-            wire.append({"role": ROLE_USER, "content": m.content or ""})
+            if m.images:
+                blocks_u: List[Dict[str, Any]] = []
+                if m.content:
+                    blocks_u.append({"type": "text", "text": m.content})
+                for img in m.images:
+                    blocks_u.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": img.media_type,
+                            "data": img.data_b64,
+                        },
+                    })
+                wire.append({"role": ROLE_USER, "content": blocks_u})
+            else:
+                wire.append({"role": ROLE_USER, "content": m.content or ""})
         elif m.role == ROLE_ASSISTANT:
             blocks: List[Dict[str, Any]] = []
             # 扩展思考回传：thinking/redacted_thinking 块必须位于 content 最前

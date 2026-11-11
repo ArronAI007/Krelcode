@@ -72,7 +72,13 @@ def to_gemini_contents(
             continue
         flush_pending()
         if m.role == ROLE_USER:
-            contents.append({"role": ROLE_USER, "parts": [{"text": m.content or ""}]})
+            parts_u: List[Dict[str, Any]] = [{"text": m.content or ""}]
+            for img in m.images or []:
+                parts_u.append({"inline_data": {
+                    "mime_type": img.media_type,
+                    "data": img.data_b64,
+                }})
+            contents.append({"role": ROLE_USER, "parts": parts_u})
         elif m.role == ROLE_ASSISTANT:
             parts: List[Dict[str, Any]] = []
             if m.content:

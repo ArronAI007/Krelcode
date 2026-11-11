@@ -75,7 +75,9 @@
 
 | 36 | 真实使用就绪 | Retry-After：LLMHTTPError 携带响应头（三家 provider 透传），retry_after 属性解析秒数（HTTP-date/非法值→None 退回退避）；RetryingProvider 取 max(退避, Retry-After)，超过 120s 硬上限快速失败 · generation 参数透传：TOML [providers.X] generation = { temperature = … } → OpenAI/Anthropic payload 合并（显式键 model/stream/messages 后置不可覆盖，防误配劫持）、Gemini 进 generationConfig 段 | 11 个新测试：retry_after 解析 5 态、provider 头透传（429+头→retry_after=11）、退避取大/取退避/硬上限放弃/无头回退；三家 generation 形态、恶意键不可覆盖、registry 透传、默认零污染 | ✅ |
 
-| 测试总数：473（离线 471 + 本地端口集成 2，沙箱内自动 skip） |
+| 37 | 多模态图片输入 | core ImageRef + Message.images（仅 user 消息）· @图片附件：png/jpeg/webp/gif 自动识别 → base64 ImageRef（文本占位符），5MB/4 张上限，越界/缺失 fail-safe · 三家 wire 转换（OpenAI image_url data URI / Anthropic source.base64 / Gemini inline_data，非 user 角色防御性忽略）· loop.run(images=) 透传 · 会话持久化只存 source_path（防每轮快照 JSONL 膨胀），恢复时按路径重载、源删则静默丢弃 · export 🖼 占位 | 13 个新测试：附件构造/文本图片混合/超限（monkeypatch 常量）/越界；三家 wire 精确断言、防角色泄漏；loop 挂载、codec 路径持久化+重载+源删丢弃、导出不含 base64 | ✅ |
+
+| 测试总数：486（离线 484 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·
