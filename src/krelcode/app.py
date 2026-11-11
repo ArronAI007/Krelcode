@@ -37,12 +37,14 @@ from .session.recorder import (
 )
 from .subagent.manager import SubagentManager
 from .tools.base import Tool, ToolContext
+from .tools.builtin.check_syntax import CheckSyntaxTool
 from .tools.builtin.edit_file import EditFileTool
 from .tools.builtin.glob import GlobTool
 from .tools.builtin.grep import GrepTool
 from .tools.builtin.read_file import ReadFileTool
 from .tools.builtin.repo_map import RepoMapTool
 from .tools.builtin.run_command import RunCommandTool
+from .tools.builtin.find_refs import FindRefsTool
 from .tools.builtin.time_tool import GetTimeTool
 from .tools.builtin.write_file import WriteFileTool
 from .tools.registry import ToolRegistry
@@ -51,10 +53,12 @@ from .ui.repl import run_repl
 
 
 def default_tools() -> List[Tool]:
-    """内置工具集（8 个）。MCP 远程工具在运行时追加注册。"""
+    """内置工具集（10 个 + 4 个子代理工具在 build_loop 注册）。
+    MCP 远程工具在运行时追加注册。"""
     return [
         GetTimeTool(), ReadFileTool(), WriteFileTool(), EditFileTool(),
         RunCommandTool(), GrepTool(), GlobTool(), RepoMapTool(),
+        FindRefsTool(), CheckSyntaxTool(),
     ]
 
 
