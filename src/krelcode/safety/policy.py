@@ -131,10 +131,13 @@ PROTECTED_GLOBS = (
     ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx",
     "id_rsa*", "id_ed25519*", "secrets.*", "credentials*",
     ".npmrc", ".netrc", ".pgpass", ".htpasswd",
-    # 审批白名单自身：防止 LLM 给自己提权
-    ".krelcode/allow_rules.json",
+    # agent 自身的配置：防 LLM 篡改配置注入 hooks / 改 provider 外传数据
+    "krelcode.toml",
 )
-PROTECTED_DIRS = (".git",)  # 仓库内部（含 hooks/config，可执行任意代码）
+# 目录级保护（路径中任一段命中即保护）：
+# - .git：仓库内部（hooks/config 可执行任意代码）
+# - .krelcode：审批白名单、检查点、会话、hook 运行时状态——防自我提权与痕迹篡改
+PROTECTED_DIRS = (".git", ".krelcode")
 
 
 def classify_protected_path(raw_path: str, workspace_root: Path) -> Optional[str]:
@@ -150,8 +153,9 @@ def classify_protected_path(raw_path: str, workspace_root: Path) -> Optional[str
     except (ValueError, OSError):
         rel = candidate.as_posix()  # 解析失败（如指向工作区外）用字面路径判断
     parts = rel.split("/")
-    if any(part in PROTECTED_DIRS for part in parts):
-        return f"{PROTECTED_DIRS[0]} 目录（仓库内部）"
+    for part in parts:
+        if part in PROTECTED_DIRS:
+            return f"{part}/ 目录（agent/仓库内部状态）"
     base = parts[-1]
     for pattern in PROTECTED_GLOBS:
         if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(base, pattern):

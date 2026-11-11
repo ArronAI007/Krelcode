@@ -39,7 +39,9 @@
 
 | 18 | 生产化加固 | token 预算（--token-budget：loop 消费 provider 上报 usage，每次 LLM 调用前检查，超限优雅中止；无 total 时退化为 input+output）· 敏感文件写保护（.git/、.env*、*.pem/*.key、id_rsa*、.npmrc/.netrc、**allow_rules.json 防 LLM 自我提权** → ASK，非交互 fail-closed）· headless JSON 输出（--output-format json：stdout 纯 JSON{ok,reply,usage,tools_used,denied,session}，启动提示走 stderr，CI/脚本可用） | 17 个新测试：预算中止时机（LLM 调用数精确断言）/无预算不受影响/usage 退化求和、保护路径 10 组参数化、策略级拒绝与批准、AllowAll 语义不变、JSON 模式 stdout 纯净性 + 字段断言 | ✅ |
 
-| 测试总数：296（离线 294 + 本地端口集成 2，沙箱内自动 skip） |
+| 19 | Hook 系统 + 安全补洞 | 安全补洞：krelcode.toml 与 .krelcode/ 全目录列入写保护（防 LLM 篡改配置注入钩子/改审批白名单/篡改检查点会话）· HookRunner：TOML [[hooks]] 配置 file_edited/tool_completed/tool_failed/run_finished 四类触发器，模板变量全部 shlex.quote（值来自 LLM 参数，防命令注入），钩子失败/超时只记日志不影响主循环 | 13 个新测试：解析容错、触发映射（失败写工具不触发 file_edited）、路径含空格+注入载荷被 quote（PWNED 不落地）、exit 3 不抛、sleep 30 被 0.5s 超时终止、AgentLoop e2e 钩子链 | ✅ |
+
+| 测试总数：308（离线 306 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

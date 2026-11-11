@@ -18,7 +18,7 @@ krelcode --version
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（296 个，全离线*）
+# 运行全部测试（308 个，全离线*）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -77,6 +77,23 @@ krelcode --provider openai -m "修复 tests/ 下失败的测试" --output-format
 ```
 
 `--token-budget N` 可限制单轮 token 用量（超限优雅中止）；启动提示走 stderr，stdout 保持纯净可管道。
+
+### Hooks（事件钩子）
+
+在配置文件里声明，典型用途是编辑后自动 formatter/linter：
+
+```toml
+[[hooks]]
+on = "file_edited"          # file_edited / tool_completed / tool_failed / run_finished
+command = "ruff format {path}"
+timeout = 30
+
+[[hooks]]
+on = "run_finished"
+command = "osascript -e 'display notification \"任务完成\"'"
+```
+
+hooks 只能由用户在配置文件定义（`krelcode.toml` 与 `.krelcode/` 已列入写保护，agent 无法自我注入）；模板变量值经 shell-quote，钩子失败/超时不影响主循环。
 
 ### git 自动提交（可选）
 

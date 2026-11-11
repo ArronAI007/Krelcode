@@ -22,6 +22,7 @@ from .agent.prompts import build_system_prompt
 from .agent.usage import UsageTracker
 from .config import load_config
 from .core.events import EventBus, PermissionDenied, ToolCallCompleted
+from .hooks import HookRunner, parse_hooks
 from .core.messages import Message, ToolCall
 from .llm.base import LLMProvider
 from .llm.providers.mock import MockProvider
@@ -256,6 +257,12 @@ async def async_main(args: argparse.Namespace) -> int:
         checkpoints.attach(loop.bus)
     usage = UsageTracker()
     usage.attach(loop.bus)
+    hook_specs = parse_hooks(config)
+    if hook_specs:
+        hooks = HookRunner(loop.tool_context.workspace_root, hook_specs, log=note)
+        hooks.attach(loop.bus)
+        note(f"[hooks] 已加载 {len(hook_specs)} 个钩子: "
+             + ", ".join(sorted({h.on for h in hook_specs})))
     if args.auto_commit:
         committer = AutoCommitter(loop.tool_context.workspace_root)
         if await committer.is_git_repo():

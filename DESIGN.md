@@ -264,6 +264,19 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   `{ok, reply, usage, tools_used, denied, session}`；启动提示（MCP 连接、
   自动提交、会话恢复）全部改走 stderr；异常 → `{"ok": false, "error": ...}` + 退出码 1
 
+## Hook 系统与安全补洞（Step 19）
+
+- **写保护补洞**：`krelcode.toml`（agent 配置本体）与 `.krelcode/` 全目录
+  （审批白名单/检查点/会话/工具输出）列入 SandboxPolicy 保护路径——
+  堵住「LLM 改配置注入 hooks / 给自己提权 / 篡改回滚痕迹」的攻击面
+- **HookRunner**（hooks.py）：用户在 TOML 里声明 `[[hooks]]`
+  （on = file_edited / tool_completed / tool_failed / run_finished，
+  command 支持 {path} {tool} {reply} {workspace} 等模板变量，timeout 可配）；
+  EventBus 旁路订阅，典型用途：编辑后自动 formatter/linter、任务完成通知
+- 安全模型：hooks 只能来自用户配置（配置即信任，直接执行不走审批）；
+  模板变量值来自 LLM 工具参数，**一律 shlex.quote** 防命令注入；
+  钩子失败/超时只记日志（executions 留审计），绝不影响主循环
+
 ## 分层测试策略（每层可独立验证）
 
 | 层 | 测试方式 |

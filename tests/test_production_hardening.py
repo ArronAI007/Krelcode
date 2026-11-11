@@ -78,6 +78,9 @@ def test_token_budget_falls_back_to_input_plus_output(tmp_path):
     (".env", True), ("config/.env.local", True), (".git/config", True),
     (".git", True), ("keys/server.pem", True), ("~/.ssh/id_rsa", True),
     (".krelcode/allow_rules.json", True),   # 防 LLM 给自己提权
+    (".krelcode/sessions/x.jsonl", True),   # 防篡改会话/检查点
+    ("krelcode.toml", True),                # 防注入 hooks/改 provider 配置
+    ("sub/krelcode.toml", True),
     ("src/app.py", False), ("notes.md", False), ("env.txt", False),
 ])
 def test_classify_protected_path(tmp_path, path, expected):
