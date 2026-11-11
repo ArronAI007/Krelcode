@@ -114,5 +114,5 @@ python scripts/real_acceptance.py --provider anthropic --keep
 - 思考流的展示文本不进对话历史（设计如此）；但 Anthropic 扩展思考的
   thinking 块（含签名/redacted）经 Message.provider_meta 完整回传（Step 34），
   其他 provider 无此要求
-- MCP 未实现 sampling/roots（服务器反向请求一律 -32601）
+- MCP 反向请求支持 sampling/roots/ping（Step 35）；elicitation 等更新的能力未实现
 - 上下文压缩的摘要质量依赖所用模型；小模型摘要可能丢细节（有占位兜底）

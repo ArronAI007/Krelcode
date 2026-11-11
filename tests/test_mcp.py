@@ -55,7 +55,8 @@ def test_list_tools():
     async def go(client):
         tools = await client.list_tools()
         return [t["name"] for t in tools]
-    assert run(go) == ["echo", "add", "boom"]
+    assert run(go) == ["echo", "add", "boom",
+                       "sample_me", "list_roots", "probe_ping", "probe_unknown"]
 
 
 def test_call_tool_echo_and_add():

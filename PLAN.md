@@ -71,7 +71,9 @@
 
 | 34 | Anthropic 扩展思考回传 | Message.provider_meta 不透明状态位（core 只携带、adapter 独占读写、session codec 持久化）· thinking/signature/redacted_thinking 块捕获 → StreamFinished 挂 meta · 回传时 thinking 块置于 assistant content 最前（API 强制顺序）· thinking_budget 配置（TOML [providers.anthropic]，钳制 ≥1024，max_tokens 自动保证 > budget） | 8 个新测试：捕获（含签名拼接）、回传块顺序（thinking→text→tool_use）、redacted 透传、budget 钳制与 max_tokens 三态、默认不带 thinking 参数、registry 配置透传、codec roundtrip | ✅ |
 
-| 测试总数：453（离线 451 + 本地端口集成 2，沙箱内自动 skip） |
+| 35 | MCP 反向请求（sampling/roots/ping） | MCPClient 路由服务器→客户端请求：sampling/createMessage（回调 app 注入的 sampler，用共享 LLM 完成补全）、roots/list（工作区根）、ping、未知方法回 -32601；initialize 声明客户端能力（sampling/roots）；streamable 传输层自动应答上收到 client 统一处理；**修复协议时序 bug**：notifications/initialized 由 fire-and-forget 改为 await（规范要求其先于一切请求，调度延迟曾致乱序）；stub 服务器扩展 4 个反向探测工具 + 按 id 匹配应答（对时序鲁棒） | 9 个新测试：sampling 往返（sampler 收到原始 messages/params）、无 sampler 拒绝、roots 应答、ping、未知方法、initialize 能力声明、sampler 闭包（systemPrompt/user 消息构造）、roots 构造；既有 streamable 服务器请求测试经由 client 路径继续通过 | ✅ |
+
+| 测试总数：462（离线 460 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

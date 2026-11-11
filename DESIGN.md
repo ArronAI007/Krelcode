@@ -217,6 +217,11 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
 - **capabilities 门控**：initialize 握手的 capabilities 决定注册哪些工具——
   tools → 每远程工具一个 MCPTool；resources → list_resources/read_resource；
   prompts → list_prompts/get_prompt；全部 `<server>__<tool>` 命名进同一注册表
+- **反向请求**（Step 35）：服务器→客户端的 sampling/createMessage（回调
+  app 注入的 sampler 闭包，用共享 LLM 完成补全）、roots/list（工作区根）、
+  ping 由 MCPClient 统一应答，未知方法回 -32601；initialize 时按配置声明
+  sampling/roots 能力。协议时序教训：notifications/initialized 必须 await
+  实发（fire-and-forget 的调度延迟会让它晚于后续请求到达，违反规范）
 - **热重载**（MCPSupervisor）：sync() 配置 diff（dataclass 相等判断：
   未变保持连接、变更先停后启、移除即注销）；check_and_restart() 复活崩溃
   服务器并重注册工具；工具注销走 registry.unregister_prefix("<server>__")；

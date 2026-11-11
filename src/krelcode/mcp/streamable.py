@@ -7,7 +7,8 @@
 - 会话：服务器可在响应头下发 `Mcp-Session-Id`，之后所有请求携带；
   POST 返回 404 = 会话过期 → 触发 on_disconnect（fail-closed）
 - 通知：202 Accepted 无响应体
-- 服务器主动请求（流内 method+id）：自动回 -32601（本客户端不支持 sampling 等）
+- 服务器主动请求（流内 method+id）：统一上抛 MCPClient 处理
+  （sampling/roots/ping 应答，未知方法回 -32601）
 - GET 监听流（可选能力）：首个 POST 往返后惰性尝试一次，405/失败静默容忍
 
 线程模型：POST 往返与 GET 监听都跑在线程里，消息经
@@ -147,30 +148,10 @@ class StreamableHTTPTransport:
     # -- 消息分发与服务器请求应答 ----------------------------------------------------------
 
     def _dispatch_incoming(self, msg: Any) -> None:
-        if not isinstance(msg, dict):
-            return
-        if msg.get("method") is not None and msg.get("id") is not None:
-            # 服务器主动请求（sampling/roots 等）：本客户端不支持，回 -32601
-            self._respond_method_not_found(msg)
-            return
-        self._emit_message(msg)
-
-    def _respond_method_not_found(self, msg: Dict[str, Any]) -> None:
-        response = {
-            "jsonrpc": "2.0",
-            "id": msg.get("id"),
-            "error": {
-                "code": -32601,
-                "message": f"method not supported by krelcode: {msg.get('method')}",
-            },
-        }
-        try:
-            headers = self._request_headers(accept=ACCEPT_BOTH)
-            body = json.dumps(response, ensure_ascii=False).encode("utf-8")
-            resp = self._connector.request("POST", self.url, headers, body, self.timeout)
-            resp.close()
-        except Exception:
-            pass  # 应答失败不致命
+        # 全部消息（含服务器主动请求）统一上抛 MCPClient：
+        # sampling/roots/ping 由 client._handle_server_request 应答
+        if isinstance(msg, dict):
+            self._emit_message(msg)
 
     def _emit_message(self, msg: Dict[str, Any]) -> None:
         if self._on_message is None:

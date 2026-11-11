@@ -39,11 +39,74 @@ TOOLS = [
         "description": "总是失败",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "sample_me",
+        "description": "向客户端发起 sampling/createMessage 反向请求",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "list_roots",
+        "description": "向客户端发起 roots/list 反向请求",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "probe_ping",
+        "description": "向客户端发起 ping",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "probe_unknown",
+        "description": "向客户端发起未知方法请求",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 
+REVERSE_ID = 99000
+
+
+def handle_reverse_probe(name, stdin):
+    """向客户端发起反向请求并同步等待应答（stub 场景受控，直接 readline）。"""
+    global REVERSE_ID
+    REVERSE_ID += 1
+    rid = REVERSE_ID
+    if name == "sample_me":
+        request = {"jsonrpc": "2.0", "id": rid, "method": "sampling/createMessage",
+                   "params": {"messages": [{"role": "user", "content": {
+                       "type": "text", "text": "说 SAMPLE"}}], "maxTokens": 100}}
+    elif name == "list_roots":
+        request = {"jsonrpc": "2.0", "id": rid, "method": "roots/list", "params": {}}
+    elif name == "probe_ping":
+        request = {"jsonrpc": "2.0", "id": rid, "method": "ping", "params": {}}
+    else:
+        request = {"jsonrpc": "2.0", "id": rid, "method": "custom/unsupported",
+                   "params": {}}
+    send(request)
+    # 按 id 匹配等待应答；跳过通知等无关行（对客户端发送时序保持鲁棒）
+    resp = None
+    while resp is None:
+        line = stdin.readline()
+        if not line:
+            return "(no response: stream closed)"
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError:
+            return f"(bad response: {line[:100]!r})"
+        if candidate.get("id") == rid:
+            resp = candidate
+    if "error" in resp:
+        return f"error {resp['error'].get('code')}: {resp['error'].get('message')}"
+    result = resp.get("result") or {}
+    if name == "sample_me":
+        return f"sampled={result.get('content', {}).get('text', '')}|model={result.get('model', '')}"
+    return json.dumps(result, ensure_ascii=False)
+
+
 def main():
-    for line in sys.stdin:
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            break
         line = line.strip()
         if not line:
             continue
@@ -80,6 +143,10 @@ def main():
                 send({"jsonrpc": "2.0", "id": mid, "result": {
                     "content": [{"type": "text", "text": "boom 工具内部错误"}],
                     "isError": True}})
+            elif name in ("sample_me", "list_roots", "probe_ping", "probe_unknown"):
+                text = handle_reverse_probe(name, sys.stdin)
+                send({"jsonrpc": "2.0", "id": mid, "result": {
+                    "content": [{"type": "text", "text": text}]}})
             else:
                 send({"jsonrpc": "2.0", "id": mid,
                       "error": {"code": -32602, "message": f"unknown tool: {name}"}})
@@ -118,6 +185,8 @@ def main():
             else:
                 send({"jsonrpc": "2.0", "id": mid,
                       "error": {"code": -32602, "message": f"unknown prompt: {pname}"}})
+        elif method is None and mid is not None:
+            pass  # 客户端对我方反向请求的应答（已在 handle_reverse_probe 内消费）
         elif mid is not None:
             send({"jsonrpc": "2.0", "id": mid,
                   "error": {"code": -32601, "message": f"method not found: {method}"}})

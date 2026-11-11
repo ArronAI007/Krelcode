@@ -94,6 +94,41 @@ def build_llm(args: argparse.Namespace, config: Dict[str, Any], log=print) -> LL
     return provider
 
 
+def build_mcp_sampler(llm: LLMProvider):
+    """MCP sampling 回调：服务器请求 LLM 补全时，用当前 provider 完成。
+
+    契约：async (messages, params) -> {"text": str, "model": str}
+    messages 为 MCP 格式 [{"role","content":{"type":"text","text"}}]。
+    """
+    from .core.messages import Message as Msg
+    from .llm.base import collect
+
+    model_name = getattr(llm, "model", "krelcode")
+
+    async def sampler(messages, params):
+        msgs = []
+        system_prompt = (params or {}).get("systemPrompt")
+        if system_prompt:
+            msgs.append(Msg.system(str(system_prompt)))
+        for m in messages or []:
+            content = m.get("content") or {}
+            text = content.get("text", "") if isinstance(content, dict) else str(content)
+            if m.get("role") == "assistant":
+                msgs.append(Msg.assistant(text))
+            else:
+                msgs.append(Msg.user(text))
+        if not msgs:
+            msgs.append(Msg.user("(空的 sampling 请求)"))
+        finished = await collect(llm, msgs)
+        return {"text": finished.message.content or "", "model": model_name}
+
+    return sampler
+
+
+def build_mcp_roots(workspace_root: Path) -> List[Dict[str, Any]]:
+    return [{"uri": workspace_root.as_uri(), "name": workspace_root.name}]
+
+
 def build_policy(args: argparse.Namespace, workspace_root: Path, bus: EventBus):
     """--no-sandbox 回退全放行；否则 SandboxPolicy（规则分级+持久化+交互审批）。"""
     if args.no_sandbox:
@@ -319,7 +354,10 @@ async def async_main(args: argparse.Namespace) -> int:
     config_path = Path(args.config) if args.config else None
     config = load_config(config_path)
     loop, subagents = await build_loop(args, config, log=note)
-    supervisor = MCPSupervisor(loop.registry, log=note)
+    supervisor = MCPSupervisor(
+        loop.registry, log=note,
+        sampler=build_mcp_sampler(loop.llm),
+        roots=build_mcp_roots(loop.tool_context.workspace_root))
     if not args.no_mcp:
         await supervisor.sync(config.get("mcp_servers") or {})
 

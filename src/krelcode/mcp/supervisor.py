@@ -45,9 +45,13 @@ class MCPSupervisor:
         self,
         registry: ToolRegistry,
         log: Callable[[str], None] = print,
+        sampler: Optional[Any] = None,
+        roots: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         self.registry = registry
         self._log = log
+        self._sampler = sampler      # 服务器 sampling 请求的回调（app 注入）
+        self._roots = list(roots or [])
         self.clients: Dict[str, MCPClient] = {}
         self.configs: Dict[str, MCPServerConfig] = {}
 
@@ -78,7 +82,7 @@ class MCPSupervisor:
             await self._start(name, cfg)
 
     async def _start(self, name: str, cfg: MCPServerConfig) -> bool:
-        client = MCPClient(cfg)
+        client = MCPClient(cfg, sampler=self._sampler, roots=self._roots)
         try:
             await client.start()
             tools = await discover_tools(client)

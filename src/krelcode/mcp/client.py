@@ -55,10 +55,21 @@ class MCPServerConfig:
 
 
 class MCPClient:
-    def __init__(self, config: MCPServerConfig, transport: Optional[MCPTransport] = None) -> None:
+    def __init__(
+        self,
+        config: MCPServerConfig,
+        transport: Optional[MCPTransport] = None,
+        sampler: Optional[Any] = None,
+        roots: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        """sampler: async (messages, params) -> {"text": str, "model": str}，
+        服务器发起 sampling/createMessage 时回调（通常由共享 LLM 实现）；
+        roots: roots/list 应答的工作区根列表 [{"uri","name"}]。"""
         self.config = config
         self.name = config.name
         self._transport: MCPTransport = transport or config.create_transport()
+        self._sampler = sampler
+        self._roots = list(roots or [])
         self._next_id = 0
         self._pending: Dict[int, asyncio.Future] = {}
         self._started = False
@@ -72,15 +83,20 @@ class MCPClient:
     async def start(self) -> None:
         await self._transport.connect(self._dispatch, self._on_disconnect)
         self._started = True
+        client_caps: Dict[str, Any] = {}
+        if self._sampler is not None:
+            client_caps["sampling"] = {}
+        if self._roots:
+            client_caps["roots"] = {"listChanged": False}
         result = await self._request("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": {},
+            "capabilities": client_caps,
             "clientInfo": {"name": "krelcode", "version": __version__},
         })
         if isinstance(result, dict):
             self.server_info = result.get("serverInfo", {}) or {}
             self.capabilities = result.get("capabilities", {}) or {}
-        self._notify("notifications/initialized")
+        await self._notify("notifications/initialized")
 
     async def close(self) -> None:
         if self._closed:
@@ -123,26 +139,34 @@ class MCPClient:
                 f"MCP 服务器 {self.name!r} 响应超时（{self.config.timeout:g}s, method={method}）"
             ) from None
 
-    def _notify(self, method: str, params: Optional[dict] = None) -> None:
+    async def _notify(self, method: str, params: Optional[dict] = None) -> None:
+        """发送通知并等待写盘完成。
+
+        必须 await（而非 create_task fire-and-forget）：MCP 规范要求
+        notifications/initialized 先于一切后续请求到达服务器，
+        调度延迟会造成乱序（曾经让 stub 把迟到通知误当反向请求应答）。
+        """
         if self._closed or not self._transport.alive:
             return
         payload = {"jsonrpc": "2.0", "method": method, "params": params or {}}
-        try:
-            # 通知不等待响应；send 是协程，fire-and-forget 交由事件循环调度
-            asyncio.get_running_loop().create_task(self._safe_send(payload))
-        except RuntimeError:
-            pass  # 无运行循环（已关闭）
-
-    async def _safe_send(self, payload: dict) -> None:
         try:
             await self._transport.send(payload)
         except MCPError:
             pass  # 通知失败不致命
 
     def _dispatch(self, msg: Dict[str, Any]) -> None:
+        method = msg.get("method")
         rid = msg.get("id")
-        if rid is None or "method" in msg:
-            return  # 服务器通知/请求：当前忽略
+        if method is not None and rid is not None:
+            # 服务器主动请求（sampling/roots/ping…）：调度异步处理并应答
+            try:
+                asyncio.get_running_loop().create_task(
+                    self._handle_server_request(msg))
+            except RuntimeError:
+                pass  # 无运行循环（已关闭）
+            return
+        if rid is None:
+            return  # 服务器通知：忽略
         future = self._pending.pop(rid, None)
         if future is None or future.done():
             return
@@ -152,6 +176,54 @@ class MCPClient:
                 MCPError(f"MCP {self.name!r} 错误 {err.get('code')}: {err.get('message')}"))
         else:
             future.set_result(msg.get("result"))
+
+    # -- 服务器 → 客户端 请求处理 -------------------------------------------------
+
+    async def _handle_server_request(self, msg: Dict[str, Any]) -> None:
+        method = str(msg.get("method"))
+        mid = msg.get("id")
+        params = msg.get("params") or {}
+        if method == "sampling/createMessage":
+            await self._handle_sampling(mid, params)
+        elif method == "roots/list":
+            await self._send_response(mid, result={"roots": list(self._roots)})
+        elif method == "ping":
+            await self._send_response(mid, result={})
+        else:
+            await self._send_response(
+                mid, error={"code": -32601,
+                            "message": f"method not supported by krelcode: {method}"})
+
+    async def _handle_sampling(self, mid: Any, params: Dict[str, Any]) -> None:
+        if self._sampler is None:
+            await self._send_response(
+                mid, error={"code": -32601, "message": "sampling not supported"})
+            return
+        try:
+            out = await self._sampler(params.get("messages") or [], params)
+            text = (out or {}).get("text", "")
+            model = (out or {}).get("model", "")
+        except Exception as e:
+            await self._send_response(
+                mid, error={"code": -32603, "message": f"sampling failed: {e}"})
+            return
+        await self._send_response(mid, result={
+            "role": "assistant",
+            "content": {"type": "text", "text": text},
+            "model": model,
+        })
+
+    async def _send_response(self, mid: Any, result: Any = None,
+                             error: Optional[Dict[str, Any]] = None) -> None:
+        payload: Dict[str, Any] = {"jsonrpc": "2.0", "id": mid}
+        if error is not None:
+            payload["error"] = error
+        else:
+            payload["result"] = result if result is not None else {}
+        try:
+            await self._transport.send(payload)
+        except MCPError:
+            pass  # 应答失败不致命（连接已断时 pending 自会失败）
 
     def _on_disconnect(self, reason: str) -> None:
         self._disconnect_reason = reason

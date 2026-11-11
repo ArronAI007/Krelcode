@@ -44,10 +44,11 @@ def test_sync_add_registers_tools_and_status():
         await sup.sync({"stub": STUB_SPEC})
         try:
             names = registry.names()
-            assert len(names) == 7 and all(n.startswith("stub__") for n in names)
+            # 7 个远程工具（含 4 个反向探测）+ 4 个能力工具（resources/prompts）
+            assert len(names) == 11 and all(n.startswith("stub__") for n in names)
             status = sup.status()[0]
             assert status["alive"] and status["transport"] == "stdio"
-            assert status["tools"] == 7 and status["server"] == "stub-server"
+            assert status["tools"] == 11 and status["server"] == "stub-server"
             assert any("已连接" in l for l in logs)
         finally:
             await sup.close_all()
@@ -88,7 +89,7 @@ def test_sync_changed_config_restarts():
         client2 = sup.clients["stub"]
         assert client2 is not client1
         assert not client1.alive and client2.alive
-        assert len([n for n in registry.names() if n.startswith("stub__")]) == 7
+        assert len([n for n in registry.names() if n.startswith("stub__")]) == 11
         await sup.close_all()
     run(go())
 
@@ -123,7 +124,7 @@ def test_check_and_restart_recovers_crashed_server():
         new_client = sup.clients["stub"]
         assert new_client is not client and new_client.alive
         # 工具重注册且可调用
-        assert len(registry.names()) == 7
+        assert len(registry.names()) == 11
         echo = registry.get("stub__echo")
         from krelcode.tools.base import ToolContext
         result = await echo.execute({"text": "复活"}, ToolContext(workspace_root=Path(".")))
