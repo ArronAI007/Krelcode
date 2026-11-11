@@ -202,6 +202,20 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   服务器并重注册工具；工具注销走 registry.unregister_prefix("<server>__")；
   REPL /mcp 查看状态、/mcp reload 重读配置触发同步
 
+## 子代理/后台任务（Step 13）
+
+- **SubagentManager**（subagent/manager.py）：spawn(task) 创建独立 AgentLoop
+  （自己的历史/事件总线/工具注册表；共享父级 provider、ToolContext、审批策略），
+  asyncio.create_task 后台执行；wait(id, timeout) 用 `asyncio.shield` 包裹——
+  等待超时绝不取消子任务；send_input 续聊（仅空闲时，上下文延续）；
+  shutdown 统一 cancel
+- **父代理工具**（subagent/tools.py）：spawn_agent / wait_agent / send_to_agent /
+  list_agents，工具持 manager 引用（构造注入），ToolContext 保持纯工作区语义
+- **防递归**：子代理工具集 = default_tools()（不含 spawn 系），委派深度硬限制 1 层
+- **可观测**：SubagentSpawned/SubagentFinished 上父总线——渲染器打状态行、
+  recorder 落 JSONL 审计；REPL /agents 列状态
+- 子代理系统提示词要求：专注委派任务、不向用户提问、最终消息即给父代理的报告
+
 ## 分层测试策略（每层可独立验证）
 
 | 层 | 测试方式 |

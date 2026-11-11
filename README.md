@@ -9,7 +9,7 @@
 ## 快速开始
 
 ```bash
-# 运行全部测试（234 个，全离线*）
+# 运行全部测试（246 个，全离线*）
 # *SSE 真实服务器集成测试需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -28,7 +28,7 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --mode
 #   api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-REPL 内置命令：`/help`、`/history`、`/tools`、`/session`、`/sessions`、`/resume <n|latest|path>`、`/mcp`（状态）、`/mcp reload`（热重载）、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/tools`、`/session`、`/sessions`、`/resume <n|latest|path>`、`/mcp`（状态）、`/mcp reload`（热重载）、`/agents`（子代理状态）、`/reset`、`/exit`。
 
 ### MCP 远程工具
 
@@ -54,7 +54,11 @@ headers = { Authorization = "Bearer ..." }
 
 内置 `repo_map` 工具：Python 用 ast 精确提取类/函数/方法+行号（零依赖，不引 tree-sitter），JS/TS 用正则，20K 字符预算，LLM 可按行号接 `read_file` 精读。
 
-当前内置工具（8 个）：`get_time`、`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`、`repo_map`；另加 MCP 远程工具。
+当前内置工具（12 个）：`get_time`、`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`、`repo_map`，以及子代理工具 `spawn_agent`、`wait_agent`、`send_to_agent`、`list_agents`；另加 MCP 远程工具。
+
+### 子代理 / 后台任务
+
+LLM 可用 `spawn_agent` 把自包含的子任务委派给后台子代理（独立上下文、并行执行），`wait_agent` 收取报告，`send_to_agent` 对已完成的子代理续聊追加任务；子代理不能再派生子代理（防递归）。REPL `/agents` 查看状态；子代理事件写入会话 JSONL 审计流。
 文件与命令操作限定在工作区内（相对路径基于 `--workspace`），自动跳过 `.git`/`node_modules` 等目录。
 
 安全策略（默认开启）：只读命令静默放行；执行代码/删文件/网络访问等 ASK 级操作弹 `[y]是/[n]否/[a]始终允许` 审批，"始终允许"按程序名持久化到 `<workspace>/.krelcode/allow_rules.json`；`sudo`、`rm -rf /`、`curl|sh` 等 DENY 级无条件拒绝。`--auto-approve` 自动批准 ASK 级，`--no-sandbox` 完全关闭。

@@ -27,6 +27,7 @@ from .safety.policy import AllowAllPolicy, SandboxPolicy
 from .session.recorder import (
     SessionRecorder, latest_session, load_history, new_session_path,
 )
+from .subagent.manager import SubagentManager
 from .tools.base import Tool, ToolContext
 from .tools.builtin.edit_file import EditFileTool
 from .tools.builtin.glob import GlobTool
@@ -88,7 +89,12 @@ async def build_loop(
     args: argparse.Namespace,
     config: Dict[str, Any],
     extra_tools: Optional[List[Tool]] = None,
-) -> AgentLoop:
+):
+    """返回 (AgentLoop, SubagentManager)。
+
+    子代理共享 provider/工作区/审批策略，但工具集由 default_tools() 单独构建
+    （不含 spawn 系工具 → 防递归），历史与总线各自独立。
+    """
     workspace_root = Path(args.workspace).resolve()
     context = ""
     if not args.no_context:
@@ -99,18 +105,31 @@ async def build_loop(
     context_manager = None
     if not args.no_compress:
         context_manager = ContextManager(llm, max_tokens=args.context_tokens)
-    tools = default_tools() + list(extra_tools or [])
-    return AgentLoop(
+    tool_context = ToolContext(workspace_root=workspace_root)
+    policy = build_policy(args, workspace_root, bus)
+    registry = ToolRegistry(default_tools() + list(extra_tools or []))
+    manager = SubagentManager(
         llm=llm,
-        registry=ToolRegistry(tools),
-        tool_context=ToolContext(workspace_root=workspace_root),
-        policy=build_policy(args, workspace_root, bus),
+        tool_factory=default_tools,
+        tool_context=tool_context,
+        policy=policy,
+        bus=bus,
+        max_steps=args.max_steps,
+    )
+    for tool in manager.build_tools():
+        registry.register(tool)
+    loop = AgentLoop(
+        llm=llm,
+        registry=registry,
+        tool_context=tool_context,
+        policy=policy,
         bus=bus,
         system_prompt=build_system_prompt(context),
         max_steps=args.max_steps,
         repeat_failure_limit=args.repeat_failure_limit,
         context_manager=context_manager,
     )
+    return loop, manager
 
 
 def setup_session(args: argparse.Namespace, loop: AgentLoop):
@@ -188,7 +207,7 @@ def build_parser() -> argparse.ArgumentParser:
 async def async_main(args: argparse.Namespace) -> int:
     config_path = Path(args.config) if args.config else None
     config = load_config(config_path)
-    loop = await build_loop(args, config)
+    loop, subagents = await build_loop(args, config)
     supervisor = MCPSupervisor(loop.registry)
     if not args.no_mcp:
         await supervisor.sync(config.get("mcp_servers") or {})
@@ -218,8 +237,10 @@ async def async_main(args: argparse.Namespace) -> int:
             sessions_dir=sessions_dir,
             mcp_supervisor=supervisor,
             mcp_reload=reload_mcp,
+            subagents=subagents,
         )
     finally:
+        await subagents.shutdown()
         await supervisor.close_all()
 
 

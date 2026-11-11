@@ -17,6 +17,8 @@ from ..core.events import (
     LLMStreamDelta,
     PermissionDenied,
     RunFinished,
+    SubagentFinished,
+    SubagentSpawned,
     ToolCallCompleted,
     ToolCallStarted,
 )
@@ -90,6 +92,15 @@ class StreamRenderer:
         elif isinstance(event, PermissionDenied):
             self.end_stream()
             self._write(f"  [deny] {event.tool_call.name} 被拒绝: {event.reason}\n")
+        elif isinstance(event, SubagentSpawned):
+            self.end_stream()
+            task = event.task if len(event.task) <= 60 else event.task[:60] + "…"
+            self._write(f"  [agent] 子代理 {event.agent_id} 启动: {task}\n")
+        elif isinstance(event, SubagentFinished):
+            self.end_stream()
+            self._write(
+                f"  [agent] 子代理 {event.agent_id} {event.status}"
+                + (f": {event.preview}" if event.preview else "") + "\n")
         elif isinstance(event, ContextCompressed):
             self.end_stream()
             self._write(

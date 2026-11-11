@@ -76,6 +76,21 @@ class ContextCompressed(AgentEvent):
 
 
 @dataclass(frozen=True)
+class SubagentSpawned(AgentEvent):
+    """子代理创建并开始后台执行（Step 13）。"""
+    agent_id: str
+    task: str
+
+
+@dataclass(frozen=True)
+class SubagentFinished(AgentEvent):
+    """子代理到达终态：completed / failed / cancelled。"""
+    agent_id: str
+    status: str
+    preview: str
+
+
+@dataclass(frozen=True)
 class RunFinished(AgentEvent):
     final_text: str
 

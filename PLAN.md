@@ -27,7 +27,9 @@
 
 | 12 | MCP 进阶 | MCPTransport 端口拆分（StdioTransport/SSETransport：endpoint 事件、reader 线程→call_soon_threadsafe 回投、connector 可注入）· capabilities 门控 · resources/prompts 四类能力工具 · MCPSupervisor 热重载（配置 diff 增/删/改、崩溃自动重启+工具重注册、/mcp 状态与 reload）· ToolRegistry.unregister_prefix | 34 个新测试：FakeConnector 内存 SSE（握手/urljoin/断流/JSON-RPC 错误）、真实 http.server SSE 集成（沙箱自动 skip，提权 234 全过）、supervisor 增删改/崩溃复活后工具可调用、能力门控、resources/prompts 端到端 | ✅ |
 
-| 测试总数：234（离线 233 + 本地端口集成 1，沙箱内自动 skip） |
+| 13 | 子代理/后台任务 | SubagentManager（spawn/wait/send_input/shutdown，独立 AgentLoop+历史+总线，共享 provider/工作区/审批策略）· 4 个父代理工具 spawn_agent/wait_agent/send_to_agent/list_agents · 防递归（子代理工具集不含 spawn 系）· wait 超时用 shield 不杀任务 · SubagentSpawned/Finished 事件（渲染器+recorder+审计）· REPL /agents | 12 个新测试：生命周期、续聊上下文延续、3 子代理并行时序（<0.7s 跑 3×0.25s）、超时仍运行、shutdown 取消、防递归断言、事件、工具表面、父代理经 tool-call 委派端到端 | ✅ |
+
+| 测试总数：246（离线 245 + 本地端口集成 1，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

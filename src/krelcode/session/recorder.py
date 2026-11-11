@@ -23,6 +23,8 @@ from ..core.events import (
     PermissionDenied,
     RunFinished,
     RunStarted,
+    SubagentFinished,
+    SubagentSpawned,
     ToolCallCompleted,
     ToolCallStarted,
 )
@@ -72,6 +74,13 @@ class SessionRecorder:
         if isinstance(event, PermissionDenied):
             return {"type": "permission_denied", "ts": ts,
                     "name": event.tool_call.name, "reason": event.reason}
+        if isinstance(event, SubagentSpawned):
+            return {"type": "subagent_spawned", "ts": ts,
+                    "agent_id": event.agent_id, "task": event.task[:200]}
+        if isinstance(event, SubagentFinished):
+            return {"type": "subagent_finished", "ts": ts,
+                    "agent_id": event.agent_id, "status": event.status,
+                    "preview": event.preview}
         if isinstance(event, ContextCompressed):
             return {"type": "context_compressed", "ts": ts,
                     "before_tokens": event.before_tokens, "after_tokens": event.after_tokens}

@@ -23,6 +23,7 @@ HELP_TEXT = """可用命令：
   /sessions      列出工作区的全部会话
   /resume <n>    切换到第 n 个会话（/sessions 里的序号；latest=最新）
   /mcp           查看 MCP 服务器状态；/mcp reload 重读配置并热重启
+  /agents        列出子代理（后台任务）状态
   /reset         清空对话历史
   /exit          退出（Ctrl-D / Ctrl-C 同样有效）
 其他任何输入都会作为消息发给 agent。"""
@@ -35,6 +36,7 @@ async def run_repl(
     sessions_dir: Optional[Path] = None,
     mcp_supervisor=None,
     mcp_reload=None,
+    subagents=None,
 ) -> int:
     from ..app import restore_session  # 延迟导入避免 ui→app 循环依赖
 
@@ -77,6 +79,13 @@ async def run_repl(
                     print(f"  （找不到会话: {target}；用 /sessions 查看列表）")
                 else:
                     restore_session(loop, path)
+                continue
+            if user_input == "/agents":
+                if subagents is None:
+                    print("  （子代理未启用）")
+                else:
+                    lines = subagents.status_lines()
+                    print("\n".join(f"  {l}" for l in lines) if lines else "  （暂无子代理）")
                 continue
             if user_input == "/mcp" or user_input.startswith("/mcp "):
                 if mcp_supervisor is None:
