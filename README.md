@@ -5,6 +5,9 @@
 - 架构设计与技术决策：[DESIGN.md](DESIGN.md)
 - 主流 coding agent 架构参考：[ARCHITECTURE.md](ARCHITECTURE.md)
 - 分步路线图与进度：[PLAN.md](PLAN.md)
+- 构建回顾（统计/决策时间线/文件导览/验收指引）：[BUILD.md](BUILD.md)
+
+配好 API key 后可跑真模型自动验收：`python scripts/real_acceptance.py`（7 阶段，详见 BUILD.md §5）。
 
 ## 安装
 
@@ -28,7 +31,7 @@ krelcode               # 进入 REPL
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（445 个，全离线*）
+# 运行全部测试（446 个，全离线*）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 

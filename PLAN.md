@@ -67,7 +67,9 @@
 
 | 32 | REPL 运维增强 | /allow 审批规则管理（list/add/remove，AllowRules.add_program/remove_program 持久化到工作区，--no-sandbox 时提示不适用）· /model 运行时热切换（build_model_switcher：支持 "model"（沿用当前 provider）与 "provider/model" 跨切换；重建 provider 含重试包装、替换 loop.llm 与压缩器 llm、同步 usage.model、未显式指定预算时按新模型窗口自适应；缺 key/未知 provider 优雅失败不破坏原 provider；mock 基座要求显式 provider） | 11 个新测试：规则增删幂等/持久化重载/REPL 全流程/无沙箱提示；切换当前信息/mock 裸切拦截/切 openai 联动预算 96k+重试包装/同 provider 沿用/缺 key 优雅失败且原 provider 完好/未知 provider/显式预算不被覆盖/REPL 集成 | ✅ |
 
-| 测试总数：445（离线 443 + 本地端口集成 2，沙箱内自动 skip） |
+| 33 | 真模型验收准备 + 项目回顾 | scripts/real_acceptance.py：7 阶段自动验收（基础对话/get_time 工具/文件写读/命令执行/上下文注入/会话录制恢复/用量成本），退出码=失败数，临时工作区默认用后即焚（--keep 保留），与 Mock 验收套件互补（机制 vs 行为）· BUILD.md：统计（8083 行源码/445+ 测试）、14 条架构决策时间线、文件导览、测试方法论（注入点清单）、诚实的已知边界清单 | 脚本 ast 结构守护测试（7 阶段函数+装配+主流程齐全）；真跑需 API key（唯一外部依赖项） | ✅（脚本就绪，待 key 实跑） |
+
+| 测试总数：446（离线 444 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·
