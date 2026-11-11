@@ -33,7 +33,9 @@
 
 | 15 | 发布准备 | pyproject 完整元数据 + `[project.scripts]` 控制台入口（pip 安装后 `krelcode` 直接可用）· requires-python >=3.11（tomllib）· `--version` · run_command 跨平台进程终止（POSIX killpg / Windows proc.kill 兜底）· ContextManager force 压缩 + REPL `/compact` | 7 个新测试：元数据/版本一致性/入口可调用/--version/三分支终止逻辑/强制压缩；离线 pip install 进临时 venv 实跑 `krelcode --version` 与 REPL 验证 | ✅ |
 
-| 测试总数：261（离线 259 + 本地端口集成 2，沙箱内自动 skip） |
+| 16 | 检查点与回滚 | CheckpointManager（事件总线旁路订阅者，内核/工具层零改动）：RunStarted 开组 / write_file·edit_file 首次修改前快照 / RunFinished 关组（空组丢弃）；快照落盘 .krelcode/checkpoints/（meta.json+字节备份）；undo_last LIFO 恢复（改过的还原、新建的删除）；跨重启重建组栈；REPL /undo、/undo list；--no-checkpoint | 10 个新测试：修改恢复/新建删除/同组保最早版本/空组丢弃/越界路径忽略/LIFO 多轮/跨重启/损坏组跳过/事件驱动/AgentLoop 端到端（edit+write 一轮 undo 全恢复） | ✅ |
+
+| 测试总数：271（离线 269 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

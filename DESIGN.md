@@ -223,6 +223,20 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   recorder 落 JSONL 审计；REPL /agents 列状态
 - 子代理系统提示词要求：专注委派任务、不向用户提问、最终消息即给父代理的报告
 
+## 检查点与回滚（Step 16）
+
+- **CheckpointManager**（session/checkpoint.py）：纯事件订阅者——
+  RunStarted 开组（label=用户输入预览）、ToolCallStarted 对 write_file/edit_file
+  的目标文件在**首次修改前**做字节级快照（同组同文件只记第一次，保最原始版本）、
+  RunFinished 关组（无文件改动的空组直接丢弃）
+- 落盘 `<workspace>/.krelcode/checkpoints/NNNN-<ts>/`：meta.json（文件清单）
+  + files/ 备份；构造时扫描目录重建组栈 → /undo 跨重启可用
+- undo_last()：LIFO 弹出最近已关闭组，逐文件恢复（existed=True 还原备份、
+  existed=False 删除新建），单文件失败不阻断其余
+- 边界：run_command 的文件修改不可静态追踪，不在快照范围（文档注明）；
+  路径解析与工具层同规则（越界路径静默跳过）
+- REPL：`/undo`（回滚上一轮）、`/undo list`（查看检查点栈）、`--no-checkpoint` 关闭
+
 ## 分层测试策略（每层可独立验证）
 
 | 层 | 测试方式 |

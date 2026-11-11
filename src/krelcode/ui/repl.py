@@ -25,6 +25,7 @@ HELP_TEXT = """可用命令：
   /mcp           查看 MCP 服务器状态；/mcp reload 重读配置并热重启
   /agents        列出子代理（后台任务）状态
   /compact       立即压缩对话历史（LLM 摘要，不必等预算超限）
+  /undo          回滚上一轮对话的文件改动（检查点恢复；/undo list 查看栈）
   /reset         清空对话历史
   /exit          退出（Ctrl-D / Ctrl-C 同样有效）
 其他任何输入都会作为消息发给 agent。"""
@@ -38,6 +39,7 @@ async def run_repl(
     mcp_supervisor=None,
     mcp_reload=None,
     subagents=None,
+    checkpoints=None,
 ) -> int:
     from ..app import restore_session  # 延迟导入避免 ui→app 循环依赖
 
@@ -80,6 +82,27 @@ async def run_repl(
                     print(f"  （找不到会话: {target}；用 /sessions 查看列表）")
                 else:
                     restore_session(loop, path)
+                continue
+            if user_input == "/undo" or user_input.startswith("/undo "):
+                if checkpoints is None:
+                    print("  （检查点未启用：--no-checkpoint）")
+                    continue
+                arg = user_input.split(maxsplit=1)[1].strip() if len(user_input.split(maxsplit=1)) > 1 else ""
+                if arg == "list":
+                    lines = checkpoints.list_groups()
+                    print("\n".join(f"  {l}" for l in lines) if lines else "  （无可回滚的检查点）")
+                    continue
+                result = checkpoints.undo_last()
+                if result is None:
+                    print("  （无可回滚的检查点）")
+                else:
+                    parts = []
+                    if result.restored:
+                        parts.append(f"还原 {len(result.restored)} 个: {', '.join(result.restored)}")
+                    if result.deleted:
+                        parts.append(f"删除新建 {len(result.deleted)} 个: {', '.join(result.deleted)}")
+                    label = f"（{result.label}）" if result.label else ""
+                    print(f"  [undo] 已回滚上一轮{label}: {'；'.join(parts) if parts else '无文件变化'}")
                 continue
             if user_input == "/compact":
                 if loop.context_manager is None:

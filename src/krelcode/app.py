@@ -25,6 +25,7 @@ from .llm.providers.mock import MockProvider
 from .llm.registry import create_provider, resolve_settings
 from .mcp.supervisor import MCPSupervisor
 from .safety.policy import AllowAllPolicy, SandboxPolicy
+from .session.checkpoint import CheckpointManager
 from .session.recorder import (
     SessionRecorder, latest_session, load_history, new_session_path,
 )
@@ -201,6 +202,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="恢复会话：--resume 取最新，--resume <path> 取指定文件")
     p.add_argument("--no-session", action="store_true",
                    help="关闭会话 JSONL 录制（默认写入 <workspace>/.krelcode/sessions/）")
+    p.add_argument("--no-checkpoint", action="store_true",
+                   help="关闭文件检查点（/undo 回滚功能）")
     p.add_argument("-m", "--message", default=None, help="单次提问模式：执行完直接退出")
     p.add_argument("--version", action="version", version=f"krelcode {__version__}")
     return p
@@ -220,6 +223,10 @@ async def async_main(args: argparse.Namespace) -> int:
         await supervisor.sync(new_config.get("mcp_servers") or {})
         return await supervisor.check_and_restart()
 
+    checkpoints = None
+    if not args.no_checkpoint:
+        checkpoints = CheckpointManager(loop.tool_context.workspace_root)
+        checkpoints.attach(loop.bus)
     try:
         session_path = setup_session(args, loop)
         sessions_dir = loop.tool_context.workspace_root / ".krelcode" / "sessions"
@@ -240,6 +247,7 @@ async def async_main(args: argparse.Namespace) -> int:
             mcp_supervisor=supervisor,
             mcp_reload=reload_mcp,
             subagents=subagents,
+            checkpoints=checkpoints,
         )
     finally:
         await subagents.shutdown()
