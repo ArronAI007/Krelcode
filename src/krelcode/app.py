@@ -302,10 +302,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="krelcode", description="Krelcode coding agent (统一 Provider + tool-calling 循环 + MCP)"
     )
-    p.add_argument("command", nargs="?", choices=("doctor", "init"), default=None,
-                   help="子命令：doctor=环境自检；init=生成配置/规则模板（缺省进入对话）")
+    p.add_argument("command", nargs="?", choices=("doctor", "init", "review"), default=None,
+                   help="子命令：doctor=环境自检；init=生成配置/规则模板；"
+                        "review=评审当前 git 变更（缺省进入对话）")
     p.add_argument("--force", action="store_true",
                    help="init 子命令：覆盖已存在的模板文件")
+    p.add_argument("--staged", action="store_true",
+                   help="review 子命令：只评审已暂存变更（git diff --cached）")
+    p.add_argument("--focus", default=None,
+                   help="review 子命令：附加评审重点（如 '安全' / '性能'）")
     p.add_argument("--provider", default=None,
                    help="openai / anthropic / gemini / mock（默认: KRELCODE_PROVIDER 或配置文件 default_provider 或 openai）")
     p.add_argument("--mock", action="store_true", help="等价于 --provider mock（含演示脚本），无需 API key")
@@ -328,7 +333,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="关闭安全策略（AllowAll，仅建议在隔离环境中使用）")
     p.add_argument("--context-tokens", type=int, default=None,
                    help="上下文 token 预算，超限自动压缩（默认: 模型上下文窗口×75%%，"
-                        "未知模型回退 %d）" % DEFAULT_CONTEXT_BUDGET)
+                        f"未知模型回退 {DEFAULT_CONTEXT_BUDGET}）")
     p.add_argument("--no-compress", action="store_true",
                    help="关闭上下文自动压缩")
     p.add_argument("--no-mcp", action="store_true",
@@ -471,6 +476,9 @@ def main(argv=None) -> int:
         return _run_doctor(args)
     if args.command == "init":
         return _run_init(args)
+    if args.command == "review":
+        from .review import run_review
+        return asyncio.run(run_review(args))
     return asyncio.run(async_main(args))
 
 

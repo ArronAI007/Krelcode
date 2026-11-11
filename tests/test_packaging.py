@@ -111,3 +111,12 @@ def test_force_compress_under_budget():
     assert len(history) == 1 + 1 + 4
     assert history[1].content.startswith(SUMMARY_PREFIX)
     assert "手动压缩产生的摘要" in history[1].content
+
+
+def test_parser_help_renders():
+    """守护：argparse 会对 help 字符串做 %% 插值，
+    字面 % 未转义会在渲染 --help 时抛 ValueError（Step 38 抓到的潜在 bug）。"""
+    from krelcode.app import build_parser
+    text = build_parser().format_help()
+    assert "--context-tokens" in text and "75%" in text
+    assert "--output-format" in text and "review" in text

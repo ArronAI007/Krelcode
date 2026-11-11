@@ -429,6 +429,17 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
 - 持久化：JSONL 只存 source_path（每轮全量快照 × base64 会撑爆文件），
   恢复时按路径重载，源文件已删则静默丢弃；Markdown 导出以 🖼 占位
 
+## review 子命令（Step 38）
+
+`krelcode review` 是 headless 单次任务模式的垂直应用：
+- **只读工具集**（read_file/grep/glob/find_refs/repo_map）——模型可拉取
+  上下文核实疑点，但结构上没有写/执行能力，无需审批链即安全
+- 输入组装：git diff（--staged 可选）+ 未跟踪文件名单 + --focus 重点；
+  diff 经 truncate_middle 截断（100K 字符）
+- 输出：文本模式打印评审 + [usage]；JSON 模式与 -m 同构
+  （ok/review/usage/cost_usd/tools_used/denied）
+- 复用失败安全的 _git runner；非仓库/无变更 → 友好提示，退出码 0
+
 ## 分层测试策略（每层可独立验证）
 
 | 层 | 测试方式 |

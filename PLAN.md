@@ -77,7 +77,9 @@
 
 | 37 | 多模态图片输入 | core ImageRef + Message.images（仅 user 消息）· @图片附件：png/jpeg/webp/gif 自动识别 → base64 ImageRef（文本占位符），5MB/4 张上限，越界/缺失 fail-safe · 三家 wire 转换（OpenAI image_url data URI / Anthropic source.base64 / Gemini inline_data，非 user 角色防御性忽略）· loop.run(images=) 透传 · 会话持久化只存 source_path（防每轮快照 JSONL 膨胀），恢复时按路径重载、源删则静默丢弃 · export 🖼 占位 | 13 个新测试：附件构造/文本图片混合/超限（monkeypatch 常量）/越界；三家 wire 精确断言、防角色泄漏；loop 挂载、codec 路径持久化+重载+源删丢弃、导出不含 base64 | ✅ |
 
-| 测试总数：486（离线 484 + 本地端口集成 2，沙箱内自动 skip） |
+| 38 | review 子命令 | `krelcode review [--staged] [--focus X] [--output-format json]`：一键评审当前 git 变更——只注册**只读工具集**（read_file/grep/glob/find_refs/repo_map，模型可拉上下文但绝无写/执行能力，评审模式天然安全）；diff 中间截断（100K）、未跟踪文件列名提示、无变更/非仓库友好退出；评审系统提示词要求引用 file:line、按严重度分级、以「结论: 可合入/建议修改后合入/需要修改」收尾；顺带修复 argparse help 含字面 % 渲染崩溃的潜在 bug（Step 31 起潜伏）并加 format_help 守护测试 | 12 个新测试（真 git 仓库）：diff 收集/仅暂存/无变更/未跟踪+focus/截断；run_review 端到端（diff 进 prompt、只读工具集精确断言、JSON 模式、非仓库友好）；help 渲染守护 | ✅ |
+
+| 测试总数：498（离线 496 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

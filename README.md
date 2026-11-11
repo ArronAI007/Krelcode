@@ -88,6 +88,16 @@ transport = "sse"
 
 当前内置工具（14 个）：`get_time`、`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`、`repo_map`、`find_refs`（ast 级符号引用查找）、`check_syntax`（批量语法检查），以及子代理工具 `spawn_agent`、`wait_agent`、`send_to_agent`、`list_agents`；另加 MCP 远程工具。
 
+### 代码评审
+
+```bash
+krelcode review                  # 评审工作区未提交变更
+krelcode review --staged         # 只评审已暂存变更
+krelcode review --focus "安全" --output-format json   # CI 集成
+```
+
+评审模式只给模型**只读工具**（可查上下文、绝无写/执行能力），输出以「结论: 可合入 / 建议修改后合入 / 需要修改」收尾。
+
 ### Headless / CI 模式
 
 ```bash
