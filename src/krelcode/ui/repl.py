@@ -24,6 +24,7 @@ HELP_TEXT = """可用命令：
   /resume <n>    切换到第 n 个会话（/sessions 里的序号；latest=最新）
   /mcp           查看 MCP 服务器状态；/mcp reload 重读配置并热重启
   /agents        列出子代理（后台任务）状态
+  /compact       立即压缩对话历史（LLM 摘要，不必等预算超限）
   /reset         清空对话历史
   /exit          退出（Ctrl-D / Ctrl-C 同样有效）
 其他任何输入都会作为消息发给 agent。"""
@@ -79,6 +80,19 @@ async def run_repl(
                     print(f"  （找不到会话: {target}；用 /sessions 查看列表）")
                 else:
                     restore_session(loop, path)
+                continue
+            if user_input == "/compact":
+                if loop.context_manager is None:
+                    print("  （上下文压缩未启用：--no-compress）")
+                else:
+                    from ..agent.tokens import estimate_history_tokens
+                    before = estimate_history_tokens(loop.history)
+                    done = await loop.context_manager.maybe_compress(loop.history, force=True)
+                    after = estimate_history_tokens(loop.history)
+                    if done:
+                        print(f"  [compact] 已压缩: {before} → {after} tokens")
+                    else:
+                        print(f"  [compact] 历史太短，无需压缩（当前约 {before} tokens）")
                 continue
             if user_input == "/agents":
                 if subagents is None:

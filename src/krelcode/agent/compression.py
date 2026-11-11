@@ -47,9 +47,9 @@ class ContextManager:
     def over_budget(self, history: List[Message]) -> bool:
         return estimate_history_tokens(history) > self.max_tokens
 
-    async def maybe_compress(self, history: List[Message]) -> bool:
-        """超预算则原地压缩 history；返回是否发生了压缩。"""
-        if not self.over_budget(history):
+    async def maybe_compress(self, history: List[Message], force: bool = False) -> bool:
+        """超预算（或 force=True，即 REPL /compact）则原地压缩；返回是否压缩。"""
+        if not force and not self.over_budget(history):
             return False
 
         head_count = 1 if history and history[0].role == "system" else 0

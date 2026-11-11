@@ -12,6 +12,7 @@ import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import __version__
 from .agent.compression import ContextManager
 from .agent.context import build_workspace_context
 from .agent.loop import AgentLoop
@@ -201,6 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-session", action="store_true",
                    help="关闭会话 JSONL 录制（默认写入 <workspace>/.krelcode/sessions/）")
     p.add_argument("-m", "--message", default=None, help="单次提问模式：执行完直接退出")
+    p.add_argument("--version", action="version", version=f"krelcode {__version__}")
     return p
 
 

@@ -154,7 +154,8 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
 - **大输出落盘**（loop）：工具结果 > 12K 字符（可调）时全文写入
   `<workspace>/.krelcode/tool_outputs/`，历史只留 truncate_middle 版 + 文件引用；
   落盘失败退回纯截断
-- 压缩发生会 emit `ContextCompressed(before_tokens, after_tokens)`，UI 可提示用户
+- 压缩发生会 emit `ContextCompressed(before_tokens, after_tokens)`，UI 可提示用户；REPL `/compact` 经 `maybe_compress(force=True)` 手动触发（不必等预算超限）
+- 跨平台：run_command 超时终止在 POSIX 走进程组 killpg(SIGKILL)，Windows 退化为杀主进程（os.killpg/SIGKILL 不存在时不触碰）
 
 ## 交互与会话（Step 8）
 

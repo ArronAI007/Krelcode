@@ -31,7 +31,9 @@
 
 | 14 | Streamable HTTP 传输 | MCP 2025-03-26 规范：单端点 POST（响应 JSON/SSE 二态）、Mcp-Session-Id 会话头捕获与携带、404 过期 fail-closed 断连、通知 202、流内服务器请求自动回 -32601、GET 监听流惰性尝试（405 静默容忍）；HTTPConnector 端口可注入；共享 SSEEventParser；config `transport = "sse"` 回退旧规范，url 默认新规范；协议版本升至 2025-03-26 | 8 个新测试：Fake 连接器（会话捕获/Accept 头/SSE 响应模式/202 通知/GET 405/服务器请求自动应答/会话过期断连且不再打网络/transport 选择）+ 真实 http.server 集成（bind 门控）；提权 254 全过 | ✅ |
 
-| 测试总数：254（离线 252 + 本地端口集成 2，沙箱内自动 skip） |
+| 15 | 发布准备 | pyproject 完整元数据 + `[project.scripts]` 控制台入口（pip 安装后 `krelcode` 直接可用）· requires-python >=3.11（tomllib）· `--version` · run_command 跨平台进程终止（POSIX killpg / Windows proc.kill 兜底）· ContextManager force 压缩 + REPL `/compact` | 7 个新测试：元数据/版本一致性/入口可调用/--version/三分支终止逻辑/强制压缩；离线 pip install 进临时 venv 实跑 `krelcode --version` 与 REPL 验证 | ✅ |
+
+| 测试总数：261（离线 259 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

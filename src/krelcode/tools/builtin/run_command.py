@@ -69,7 +69,7 @@ class RunCommandTool:
         try:
             raw, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            _kill_process_group(proc)
+            _terminate_process_tree(proc)
             try:
                 await asyncio.wait_for(proc.wait(), timeout=5)
             except asyncio.TimeoutError:
@@ -99,11 +99,16 @@ def _clamp_timeout(value: Any) -> float:
     return max(1.0, min(t, MAX_TIMEOUT))
 
 
-def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError, OSError):
+def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:
+    """跨平台终止：POSIX 用进程组整组击杀；Windows（无 killpg/SIGKILL）
+    退化为杀主进程（start_new_session 在 Windows 上被 subprocess 忽略，无害）。"""
+    if os.name == "posix":
         try:
-            proc.kill()
-        except ProcessLookupError:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            return
+        except (ProcessLookupError, PermissionError, OSError, AttributeError):
             pass
+    try:
+        proc.kill()
+    except (ProcessLookupError, OSError):
+        pass

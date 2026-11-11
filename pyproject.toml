@@ -1,9 +1,25 @@
 [project]
 name = "krelcode"
-version = "0.1.0"
-description = "A coding agent built step by step"
-requires-python = ">=3.9"
+version = "0.14.0"
+description = "A coding agent built step by step — layered, decoupled, zero third-party runtime dependencies"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Arron" }]
+keywords = ["agent", "coding-agent", "llm", "mcp", "cli"]
+requires-python = ">=3.11"   # tomllib(3.11+) / zoneinfo / asyncio.to_thread
 dependencies = []
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.scripts]
+krelcode = "krelcode.app:main"
 
 [build-system]
 requires = ["setuptools>=68"]

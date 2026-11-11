@@ -6,10 +6,19 @@
 - 主流 coding agent 架构参考：[ARCHITECTURE.md](ARCHITECTURE.md)
 - 分步路线图与进度：[PLAN.md](PLAN.md)
 
-## 快速开始
+## 安装
 
 ```bash
-# 运行全部测试（254 个，全离线*）
+pip install .          # 或 pip install -e . 开发模式；之后 krelcode 命令全局可用
+krelcode --version
+```
+
+零第三方运行时依赖，Python ≥ 3.11（开发测试仅需 pytest）。
+
+## 快速开始（源码方式）
+
+```bash
+# 运行全部测试（261 个，全离线*）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -28,7 +37,7 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --mode
 #   api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-REPL 内置命令：`/help`、`/history`、`/tools`、`/session`、`/sessions`、`/resume <n|latest|path>`、`/mcp`（状态）、`/mcp reload`（热重载）、`/agents`（子代理状态）、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/tools`、`/session`、`/sessions`、`/resume <n|latest|path>`、`/mcp`（状态）、`/mcp reload`（热重载）、`/agents`（子代理状态）、`/compact`（立即压缩历史）、`/reset`、`/exit`。
 
 ### MCP 远程工具
 
