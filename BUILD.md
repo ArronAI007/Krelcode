@@ -2,7 +2,7 @@
 
 > 本文回答三个问题：这个项目**长什么样**（统计与导览）、**为什么长成这样**
 > （关键决策时间线）、**怎么验收**（离线套件 + 真模型脚本）。
-> 使用文档见 [README.md](README.md)，契约细节见 [DESIGN.md](DESIGN.md)，
+> 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
 ## 1. 项目统计（v0.31.0 / Step 32 时点）

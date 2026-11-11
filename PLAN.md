@@ -79,7 +79,9 @@
 
 | 38 | review 子命令 | `krelcode review [--staged] [--focus X] [--output-format json]`：一键评审当前 git 变更——只注册**只读工具集**（read_file/grep/glob/find_refs/repo_map，模型可拉上下文但绝无写/执行能力，评审模式天然安全）；diff 中间截断（100K）、未跟踪文件列名提示、无变更/非仓库友好退出；评审系统提示词要求引用 file:line、按严重度分级、以「结论: 可合入/建议修改后合入/需要修改」收尾；顺带修复 argparse help 含字面 % 渲染崩溃的潜在 bug（Step 31 起潜伏）并加 format_help 守护测试 | 12 个新测试（真 git 仓库）：diff 收集/仅暂存/无变更/未跟踪+focus/截断；run_review 端到端（diff 进 prompt、只读工具集精确断言、JSON 模式、非仓库友好）；help 渲染守护 | ✅ |
 
-| 测试总数：498（离线 496 + 本地端口集成 2，沙箱内自动 skip） |
+| 39 | 配置参考文档 | CONFIG.md：全部 CLI 旗标（3 子命令+25 旗标）、17+ REPL 命令（含 steering 语义与 @语法）、TOML 全键（providers/mcp_servers/hooks）、环境变量、.krelcode 状态目录布局、安全策略速查表（ALLOW/ASK/DENY 分级）、15 事件与 10 审计记录类型、JSON 输出模式——**配 5 个文档一致性守护测试**（每个 CLI 旗标/子命令/REPL 命令/env/hook 触发器必须在文档中，防文档腐化） | 守护测试全过；顺带在整理时校验了实现与文档零漂移 | ✅ |
+
+| 测试总数：503（离线 501 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

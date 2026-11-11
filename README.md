@@ -6,6 +6,7 @@
 - 主流 coding agent 架构参考：[ARCHITECTURE.md](ARCHITECTURE.md)
 - 分步路线图与进度：[PLAN.md](PLAN.md)
 - 构建回顾（统计/决策时间线/文件导览/验收指引）：[BUILD.md](BUILD.md)
+- **完整配置参考**（CLI/REPL/TOML/env/安全速查/事件清单）：[CONFIG.md](CONFIG.md)
 
 配好 API key 后可跑真模型自动验收：`python scripts/real_acceptance.py`（7 阶段，详见 BUILD.md §5）。
 
