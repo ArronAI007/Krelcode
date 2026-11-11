@@ -1,6 +1,6 @@
 [project]
 name = "krelcode"
-version = "0.28.0"
+version = "0.29.0"
 description = "A coding agent built step by step — layered, decoupled, zero third-party runtime dependencies"
 readme = "README.md"
 license = { file = "LICENSE" }

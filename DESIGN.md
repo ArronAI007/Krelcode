@@ -369,6 +369,21 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   注释模板）与 AGENTS.md 规则骨架；默认不覆盖已存在文件
 - 子命令为可选位置参数（nargs="?"），既有 flag 式用法完全兼容
 
+## 成本感知（Step 30）
+
+- **Anthropic prompt caching**（adapter 内实现，其他层零感知）：默认开启，
+  3 个 ephemeral 断点——tools 最后一个声明、system（block 化）、
+  最后一条消息的最后一个 content block（str content 自动转 block；
+  tool_result 合并消息只标末块）；`prompt_cache = false`（TOML）可关。
+  缓存命中 input 按 ~10% 计价，长会话成本大幅下降；
+  usage 新增规范化键 cache_read / cache_creation
+- **价目表与成本估算**（agent/pricing.py）：内置主流型号 USD/1M 参考价
+  （标注为估算，非计费依据）；匹配规则精确 → **最长前缀**
+  （gpt-4o-mini-2024-07-18 → mini 价而非 gpt-4o 价）；未知模型返回 None，
+  UI 不显示成本（不造假）；UsageTracker(model) 每次响应累计
+  session.cost，/cost 与 -m [usage] 显示 `估算成本 $x.xxxx`，
+  JSON 输出带 cost_usd 字段
+
 ## 分层测试策略（每层可独立验证）
 
 | 层 | 测试方式 |

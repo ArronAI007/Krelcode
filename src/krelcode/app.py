@@ -274,7 +274,7 @@ async def async_main(args: argparse.Namespace) -> int:
     if not args.no_checkpoint:
         checkpoints = CheckpointManager(loop.tool_context.workspace_root)
         checkpoints.attach(loop.bus)
-    usage = UsageTracker()
+    usage = UsageTracker(model=getattr(loop.llm, "model", None))
     usage.attach(loop.bus)
     hook_specs = parse_hooks(config)
     if hook_specs:
@@ -311,6 +311,7 @@ async def async_main(args: argparse.Namespace) -> int:
                         },
                         "tools_used": summary.tools_used,
                         "denied": summary.denied,
+                        "cost_usd": usage.cost_usd,
                         "session": str(session_path) if session_path else None,
                     }
                     code = 0
@@ -325,7 +326,7 @@ async def async_main(args: argparse.Namespace) -> int:
                 print(f"错误：{type(e).__name__}: {e}")
                 return 1
             if usage.session.calls:
-                print(f"[usage] {usage.session.text()}")
+                print(f"[usage] {usage.session.text()}{usage.cost_note()}")
             return 0
         print(f"[provider: {loop.llm.name} | model: {model}]")
         return await run_repl(

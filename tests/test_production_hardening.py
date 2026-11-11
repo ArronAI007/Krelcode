@@ -142,6 +142,7 @@ def test_json_output_mode(tmp_path, capsys):
     assert payload["session"] is None                # --no-session
     assert set(payload["usage"]) == {"calls", "input", "output", "total"}
     assert payload["usage"]["calls"] == 2            # tool-call 轮 + 总结轮
+    assert "cost_usd" in payload and payload["cost_usd"] is None  # mock-model 不在价目表
     assert "tool-call 循环" in payload["reply"]
 
 

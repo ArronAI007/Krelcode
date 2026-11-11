@@ -30,6 +30,8 @@ FINISH_LENGTH = "length"
 USAGE_INPUT = "input_tokens"
 USAGE_OUTPUT = "output_tokens"
 USAGE_TOTAL = "total_tokens"
+USAGE_CACHE_READ = "cache_read"          # 命中缓存读取的 input tokens（折扣价）
+USAGE_CACHE_CREATION = "cache_creation"  # 写入缓存的 input tokens（溢价）
 
 ToolSpec = Dict[str, object]  # {"name": str, "description": str, "parameters": dict}
 
@@ -109,6 +111,11 @@ def normalize_usage(raw: Dict[str, int]) -> Dict[str, int]:
         out[USAGE_INPUT] = raw.get("input_tokens", raw.get("prompt_tokens", 0))
     if "output_tokens" in raw or "completion_tokens" in raw:
         out[USAGE_OUTPUT] = raw.get("output_tokens", raw.get("completion_tokens", 0))
+    # 缓存 tokens（Anthropic prompt caching；OpenAI 侧自动缓存暂不采集）
+    if "cache_read_input_tokens" in raw:
+        out[USAGE_CACHE_READ] = raw["cache_read_input_tokens"]
+    if "cache_creation_input_tokens" in raw:
+        out[USAGE_CACHE_CREATION] = raw["cache_creation_input_tokens"]
     if "total_tokens" in raw:
         out[USAGE_TOTAL] = raw["total_tokens"]
     elif USAGE_INPUT in out and USAGE_OUTPUT in out:

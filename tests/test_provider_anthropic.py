@@ -18,6 +18,7 @@ TOOLS = [{"name": "get_time", "description": "查时间", "parameters": {"type":
 
 def make_provider(body: bytes, status: int = 200, **kw):
     transport = FakeTransport(body, status)
+    kw.setdefault("prompt_cache", False)   # wire 形状断言默认走无缓存路径
     provider = AnthropicProvider(model="claude-x", api_key="sk-ant", transport=transport, **kw)
     return provider, transport
 
@@ -161,3 +162,69 @@ def test_missing_api_key(monkeypatch):
 
 async def _events(provider):
     return [e async for e in provider.stream([Message.user("hi")])]
+
+
+# -- prompt caching（Step 30）------------------------------------------------------------------
+
+def test_prompt_cache_default_enabled_and_breakpoints():
+    """默认开启：tools 末尾 / system / 最后一条消息末尾共 3 个 ephemeral 断点。"""
+    provider = AnthropicProvider(model="claude-x", api_key="k")
+    assert provider.prompt_cache is True
+    req = provider.build_request(
+        [Message.system("S"), Message.user("hi")], TOOLS)
+    import json as _json
+    payload = _json.loads(req["body"].decode("utf-8"))
+    # tools 最后一个声明带断点
+    assert payload["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+    # system 转 block 形式并带断点
+    assert payload["system"] == [{
+        "type": "text", "text": "S", "cache_control": {"type": "ephemeral"}}]
+    # 最后一条消息（str content → block 化）带断点
+    assert payload["messages"][-1]["content"] == [{
+        "type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]
+
+
+def test_prompt_cache_marks_last_block_of_tool_result_message():
+    """最后一条是 tool 结果（blocks 列表）→ 断点打在最后一个 block 上。"""
+    provider = AnthropicProvider(model="claude-x", api_key="k")
+    history = [
+        Message.user("几点"),
+        Message.assistant(tool_calls=[ToolCall("t1", "get_time", {})]),
+        Message.tool_result("t1", "12:00"),
+        Message.tool_result("t2", "13:00"),
+    ]
+    import json as _json
+    req = provider.build_request(history, None)
+    payload = _json.loads(req["body"].decode("utf-8"))
+    last = payload["messages"][-1]
+    assert last["role"] == "user"
+    assert len(last["content"]) == 2                     # 两个 tool_result 合并
+    assert last["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in last["content"][0]     # 只标最后一个
+    assert "tools" not in payload
+
+
+def test_prompt_cache_disabled_no_markers():
+    provider = AnthropicProvider(model="claude-x", api_key="k", prompt_cache=False)
+    req = provider.build_request([Message.system("S"), Message.user("hi")], TOOLS)
+    assert b"cache_control" not in req["body"]
+
+
+def test_cache_usage_normalized():
+    body = sse(
+        {"type": "message_start", "message": {"usage": {
+            "input_tokens": 10, "output_tokens": 1,
+            "cache_read_input_tokens": 5000, "cache_creation_input_tokens": 200}}},
+        {"type": "content_block_start", "index": 0,
+         "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "text_delta", "text": "ok"}},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+         "usage": {"output_tokens": 4}},
+    )
+    provider, _ = make_provider(body)
+    finished = asyncio.run(collect(provider, [Message.user("q")]))
+    assert finished.usage["cache_read"] == 5000
+    assert finished.usage["cache_creation"] == 200
+    assert finished.usage["input_tokens"] == 10
+    assert finished.usage["output_tokens"] == 4

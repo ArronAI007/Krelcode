@@ -125,6 +125,7 @@ class AnthropicProvider:
         base_url: Optional[str] = None,
         timeout: float = 120.0,
         max_tokens: Optional[int] = None,
+        prompt_cache: bool = True,
         transport: Optional[Transport] = None,
     ) -> None:
         self.model = model or os.environ.get("KRELCODE_MODEL") or self.DEFAULT_MODEL
@@ -134,6 +135,7 @@ class AnthropicProvider:
         ).rstrip("/")
         self.timeout = timeout
         self.max_tokens = max_tokens or self.DEFAULT_MAX_TOKENS
+        self.prompt_cache = prompt_cache
         self._transport: Transport = transport or UrllibTransport()
 
     # -- 请求构造（纯函数，可单测） ---------------------------------------------
@@ -152,10 +154,23 @@ class AnthropicProvider:
             "messages": wire_messages,
             "stream": True,
         }
+        # prompt caching：3 个 ephemeral 断点（tools 末尾 / system / 最后一条消息末尾）。
+        # 缓存命中部分按 ~10% 计价，长会话显著省钱；不足最小缓存长度时服务端自动忽略，无害。
         if system is not None:
-            payload["system"] = system
+            if self.prompt_cache:
+                payload["system"] = [{
+                    "type": "text", "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }]
+            else:
+                payload["system"] = system
         if tools:
-            payload["tools"] = tool_specs_to_anthropic(tools)
+            tool_defs = tool_specs_to_anthropic(tools)
+            if self.prompt_cache and tool_defs:
+                tool_defs[-1]["cache_control"] = {"type": "ephemeral"}
+            payload["tools"] = tool_defs
+        if self.prompt_cache and wire_messages:
+            _mark_last_block_cacheable(wire_messages[-1])
         return {
             "url": f"{self.base_url}/v1/messages",
             "headers": {
@@ -248,6 +263,22 @@ class AnthropicProvider:
             )
         finally:
             resp.close()
+
+
+def _mark_last_block_cacheable(wire_message: Dict[str, Any]) -> None:
+    """给一条 wire 消息的最后一个 content block 打 cache_control 断点。"""
+    content = wire_message.get("content")
+    if isinstance(content, str):
+        if not content:
+            return
+        wire_message["content"] = [{
+            "type": "text", "text": content,
+            "cache_control": {"type": "ephemeral"},
+        }]
+    elif isinstance(content, list) and content:
+        last = content[-1]
+        if isinstance(last, dict):
+            last["cache_control"] = {"type": "ephemeral"}
 
 
 def _parse_input(raw: str) -> Dict[str, Any]:

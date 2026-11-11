@@ -61,7 +61,9 @@
 
 | 29 | 端到端行为验收套件 | tests/test_acceptance.py：用与 app.py 相同的组件装配全栈（default_tools+SandboxPolicy+Recorder+Checkpoint+Usage+AutoCommit+SubagentManager），脚本化 MockProvider 驱动 4 个典型任务，断言工作区最终状态+审计痕迹+行为不变量——①修 bug 全链路（失败回填→修复→PASS→JSONL 审计→用量 5×150→git 提交→undo 恢复）②子代理委派（spawn/wait/子报告进父历史/防递归/事件进父审计流）③重构改名（find_refs→replace_all→grep 零残留→check_syntax→undo 还原两文件）④自我修正+写保护（错误 old_string→相近行提示→修正成功；.env 拒绝→事件+审计） | 4 场景全过；这是无真模型条件下的"整机"行为回归，真模型验收为其补充 | ✅ |
 
-| 测试总数：415（离线 413 + 本地端口集成 2，沙箱内自动 skip） |
+| 30 | 成本感知 | Anthropic prompt caching（默认开：tools 末尾/system/最后一条消息 3 个 ephemeral 断点，str content 自动 block 化，tool_result 列表只标最后一块；prompt_cache=false 可关，TOML [providers.anthropic] 透传）· usage 规范化新增 cache_read/cache_creation 键 · 内置价目表 agent/pricing.py（18 个主流型号 USD/1M，精确→**最长前缀**匹配防 gpt-4o 误吞 mini，未知返回 None 不造假；cache_read 10%/cache_creation 125% 计价）· UsageTracker 带 model 累计成本，/cost 与 -m [usage] 显示估算 $，JSON 输出含 cost_usd | 13 个新测试 + 1 处更新：3 断点形态/tool_result 只标末块/关闭无标记/cache usage 规范化；价目精确与前缀匹配/未知 None/基础与缓存数学/Tracker 累计与摘要/未知模型不算钱；JSON cost_usd 键 | ✅ |
+
+| 测试总数：428（离线 426 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

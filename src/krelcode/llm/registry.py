@@ -111,7 +111,10 @@ def create_provider(settings: ProviderSettings, **overrides: Any) -> LLMProvider
             base_url=settings.base_url,
             timeout=settings.timeout,
         )
-        if settings.provider == "anthropic" and settings.max_tokens:
-            kwargs["max_tokens"] = settings.max_tokens
+        if settings.provider == "anthropic":
+            if settings.max_tokens:
+                kwargs["max_tokens"] = settings.max_tokens
+            if "prompt_cache" in settings.extra:
+                kwargs["prompt_cache"] = bool(settings.extra["prompt_cache"])
     kwargs.update(overrides)
     return factory(**kwargs)  # type: ignore[operator]
