@@ -5,24 +5,27 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（v0.31.0 / Step 32 时点）
+## 1. 项目统计（v0.38.0 / Step 39 收官）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 8,083 行（Python，**零第三方运行时依赖**） |
-| 测试 | 7,307 行 / 46 个文件 / 445 个用例（离线 443 + 本地端口集成 2） |
-| 提交 | 32 个步骤，每步一个语义化 commit，全部含测试 |
+| 源码 | 8,606 行（Python，**零第三方运行时依赖**） |
+| 测试 | 8,246 行 / 52 个文件 / 503 个用例（离线 501 + 本地端口集成 2，提权环境 503/503 全绿） |
+| 提交 | 39 个步骤，每步一个语义化 commit，全部含测试 |
 | 工具 | 内置 10 + 子代理 4 + MCP 远程动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
+| CLI 入口 | REPL 对话 · -m 单次（text/json）· doctor · init · review |
+| 文档 | README（上手）· CONFIG（全量参考）· DESIGN（契约）· ARCHITECTURE（对标）· PLAN（路线）· BUILD（本文） |
 
 源码按层分布：
 
 ```
-llm 1351 · mcp 1331 · tools 1211 · app/config/doctor/scaffold/hooks 905
-agent 860 · ui 656 · session 625 · subagent 435 · safety 427 · core 276
+llm 1451 · mcp 1388 · tools 1211 · 顶层(app/config/doctor/scaffold/hooks/review) 1144
+agent 862 · ui 708 · session 667 · subagent 435 · safety 427 · core 313
 ```
 
-core 只有 276 行——内核极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
+core 只有 313 行——内核极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
+测试代码量与源码接近 1:1（8,246 vs 8,606）。
 
 ## 2. 关键架构决策时间线
 
@@ -44,6 +47,8 @@ core 只有 276 行——内核极小、能力在边缘，正是当初对标 pi/
 | v0.26 | REPL 架构 | 从「读一行跑一轮」重构为常驻 reader + 状态机，才可能有运行中 steering |
 | v0.30 | usage 语义分裂 | OpenAI prompt_tokens 含缓存、Anthropic input_tokens 不含 → 统一为 Anthropic 语义（input 扣除 cache_read），成本公式两家通用且防双计 |
 | v0.31 | 热切换原子性 | /model 先建新 provider 并验证 key，成功才替换——切换失败不破坏会话 |
+| v0.34 | 协议时序 | MCP notifications/initialized 必须 await 实发——fire-and-forget 的调度延迟会让它晚于后续请求（spy 调试抓到） |
+| v0.36 | 多模态持久化 | 图片按 source_path 存 JSONL（每轮快照×base64 会撑爆文件），恢复时重载 |
 | v0.33 | 扩展思考回传 | Anthropic thinking 块（含 signature/redacted）挂 Message.provider_meta 不透明状态位随历史回传——core 只携带不解读，wire 知识仍锁在 adapter 内 |
 
 ## 3. 文件导览（能力 → 位置）
@@ -83,7 +88,7 @@ core 只有 276 行——内核极小、能力在边缘，正是当初对标 pi/
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内跳过、提权环境全过（445/445）。
+bind 探测自动 skip——沙箱内跳过、提权环境全过（503/503）。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /
