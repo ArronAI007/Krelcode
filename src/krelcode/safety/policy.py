@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import inspect
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,7 +74,15 @@ class SandboxPolicy:
 
     async def check(self, tool_call: ToolCall, ctx: ToolContext) -> Decision:
         name = tool_call.name
-        if name in READONLY_TOOLS or name in WORKSPACE_WRITE_TOOLS:
+        if name in READONLY_TOOLS:
+            return ALLOW
+        if name in WORKSPACE_WRITE_TOOLS:
+            # 工作区约束由 tools/paths.py 兜底；这里额外保护敏感文件
+            protected = classify_protected_path(
+                str(tool_call.arguments.get("path", "")), ctx.workspace_root)
+            if protected:
+                return await self._ask(
+                    tool_call, f"写入受保护路径（{protected}）")
             return ALLOW
         if name in SHELL_TOOLS:
             return await self._check_command(tool_call)
@@ -111,3 +120,40 @@ class SandboxPolicy:
         if answer == "yes":
             return Decision(True, f"用户批准: {reason}")
         return deny(f"用户拒绝（{reason}）")
+
+
+# ---------------------------------------------------------------------------
+# 受保护路径（写保护 → ASK；非交互场景 fail-closed 拒绝）
+# ---------------------------------------------------------------------------
+
+# glob 同时匹配「相对工作区路径」与「文件基名」
+PROTECTED_GLOBS = (
+    ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx",
+    "id_rsa*", "id_ed25519*", "secrets.*", "credentials*",
+    ".npmrc", ".netrc", ".pgpass", ".htpasswd",
+    # 审批白名单自身：防止 LLM 给自己提权
+    ".krelcode/allow_rules.json",
+)
+PROTECTED_DIRS = (".git",)  # 仓库内部（含 hooks/config，可执行任意代码）
+
+
+def classify_protected_path(raw_path: str, workspace_root: Path) -> Optional[str]:
+    """目标路径若受保护，返回原因字符串；否则 None。纯路径计算，不触网。"""
+    if not raw_path.strip():
+        return None
+    root = Path(workspace_root)
+    candidate = Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        rel = candidate.resolve().relative_to(root.resolve()).as_posix()
+    except (ValueError, OSError):
+        rel = candidate.as_posix()  # 解析失败（如指向工作区外）用字面路径判断
+    parts = rel.split("/")
+    if any(part in PROTECTED_DIRS for part in parts):
+        return f"{PROTECTED_DIRS[0]} 目录（仓库内部）"
+    base = parts[-1]
+    for pattern in PROTECTED_GLOBS:
+        if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(base, pattern):
+            return f"敏感文件模式 {pattern}"
+    return None

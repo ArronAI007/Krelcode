@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -19,7 +21,7 @@ from .agent.loop import AgentLoop
 from .agent.prompts import build_system_prompt
 from .agent.usage import UsageTracker
 from .config import load_config
-from .core.events import EventBus
+from .core.events import EventBus, PermissionDenied, ToolCallCompleted
 from .core.messages import Message, ToolCall
 from .llm.base import LLMProvider
 from .llm.providers.mock import MockProvider
@@ -132,11 +134,12 @@ async def build_loop(
         max_steps=args.max_steps,
         repeat_failure_limit=args.repeat_failure_limit,
         context_manager=context_manager,
+        token_budget=args.token_budget,
     )
     return loop, manager
 
 
-def setup_session(args: argparse.Namespace, loop: AgentLoop):
+def setup_session(args: argparse.Namespace, loop: AgentLoop, log=print):
     """恢复历史（--resume）并挂载 JSONL 录制器；返回会话文件路径或 None。"""
     sessions_dir = loop.tool_context.workspace_root / ".krelcode" / "sessions"
 
@@ -144,11 +147,11 @@ def setup_session(args: argparse.Namespace, loop: AgentLoop):
         if args.resume == "latest":
             path = latest_session(sessions_dir)
             if path is None:
-                print(f"（{sessions_dir} 下没有可恢复的会话，从空白开始）")
+                log(f"（{sessions_dir} 下没有可恢复的会话，从空白开始）")
             else:
-                restore_session(loop, path)
+                restore_session(loop, path, log=log)
         else:
-            restore_session(loop, Path(args.resume))
+            restore_session(loop, Path(args.resume), log=log)
 
     if args.no_session:
         return None
@@ -158,20 +161,34 @@ def setup_session(args: argparse.Namespace, loop: AgentLoop):
     return session_path
 
 
-def restore_session(loop: AgentLoop, path: Path) -> bool:
+def restore_session(loop: AgentLoop, path: Path, log=print) -> bool:
     """把会话历史装入 loop（REPL /resume 命令与 --resume 参数共用）。"""
     if not Path(path).is_file():
-        print(f"（会话文件不存在: {path}）")
+        log(f"（会话文件不存在: {path}）")
         return False
     history = load_history(Path(path))
     if not history:
-        print(f"（会话 {path} 中没有历史快照）")
+        log(f"（会话 {path} 中没有历史快照）")
         return False
     if history[0].role != "system":
         history.insert(0, Message.system(build_system_prompt()))
     loop.history = history
-    print(f"（已恢复会话 {path}，共 {len(history)} 条消息）")
+    log(f"（已恢复会话 {path}，共 {len(history)} 条消息）")
     return True
+
+
+class _RunSummary:
+    """JSON 输出模式的事件收集器（旁路订阅）。"""
+
+    def __init__(self) -> None:
+        self.tools_used: List[str] = []
+        self.denied = 0
+
+    def on_event(self, event) -> None:
+        if isinstance(event, ToolCallCompleted):
+            self.tools_used.append(event.tool_call.name)
+        elif isinstance(event, PermissionDenied):
+            self.denied += 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -188,6 +205,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-steps", type=int, default=20, help="单轮任务的最大 LLM 迭代步数")
     p.add_argument("--repeat-failure-limit", type=int, default=3,
                    help="同一调用连续失败多少次判定卡死并中止（默认 3）")
+    p.add_argument("--token-budget", type=int, default=None,
+                   help="单轮任务的 token 预算，超限中止（默认不限）")
     p.add_argument("--no-context", action="store_true",
                    help="跳过启动时的工作区上下文注入（目录树/git/AGENTS.md）")
     p.add_argument("--auto-approve", action="store_true",
@@ -209,15 +228,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--auto-commit", action="store_true",
                    help="每轮结束若有文件变更自动 git 提交（需工作区是 git 仓库）")
     p.add_argument("-m", "--message", default=None, help="单次提问模式：执行完直接退出")
+    p.add_argument("--output-format", choices=("text", "json"), default="text",
+                   help="配合 -m：json 输出结构化结果到 stdout（启动提示走 stderr），适合 CI/脚本")
     p.add_argument("--version", action="version", version=f"krelcode {__version__}")
     return p
 
 
 async def async_main(args: argparse.Namespace) -> int:
+    quiet = bool(args.message) and args.output_format == "json"
+    note = (lambda msg: print(msg, file=sys.stderr)) if quiet else print
     config_path = Path(args.config) if args.config else None
     config = load_config(config_path)
     loop, subagents = await build_loop(args, config)
-    supervisor = MCPSupervisor(loop.registry)
+    supervisor = MCPSupervisor(loop.registry, log=note)
     if not args.no_mcp:
         await supervisor.sync(config.get("mcp_servers") or {})
 
@@ -238,14 +261,38 @@ async def async_main(args: argparse.Namespace) -> int:
         if await committer.is_git_repo():
             await committer.ensure_local_exclude()
             loop.bus.subscribe(committer.on_event)
-            print("[git] 自动提交已开启（每轮有变更时 commit；.krelcode/ 已本地排除）")
+            note("[git] 自动提交已开启（每轮有变更时 commit；.krelcode/ 已本地排除）")
         else:
-            print("[git] 工作区不是 git 仓库，--auto-commit 未生效")
+            note("[git] 工作区不是 git 仓库，--auto-commit 未生效")
     try:
-        session_path = setup_session(args, loop)
+        session_path = setup_session(args, loop, log=note)
         sessions_dir = loop.tool_context.workspace_root / ".krelcode" / "sessions"
         model = getattr(loop.llm, "model", "?")
         if args.message:
+            if args.output_format == "json":
+                summary = _RunSummary()
+                loop.bus.subscribe(summary.on_event)
+                try:
+                    reply = await loop.run(args.message)
+                    payload = {
+                        "ok": True,
+                        "reply": reply,
+                        "usage": {
+                            "calls": usage.session.calls,
+                            "input": usage.session.input,
+                            "output": usage.session.output,
+                            "total": usage.session.total,
+                        },
+                        "tools_used": summary.tools_used,
+                        "denied": summary.denied,
+                        "session": str(session_path) if session_path else None,
+                    }
+                    code = 0
+                except Exception as e:
+                    payload = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+                    code = 1
+                print(json.dumps(payload, ensure_ascii=False))
+                return code
             try:
                 print(await loop.run(args.message))
             except Exception as e:

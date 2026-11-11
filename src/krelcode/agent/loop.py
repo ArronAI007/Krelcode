@@ -52,6 +52,7 @@ class AgentLoop:
         repeat_failure_limit: int = 3,
         context_manager: Optional[ContextManager] = None,
         tool_output_inline_limit: int = 12_000,
+        token_budget: Optional[int] = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -62,6 +63,8 @@ class AgentLoop:
         self.repeat_failure_limit = repeat_failure_limit
         self.context_manager = context_manager
         self.tool_output_inline_limit = tool_output_inline_limit
+        self.token_budget = token_budget
+        self._token_total = 0
         self._failure_counts: Dict[str, int] = {}
         self.history: List[Message] = (
             [Message.system(system_prompt)] if system_prompt else []
@@ -80,9 +83,16 @@ class AgentLoop:
         """处理一轮用户输入：内部可能经历多次 LLM 调用与工具执行。"""
         self.history.append(Message.user(user_input))
         self._failure_counts = {}
+        self._token_total = 0
         await self._emit(RunStarted(user_input))
 
         for step in range(1, self.max_steps + 1):
+            if self.token_budget is not None and self._token_total > self.token_budget:
+                text = (f"[krelcode] token 预算耗尽（已用 {self._token_total} > "
+                        f"预算 {self.token_budget}），中止本轮。")
+                self.history.append(Message.assistant(text))
+                await self._emit(RunFinished(text))
+                return text
             await self._emit(StepStarted(step))
             assistant = await self._llm_turn()
             if not assistant.tool_calls:
@@ -119,7 +129,10 @@ class AgentLoop:
         if finished is None:  # provider 违反契约
             raise RuntimeError("LLMProvider 未产出 StreamFinished")
         self.history.append(finished.message)
-        await self._emit(LLMResponseReceived(finished.message, dict(finished.usage)))
+        usage = dict(finished.usage)
+        self._token_total += usage.get("total_tokens") or (
+            usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
+        await self._emit(LLMResponseReceived(finished.message, usage))
         return finished.message
 
     # -- 内部：执行一批工具调用 -------------------------------------------------

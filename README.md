@@ -18,7 +18,7 @@ krelcode --version
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（279 个，全离线*）
+# 运行全部测试（296 个，全离线*）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -69,6 +69,15 @@ transport = "sse"
 
 当前内置工具（12 个）：`get_time`、`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`、`repo_map`，以及子代理工具 `spawn_agent`、`wait_agent`、`send_to_agent`、`list_agents`；另加 MCP 远程工具。
 
+### Headless / CI 模式
+
+```bash
+krelcode --provider openai -m "修复 tests/ 下失败的测试" --output-format json --auto-approve --no-session
+# stdout 输出单行 JSON: {"ok": true, "reply": ..., "usage": {...}, "tools_used": [...], "denied": 0, "session": null}
+```
+
+`--token-budget N` 可限制单轮 token 用量（超限优雅中止）；启动提示走 stderr，stdout 保持纯净可管道。
+
 ### git 自动提交（可选）
 
 `--auto-commit`：每轮对话结束若工作区有变更，自动 `git add -A && commit -m "krelcode: <你的输入>"`（Aider 风格）。`.krelcode/` 运行时目录自动写入 `.git/info/exclude`（仅本地生效）。与 `/undo` 互补：checkpoint 管文件级回滚，auto-commit 管历史留痕。
@@ -82,7 +91,7 @@ transport = "sse"
 LLM 可用 `spawn_agent` 把自包含的子任务委派给后台子代理（独立上下文、并行执行），`wait_agent` 收取报告，`send_to_agent` 对已完成的子代理续聊追加任务；子代理不能再派生子代理（防递归）。REPL `/agents` 查看状态；子代理事件写入会话 JSONL 审计流。
 文件与命令操作限定在工作区内（相对路径基于 `--workspace`），自动跳过 `.git`/`node_modules` 等目录。
 
-安全策略（默认开启）：只读命令静默放行；执行代码/删文件/网络访问等 ASK 级操作弹 `[y]是/[n]否/[a]始终允许` 审批，"始终允许"按程序名持久化到 `<workspace>/.krelcode/allow_rules.json`；`sudo`、`rm -rf /`、`curl|sh` 等 DENY 级无条件拒绝。`--auto-approve` 自动批准 ASK 级，`--no-sandbox` 完全关闭。
+安全策略（默认开启）：只读命令与常规文件写入静默放行，但 `.git/`、`.env*`、密钥文件、审批白名单自身等**受保护路径**的写入需要审批；执行代码/删文件/网络访问等 ASK 级操作弹 `[y]是/[n]否/[a]始终允许` 审批，"始终允许"按程序名持久化到 `<workspace>/.krelcode/allow_rules.json`；`sudo`、`rm -rf /`、`curl|sh` 等 DENY 级无条件拒绝。`--auto-approve` 自动批准 ASK 级，`--no-sandbox` 完全关闭。
 
 上下文管理：CJK 感知 token 估算；历史超过 `--context-tokens`（默认 10 万）自动把中段摘要压缩（`--no-compress` 关闭）；超长工具输出全文落盘 `.krelcode/tool_outputs/` 并只在上下文留引用。
 

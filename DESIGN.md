@@ -250,6 +250,20 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   不污染用户 .gitignore）；非 git 仓库/无变更/提交失败全部静默跳过；
   与 CheckpointManager 互补：checkpoint 管文件级回滚，auto-commit 管历史留痕
 
+## 生产化加固（Step 18）
+
+- **token 预算**：AgentLoop 累计每次 StreamFinished 的 usage
+  （total_tokens 缺失时用 input+output），每个 step 的 LLM 调用**前**检查，
+  超限走与 max_steps 相同的优雅中止路径（assistant 消息入历史 + RunFinished）
+- **敏感文件写保护**（safety/policy.py）：write_file/edit_file 不再一律放行——
+  classify_protected_path() 对 `.git/`（仓库内部，hooks 可执行任意代码）、
+  `.env*`、密钥/凭据模式（*.pem、id_rsa*、.npmrc…）以及
+  **`.krelcode/allow_rules.json`（防 LLM 给自己提权）** 返回保护原因 →
+  走 ASK 审批链（非交互 fail-closed 拒绝）；纯路径计算不触网
+- **headless JSON**：`-m --output-format json` 时 stdout 只输出一行
+  `{ok, reply, usage, tools_used, denied, session}`；启动提示（MCP 连接、
+  自动提交、会话恢复）全部改走 stderr；异常 → `{"ok": false, "error": ...}` + 退出码 1
+
 ## 分层测试策略（每层可独立验证）
 
 | 层 | 测试方式 |
