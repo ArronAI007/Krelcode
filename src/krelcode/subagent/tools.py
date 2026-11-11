@@ -45,13 +45,15 @@ class SpawnAgentTool:
 class WaitAgentTool:
     name = "wait_agent"
     description = (
-        "等待子代理完成任务并返回其报告。timeout 秒数可选（默认 60，超时不取消任务，"
-        "返回当前状态，可再次 wait）。"
+        "等待子代理完成任务并返回其报告。agent_id 支持逗号分隔多个 id"
+        "（一次等多个，各自返回状态与报告）。timeout 秒数可选（默认 60，"
+        "超时不取消任务，返回当前状态，可再次 wait）。"
     )
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
-            "agent_id": {"type": "string", "description": "spawn_agent 返回的 id"},
+            "agent_id": {"type": "string",
+                         "description": "spawn_agent 返回的 id；逗号分隔可等多个"},
             "timeout": {"type": "number", "description": "最长等待秒数（默认 60）"},
         },
         "required": ["agent_id"],
@@ -61,7 +63,10 @@ class WaitAgentTool:
         self.manager = manager
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
-        agent_id = str(args.get("agent_id", ""))
+        raw_id = str(args.get("agent_id", ""))
+        agent_ids = [t.strip() for t in raw_id.replace("，", ",").split(",") if t.strip()]
+        if not agent_ids:
+            return ToolResult(content="agent_id 不能为空", is_error=True)
         timeout = args.get("timeout")
         try:
             timeout = float(timeout) if timeout is not None else 60.0
@@ -69,33 +74,55 @@ class WaitAgentTool:
         except (TypeError, ValueError):
             timeout = 60.0
         try:
-            handle = await self.manager.wait(agent_id, timeout=timeout)
+            if len(agent_ids) == 1:
+                handles = [await self.manager.wait(agent_ids[0], timeout=timeout)]
+            else:
+                handles = await self.manager.wait_many(agent_ids, timeout=timeout)
         except KeyError as e:
             return ToolResult(content=str(e), is_error=True)
-        if handle.status == STATUS_RUNNING:
+
+        sections = []
+        all_completed = True
+        for handle in handles:
+            if handle.status == STATUS_RUNNING:
+                all_completed = False
+                sections.append(
+                    f"[{handle.id}] 仍在运行（等待 {timeout:g}s 超时）。可稍后再次 wait_agent。")
+            else:
+                body = handle.result if handle.status == "completed" else (handle.error or "")
+                if handle.status != "completed":
+                    all_completed = False
+                sections.append(f"[{handle.id}] {handle.status}\n{body}")
+        if len(agent_ids) == 1:
+            # 单 id：保持与旧版完全一致的内容格式
+            handle = handles[0]
+            if handle.status == STATUS_RUNNING:
+                return ToolResult(content=sections[0],
+                                  data={"status": handle.status})
             return ToolResult(
-                content=f"[{handle.id}] 仍在运行（等待 {timeout:g}s 超时）。可稍后再次 wait_agent。",
-                data={"status": handle.status},
-            )
-        body = handle.result if handle.status == "completed" else (handle.error or "")
+                content=sections[0], is_error=handle.status != "completed",
+                data={"status": handle.status})
         return ToolResult(
-            content=f"[{handle.id}] {handle.status}\n{body}",
-            is_error=handle.status != "completed",
-            data={"status": handle.status},
+            content="\n---\n".join(sections),
+            is_error=not all_completed,
+            data={"statuses": {h.id: h.status for h in handles}},
         )
 
 
 class SendToAgentTool:
     name = "send_to_agent"
     description = (
-        "给已完成/失败的子代理追加一轮任务（其上下文延续，记得之前的工作）。"
-        "子代理仍在运行时会报错，请先 wait_agent。"
+        "给子代理追加任务（其上下文延续，记得之前的工作）。"
+        "子代理空闲时立即开始；运行中默认排队（完成后自动处理）；"
+        "interrupt=true 则打断当前任务立即处理本消息。"
     )
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
             "agent_id": {"type": "string"},
             "message": {"type": "string", "description": "追加的任务/指示"},
+            "interrupt": {"type": "boolean",
+                          "description": "true=打断运行中的任务立即处理（默认 false=排队）"},
         },
         "required": ["agent_id", "message"],
     }
@@ -109,14 +136,25 @@ class SendToAgentTool:
         if not isinstance(message, str) or not message.strip():
             return ToolResult(content="message 必须是非空字符串", is_error=True)
         try:
-            handle = self.manager.send_input(agent_id, message.strip())
+            handle, action = await self.manager.send_input(
+                agent_id, message.strip(), interrupt=bool(args.get("interrupt", False)))
         except KeyError as e:
             return ToolResult(content=str(e), is_error=True)
-        except RuntimeError as e:
-            return ToolResult(content=str(e), is_error=True)
+        if action == "queued":
+            return ToolResult(
+                content=(f"子代理 {handle.id} 正在运行，消息已排队"
+                         f"（当前队列 {len(handle.queue)} 条），完成后自动处理。"
+                         f"用 wait_agent 等待。"),
+                data={"agent_id": handle.id, "action": action},
+            )
+        if action == "interrupted":
+            return ToolResult(
+                content=f"已打断子代理 {handle.id}，新消息立即处理。用 wait_agent 等待。",
+                data={"agent_id": handle.id, "action": action},
+            )
         return ToolResult(
             content=f"已向子代理 {handle.id} 追加任务（后台运行），用 wait_agent 等待。",
-            data={"agent_id": handle.id},
+            data={"agent_id": handle.id, "action": action},
         )
 
 

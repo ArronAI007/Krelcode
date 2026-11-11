@@ -47,7 +47,9 @@
 
 | 22 | 交互层增强 | @文件引用（ui/atfiles：词首 @ 触发、email 不误伤、工作区约束、二进制/超限 fail-safe、注入预算）· 会话 Markdown 导出（session/export + /export [路径]，长内容截断）· REPL 可测试化（input_fn 注入点）——全部 /命令首次固化为自动化回归 | 24 个新测试：@展开 9 例（截断/上限/越界/二进制/email）、导出结构与截断、REPL 13 例全命令（help/tools/消息流/异常路径/@注入/history/reset/cost/compact/未启用提示/sessions+resume/export/undo 集成） | ✅ |
 
-| 测试总数：350（离线 348 + 本地端口集成 2，沙箱内自动 skip） |
+| 23 | 子代理增强 | 消息队列（运行中 send → 排队，同 Task 内排空，wait 语义=队列排空）· interrupt 打断（取消→**历史消毒** sanitize_history 防孤儿 tool_calls/连续 user→合并打断指示）· wait_many / wait_agent 多 id（逗号分隔，单 id 输出格式向后兼容）· status_lines 显示队列深度 | 9 个新测试 + 1 个语义更新：消毒级联弹出/干净历史不动、interrupt 后历史精确为 [sys,user(合并),assistant] 且 cancelled 事件发出、打断保留队列、并行 wait_many 时序、多 id 工具分节、单 id 向后兼容、排队后自动续跑（原「运行中拒绝」测试改为排队语义） | ✅ |
+
+| 测试总数：359（离线 357 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

@@ -129,7 +129,8 @@ def test_send_input_continues_child_context():
         mgr = make_manager(EchoProvider())
         await mgr.spawn("任务一")
         await mgr.wait("a1", timeout=5)
-        handle = mgr.send_input("a1", "任务二")
+        handle, action = await mgr.send_input("a1", "任务二")
+        assert action == "started"          # 空闲 → 立即开跑
         await mgr.wait("a1", timeout=5)
         assert handle.result == "完成: 任务二"
         assert handle.turns == 2
@@ -140,13 +141,21 @@ def test_send_input_continues_child_context():
     asyncio.run(go())
 
 
-def test_send_input_while_running_rejected():
+def test_send_input_while_running_queues():
+    """Step 23 语义：运行中 send → 排队（不再是拒绝），排空后 wait 返回。"""
     async def go():
-        mgr = make_manager(SleepyProvider(seconds=0.4))
+        mgr = make_manager(SleepyProvider(seconds=0.2))
         await mgr.spawn("慢任务")
-        await asyncio.sleep(0.05)
-        with pytest.raises(RuntimeError, match="仍在运行"):
-            mgr.send_input("a1", "插队")
+        await asyncio.sleep(0.02)
+        handle, action = await mgr.send_input("a1", "排队消息")
+        assert action == "queued"
+        assert handle.queue == ["排队消息"]
+        assert "排队 1" in mgr.status_lines()[0]      # 观测面显示队列
+        # wait 的语义 = 队列排空：两轮都完成
+        handle = await mgr.wait("a1", timeout=10)
+        assert handle.status == "completed" and handle.turns == 2
+        users = [m.content for m in handle.loop.history if m.role == "user"]
+        assert users == ["慢任务", "排队消息"]
         await mgr.shutdown()
     asyncio.run(go())
 

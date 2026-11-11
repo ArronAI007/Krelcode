@@ -220,6 +220,14 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   shutdown 统一 cancel
 - **父代理工具**（subagent/tools.py）：spawn_agent / wait_agent / send_to_agent /
   list_agents，工具持 manager 引用（构造注入），ToolContext 保持纯工作区语义
+- **消息队列与打断**（Step 23，对齐 Codex multi_agent 语义）：运行中
+  send_input 默认入队（同一 Task 内排空，wait 语义 = 队列排空）；
+  interrupt=true 取消当前 Task → sanitize_history 消毒（级联弹出尾部
+  孤儿 tool / assistant(tool_calls)，防 provider 拒绝不配对请求）→
+  尾部未答完的 user 消息与打断指示合并（防连续 user，Anthropic 要求
+  角色交替）→ 开新 Task；队列中未处理消息保留
+- **wait_many**：一次等多个子代理（asyncio.wait，超时不取消）；
+  wait_agent 工具的 agent_id 支持逗号分隔，单 id 输出格式向后兼容
 - **防递归**：子代理工具集 = default_tools()（不含 spawn 系），委派深度硬限制 1 层
 - **可观测**：SubagentSpawned/SubagentFinished 上父总线——渲染器打状态行、
   recorder 落 JSONL 审计；REPL /agents 列状态
