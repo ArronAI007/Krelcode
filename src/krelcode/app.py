@@ -209,6 +209,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="krelcode", description="Krelcode coding agent (统一 Provider + tool-calling 循环 + MCP)"
     )
+    p.add_argument("command", nargs="?", choices=("doctor", "init"), default=None,
+                   help="子命令：doctor=环境自检；init=生成配置/规则模板（缺省进入对话）")
+    p.add_argument("--force", action="store_true",
+                   help="init 子命令：覆盖已存在的模板文件")
     p.add_argument("--provider", default=None,
                    help="openai / anthropic / gemini / mock（默认: KRELCODE_PROVIDER 或配置文件 default_provider 或 openai）")
     p.add_argument("--mock", action="store_true", help="等价于 --provider mock（含演示脚本），无需 API key")
@@ -340,8 +344,34 @@ async def async_main(args: argparse.Namespace) -> int:
         await supervisor.close_all()
 
 
+def _run_doctor(args: argparse.Namespace) -> int:
+    from .doctor import exit_code, format_report, run_all_checks
+    config_path = Path(args.config) if args.config else None
+    config = load_config(config_path if config_path and config_path.is_file() else None)
+    results = run_all_checks(Path(args.workspace).resolve(), config, config_path)
+    print(format_report(results))
+    return exit_code(results)
+
+
+def _run_init(args: argparse.Namespace) -> int:
+    from .scaffold import scaffold_workspace
+    try:
+        for action in scaffold_workspace(Path(args.workspace).resolve(), force=args.force):
+            print(action)
+    except OSError as e:
+        print(f"init 失败: {e}")
+        return 1
+    print("完成。下一步：设置 API key 后运行 `krelcode doctor` 验证环境。")
+    return 0
+
+
 def main(argv=None) -> int:
-    return asyncio.run(async_main(build_parser().parse_args(argv)))
+    args = build_parser().parse_args(argv)
+    if args.command == "doctor":
+        return _run_doctor(args)
+    if args.command == "init":
+        return _run_init(args)
+    return asyncio.run(async_main(args))
 
 
 if __name__ == "__main__":

@@ -359,6 +359,16 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
 - **check_syntax**：批量 ast.parse 语法自检（不执行代码），错误输出
   `路径:行:列: 消息`；agent 批量编辑后的廉价验证手段
 
+## CLI 子命令（Step 28）
+
+- `krelcode doctor`：离线环境自检（不发起网络请求）——Python 版本、
+  provider key（脱敏 mask_key，全 key 不落屏）、默认 provider 可解析、
+  配置文件（显式 --config 必须存在；缺省探测报告命中项）、git/工作区可写、
+  MCP stdio 命令存在性（url 型仅提示）。三态 ✓/⚠/✗；有 ✗ → 退出码 1（CI 可判定）
+- `krelcode init [--force]`：脚手架生成 krelcode.toml（provider/MCP/hooks
+  注释模板）与 AGENTS.md 规则骨架；默认不覆盖已存在文件
+- 子命令为可选位置参数（nargs="?"），既有 flag 式用法完全兼容
+
 ## 分层测试策略（每层可独立验证）
 
 | 层 | 测试方式 |

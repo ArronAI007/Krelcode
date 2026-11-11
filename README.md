@@ -13,12 +13,22 @@ pip install .          # 或 pip install -e . 开发模式；之后 krelcode 命
 krelcode --version
 ```
 
+## 起步
+
+```bash
+cd your-project
+krelcode init          # 生成 krelcode.toml 与 AGENTS.md 模板（不覆盖已有文件，--force 强制）
+export OPENAI_API_KEY=sk-...   # 或 ANTHROPIC_API_KEY / GEMINI_API_KEY
+krelcode doctor        # 环境自检：Python/key/配置/git/工作区/MCP，✓⚠✗ 报告（有 ✗ 时退出码 1）
+krelcode               # 进入 REPL
+```
+
 零第三方运行时依赖，Python ≥ 3.11（开发测试仅需 pytest）。
 
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（401 个，全离线*）
+# 运行全部测试（411 个，全离线*）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 

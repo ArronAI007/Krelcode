@@ -57,7 +57,9 @@
 
 | 27 | 代码智能工具 | find_refs：ast 级 Python 符号引用查找（[def]/[ref]/[import] 分类，不受字符串/注释同名词干扰，语法损坏文件静默跳过，剪枝+限额）· check_syntax：批量语法检查（单文件/目录，错误带 路径:行:列，不执行代码）——两者零依赖，与文本级 grep 互补 | 10 个新测试：类/方法符号、字符串注释不误报、剪枝/隐藏/损坏文件、子目录与限额、错误定位、干净目录、单文件与非 Python、越界拒绝 | ✅ |
 
-| 测试总数：401（离线 399 + 本地端口集成 2，沙箱内自动 skip） |
+| 28 | CLI 子命令 doctor/init | `krelcode doctor`：Python 版本/provider key（脱敏显示）/默认 provider 解析/配置文件/git 与工作区状态/MCP 命令存在性，✓⚠✗ 三态报告，有 fail 退出码 1（CI 可用）· `krelcode init [--force]`：生成 krelcode.toml（provider/MCP/hooks 注释模板，tomllib 自洽性有测试守护）与 AGENTS.md 规则骨架，不覆盖已存在文件 | 10 个新测试：各检查项 ok/warn/fail 分支、key 脱敏不泄露、非仓库/仓库、不可写路径、MCP 五种配置形态、报告汇总与退出码、CLI init/跳过/force/doctor 集成；真机演示 doctor 输出 4✓/2⚠ | ✅ |
+
+| 测试总数：411（离线 409 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·
