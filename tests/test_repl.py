@@ -25,14 +25,20 @@ from krelcode.ui.repl import run_repl
 
 
 class ScriptedInput:
-    """按脚本供行，耗尽后 EOF（等价于用户 Ctrl-D）。"""
+    """按脚本供行，耗尽后 EOF（等价于用户 Ctrl-D）。
 
-    def __init__(self, lines):
+    每行前 sleep 让出事件循环：保证「瞬时 run 任务」在下一行到达前完成，
+    消除 reader 预读与状态机的时序竞态（测试确定性）。
+    """
+
+    def __init__(self, lines, delay=0.01):
         self.lines = list(lines)
+        self.delay = delay
 
     async def __call__(self, prompt):
         if not self.lines:
             raise EOFError
+        await asyncio.sleep(self.delay)
         return self.lines.pop(0)
 
 
@@ -208,3 +214,109 @@ def test_context_stats_and_refresh(tmp_path, capsys):
     assert system_msg.role == "system"
     assert "<workspace_context>" in system_msg.content
     assert "proj.py" in system_msg.content                      # 目录树已进 system
+
+
+# -- 运行中 steering / stop（Step 26）----------------------------------------------------------------
+
+class TimedInput:
+    """每行带独立延迟（秒），精确控制"运行中输入"的时机。"""
+
+    def __init__(self, items):
+        self.items = list(items)   # [(text, delay_before)]
+
+    async def __call__(self, prompt):
+        if not self.items:
+            raise EOFError
+        text, delay = self.items.pop(0)
+        if delay:
+            await asyncio.sleep(delay)
+        return text
+
+
+class SlowToolProvider:
+    """第一次调用睡 delay 秒后返回 echo tool_call；之后回 final。无状态判定。"""
+    name = "slow-tool"
+    model = "m"
+
+    def __init__(self, delay=0.25, final="已完成"):
+        self.delay = delay
+        self.final = final
+        self.calls = 0
+
+    async def stream(self, messages, tools=None):
+        from krelcode.llm.base import StreamFinished
+        self.calls += 1
+        n_assistant = sum(1 for m in messages if m.role == "assistant")
+        if n_assistant == 0:
+            await asyncio.sleep(self.delay)
+            msg = Message.assistant(
+                tool_calls=[ToolCall("c1", "echo", {"m": "x"})])
+        else:
+            msg = Message.assistant(self.final)
+        yield StreamFinished(message=msg, finish_reason="stop", usage={})
+
+
+class EchoTool:
+    name = "echo"
+    description = "echo"
+    parameters = {"type": "object", "properties": {"m": {"type": "string"}}}
+
+    async def execute(self, args, ctx):
+        from krelcode.tools.base import ToolResult
+        return ToolResult(content=f"echo: {args.get('m')}")
+
+
+def make_loop_with(tmp_path, provider, tools=None):
+    return AgentLoop(
+        llm=provider,
+        registry=ToolRegistry(tools if tools is not None else [EchoTool(), GetTimeTool()]),
+        tool_context=ToolContext(workspace_root=tmp_path),
+        policy=AllowAllPolicy(),
+        system_prompt="SYS",
+    )
+
+
+def test_steering_injected_while_running(tmp_path, capsys):
+    loop = make_loop_with(tmp_path, SlowToolProvider(delay=0.25))
+    inp = TimedInput([
+        ("跑个任务", 0),
+        ("顺便注意拼写", 0.05),   # 运行中输入 → steering
+        ("/exit", 0.6),           # 等任务完成后退出
+    ])
+    rc = asyncio.run(run_repl(loop, input_fn=inp))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "[steering] 插话已排队" in out
+    assert "[steering] 插话已注入: 顺便注意拼写" in out     # 渲染器确认注入
+    assert "agent> 已完成" in out
+    # 注入点在 tool 结果之后（合法交替位），带前缀
+    steer = [m for m in loop.history
+             if m.role == "user" and "[用户插话]" in (m.content or "")]
+    assert len(steer) == 1 and steer[0].content == "[用户插话] 顺便注意拼写"
+
+
+def test_stop_cancels_running_task(tmp_path, capsys):
+    loop = make_loop_with(tmp_path, SlowToolProvider(delay=5))   # 长任务
+    inp = TimedInput([("慢任务", 0), ("/stop", 0.1), ("/exit", 0.05)])
+    rc = asyncio.run(run_repl(loop, input_fn=inp))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "[stopped] 已中止" in out
+    # 历史被修复：未答完的 user 消息后补了中止说明
+    assert loop.history[-1].role == "assistant"
+    assert loop.history[-1].content == "[已被用户中止]"
+
+
+def test_slash_command_while_running_shows_hint(tmp_path, capsys):
+    loop = make_loop_with(tmp_path, SlowToolProvider(delay=0.3))
+    inp = TimedInput([("任务", 0), ("/help", 0.05), ("/stop", 0.1), ("/exit", 0.05)])
+    rc = asyncio.run(run_repl(loop, input_fn=inp))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "任务运行中" in out
+
+
+def test_stop_when_idle(tmp_path, capsys):
+    loop = make_loop_with(tmp_path, SlowToolProvider())
+    drive(loop, ["/stop", "/exit"])
+    assert "当前没有运行中的任务" in capsys.readouterr().out

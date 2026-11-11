@@ -66,23 +66,9 @@ class AgentHandle:
         return text.replace("\n", " ")
 
 
-def sanitize_history(history: List) -> None:
-    """打断后的历史消毒（原地）。
-
-    取消可能发生在任意点：历史尾部可能残留
-    - assistant(tool_calls) 而对应 tool 结果缺失 → provider 会拒绝请求
-    - 部分 tool 结果 → 与 assistant.tool_calls 不配对
-    规则：从尾部弹掉所有 tool 消息与带 tool_calls 的 assistant 消息，
-    直到最后一条是「纯文本 assistant」或「user」。
-    """
-    while history:
-        last = history[-1]
-        if last.role == "tool":
-            history.pop()
-        elif last.role == "assistant" and last.tool_calls:
-            history.pop()
-        else:
-            break
+# sanitize_history 已下沉到 core.messages（主代理取消修复与子代理打断共用）；
+# 此处 re-export 保持既有导入路径兼容
+from ..core.messages import sanitize_history  # noqa: E402,F401
 
 
 class SubagentManager:

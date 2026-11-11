@@ -62,3 +62,22 @@ class Message:
     @classmethod
     def tool_result(cls, tool_call_id: str, content: str) -> "Message":
         return cls(role=ROLE_TOOL, content=content, tool_call_id=tool_call_id)
+
+
+def sanitize_history(history: List[Message]) -> None:
+    """打断/取消后的历史消毒（原地）。
+
+    取消可能发生在任意点，历史尾部可能残留：
+    - assistant(tool_calls) 而对应 tool 结果缺失 → provider 会拒绝请求
+    - 部分 tool 结果 → 与 assistant.tool_calls 不配对
+    规则：从尾部级联弹出 tool 消息与带 tool_calls 的 assistant 消息，
+    直到最后一条是「纯文本 assistant」或「user」为止。
+    """
+    while history:
+        last = history[-1]
+        if last.role == ROLE_TOOL:
+            history.pop()
+        elif last.role == ROLE_ASSISTANT and last.tool_calls:
+            history.pop()
+        else:
+            break

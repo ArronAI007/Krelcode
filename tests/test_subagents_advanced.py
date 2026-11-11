@@ -10,9 +10,7 @@ import pytest
 from krelcode.core.events import EventBus, SubagentFinished
 from krelcode.core.messages import Message, ToolCall
 from krelcode.llm.base import ProviderCapabilities, StreamFinished
-from krelcode.subagent.manager import (
-    INTERRUPT_MARKER, SubagentManager, sanitize_history,
-)
+from krelcode.subagent.manager import SubagentManager, sanitize_history
 from krelcode.subagent.tools import SendToAgentTool, WaitAgentTool
 from krelcode.tools.base import ToolContext, ToolResult
 
@@ -151,11 +149,13 @@ def test_interrupt_cancels_and_sanitizes_history():
         assert handle.result == "打断后完成"
         assert provider.calls == 2
 
-        # 历史消毒 + 合并：无孤儿 tool_calls；打断消息合并进未答完的 user 消息
+        # Step 26 起：取消时 AgentLoop._repair_after_cancel 消毒历史并补
+        # "[已被用户中止]" assistant 消息 → 打断消息作为干净的新 user 轮追加
         roles = [m.role for m in handle.loop.history]
-        assert roles == ["system", "user", "assistant"]
-        user_msg = handle.loop.history[1]
-        assert user_msg.content == "长任务" + INTERRUPT_MARKER + "别做了，回答新问题"
+        assert roles == ["system", "user", "assistant", "user", "assistant"]
+        assert handle.loop.history[1].content == "长任务"
+        assert handle.loop.history[2].content == "[已被用户中止]"
+        assert handle.loop.history[3].content == "别做了，回答新问题"
 
         # 取消也发了 SubagentFinished(cancelled) 事件
         finished = [e for e in events if isinstance(e, SubagentFinished)]

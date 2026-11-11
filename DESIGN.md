@@ -336,6 +336,21 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   asyncio.to_thread(input)）；ScriptedInput 驱动下全部 /命令均有自动化回归
   ——UI 层从「只能人工演示」变为与内核同级的测试覆盖
 
+## Steering 与中止（Step 26）
+
+- **AgentLoop.steering_queue**：运行中用户插话入队；每个 step 开始前注入历史——
+  尾部是 user 消息则合并（防连续 user，Anthropic 要求角色交替），
+  尾部是 tool/assistant 则作为独立 user 消息追加（`[用户插话]` 前缀）；
+  注入发 UserSteered 事件（渲染器提示、recorder 落盘）
+- **取消修复**：run() 被 cancel 时 `_repair_after_cancel()`——
+  sanitize_history（已下沉 core.messages，主代理取消与子代理打断共用）
+  级联弹出尾部孤儿 tool / assistant(tool_calls)，若尾部是未答完的 user
+  则补 assistant("[已被用户中止]") 保角色交替 → 修复后的历史可直接续聊
+- **REPL 状态机**：常驻 reader task → inbox 队列；asyncio.wait 同时盯
+  inbox 与运行中任务。IDLE 处理命令/启动 run；RUNNING：普通文本→steering、
+  /stop→cancel+修复+提示、/exit→停止退出、其他斜杠→提示；EOF 停任务退出；
+  任务结束后未送达的插话**可见地**丢弃（不静默留到下一轮）
+
 ## 分层测试策略（每层可独立验证）
 
 | 层 | 测试方式 |

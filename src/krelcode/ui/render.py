@@ -22,6 +22,7 @@ from ..core.events import (
     SubagentSpawned,
     ToolCallCompleted,
     ToolCallStarted,
+    UserSteered,
 )
 
 GREEN = "\x1b[32m"
@@ -104,6 +105,10 @@ class StreamRenderer:
         elif isinstance(event, PermissionDenied):
             self.end_stream()
             self._write(f"  [deny] {event.tool_call.name} 被拒绝: {event.reason}\n")
+        elif isinstance(event, UserSteered):
+            self.end_stream()
+            preview = event.text if len(event.text) <= 60 else event.text[:60] + "…"
+            self._write(f"  [steering] 插话已注入: {preview}\n")
         elif isinstance(event, SubagentSpawned):
             self.end_stream()
             task = event.task if len(event.task) <= 60 else event.task[:60] + "…"

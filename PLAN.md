@@ -53,7 +53,9 @@
 
 | 25 | 上下文管理二期 | 工具结果驱逐（LLM 摘要前的免费第一道防线：只留最近 N 条工具输出，更早的换占位标记，配对结构不动、幂等、短结果跳过；驱逐后仍超预算才 LLM 摘要）· AGENTS.md 分层（全局 ~/.krelcode/AGENTS.md + 项目级，各自限字符，全局在前项目在后）· REPL /context（历史/工具消息数、估算 tokens、预算）与 /context refresh（重采目录树/git/规则并重建 system prompt） | 8 个新测试：驱逐保结构/保最近/幂等/短结果跳过/零 LLM 调用解决预算/驱逐后摘要兜底/标记含重读提示；分层规则全局+项目顺序/仅全局；/context 统计与刷新进 system | ✅ |
 
-| 测试总数：381（离线 379 + 本地端口集成 2，沙箱内自动 skip） |
+| 26 | 主循环 steering 与中止 | AgentLoop：steering_queue（每 step 开始前注入，尾部 user 则合并防连续 user，否则独立追加）+ 取消修复 _repair_after_cancel（sanitize_history 下沉 core 共用；尾部 user 补「[已被用户中止]」保角色交替）· REPL 重构为常驻 reader + 状态机：运行中直接打字=插话、/stop 取消、其他斜杠命令给提示、EOF 停任务退出、未送达插话可见丢弃 · UserSteered 事件（渲染器/recorder） | 11 个新测试 + 1 个语义更新：预填合并/运行中注入位置/空白忽略/LLM 流中取消/工具中取消弹悬挂/取消后续聊协议合法；REPL 级插话注入/停止/运行中命令提示/空闲 stop；子代理打断测试更新为新修复语义 | ✅ |
+
+| 测试总数：391（离线 389 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

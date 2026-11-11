@@ -27,6 +27,7 @@ from ..core.events import (
     SubagentSpawned,
     ToolCallCompleted,
     ToolCallStarted,
+    UserSteered,
 )
 from ..core.messages import Message
 from .codec import history_to_dicts, history_from_dicts
@@ -74,6 +75,8 @@ class SessionRecorder:
         if isinstance(event, PermissionDenied):
             return {"type": "permission_denied", "ts": ts,
                     "name": event.tool_call.name, "reason": event.reason}
+        if isinstance(event, UserSteered):
+            return {"type": "user_steered", "ts": ts, "content": event.text[:200]}
         if isinstance(event, SubagentSpawned):
             return {"type": "subagent_spawned", "ts": ts,
                     "agent_id": event.agent_id, "task": event.task[:200]}

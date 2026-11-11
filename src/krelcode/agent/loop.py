@@ -27,9 +27,12 @@ from ..core.events import (
     StepStarted,
     ToolCallCompleted,
     ToolCallStarted,
+    UserSteered,
 )
 from ..core.textutil import truncate_middle
-from ..core.messages import INVALID_ARGUMENTS_KEY, Message, ToolCall
+from ..core.messages import (
+    INVALID_ARGUMENTS_KEY, Message, ToolCall, sanitize_history,
+)
 from ..llm.base import LLMProvider, StreamFinished, TextDelta, ThinkingDelta
 from .compression import ContextManager
 from .tokens import estimate_history_tokens
@@ -38,6 +41,8 @@ from ..tools.base import ToolContext, ToolResult
 from ..tools.registry import ToolRegistry
 
 MAX_STEPS_REACHED_TEXT = "[krelcode] 已达到最大步数限制，循环中止。"
+INTERRUPTED_NOTE = "[已被用户中止]"
+STEERING_PREFIX = "[用户插话] "
 
 
 class AgentLoop:
@@ -67,6 +72,8 @@ class AgentLoop:
         self.token_budget = token_budget
         self._token_total = 0
         self._failure_counts: Dict[str, int] = {}
+        # 运行中用户插话队列（REPL steering）：每个 step 开始前注入历史
+        self.steering_queue: asyncio.Queue = asyncio.Queue()
         self.history: List[Message] = (
             [Message.system(system_prompt)] if system_prompt else []
         )
@@ -81,35 +88,70 @@ class AgentLoop:
     # -- 对外主入口 -----------------------------------------------------------
 
     async def run(self, user_input: str) -> str:
-        """处理一轮用户输入：内部可能经历多次 LLM 调用与工具执行。"""
+        """处理一轮用户输入：内部可能经历多次 LLM 调用与工具执行。
+
+        被 cancel 时（REPL /stop）：消毒历史（弹掉不配对的尾部消息），
+        若结尾是未答完的 user 消息则补一条中止说明（保角色交替），再重抛。
+        """
         self.history.append(Message.user(user_input))
         self._failure_counts = {}
         self._token_total = 0
         await self._emit(RunStarted(user_input))
 
-        for step in range(1, self.max_steps + 1):
-            if self.token_budget is not None and self._token_total > self.token_budget:
-                text = (f"[krelcode] token 预算耗尽（已用 {self._token_total} > "
-                        f"预算 {self.token_budget}），中止本轮。")
-                self.history.append(Message.assistant(text))
-                await self._emit(RunFinished(text))
-                return text
-            await self._emit(StepStarted(step))
-            assistant = await self._llm_turn()
-            if not assistant.tool_calls:
-                final_text = assistant.content or ""
-                await self._emit(RunFinished(final_text))
-                return final_text
-            abort_reason = await self._execute_tool_calls(assistant.tool_calls)
-            if abort_reason:
-                text = f"[krelcode] {abort_reason}，判定为循环，已中止本轮。"
-                self.history.append(Message.assistant(text))
-                await self._emit(RunFinished(text))
-                return text
+        try:
+            for step in range(1, self.max_steps + 1):
+                await self._inject_steering()
+                if self.token_budget is not None and self._token_total > self.token_budget:
+                    text = (f"[krelcode] token 预算耗尽（已用 {self._token_total} > "
+                            f"预算 {self.token_budget}），中止本轮。")
+                    self.history.append(Message.assistant(text))
+                    await self._emit(RunFinished(text))
+                    return text
+                await self._emit(StepStarted(step))
+                assistant = await self._llm_turn()
+                if not assistant.tool_calls:
+                    final_text = assistant.content or ""
+                    await self._emit(RunFinished(final_text))
+                    return final_text
+                abort_reason = await self._execute_tool_calls(assistant.tool_calls)
+                if abort_reason:
+                    text = f"[krelcode] {abort_reason}，判定为循环，已中止本轮。"
+                    self.history.append(Message.assistant(text))
+                    await self._emit(RunFinished(text))
+                    return text
+        except asyncio.CancelledError:
+            self._repair_after_cancel()
+            raise
 
         self.history.append(Message.assistant(MAX_STEPS_REACHED_TEXT))
         await self._emit(RunFinished(MAX_STEPS_REACHED_TEXT))
         return MAX_STEPS_REACHED_TEXT
+
+    async def _inject_steering(self) -> None:
+        """把插话队列里的消息注入历史（每个 step 开始前调用）。
+
+        尾部若是 user 消息则合并（防连续 user——Anthropic 要求角色交替）；
+        尾部是 tool/assistant 时作为新 user 消息追加（合法的交替点）。
+        """
+        while not self.steering_queue.empty():
+            try:
+                text = self.steering_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            text = str(text).strip()
+            if not text:
+                continue
+            if self.history and self.history[-1].role == "user":
+                self.history[-1].content = (
+                    (self.history[-1].content or "") + "\n" + STEERING_PREFIX + text)
+            else:
+                self.history.append(Message.user(STEERING_PREFIX + text))
+            await self._emit(UserSteered(text))
+
+    def _repair_after_cancel(self) -> None:
+        sanitize_history(self.history)
+        if self.history and self.history[-1].role == "user":
+            self.history.append(Message.assistant(INTERRUPTED_NOTE))
 
     # -- 内部：一次 LLM 调用 ---------------------------------------------------
 

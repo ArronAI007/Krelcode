@@ -18,7 +18,7 @@ krelcode --version
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（381 个，全离线*）
+# 运行全部测试（391 个，全离线*）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -37,7 +37,9 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --mode
 #   api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-REPL 内置命令：`/help`、`/history`、`/tools`、`/session`、`/sessions`、`/resume <n|latest|path>`、`/mcp`（状态）、`/mcp reload`（热重载）、`/agents`（子代理状态）、`/compact`（立即压缩历史）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量）、`/context`（上下文统计）、`/context refresh`（重采工作区上下文）、`/export [路径]`（会话导出 Markdown）、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/tools`、`/session`、`/sessions`、`/resume <n|latest|path>`、`/mcp`（状态）、`/mcp reload`（热重载）、`/agents`（子代理状态）、`/compact`（立即压缩历史）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量）、`/context`（上下文统计）、`/context refresh`（重采工作区上下文）、`/export [路径]`（会话导出 Markdown）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
+
+**Steering**：任务运行中直接打字 = 插话（模型在下一步看到，无需等任务结束）；`/stop` 随时中止（历史自动修复，可立即续聊）。
 
 消息里可用 **@路径** 引用文件（如 `解释 @src/main.py 的作用`），内容随消息自动注入（工作区内、带预算与截断，email 地址不会误触发）。
 

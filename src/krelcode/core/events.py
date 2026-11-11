@@ -82,6 +82,12 @@ class ContextCompressed(AgentEvent):
 
 
 @dataclass(frozen=True)
+class UserSteered(AgentEvent):
+    """运行中用户插话被注入历史（Step 26 steering）。"""
+    text: str
+
+
+@dataclass(frozen=True)
 class SubagentSpawned(AgentEvent):
     """子代理创建并开始后台执行（Step 13）。"""
     agent_id: str
