@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# 测试与工具缓存
+.pytest_cache/
+
+# krelcode 运行时产物（会话/规则/工具输出）
+.krelcode/

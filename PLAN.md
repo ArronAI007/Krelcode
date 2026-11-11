@@ -1,0 +1,22 @@
+# Krelcode 路线图：逐步构建一个 Coding Agent
+
+原则：**每一步都可独立运行、可测试**。架构契约见 [DESIGN.md](DESIGN.md)，
+主流产品架构对照见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
+| 阶段 | 架构层 | 交付物 | 验证方式 | 状态 |
+|------|--------|--------|----------|------|
+| 1 | 模型层+交互层 | LLM 抽象、Mock、REPL（平铺版） | pytest | ✅（并入 Step 2 重构） |
+| 1.5 | 统一 Provider 机制 | wire-free core · transport+SSE · OpenAI(真流式+tool_call聚合) / Anthropic(异构格式) 双适配器 · 工厂/TOML/env 配置解析 · 统一 ToolSpec | FakeTransport 全离线测试两适配器互转与流式翻译；50 个测试 | ✅ |
+| 2 | 内核+主循环 | core(messages/events) · LLMProvider/Tool/ApprovalPolicy/EventBus 四端口 · AgentLoop tool-call 循环 · 组装根 · get_time 演示工具 | 25 个测试（纯内存断言循环/错误恢复/拒绝/max_steps/事件序列）+ `--mock` 演示 | ✅ |
+| 3 | 工具层-文件 | read_file(行号/分段/截断/二进制防呆) / write_file(建目录/覆盖) / edit_file(唯一匹配替换+diff) / 路径越界防护(symlink 也拦) | 20 个新测试：tmp 工作区真实读写改 + write→read→edit 端到端 + 错误回填自我修正 | ✅ |
+| 4 | 工具层-Shell | run_command(asyncio subprocess、进程组超时击杀、输出头尾截断、cwd 限定) + grep(正则/剪枝/include) + glob(mtime 新→旧) | 21 个新测试 + 端到端「写函数→跑挂→修复→PASS」工作流 | ✅ |
+| 5 | 主循环加固 | asyncio.gather 并行工具执行(结果保序回填) · 卡死检测(同签名连续失败中止) · 上下文注入(目录树快照/git 分支+状态/AGENTS.md) | 14 个新测试：并行时间窗重叠、乱序完成仍保序、失败计数重置/分签名计数、树剪枝+限深+限条目、真实 git 仓库快照；端到端「写函数→跑挂→修复→PASS」已在 Step 4 通过 | ✅ |
+| 6 | 安全层 | 命令风险分级(shlex punctuation 切段/DENY·ASK·ALLOW/跨段 curl\|sh 规则/重定向升级) · SandboxPolicy(fail-closed) · allow 规则持久化(.krelcode/allow_rules.json) · 控制台审批 y/n/a + ApprovalRequested 事件 · --auto-approve/--no-sandbox | 58 个新测试：分级 30+ 案例、审批全流程、规则落盘重载、损坏规则 fail-closed、事件断言；终端演示 放行/批准/拒绝 三链路 | ✅ |
+| 7 | 上下文管理 | CJK 感知 token 估算(零依赖启发式) · ContextManager 预算压缩(system+LLM摘要+keep_recent，切点不拆 tool_call/result 配对，摘要失败退化占位) · 大工具输出全文落盘留引用 · ContextCompressed 事件 · --context-tokens/--no-compress | 11 个新测试：估算、预算触发/不触发、太短不压缩、孤儿 tool 边界、失败安全、循环集成(事件+token下降)、50K 输出落盘/小输出不落盘 | ✅ |
+| 8 | 交互增强 | StreamRenderer 流式渲染(LLMStreamDelta 逐字输出、工具活动打断续流) · edit_file diff 红绿高亮(tty/NO_COLOR 感知) · SessionRecorder JSONL 审计流+历史快照 · --resume/--no-session · /session 命令 | 16 个新测试：渲染器注入 write 断言逐字输出/兜底打印/打断续流、codec roundtrip、快照取最后、损坏行跳过、录制→恢复→续聊集成；终端演示 录制+恢复 全链路 | ✅ |
+
+🎉 路线图 8 个阶段全部完成。| 测试总数：190（全离线） |
+
+## 已确认的技术栈（详见 DESIGN.md）
+Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·
+pi 式分层包 + 轻量事件总线（不做插件微内核） · TOML 配置 + JSONL 会话

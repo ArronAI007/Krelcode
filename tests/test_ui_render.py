@@ -1,0 +1,105 @@
+"""ui/render 测试：流式渲染器（注入 write，无真实终端）与 diff 上色。"""
+
+import pytest
+
+from krelcode.core.events import (
+    ContextCompressed, ErrorOccurred, LLMStreamDelta, PermissionDenied,
+    RunFinished, ToolCallCompleted, ToolCallStarted,
+)
+from krelcode.core.messages import ToolCall
+from krelcode.ui.render import GREEN, RED, RESET, StreamRenderer, colorize_diff
+
+
+class Buffer:
+    def __init__(self):
+        self.parts = []
+
+    def write(self, s):
+        self.parts.append(s)
+
+    @property
+    def text(self):
+        return "".join(self.parts)
+
+
+def make_renderer(color=False):
+    buf = Buffer()
+    return StreamRenderer(write=buf.write, color=color), buf
+
+
+# -- 流式渲染 -------------------------------------------------------------------------
+
+def test_streaming_deltas_rendered_incrementally():
+    r, buf = make_renderer()
+    r(LLMStreamDelta("Hel"))
+    assert buf.text == "agent> Hel"      # 首个 delta 带前缀，立即输出
+    r(LLMStreamDelta("lo"))
+    assert buf.text == "agent> Hello"
+    r(RunFinished("Hello"))
+    assert buf.text == "agent> Hello\n"  # 结束补换行，且不重复打印全文
+
+
+def test_unstreamed_final_text_printed_once():
+    r, buf = make_renderer()
+    r(RunFinished("[krelcode] 判定为循环，已中止本轮。"))
+    assert buf.text == "agent> [krelcode] 判定为循环，已中止本轮。\n"
+
+
+def test_tool_activity_interrupts_stream():
+    r, buf = make_renderer()
+    tc = ToolCall("c1", "get_time", {})
+    r(LLMStreamDelta("让我想想"))
+    r(ToolCallStarted(tc))
+    r(ToolCallCompleted(tc, "12:00", False))
+    r(LLMStreamDelta("现在是12点"))
+    r(RunFinished("让我想现在是12点"))
+    lines = buf.text.splitlines()
+    assert lines[0] == "agent> 让我想想"
+    assert "[tool] 调用 get_time" in lines[1]
+    assert "[tool] ✓ get_time → 12:00" in lines[2]
+    assert lines[3] == "agent> 现在是12点"
+
+
+def test_error_and_denied_and_compressed_lines():
+    r, buf = make_renderer()
+    tc = ToolCall("c1", "rm", {})
+    r(PermissionDenied(tc, "危险命令"))
+    r(ContextCompressed(1000, 200))
+    r(ErrorOccurred("boom", "pytest"))
+    text = buf.text
+    assert "[deny] rm 被拒绝: 危险命令" in text
+    assert "[context] 历史已压缩: 1000 → 200 tokens" in text
+    assert "[error] pytest: boom" in text
+
+
+def test_long_tool_content_truncated():
+    r, buf = make_renderer()
+    tc = ToolCall("c1", "grep", {})
+    r(ToolCallCompleted(tc, "y" * 5000, False))
+    assert "…" in buf.text and len(buf.text) < 500
+
+
+# -- diff 上色 ---------------------------------------------------------------------------
+
+def test_edit_file_diff_colorized():
+    r, buf = make_renderer(color=True)
+    tc = ToolCall("c1", "edit_file", {})
+    diff = "已编辑 f.py（替换 1 处）\n--- a/f.py\n+++ b/f.py\n@@ -1 +1 @@\n-a = 1\n+a = 2"
+    r(ToolCallCompleted(tc, diff, False))
+    assert GREEN in buf.text and RED in buf.text and RESET in buf.text
+    assert "[tool] ✓ edit_file: 已编辑 f.py（替换 1 处）" in buf.text
+
+
+def test_edit_file_error_not_treated_as_diff():
+    r, buf = make_renderer(color=True)
+    tc = ToolCall("c1", "edit_file", {})
+    r(ToolCallCompleted(tc, "-未找到 old_string", True))
+    assert GREEN not in buf.text  # 错误信息不走 diff 上色
+
+
+def test_colorize_diff_pure_function():
+    diff = "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new\n ctx"
+    colored = colorize_diff(diff, enabled=True)
+    assert f"{RED}-old{RESET}" in colored
+    assert f"{GREEN}+new{RESET}" in colored
+    assert colorize_diff(diff, enabled=False) == diff
