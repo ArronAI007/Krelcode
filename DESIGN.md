@@ -190,10 +190,16 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
 - **传输抽象**：MCPClient 只做 JSON-RPC 协议层（id 配对 Future、超时、
   disconnect 时 pending 全部失败）；MCPTransport 端口两实现：
   · StdioTransport：子进程管道 + asyncio reader task
-  · SSETransport（HTTP+SSE 2024-11-05 规范）：GET 长连接收 `endpoint` 事件
+  · SSETransport（HTTP+SSE 2024-11-05 旧规范）：GET 长连接收 `endpoint` 事件
     （urljoin 解析 POST 目标）与 `message` 事件；reader 跑独立线程，经
     loop.call_soon_threadsafe 回投；connector 可注入（单测零 socket）
-  配置 `command` → stdio，`url` → SSE，二选一
+  共享 SSEEventParser（sseparse.py）；HTTP 传输的线程模型统一为
+  「线程做阻塞 IO，call_soon_threadsafe 回投消息」（Future 不能在外部线程 set_result）
+  · StreamableHTTPTransport（2025-03-26 规范，url 默认）：单端点 POST，
+    响应按 Content-Type 二态处理（application/json 单条 / text/event-stream 流），
+    Mcp-Session-Id 会话头自动捕获携带，404=会话过期→fail-closed 断连，
+    通知回 202，流内服务器请求自动应答 -32601，GET 监听流惰性尝试一次（405 容忍）
+  配置 `command` → stdio；`url` → streamable-http（默认），`transport = "sse"` 回退旧规范
 - **capabilities 门控**：initialize 握手的 capabilities 决定注册哪些工具——
   tools → 每远程工具一个 MCPTool；resources → list_resources/read_resource；
   prompts → list_prompts/get_prompt；全部 `<server>__<tool>` 命名进同一注册表

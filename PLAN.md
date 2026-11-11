@@ -29,7 +29,9 @@
 
 | 13 | 子代理/后台任务 | SubagentManager（spawn/wait/send_input/shutdown，独立 AgentLoop+历史+总线，共享 provider/工作区/审批策略）· 4 个父代理工具 spawn_agent/wait_agent/send_to_agent/list_agents · 防递归（子代理工具集不含 spawn 系）· wait 超时用 shield 不杀任务 · SubagentSpawned/Finished 事件（渲染器+recorder+审计）· REPL /agents | 12 个新测试：生命周期、续聊上下文延续、3 子代理并行时序（<0.7s 跑 3×0.25s）、超时仍运行、shutdown 取消、防递归断言、事件、工具表面、父代理经 tool-call 委派端到端 | ✅ |
 
-| 测试总数：246（离线 245 + 本地端口集成 1，沙箱内自动 skip） |
+| 14 | Streamable HTTP 传输 | MCP 2025-03-26 规范：单端点 POST（响应 JSON/SSE 二态）、Mcp-Session-Id 会话头捕获与携带、404 过期 fail-closed 断连、通知 202、流内服务器请求自动回 -32601、GET 监听流惰性尝试（405 静默容忍）；HTTPConnector 端口可注入；共享 SSEEventParser；config `transport = "sse"` 回退旧规范，url 默认新规范；协议版本升至 2025-03-26 | 8 个新测试：Fake 连接器（会话捕获/Accept 头/SSE 响应模式/202 通知/GET 405/服务器请求自动应答/会话过期断连且不再打网络/transport 选择）+ 真实 http.server 集成（bind 门控）；提权 254 全过 | ✅ |
+
+| 测试总数：254（离线 252 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

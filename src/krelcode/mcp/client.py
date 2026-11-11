@@ -14,9 +14,14 @@ from typing import Any, Dict, List, Optional
 from .. import __version__
 from .stdio_transport import StdioTransport
 from .sse_transport import SSETransport
+from .streamable import StreamableHTTPTransport
 from .transport import MCPError, MCPTransport
 
-PROTOCOL_VERSION = "2024-11-05"
+# url 型服务器的传输选择（config: transport = "..."）
+TRANSPORT_STREAMABLE = "streamable-http"
+TRANSPORT_SSE = "sse"
+
+PROTOCOL_VERSION = "2025-03-26"
 
 
 @dataclass(frozen=True)
@@ -26,15 +31,24 @@ class MCPServerConfig:
     command: Optional[str] = None
     args: List[str] = field(default_factory=list)
     env: Dict[str, str] = field(default_factory=dict)
-    # SSE 传输（url 优先于 command）
+    # HTTP 传输（url 优先于 command）
     url: Optional[str] = None
     headers: Dict[str, str] = field(default_factory=dict)
+    # "streamable-http"（默认，2025-03-26 规范）或 "sse"（旧 2024-11-05 规范）
+    transport: Optional[str] = None
     # 通用
     timeout: float = 30.0
 
     def create_transport(self) -> MCPTransport:
         if self.url:
-            return SSETransport(self.url, self.headers, self.timeout)
+            kind = (self.transport or TRANSPORT_STREAMABLE).lower()
+            if kind in (TRANSTREAMABLE_ALIASES := ("streamable-http", "http", "streamable", "auto")):
+                return StreamableHTTPTransport(self.url, self.headers, self.timeout)
+            if kind == TRANSPORT_SSE:
+                return SSETransport(self.url, self.headers, self.timeout)
+            raise MCPError(
+                f"MCP 服务器 {self.name!r} 未知 transport: {self.transport!r}"
+                f"（可选: {', '.join(TRANSTREAMABLE_ALIASES + (TRANSPORT_SSE,))}）")
         if self.command:
             return StdioTransport(self.command, self.args, self.env)
         raise MCPError(f"MCP 服务器 {self.name!r} 配置缺少 url 或 command")

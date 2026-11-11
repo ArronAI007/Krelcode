@@ -20,6 +20,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable, Dict, Iterator, Optional, Protocol, Tuple
 
+from .sseparse import SSEEventParser
 from .transport import MCPError
 
 Headers = Dict[str, str]
@@ -150,26 +151,18 @@ class SSETransport:
     # -- reader 线程 --------------------------------------------------------------
 
     def _reader(self, lines, on_message, on_disconnect) -> None:
-        event_name = ""
-        data_lines: list = []
+        parser = SSEEventParser()
         try:
             for raw in lines:
                 if self._closed:
                     break
                 line = raw.decode("utf-8", "replace").rstrip("\r\n")
-                if line == "":
-                    if data_lines:
-                        self._handle_event(event_name, "\n".join(data_lines), on_message)
-                    event_name, data_lines = "", []
-                    continue
-                if line.startswith(":"):
-                    continue  # 心跳/注释
-                if line.startswith("event:"):
-                    event_name = line[len("event:"):].strip()
-                elif line.startswith("data:"):
-                    data_lines.append(line[len("data:"):].lstrip())
-            if data_lines:
-                self._handle_event(event_name, "\n".join(data_lines), on_message)
+                event = parser.feed(line)
+                if event is not None:
+                    self._handle_event(event[0], event[1], on_message)
+            tail = parser.flush()
+            if tail is not None:
+                self._handle_event(tail[0], tail[1], on_message)
             reason = "SSE 流已结束"
         except Exception as e:
             reason = f"SSE 读取异常: {e}"

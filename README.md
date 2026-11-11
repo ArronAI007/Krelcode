@@ -9,8 +9,8 @@
 ## 快速开始
 
 ```bash
-# 运行全部测试（246 个，全离线*）
-# *SSE 真实服务器集成测试需本地端口，沙箱环境自动跳过
+# 运行全部测试（254 个，全离线*）
+# *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
 # 离线体验 mock 模式：第一轮会演示完整 tool-call 循环（LLM→审批→执行get_time→回填→总结）
@@ -41,9 +41,13 @@ args = ["mcp-server-fetch"]
 env = { SOME_KEY = "value" }
 timeout = 30
 
-[mcp_servers.remote]         # SSE 传输（HTTP+SSE）
-url = "http://localhost:3000/sse"
+[mcp_servers.remote]         # Streamable HTTP（2025-03-26 规范，url 默认）
+url = "http://localhost:3000/mcp"
 headers = { Authorization = "Bearer ..." }
+
+[mcp_servers.legacy]         # 旧 HTTP+SSE 规范：显式 transport = "sse"
+url = "http://localhost:3001/sse"
+transport = "sse"
 ```
 
 - 按服务器 capabilities 自动注册：远程工具 + `list_resources`/`read_resource` + `list_prompts`/`get_prompt`

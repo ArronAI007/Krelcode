@@ -8,13 +8,14 @@ MCPSupervisor 负责配置同步与崩溃热重启。
 from .client import MCPClient, MCPServerConfig
 from .stdio_transport import StdioTransport
 from .sse_transport import SSETransport
+from .streamable import StreamableHTTPTransport
 from .supervisor import MCPSupervisor
 from .tools import MCPTool, discover_tools, sanitize_tool_name, server_prefix
 from .transport import MCPError, MCPTransport
 
 __all__ = [
     "MCPClient", "MCPServerConfig", "MCPError", "MCPTransport",
-    "StdioTransport", "SSETransport",
+    "StdioTransport", "SSETransport", "StreamableHTTPTransport",
     "MCPTool", "discover_tools", "sanitize_tool_name", "server_prefix",
     "MCPSupervisor",
 ]
