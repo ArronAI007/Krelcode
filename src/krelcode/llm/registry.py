@@ -16,19 +16,22 @@ from typing import Any, Callable, Dict, Optional, Type
 from ..core.errors import ConfigError
 from .base import LLMProvider
 from .providers.anthropic import AnthropicProvider
+from .providers.gemini import GeminiProvider
 from .providers.mock import MockProvider
 from .providers.openai import OpenAIProvider
 
 PROVIDERS: Dict[str, Callable[..., LLMProvider]] = {
     "openai": OpenAIProvider,
     "anthropic": AnthropicProvider,
+    "gemini": GeminiProvider,
     "mock": MockProvider,
 }
 
-# 各 provider 的 api key 环境变量约定
+# 各 provider 的 api key 环境变量约定（Gemini 另有 GOOGLE_API_KEY 兜底，在 provider 内处理）
 API_KEY_ENV: Dict[str, str] = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
     "mock": "",
 }
 

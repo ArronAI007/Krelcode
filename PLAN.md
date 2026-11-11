@@ -49,7 +49,9 @@
 
 | 23 | 子代理增强 | 消息队列（运行中 send → 排队，同 Task 内排空，wait 语义=队列排空）· interrupt 打断（取消→**历史消毒** sanitize_history 防孤儿 tool_calls/连续 user→合并打断指示）· wait_many / wait_agent 多 id（逗号分隔，单 id 输出格式向后兼容）· status_lines 显示队列深度 | 9 个新测试 + 1 个语义更新：消毒级联弹出/干净历史不动、interrupt 后历史精确为 [sys,user(合并),assistant] 且 cancelled 事件发出、打断保留队列、并行 wait_many 时序、多 id 工具分节、单 id 向后兼容、排队后自动续跑（原「运行中拒绝」测试改为排队语义） | ✅ |
 
-| 测试总数：359（离线 357 + 本地端口集成 2，沙箱内自动 skip） |
+| 24 | Gemini provider | 第三种 wire format 验证统一抽象：contents/parts（text/functionCall/functionResponse）、systemInstruction 独立字段、functionCall **无 id** → 合成 gem-N + 转换历史时重建 id→name 映射、连续 tool 结果合并、finishReason 规范化（有调用即 tool_calls / MAX_TOKENS→length / 其余小写透传）、usageMetadata 三键规范化、x-goog-api-key 鉴权、:streamGenerateContent?alt=sse；GOOGLE_API_KEY 兜底；FakeTransport 升级为响应队列 | 14 个新测试：全形态历史转换、请求形态、流式文本+usage、合成 id 多调用、非法 args 标记、finish 映射×2、HTTP 错误、key 缺失/env 兜底、registry 接入、**AgentLoop 全链路 wire roundtrip**（functionCall→get_time→functionResponse 按 name 配对→文本） | ✅ |
+
+| 测试总数：373（离线 371 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

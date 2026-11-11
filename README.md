@@ -18,15 +18,15 @@ krelcode --version
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（359 个，全离线*）
+# 运行全部测试（373 个，全离线*）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
 # 离线体验 mock 模式：第一轮会演示完整 tool-call 循环（LLM→审批→执行get_time→回填→总结）
 PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --mock
 
-# 真实模式：统一 Provider 机制，--provider openai / anthropic
-export OPENAI_API_KEY=sk-...          # 或 ANTHROPIC_API_KEY
+# 真实模式：统一 Provider 机制，--provider openai / anthropic / gemini
+export OPENAI_API_KEY=sk-...          # 或 ANTHROPIC_API_KEY / GEMINI_API_KEY
 PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider openai -m "现在纽约几点？"
 PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --model claude-sonnet-4-5
 

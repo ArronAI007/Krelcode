@@ -123,11 +123,16 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
 1. **消息互转**：规范历史 ⇄ provider wire format
    - OpenAI: role 消息 + tool_calls/tool_call_id
    - Anthropic: system 顶层抽离、content blocks、连续 tool_result 合并进单条 user 消息
+   - Gemini: contents/parts、systemInstruction 独立字段、functionCall 无 id
+     → 合成 gem-N（转换历史时经 assistant.tool_calls 重建 id→name 映射，
+     functionResponse 按 name 配对）、连续 tool 结果同样合并
 2. **流式翻译**：provider SSE 事件 → 统一 `TextDelta` / `StreamFinished`
    - OpenAI: choices[].delta.content / delta.tool_calls（按 index 聚合分片 arguments）
    - Anthropic: content_block_delta(text_delta / input_json_delta.partial_json)
+   - Gemini: candidates[].content.parts[]（text / functionCall 整块到达，无增量拼接）
 3. **语义规范化**：finish_reason（end_turn→stop, tool_use→tool_calls, max_tokens→length）；
-   usage（prompt_tokens→input_tokens 等，缺失不补造）；
+   usage（prompt_tokens→input_tokens、Gemini usageMetadata.promptTokenCount 等，
+   缺失不补造）；Gemini 有 functionCall 时 finishReason 也是 STOP → 规范化为 tool_calls；
    **思考流**（reasoning_content/reasoning、Anthropic thinking 块）→ 统一
    ThinkingDelta 事件——只用于 UI 展示，永不进入 message.content/history
 4. **错误规范化**：非 2xx → `LLMHTTPError(status, body, provider)`；网络错误 → `LLMError`

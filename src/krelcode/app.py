@@ -206,7 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="krelcode", description="Krelcode coding agent (统一 Provider + tool-calling 循环 + MCP)"
     )
     p.add_argument("--provider", default=None,
-                   help="openai / anthropic / mock（默认: KRELCODE_PROVIDER 或配置文件 default_provider 或 openai）")
+                   help="openai / anthropic / gemini / mock（默认: KRELCODE_PROVIDER 或配置文件 default_provider 或 openai）")
     p.add_argument("--mock", action="store_true", help="等价于 --provider mock（含演示脚本），无需 API key")
     p.add_argument("--model", default=None, help="模型名（默认: 配置文件 / KRELCODE_MODEL / provider 默认）")
     p.add_argument("--base-url", default=None, help="覆盖 provider 的 base_url（任意兼容端点）")
