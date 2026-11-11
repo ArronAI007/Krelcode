@@ -304,6 +304,19 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   内部换行压平防串行，任意其他事件到达即收束思考行）
 - RetryingProvider/collect 等对 ThinkingDelta 天然透明
 
+## 交互层增强（Step 22）
+
+- **@文件引用**（ui/atfiles.py）：UI 层展开——进入 history 的已是展开后文本，
+  provider/内核零感知。词首 `@path` 触发（`(?<![\w@])` 防 email 误伤）；
+  路径与工具层同规则约束在工作区内；不存在/二进制/越界/超限一律保留原文
+  并回显说明（fail-safe）；单文件 8K 字符、单消息 5 个文件的注入预算
+- **会话导出**（session/export.py）：history → Markdown（System/User/Assistant/
+  Tool Result 分节，工具参数与长结果截断）；`/export [路径]`，缺省落
+  `.krelcode/exports/session-<ts>.md`
+- **REPL 可测试化**：run_repl 增加 input_fn 注入点（默认仍是
+  asyncio.to_thread(input)）；ScriptedInput 驱动下全部 /命令均有自动化回归
+  ——UI 层从「只能人工演示」变为与内核同级的测试覆盖
+
 ## 分层测试策略（每层可独立验证）
 
 | 层 | 测试方式 |

@@ -1,8 +1,10 @@
 """REPL：用户输入循环 + StreamRenderer 订阅（二者都只是事件旁路消费者）。
 
-阻塞的 input() 经 asyncio.to_thread 桥接。最终回复由渲染器流式打印，
-REPL 不再重复输出（未经流式的系统消息由渲染器在 RunFinished 兜底打印）。
-多会话：/sessions 列表、/resume <n|latest|path> 会话内切换。
+阻塞的 input() 经 asyncio.to_thread 桥接（input_fn 可注入，测试零终端）。
+最终回复由渲染器流式打印，REPL 不再重复输出（未经流式的系统消息由
+渲染器在 RunFinished 兜底打印）。
+用户输入里的 @path 在 UI 层展开为文件内容块（ui/atfiles）。
+多会话：/sessions 列表、/resume <n|latest|path> 切换、/export 导出 Markdown。
 """
 
 from __future__ import annotations
@@ -12,7 +14,9 @@ from pathlib import Path
 from typing import Optional
 
 from ..agent.loop import AgentLoop
+from ..session.export import export_session
 from ..session.manager import format_sessions, list_sessions
+from .atfiles import expand_at_files
 from .render import StreamRenderer
 
 HELP_TEXT = """可用命令：
@@ -27,6 +31,8 @@ HELP_TEXT = """可用命令：
   /compact       立即压缩对话历史（LLM 摘要，不必等预算超限）
   /undo          回滚上一轮对话的文件改动（检查点恢复；/undo list 查看栈）
   /cost          显示 token 用量（本轮 + 会话累计）
+  /export [路径] 把当前会话导出为 Markdown（缺省存 .krelcode/exports/）
+消息里可用 @路径 引用文件（如: 解释 @src/main.py），内容随消息注入。
   /reset         清空对话历史
   /exit          退出（Ctrl-D / Ctrl-C 同样有效）
 其他任何输入都会作为消息发给 agent。"""
@@ -42,17 +48,20 @@ async def run_repl(
     subagents=None,
     checkpoints=None,
     usage=None,
+    input_fn=None,
 ) -> int:
     from ..app import restore_session  # 延迟导入避免 ui→app 循环依赖
 
     renderer = StreamRenderer()
     unsubscribe = loop.bus.subscribe(renderer)
+    read_line = input_fn or (lambda prompt: asyncio.to_thread(input, prompt))
+    workspace_root = loop.tool_context.workspace_root
     tools_note = f"，工具: {', '.join(tool_names)}" if tool_names else ""
     print(f"Krelcode REPL（/help 查看命令，/exit 退出{tools_note}）")
     try:
         while True:
             try:
-                user_input = (await asyncio.to_thread(input, "you> ")).strip()
+                user_input = (await read_line("you> ")).strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 return 0
@@ -151,12 +160,29 @@ async def run_repl(
                     extra = f" tool_calls={[tc.name for tc in m.tool_calls]}" if m.tool_calls else ""
                     print(f"  [{m.role}]{extra} {content}")
                 continue
+            if user_input == "/export" or user_input.startswith("/export "):
+                parts = user_input.split(maxsplit=1)
+                try:
+                    if len(parts) > 1:
+                        out = export_session(loop.history, Path(parts[1].strip()))
+                    else:
+                        out = export_session(
+                            loop.history,
+                            export_dir=workspace_root / ".krelcode" / "exports")
+                    print(f"  [export] 已导出: {out}")
+                except OSError as e:
+                    print(f"  [export] 导出失败: {e}")
+                continue
             if user_input == "/reset":
                 loop.reset()
                 print("（历史已清空）")
                 continue
+            # @文件引用展开（UI 层完成，history 里存展开后文本）
+            expanded, at_notes = expand_at_files(user_input, workspace_root)
+            for note_text in at_notes:
+                print(f"  [@] {note_text}")
             try:
-                await loop.run(user_input)
+                await loop.run(expanded)
             except Exception as e:
                 renderer.end_stream()
                 print(f"错误：{type(e).__name__}: {e}")

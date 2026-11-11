@@ -45,7 +45,9 @@
 
 | 21 | 思考模型统一支持 | 统一 ThinkingDelta 事件（llm 层）：OpenAI 兼容 reasoning_content/reasoning（DeepSeek/Qwen/OpenRouter）与 Anthropic thinking 块（thinking_delta，signature_delta 忽略）都翻译到同一事件流；约定思考**永不进入** message.content/history；core LLMThinkingDelta 事件转发；渲染器 dim [thinking] 流（前缀一次、换行压平、任意其他事件收束） | 6 个新测试：两 provider 的 SSE 思考流解析、思考不混入 content、loop 转发与历史洁净、渲染器收束与压平 | ✅ |
 
-| 测试总数：326（离线 324 + 本地端口集成 2，沙箱内自动 skip） |
+| 22 | 交互层增强 | @文件引用（ui/atfiles：词首 @ 触发、email 不误伤、工作区约束、二进制/超限 fail-safe、注入预算）· 会话 Markdown 导出（session/export + /export [路径]，长内容截断）· REPL 可测试化（input_fn 注入点）——全部 /命令首次固化为自动化回归 | 24 个新测试：@展开 9 例（截断/上限/越界/二进制/email）、导出结构与截断、REPL 13 例全命令（help/tools/消息流/异常路径/@注入/history/reset/cost/compact/未启用提示/sessions+resume/export/undo 集成） | ✅ |
+
+| 测试总数：350（离线 348 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·
