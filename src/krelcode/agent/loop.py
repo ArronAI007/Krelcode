@@ -13,6 +13,7 @@ import asyncio
 import json
 from typing import Dict, List, Optional
 
+from ..core.redact import SecretRedactor
 from ..core.events import (
     AgentEvent,
     ContextCompressed,
@@ -59,6 +60,7 @@ class AgentLoop:
         context_manager: Optional[ContextManager] = None,
         tool_output_inline_limit: int = 12_000,
         token_budget: Optional[int] = None,
+        redactor: Optional[SecretRedactor] = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -70,6 +72,7 @@ class AgentLoop:
         self.context_manager = context_manager
         self.tool_output_inline_limit = tool_output_inline_limit
         self.token_budget = token_budget
+        self.redactor = redactor
         self._token_total = 0
         self._failure_counts: Dict[str, int] = {}
         # 运行中用户插话队列（REPL steering）：每个 step 开始前注入历史
@@ -195,7 +198,8 @@ class AgentLoop:
             *(self._execute_one(tc) for tc in tool_calls)
         )
         for tool_call, result in zip(tool_calls, results):
-            inline_content = self._persist_large_output(tool_call, result.content)
+            content = self.redactor.redact(result.content) if self.redactor else result.content
+            inline_content = self._persist_large_output(tool_call, content)
             await self._emit(
                 ToolCallCompleted(tool_call, inline_content, result.is_error)
             )

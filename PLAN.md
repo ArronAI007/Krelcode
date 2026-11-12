@@ -93,8 +93,9 @@
 | 46 | 输出/历史脱敏 | 新增 core/redact.py SecretRedactor（持有已解析敏感明文，redact() 统一 replace 为 ***，MIN_SECRET_LEN=6 防误打码短词）· 接线：StreamRenderer 全部终端输出、SessionRecorder 全部 JSONL 落盘（含 history 快照）、-m 直接打印与 --output-format json 的 reply 都经 redactor · app 组装根把 loop.llm.api_key 注入 redactor | 4 个新测试：redactor 基本/多值、渲染器工具结果脱敏、recorder 落盘脱敏且 JSON 仍可解析 | ✅ |
 | 47 | doctor 修复：key 检查尊重 api_key_env | check_provider_keys 此前只看默认环境变量（OPENAI/ANTHROPIC/GEMINI），忽略配置里 api_key_env=DEEPSEEK_API_KEY → 设置后仍误报「未设置」。改为接受 config，经 resolve_settings 解析默认 provider 的 key（尊重 api_key/api_key_env），缺失时按配置里的真实 env 名（如 DEEPSEEK_API_KEY）提示 | 3 个新测试：config api_key_env 命中、自定义 env 名警告、config 明文 api_key 命中 | ✅ |
 | 48 | DeepSeek 模型目录更新 | 经官方接口/文档确认当前模型已从 deepseek-chat/reasoner 迁移为 deepseek-flash / deepseek-v4-pro（旧名退役）：更新 PRICING（flash 0.15/0.60、v4-pro 0.66/1.98，取 off-peak 缓存未命中基准，peak=2×）与 CONTEXT_WINDOWS（两者 1M）· scaffold 模板与 README 示例同步到 deepseek-flash · doctor 显示上下文 1000k/压缩预算 750k | 既有 DeepSeek 配置路径与价目/窗口守护测试更新到新模型名并继续通过 | ✅ |
+| 49 | 上下文级脱敏 | 堵住「工具结果进入 LLM 历史」这最后一道明文密钥漏洞：此前 SecretRedactor 只保护 renderer/recorder/-m 输出，但 `run_command("cat ~/.krelcode/config.toml")` 等会把明文 key 写进 loop.history 并回传模型。AgentLoop 新增可选 redactor 参数，`_execute_tool_calls` 在 `_persist_large_output` 之前对 result.content 统一 redact，历史/事件/大输出落盘三者同步脱敏 · app 组装根把已注入 api_key 的 redactor 挂到 loop.redactor | 3 个新测试：历史工具结果脱敏+回传模型第二轮调用脱敏、ToolCallCompleted 事件脱敏、未注入 redactor 时行为不变 | ✅ |
 
-| 测试总数：537（离线 535 + 本地端口集成 2，沙箱内自动 skip） |
+| 测试总数：540（离线 538 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

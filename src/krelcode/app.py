@@ -368,6 +368,7 @@ async def async_main(args: argparse.Namespace) -> int:
     loop, subagents = await build_loop(args, config, log=note)
     redactor = SecretRedactor()
     redactor.add(getattr(loop.llm, "api_key", None))
+    loop.redactor = redactor
     supervisor = MCPSupervisor(
         loop.registry, log=note,
         sampler=build_mcp_sampler(loop.llm),
