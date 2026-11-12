@@ -92,6 +92,7 @@
 | 45 | 敏感文件读保护与脱敏 | read_file 对纯密钥/凭据文件（*.pem/*.key/*.p12/*.pfx/id_rsa*/id_ed25519*/credentials*/secrets.*/.npmrc/.netrc/.pgpass/.htpasswd）直接拒读；对 .env/.env.* 与 krelcode.toml 脱敏后返回（KEY=VALUE 值隐藏、保留键名/export/注释；TOML 只隐藏 api_key 值，model/api_key_env 等其余配置照常可见）· grep 跳过所有敏感文件（含非隐藏的 credentials/secrets/krelcode.toml，防命中密钥）· 新增 tools/secret_guard.py（classify_secret_path + redact_secret_text，纯函数零依赖） | 4 个新测试：.env 值脱敏+结构保留、凭据文件拒读（3 类）、krelcode.toml 仅 api_key 脱敏、grep 跳过敏感文件 | ✅ |
 | 46 | 输出/历史脱敏 | 新增 core/redact.py SecretRedactor（持有已解析敏感明文，redact() 统一 replace 为 ***，MIN_SECRET_LEN=6 防误打码短词）· 接线：StreamRenderer 全部终端输出、SessionRecorder 全部 JSONL 落盘（含 history 快照）、-m 直接打印与 --output-format json 的 reply 都经 redactor · app 组装根把 loop.llm.api_key 注入 redactor | 4 个新测试：redactor 基本/多值、渲染器工具结果脱敏、recorder 落盘脱敏且 JSON 仍可解析 | ✅ |
 | 47 | doctor 修复：key 检查尊重 api_key_env | check_provider_keys 此前只看默认环境变量（OPENAI/ANTHROPIC/GEMINI），忽略配置里 api_key_env=DEEPSEEK_API_KEY → 设置后仍误报「未设置」。改为接受 config，经 resolve_settings 解析默认 provider 的 key（尊重 api_key/api_key_env），缺失时按配置里的真实 env 名（如 DEEPSEEK_API_KEY）提示 | 3 个新测试：config api_key_env 命中、自定义 env 名警告、config 明文 api_key 命中 | ✅ |
+| 48 | DeepSeek 模型目录更新 | 经官方接口/文档确认当前模型已从 deepseek-chat/reasoner 迁移为 deepseek-flash / deepseek-v4-pro（旧名退役）：更新 PRICING（flash 0.15/0.60、v4-pro 0.66/1.98，取 off-peak 缓存未命中基准，peak=2×）与 CONTEXT_WINDOWS（两者 1M）· scaffold 模板与 README 示例同步到 deepseek-flash · doctor 显示上下文 1000k/压缩预算 750k | 既有 DeepSeek 配置路径与价目/窗口守护测试更新到新模型名并继续通过 | ✅ |
 
 | 测试总数：537（离线 535 + 本地端口集成 2，沙箱内自动 skip） |
 

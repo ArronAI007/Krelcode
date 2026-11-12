@@ -17,7 +17,7 @@ api_key_env = "OPENAI_API_KEY"
 # generation = { temperature = 0.3 }       # 生成参数透传（top_p、max_tokens…）
 
 # ---- DeepSeek 示例（OpenAI 兼容端点）：取消注释并置顶 default_provider = "openai" ----
-# model = "deepseek-chat"                  # 工具调用用 chat；deepseek-reasoner 思考流已支持
+# model = "deepseek-flash"                 # 快速模型；deepseek-v4-pro 更强（默认思考模式）
 # base_url = "https://api.deepseek.com/v1"
 # api_key_env = "DEEPSEEK_API_KEY"
 # generation = { stream_options = { include_usage = true } }   # 流式回传 usage，/cost 才有数据

@@ -5,8 +5,9 @@ JSON 输出的量级估算，不用于计费。未知模型返回 None——不�
 
 模型匹配：精确匹配优先，其次最长前缀匹配
 （gpt-4o-mini-2024-07-18 → gpt-4o-mini 而非 gpt-4o）。
-缓存计价（Anthropic prompt caching）：cache_read 按输入价 10%，
-cache_creation 按输入价 125%（5 分钟 ephemeral 档）。
+缓存计价：cache_read 统一按输入价 10%、cache_creation 按 125%
+（Anthropic 5 分钟 ephemeral 档；DeepSeek 实际 cache hit 约 2–3%，更便宜，量级估算足够）。
+DeepSeek 现价分 peak/off-peak（peak=2×off-peak），上表取 off-peak 基准。
 """
 
 from __future__ import annotations
@@ -31,8 +32,9 @@ PRICING: Dict[str, Tuple[float, float]] = {
     "gemini-2.5-pro": (1.25, 10.00),
     "gemini-2.5-flash": (0.30, 2.50),
     "gemini-2.0-flash": (0.10, 0.40),
-    "deepseek-chat": (0.28, 1.10),
-    "deepseek-reasoner": (0.28, 1.10),
+    # DeepSeek 取 off-peak、缓存未命中为基准（peak=2×）；cache hit 约 2–3%
+    "deepseek-flash": (0.15, 0.60),
+    "deepseek-v4-pro": (0.66, 1.98),
 }
 
 CACHE_READ_FACTOR = 0.1       # 缓存命中折扣
@@ -56,8 +58,8 @@ CONTEXT_WINDOWS: Dict[str, int] = {
     "gemini-2.5-pro": 1_000_000,
     "gemini-2.5-flash": 1_000_000,
     "gemini-2.0-flash": 1_000_000,
-    "deepseek-chat": 64_000,
-    "deepseek-reasoner": 64_000,
+    "deepseek-flash": 1_000_000,
+    "deepseek-v4-pro": 1_000_000,
 }
 
 # 自适应预算比例：留 25% 给输出与安全余量

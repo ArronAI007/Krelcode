@@ -42,7 +42,7 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --mock
 # DeepSeek（OpenAI 兼容端点）：
 export DEEPSEEK_API_KEY=sk-...
 PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider openai \
-  --base-url https://api.deepseek.com/v1 --model deepseek-chat
+  --base-url https://api.deepseek.com/v1 --model deepseek-flash
 # 建议写进 krelcode.toml（krelcode init 生成的模板里有现成注释示例），之后直接运行 krelcode
 
 # 真实模式：统一 Provider 机制，--provider openai / anthropic / gemini
