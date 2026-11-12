@@ -30,14 +30,21 @@ from ..core.events import (
     UserSteered,
 )
 from ..core.messages import Message
+from ..core.redact import SecretRedactor
 from .codec import history_to_dicts, history_from_dicts
 
 
 class SessionRecorder:
-    def __init__(self, path: Path, get_history) -> None:
+    def __init__(
+        self,
+        path: Path,
+        get_history,
+        redactor: Optional[SecretRedactor] = None,
+    ) -> None:
         """get_history: 无参可调用，返回当前 List[Message]（避免循环依赖注入 loop）。"""
         self.path = Path(path)
         self._get_history = get_history
+        self._redactor = redactor
         self._unsub: Optional[object] = None
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -93,8 +100,11 @@ class SessionRecorder:
 
     def _write(self, record: dict) -> None:
         try:
+            line = json.dumps(record, ensure_ascii=False)
+            if self._redactor is not None:
+                line = self._redactor.redact(line)
             with open(self.path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                f.write(line + "\n")
         except OSError:
             pass  # 持久化失败不阻断对话
 

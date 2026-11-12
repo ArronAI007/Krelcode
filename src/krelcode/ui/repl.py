@@ -62,10 +62,11 @@ async def run_repl(
     usage=None,
     model_switch=None,
     input_fn=None,
+    redactor=None,
 ) -> int:
     from ..app import restore_session  # 延迟导入避免 ui→app 循环依赖
 
-    renderer = StreamRenderer()
+    renderer = StreamRenderer(redactor=redactor)
     unsubscribe = loop.bus.subscribe(renderer)
     read_line = input_fn or (lambda prompt: asyncio.to_thread(input, prompt))
     workspace_root = loop.tool_context.workspace_root

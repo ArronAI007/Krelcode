@@ -24,6 +24,7 @@ from .agent.prompts import build_system_prompt
 from .agent.usage import UsageTracker
 from .config import load_config
 from .core.events import EventBus, PermissionDenied, ToolCallCompleted
+from .core.redact import SecretRedactor
 from .hooks import HookRunner, parse_hooks
 from .core.messages import Message, ToolCall
 from .llm.base import LLMProvider
@@ -198,7 +199,7 @@ async def build_loop(
     return loop, manager
 
 
-def setup_session(args: argparse.Namespace, loop: AgentLoop, log=print):
+def setup_session(args: argparse.Namespace, loop: AgentLoop, log=print, redactor=None):
     """恢复历史（--resume）并挂载 JSONL 录制器；返回会话文件路径或 None。"""
     sessions_dir = loop.tool_context.workspace_root / ".krelcode" / "sessions"
 
@@ -215,7 +216,7 @@ def setup_session(args: argparse.Namespace, loop: AgentLoop, log=print):
     if args.no_session:
         return None
     session_path = new_session_path(sessions_dir)
-    recorder = SessionRecorder(session_path, lambda: loop.history)
+    recorder = SessionRecorder(session_path, lambda: loop.history, redactor=redactor)
     recorder.attach(loop.bus)
     return session_path
 
@@ -365,6 +366,8 @@ async def async_main(args: argparse.Namespace) -> int:
     config_path = Path(args.config) if args.config else None
     config = load_config(config_path)
     loop, subagents = await build_loop(args, config, log=note)
+    redactor = SecretRedactor()
+    redactor.add(getattr(loop.llm, "api_key", None))
     supervisor = MCPSupervisor(
         loop.registry, log=note,
         sampler=build_mcp_sampler(loop.llm),
@@ -400,7 +403,7 @@ async def async_main(args: argparse.Namespace) -> int:
         else:
             note("[git] 工作区不是 git 仓库，--auto-commit 未生效")
     try:
-        session_path = setup_session(args, loop, log=note)
+        session_path = setup_session(args, loop, log=note, redactor=redactor)
         sessions_dir = loop.tool_context.workspace_root / ".krelcode" / "sessions"
         model = getattr(loop.llm, "model", "?")
         if args.message:
@@ -408,7 +411,7 @@ async def async_main(args: argparse.Namespace) -> int:
                 summary = _RunSummary()
                 loop.bus.subscribe(summary.on_event)
                 try:
-                    reply = await loop.run(args.message)
+                    reply = redactor.redact(await loop.run(args.message))
                     payload = {
                         "ok": True,
                         "reply": reply,
@@ -430,7 +433,7 @@ async def async_main(args: argparse.Namespace) -> int:
                 print(json.dumps(payload, ensure_ascii=False))
                 return code
             try:
-                print(await loop.run(args.message))
+                print(redactor.redact(await loop.run(args.message)))
             except Exception as e:
                 print(f"错误：{type(e).__name__}: {e}")
                 return 1
@@ -449,6 +452,7 @@ async def async_main(args: argparse.Namespace) -> int:
             checkpoints=checkpoints,
             usage=usage,
             model_switch=model_switch,
+            redactor=redactor,
         )
     finally:
         await subagents.shutdown()

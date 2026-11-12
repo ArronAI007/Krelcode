@@ -10,6 +10,7 @@ import os
 import sys
 from typing import Callable, Optional
 
+from ..core.redact import SecretRedactor
 from ..core.events import (
     AgentEvent,
     ContextCompressed,
@@ -70,11 +71,19 @@ class StreamRenderer:
         self,
         write: Optional[Callable[[str], None]] = None,
         color: Optional[bool] = None,
+        redactor: Optional[SecretRedactor] = None,
     ) -> None:
-        self._write = write or _default_write
+        self._raw_write = write or _default_write
+        self._redactor = redactor
         self._color = auto_color() if color is None else color
         self._streaming = False
         self._thinking = False
+
+    def _write(self, s: str) -> None:
+        # 所有终端输出都经此出口：脱敏后统一写出
+        if self._redactor is not None:
+            s = self._redactor.redact(s)
+        self._raw_write(s)
 
     # EventBus handler（同步即可）
     def __call__(self, event: AgentEvent) -> None:

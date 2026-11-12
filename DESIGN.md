@@ -76,6 +76,8 @@ class ApprovalPolicy(Protocol):
 #     黑名单按名字匹配，保留 PATH/HOME），防 agent 用 `env` 顺手读出 LLM key（Step 44）
 #   · 敏感文件读保护：read_file 拒读纯密钥文件、对 .env/krelcode.toml 脱敏，
 #     grep 跳过敏感文件（Step 45）
+#   · 输出/历史脱敏：SecretRedactor 持有已解析 key，renderer/recorder/-m 输出
+#     统一 replace 为 ***（Step 46）
 #     - 按控制符切段(punctuation_chars)逐段分级，整条取最严格；重定向升级为 ASK
 #     - 无条件 DENY：sudo/dd/mkfs/shutdown、rm 灾难目标、curl|sh、fork 炸弹
 #     - ASK：执行代码/装依赖/git 写操作/删文件/网络/未知命令
