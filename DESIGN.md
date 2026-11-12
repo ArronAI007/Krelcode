@@ -251,6 +251,12 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   shutdown 存档被取消的工作并回收 worktree（**分支保留**供 merge/cherry-pick）；
   `.krelcode/` 经 .git/info/exclude 本地排除（与 autocommit 共用
   ensure_local_exclude/git_is_repo，已从 AutoCommitter 提取为模块级函数）
+- **fork_context**（Step 42，依赖型子任务）：spawn(fork_context=true) 深拷贝
+  父历史（replace 逐消息拷贝，去父 system 换子代理 system）；尾部消毒——
+  spawn 时父历史尾部必然悬挂 assistant(tool_calls)（spawn 调用本身），
+  sanitize_history 弹掉；若消毒后尾部是未答完的 user 消息（触发委派那句），
+  弹出并与子任务合并（"[委派的子任务]" 标记）——保上下文又保角色严格交替；
+  get_parent_history 以 getter 注入（/resume 重绑定 loop.history 后依然正确）
 - **防递归**：子代理工具集 = default_tools()（不含 spawn 系），委派深度硬限制 1 层
 - **可观测**：SubagentSpawned/SubagentFinished 上父总线——渲染器打状态行、
   recorder 落 JSONL 审计；REPL /agents 列状态

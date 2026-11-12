@@ -21,6 +21,14 @@ Step 41 增强——**git worktree 隔离**（isolated=True）：
 - 基于当前 HEAD 建分支（不含主工作区未提交改动）；要求工作区是
   git 仓库，否则 spawn 抛 ValueError（工具层转 is_error）
 
+Step 42 增强——**fork_context**（依赖型子任务）：
+- spawn(task, fork_context=True) 把父对话历史深拷贝进子代理
+  （去掉父 system，换上子代理 system；子代理由此"看得见"任务背景）
+- 尾部消毒：spawn 发生在父轮执行中，历史尾部必然是悬挂的
+  assistant(tool_calls)（spawn 调用本身）→ sanitize_history 弹掉；
+  若消毒后尾部是未答完的 user 消息（正是触发委派的那句），弹出并
+  与子任务合并——既保上下文又保 user/assistant 严格交替（Anthropic 要求）
+
 防递归：子代理的工具集由 tool_factory 提供（app 里 = default_tools()，
 不含 spawn 系工具），委派深度硬限制为 1 层。
 """
@@ -28,7 +36,7 @@ Step 41 增强——**git worktree 隔离**（isolated=True）：
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -74,6 +82,7 @@ class AgentHandle:
     # 隔离模式（Step 41）：worktree 路径与分支名；非隔离为 None
     worktree: Optional[Path] = None
     branch: Optional[str] = None
+    forked: bool = False   # Step 42：是否继承了父对话上下文
 
     def preview(self) -> str:
         text = self.result or self.error or ""
@@ -84,7 +93,7 @@ class AgentHandle:
 
 # sanitize_history 已下沉到 core.messages（主代理取消修复与子代理打断共用）；
 # 此处 re-export 保持既有导入路径兼容
-from ..core.messages import sanitize_history  # noqa: E402,F401
+from ..core.messages import Message, sanitize_history  # noqa: E402,F401
 
 
 class SubagentManager:
@@ -105,15 +114,21 @@ class SubagentManager:
         self.max_steps = max_steps
         self._handles: Dict[str, AgentHandle] = {}
         self._counter = 0
+        # fork_context 数据源：app 组装根注入 lambda: loop.history
+        # （用 getter 而非直接引用，/resume 重绑定 loop.history 后依然正确）
+        self.get_parent_history: Optional[Callable[[], List[Message]]] = None
 
     # -- 生命周期 ---------------------------------------------------------------------
 
-    async def spawn(self, task: str, isolated: bool = False) -> AgentHandle:
+    async def spawn(self, task: str, isolated: bool = False,
+                    fork_context: bool = False) -> AgentHandle:
         """创建一个后台子代理并立即开始执行任务。
 
         isolated=True：在独立 git worktree（分支 krelcode/agent-<id>）中执行，
         并行写文件互不干扰；完成后变更自动提交到分支。
         要求主工作区是 git 仓库，否则抛 ValueError。
+
+        fork_context=True：深拷贝父对话历史进子代理（依赖型子任务用）。
         """
         self._counter += 1
         agent_id = f"a{self._counter}"
@@ -133,12 +148,39 @@ class SubagentManager:
             system_prompt=SUBAGENT_SYSTEM_PROMPT,
             max_steps=self.max_steps,
         )
+        effective_task = task
+        forked = False
+        if fork_context and self.get_parent_history is not None:
+            forked_history, pending_user = self._fork_parent_history()
+            if pending_user is not None:
+                # 触发委派的未答完 user 消息与子任务合并（保角色交替）
+                effective_task = f"{pending_user}\n\n[委派的子任务] {task}".strip()
+            loop.history.extend(forked_history)
+            forked = True
         handle = AgentHandle(id=agent_id, task=task, loop=loop,
-                             worktree=worktree_path, branch=branch)
+                             worktree=worktree_path, branch=branch, forked=forked)
         self._handles[agent_id] = handle
-        handle.task_obj = asyncio.create_task(self._run(handle, task))
+        handle.task_obj = asyncio.create_task(self._run(handle, effective_task))
         await self.bus.emit(SubagentSpawned(agent_id, task))
         return handle
+
+    def _fork_parent_history(self) -> Tuple[List[Message], Optional[str]]:
+        """深拷贝父历史（去父 system、尾部消毒）。
+
+        返回 (forked_messages, pending_user_text)：消毒后若尾部是未答完的
+        user 消息则弹出并作为第二返回值（调用方与子任务合并，避免连续 user）。
+        """
+        source = self.get_parent_history() or []
+        start = 1 if source and source[0].role == "system" else 0
+        forked = [
+            replace(m, tool_calls=list(m.tool_calls) if m.tool_calls else None)
+            for m in source[start:]
+        ]
+        sanitize_history(forked)   # 弹掉悬挂的 assistant(tool_calls)/tool 尾部
+        pending_user: Optional[str] = None
+        if forked and forked[-1].role == "user":
+            pending_user = forked.pop().content or ""
+        return forked, pending_user
 
     # -- git worktree 隔离（Step 41）---------------------------------------------------
 
@@ -312,6 +354,7 @@ class SubagentManager:
                 task_preview = task_preview[:60] + "…"
             queued = f" · 排队 {len(handle.queue)}" if handle.queue else ""
             branch = f" · 分支 {handle.branch}" if handle.branch else ""
+            branch += " · 继承上下文" if handle.forked else ""
             line = (f"{handle.id} [{handle.status}] {handle.turns} 轮{queued}{branch} · "
                     f"任务: {task_preview.replace(chr(10), ' ')}")
             if handle.status in (STATUS_COMPLETED, STATUS_FAILED):

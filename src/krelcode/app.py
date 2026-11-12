@@ -191,6 +191,8 @@ async def build_loop(
         context_manager=context_manager,
         token_budget=args.token_budget,
     )
+    # fork_context 数据源：getter 形式，/resume 重绑定 loop.history 后依然正确
+    manager.get_parent_history = lambda: loop.history
     return loop, manager
 
 

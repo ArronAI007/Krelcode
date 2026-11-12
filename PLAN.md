@@ -85,7 +85,9 @@
 
 | 41 | 子代理 git worktree 隔离 | spawn_agent(isolated=true)：子代理在独立 worktree（.krelcode/worktrees/<id>，分支 krelcode/agent-<id>，基于 HEAD）中执行，文件写入被路径沙箱天然限制在内——**多个子代理并行写同名文件互不干扰**；任务排空后未提交变更自动 commit（-c 身份兜底，不依赖用户 git config）；shutdown 存档被取消的工作并回收 worktree，**分支保留**供 merge/cherry-pick；.krelcode/ 自动本地 exclude 不污染主仓 status；wait_agent 结果附分支与合入提示；非 git 仓库优雅降级（ValueError→is_error） | 6 个新测试（真 git 仓库）：分支提交+主区干净+回收保分支、并行同名文件无冲突（两分支各自内容）、非仓库拒绝、工具端到端（isolated 参数+分支提示+git show 验证）、被取消工作 shutdown 存档 | ✅ |
 
-| 测试总数：511（离线 509 + 本地端口集成 2，沙箱内自动 skip） |
+| 42 | 子代理 fork_context | spawn_agent(fork_context=true)：深拷贝父对话历史进子代理（dataclasses.replace 逐消息拷贝，去父 system 换子代理 system）；**尾部消毒**——spawn 发生在父轮执行中，悬挂的 assistant(tool_calls) 被 sanitize_history 弹掉；消毒后若尾部是未答完的 user 消息（触发委派的那句），弹出并与子任务合并为 "[委派的子任务]"（保 user/assistant 严格交替，Anthropic 约束）；get_parent_history 用 getter 注入（/resume 重绑定后依然正确）；无源静默退化；handle.forked 观测 + status_lines 标注 | 7 个新测试：完整 fork 结构断言（system 替换/悬挂消毒/合并/角色交替）、默认不 fork、完整尾部不合并、深拷贝隔离（子改不伤父+续聊不影响父）、无源退化、工具参数与 schema | ✅ |
+
+| 测试总数：518（离线 516 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

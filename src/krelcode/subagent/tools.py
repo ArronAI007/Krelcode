@@ -19,6 +19,7 @@ class SpawnAgentTool:
         "task 要自包含：子代理看不到你的对话历史。"
         "多个子代理要并行写文件时，传 isolated=true 让每个在独立 git worktree "
         "分支中工作（互不冲突，改动提交到 krelcode/agent-<id> 分支）。"
+        "子任务依赖当前对话背景时，传 fork_context=true 让子代理继承你的对话历史。"
         "返回子代理 id；用 wait_agent 等待结果，list_agents 查看状态。"
     )
     parameters: Dict[str, Any] = {
@@ -27,6 +28,8 @@ class SpawnAgentTool:
             "task": {"type": "string", "description": "自包含的任务描述"},
             "isolated": {"type": "boolean",
                          "description": "true=在独立 git worktree 分支中执行（需工作区为 git 仓库）"},
+            "fork_context": {"type": "boolean",
+                             "description": "true=继承父对话历史（依赖型子任务；task 仍需说明要做什么）"},
         },
         "required": ["task"],
     }
@@ -40,15 +43,21 @@ class SpawnAgentTool:
             return ToolResult(content="task 必须是非空字符串", is_error=True)
         try:
             handle = await self.manager.spawn(
-                task.strip(), isolated=bool(args.get("isolated", False)))
+                task.strip(),
+                isolated=bool(args.get("isolated", False)),
+                fork_context=bool(args.get("fork_context", False)),
+            )
         except ValueError as e:
             return ToolResult(content=str(e), is_error=True)
         extra = (f"，隔离分支 {handle.branch}（worktree: {handle.worktree}）"
                  if handle.branch else "")
+        if handle.forked:
+            extra += "，已继承当前对话上下文"
         return ToolResult(
             content=f"已启动子代理 {handle.id}（后台运行）{extra}。"
                     f"用 wait_agent(agent_id=\"{handle.id}\") 等待结果。",
-            data={"agent_id": handle.id, "branch": handle.branch},
+            data={"agent_id": handle.id, "branch": handle.branch,
+                  "forked": handle.forked},
         )
 
 
