@@ -79,7 +79,8 @@ class ApprovalPolicy(Protocol):
 #   · 输出/历史脱敏：SecretRedactor 持有已解析 key，renderer/recorder/-m 输出
 #     统一 replace 为 ***（Step 46）
 #   · 上下文级脱敏：工具结果进入 loop.history/回传模型前先经 SecretRedactor
-#     处理，堵住明文 key 随 run_command(cat config) 等路径泄入 LLM 上下文的漏洞（Step 49）
+#     处理，堵住明文 key 随 run_command(cat config) 等路径泄入 LLM 上下文的漏洞（Step 49）；
+#     子代理独立历史同样经 redactor（SubagentManager spawn 注入，Step 50）
 #     - 按控制符切段(punctuation_chars)逐段分级，整条取最严格；重定向升级为 ASK
 #     - 无条件 DENY：sudo/dd/mkfs/shutdown、rm 灾难目标、curl|sh、fork 炸弹
 #     - ASK：执行代码/装依赖/git 写操作/删文件/网络/未知命令
