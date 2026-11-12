@@ -11,8 +11,10 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import os
 import signal
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Dict
 
 from ..base import ToolContext, ToolResult
@@ -22,6 +24,39 @@ from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
 MAX_OUTPUT_CHARS = 30_000
 DEFAULT_TIMEOUT = 60.0
 MAX_TIMEOUT = 600.0
+
+# 敏感环境变量：子进程执行时从环境中剥离，避免 coding agent 通过
+# `run_command("env")` 等顺手读到 LLM API key 或其它 secret。
+# 采用黑名单（按名字匹配），而非白名单：保留 PATH/HOME 等正常变量，
+# 只移除明显是密钥/令牌的那部分。
+SENSITIVE_ENV_PATTERNS: Sequence[str] = (
+    "*_API_KEY", "*_API_TOKEN", "*_TOKEN", "*_SECRET", "*_SECRETS",
+    "*_PASSWORD", "*_PASSWD", "*_CREDENTIAL", "*_CREDENTIALS",
+    "*_PRIVATE_KEY", "*_ACCESS_KEY", "*_SESSION_TOKEN",
+)
+
+# 不以常见密钥后缀结尾、但仍属敏感值的显式名单。
+SENSITIVE_ENV_NAMES: frozenset[str] = frozenset({
+    "AWS_ACCESS_KEY_ID",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+})
+
+
+def scrub_environment(
+    env: Mapping[str, str],
+    extra_names: Iterable[str] = (),
+    patterns: Sequence[str] = SENSITIVE_ENV_PATTERNS,
+    names: frozenset[str] = SENSITIVE_ENV_NAMES,
+) -> Dict[str, str]:
+    """返回移除敏感变量后的环境副本（供子进程使用，不修改原环境）。"""
+    scrubbed: Dict[str, str] = {}
+    for key, value in env.items():
+        if key in names or key in extra_names:
+            continue
+        if any(fnmatch.fnmatch(key, pattern) for pattern in patterns):
+            continue
+        scrubbed[key] = value
+    return scrubbed
 
 
 class RunCommandTool:
@@ -55,6 +90,9 @@ class RunCommandTool:
 
         timeout = _clamp_timeout(args.get("timeout"))
 
+        # 子进程不继承 LLM API key 等敏感环境变量（防 agent 用 env/子进程读 key）
+        env = scrub_environment(os.environ)
+
         try:
             proc = await asyncio.create_subprocess_shell(
                 command,
@@ -62,6 +100,7 @@ class RunCommandTool:
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=str(cwd),
                 start_new_session=True,  # 独立进程组，超时可整组击杀
+                env=env,
             )
         except OSError as e:
             return ToolResult(content=f"无法启动命令: {e}", is_error=True)

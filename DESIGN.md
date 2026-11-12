@@ -72,6 +72,8 @@ class ApprovalPolicy(Protocol):
 # 实现：AllowAllPolicy（--no-sandbox）/ SandboxPolicy（默认）：
 #   · 只读工具(get_time/read_file/grep/glob)放行；write/edit 由路径约束兜底放行
 #   · run_command → safety.commands.classify_command()：DENY/ASK/ALLOW 三级
+#   · run_command 子进程执行前剥离敏感环境变量（*_API_KEY/*_TOKEN/*_SECRET 等，
+#     黑名单按名字匹配，保留 PATH/HOME），防 agent 用 `env` 顺手读出 LLM key（Step 44）
 #     - 按控制符切段(punctuation_chars)逐段分级，整条取最严格；重定向升级为 ASK
 #     - 无条件 DENY：sudo/dd/mkfs/shutdown、rm 灾难目标、curl|sh、fork 炸弹
 #     - ASK：执行代码/装依赖/git 写操作/删文件/网络/未知命令

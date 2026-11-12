@@ -10,7 +10,7 @@ import pytest
 from krelcode.tools.base import ToolContext
 from krelcode.tools.builtin.glob import GlobTool
 from krelcode.tools.builtin.grep import GrepTool
-from krelcode.tools.builtin.run_command import RunCommandTool
+from krelcode.tools.builtin.run_command import RunCommandTool, scrub_environment
 from krelcode.tools.fsutils import truncate_middle
 
 
@@ -189,3 +189,50 @@ def test_glob_subdir_base(ws, tmp_path):
     (tmp_path / "tests" / "test_x.py").write_text("", encoding="utf-8")
     r = run(GlobTool().execute({"pattern": "test_*.py", "path": "tests"}, ws))
     assert r.content.splitlines() == ["tests/test_x.py"]
+
+
+# -- 敏感环境变量剥离（Step 44） -------------------------------------------------------------
+
+def test_scrub_environment_removes_sensitive_names():
+    env = {
+        "PATH": "/usr/bin",
+        "HOME": "/home",
+        "OPENAI_API_KEY": "sk-openai",
+        "ANTHROPIC_API_KEY": "sk-anthropic",
+        "GEMINI_API_KEY": "sk-gemini",
+        "DEEPSEEK_API_KEY": "sk-deepseek",
+        "GITHUB_TOKEN": "ghp-xxx",
+        "AWS_SECRET_ACCESS_KEY": "aws-secret",
+        "AWS_ACCESS_KEY_ID": "AKIA-xxx",
+        "DB_PASSWORD": "pw",
+        "KEEP": "keep-me",
+    }
+    out = scrub_environment(env)
+    for name in (
+        "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
+        "DEEPSEEK_API_KEY", "GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY",
+        "AWS_ACCESS_KEY_ID", "DB_PASSWORD",
+    ):
+        assert name not in out
+    assert out["PATH"] == "/usr/bin"
+    assert out["HOME"] == "/home"
+    assert out["KEEP"] == "keep-me"
+
+
+def test_scrub_environment_extra_names():
+    out = scrub_environment(
+        {"MY_CUSTOM_VAR": "secret", "KEEP": "keep"},
+        extra_names=["MY_CUSTOM_VAR"],
+    )
+    assert "MY_CUSTOM_VAR" not in out
+    assert out["KEEP"] == "keep"
+
+
+def test_run_command_strips_sensitive_env(ws, monkeypatch):
+    monkeypatch.setenv("KRELCODE_TEST_API_KEY", "sk-super-secret-123")
+    monkeypatch.setenv("KRELCODE_BENIGN_VAR", "visible")
+    r = run(RunCommandTool().execute({"command": "env"}, ws))
+    assert not r.is_error
+    assert "sk-super-secret-123" not in r.content
+    assert "KRELCODE_TEST_API_KEY" not in r.content
+    assert "KRELCODE_BENIGN_VAR=visible" in r.content
