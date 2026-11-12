@@ -57,20 +57,50 @@ def check_python() -> CheckResult:
                        f"{version_str}（需要 >= 3.11，tomllib/zoneinfo 依赖）")
 
 
-def check_provider_keys() -> CheckResult:
+def _key_env_for(provider: str, config: Dict[str, Any]) -> str:
+    """返回 provider 预期读取的 key 环境变量名（优先 config 的 api_key_env）。"""
+    section = (config.get("providers") or {}).get(provider) or {}
+    return str(section.get("api_key_env") or API_KEY_ENV.get(provider, ""))
+
+
+def check_provider_keys(config: Optional[Dict[str, Any]] = None) -> CheckResult:
+    config = config or {}
+    # 默认 provider 经 resolve_settings 解析：尊重 config 的 api_key / api_key_env
+    # （例如 [providers.openai] api_key_env = "DEEPSEEK_API_KEY"）。
+    try:
+        settings = resolve_settings(config=config)
+    except Exception:
+        settings = None
+
+    if settings is not None and settings.api_key:
+        return CheckResult("Provider API key", STATUS_OK,
+                           f"{settings.provider}(key={mask_key(settings.api_key)})")
+
     found, missing = [], []
-    for provider, env_name in API_KEY_ENV.items():
-        if not env_name:
-            continue
+    default_provider = settings.provider if settings is not None else "openai"
+    # 默认 provider 的预期 env（含自定义 api_key_env，避免误报「未设置」）
+    env_name = _key_env_for(default_provider, config)
+    if env_name:
         key = os.environ.get(env_name)
         if key:
-            found.append(f"{provider}({env_name}={mask_key(key)})")
+            found.append(f"{default_provider}({env_name}={mask_key(key)})")
         else:
             missing.append(env_name)
+    # 其余标准 provider env（任一有 key 也算可用信号）
+    for provider, env in API_KEY_ENV.items():
+        if not env or provider == default_provider:
+            continue
+        key = os.environ.get(env)
+        if key:
+            found.append(f"{provider}({env}={mask_key(key)})")
+        else:
+            missing.append(env)
+
     if found:
         return CheckResult("Provider API key", STATUS_OK, "、".join(found))
+    missing_uniq = list(dict.fromkeys(m for m in missing if m))
     return CheckResult("Provider API key", STATUS_WARN,
-                       f"未设置任何 key（{', '.join(missing)}）；只能用 --mock")
+                       f"未设置任何 key（{', '.join(missing_uniq)}）；只能用 --mock")
 
 
 def check_default_provider(config: Dict[str, Any]) -> CheckResult:
@@ -175,7 +205,7 @@ def run_all_checks(workspace: Path, config: Dict[str, Any],
                    config_path: Optional[Path] = None) -> List[CheckResult]:
     results = [
         check_python(),
-        check_provider_keys(),
+        check_provider_keys(config),
         check_default_provider(config),
         check_config(config_path),
         check_git(workspace),

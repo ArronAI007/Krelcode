@@ -43,6 +43,37 @@ def test_mask_key_short():
     assert mask_key("abc") == "…"
 
 
+def test_provider_keys_respects_config_api_key_env(monkeypatch):
+    config = {"providers": {"openai": {"api_key_env": "DEEPSEEK_API_KEY"}}}
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-1234567890")
+    for env in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"):
+        monkeypatch.delenv(env, raising=False)
+    r = check_provider_keys(config)
+    assert r.status == STATUS_OK
+    assert "openai" in r.detail
+    assert "1234567890" not in r.detail          # 全 key 不泄露
+    assert "sk-dee" in r.detail                  # 脱敏首段可见
+
+
+def test_provider_keys_warns_with_custom_env_name(monkeypatch):
+    config = {"providers": {"openai": {"api_key_env": "DEEPSEEK_API_KEY"}}}
+    for env in ("DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"):
+        monkeypatch.delenv(env, raising=False)
+    r = check_provider_keys(config)
+    assert r.status == STATUS_WARN
+    assert "DEEPSEEK_API_KEY" in r.detail
+    assert "--mock" in r.detail
+
+
+def test_provider_keys_respects_config_plaintext(monkeypatch):
+    config = {"providers": {"openai": {"api_key": "sk-plain-1234567890"}}}
+    for env in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY"):
+        monkeypatch.delenv(env, raising=False)
+    r = check_provider_keys(config)
+    assert r.status == STATUS_OK
+    assert "1234567890" not in r.detail
+
+
 def test_default_provider_resolution(monkeypatch):
     monkeypatch.delenv("KRELCODE_PROVIDER", raising=False)
     assert check_default_provider({}).status == STATUS_OK
