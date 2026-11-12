@@ -17,7 +17,7 @@ agent 层只消费统一事件，对 provider 差异零感知。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, List, Optional, Protocol, Sequence, Union
+from typing import Any, AsyncIterator, Dict, Optional, Protocol, Sequence, Union
 
 from ..core.messages import Message
 

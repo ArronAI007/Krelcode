@@ -13,7 +13,7 @@ import ast
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from ..base import ToolContext, ToolResult
 from ..fsutils import is_hidden_file, is_pruned_dir

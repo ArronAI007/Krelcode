@@ -40,6 +40,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from ..agent.compression import ContextManager
 from ..agent.context import _git
 from ..agent.loop import AgentLoop
 from ..agent.prompts import build_system_prompt
@@ -105,6 +106,7 @@ class SubagentManager:
         policy=None,
         bus: Optional[EventBus] = None,
         max_steps: int = 30,
+        context_budget: Optional[int] = None,
     ) -> None:
         self.llm = llm
         self.tool_factory = tool_factory
@@ -112,6 +114,9 @@ class SubagentManager:
         self.policy = policy or AllowAllPolicy()
         self.bus = bus or EventBus()
         self.max_steps = max_steps
+        # 子代理同样需要上下文管理：长任务（多轮工具调用）历史会膨胀，
+        # 无压缩将超出模型窗口导致 provider 400。None=不启用（向后兼容）。
+        self.context_budget = context_budget
         self._handles: Dict[str, AgentHandle] = {}
         self._counter = 0
         # fork_context 数据源：app 组装根注入 lambda: loop.history
@@ -147,6 +152,9 @@ class SubagentManager:
             bus=child_bus,
             system_prompt=SUBAGENT_SYSTEM_PROMPT,
             max_steps=self.max_steps,
+            # spawn 时以当时的 self.llm 建压缩器（/model 热切换后新建的子代理自动用新模型）
+            context_manager=(ContextManager(self.llm, max_tokens=self.context_budget)
+                             if self.context_budget else None),
         )
         effective_task = task
         forked = False

@@ -12,7 +12,7 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from . import __version__
 from .agent.compression import DEFAULT_MAX_TOKENS as DEFAULT_CONTEXT_BUDGET
@@ -160,12 +160,13 @@ async def build_loop(
     bus = EventBus()
     llm = build_llm(args, config, log=log)
     context_manager = None
+    context_budget = None
     if not args.no_compress:
         # 预算优先级：显式 --context-tokens > 模型目录推导（窗口×75%）> 兜底默认
-        budget = (args.context_tokens
-                  or default_budget_for(getattr(llm, "model", None))
-                  or DEFAULT_CONTEXT_BUDGET)
-        context_manager = ContextManager(llm, max_tokens=budget)
+        context_budget = (args.context_tokens
+                          or default_budget_for(getattr(llm, "model", None))
+                          or DEFAULT_CONTEXT_BUDGET)
+        context_manager = ContextManager(llm, max_tokens=context_budget)
     tool_context = ToolContext(workspace_root=workspace_root)
     policy = build_policy(args, workspace_root, bus)
     registry = ToolRegistry(default_tools() + list(extra_tools or []))
@@ -176,6 +177,7 @@ async def build_loop(
         policy=policy,
         bus=bus,
         max_steps=args.max_steps,
+        context_budget=context_budget,   # 子代理长任务同样受压缩保护
     )
     for tool in manager.build_tools():
         registry.register(tool)
@@ -249,7 +251,7 @@ class _RunSummary:
 
 
 def build_model_switcher(args: argparse.Namespace, config: Dict[str, Any],
-                         loop: AgentLoop, usage: UsageTracker):
+                         loop: AgentLoop, usage: UsageTracker, subagents=None):
     """/model 热切换：返回 callable(new_spec|None) -> 结果描述文本。
 
     new_spec 支持 "model"（沿用当前 provider）或 "provider/model"。
@@ -286,6 +288,8 @@ def build_model_switcher(args: argparse.Namespace, config: Dict[str, Any],
             return f"切换失败: {type(e).__name__}: {e}"
 
         loop.llm = provider
+        if subagents is not None:
+            subagents.llm = provider   # 之后 spawn 的子代理用新模型
         budget_note = ""
         if loop.context_manager is not None:
             loop.context_manager.llm = provider
@@ -380,7 +384,7 @@ async def async_main(args: argparse.Namespace) -> int:
         checkpoints.attach(loop.bus)
     usage = UsageTracker(model=getattr(loop.llm, "model", None))
     usage.attach(loop.bus)
-    model_switch = build_model_switcher(args, config, loop, usage)
+    model_switch = build_model_switcher(args, config, loop, usage, subagents=subagents)
     hook_specs = parse_hooks(config)
     if hook_specs:
         hooks = HookRunner(loop.tool_context.workspace_root, hook_specs, log=note)

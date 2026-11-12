@@ -21,7 +21,7 @@ import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from ..core.events import (
     AgentEvent, EventBus, RunFinished, RunStarted, ToolCallStarted,

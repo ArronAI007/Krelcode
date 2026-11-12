@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import shlex
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import List, Sequence, Tuple
 
 RISK_ALLOW = "allow"
 RISK_ASK = "ask"

@@ -251,6 +251,10 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   shutdown 存档被取消的工作并回收 worktree（**分支保留**供 merge/cherry-pick）；
   `.krelcode/` 经 .git/info/exclude 本地排除（与 autocommit 共用
   ensure_local_exclude/git_is_repo，已从 AutoCommitter 提取为模块级函数）
+- **子代理上下文管理**（Step 43）：SubagentManager.context_budget 由组装根
+  注入（与父代理同一套预算解析：显式 > 模型目录 > 兜底）；每个子代理
+  spawn 时以**当时的** self.llm 建独立 ContextManager——/model 热切换后
+  新子代理自动用新模型；switcher 同步更新 subagents.llm
 - **fork_context**（Step 42，依赖型子任务）：spawn(fork_context=true) 深拷贝
   父历史（replace 逐消息拷贝，去父 system 换子代理 system）；尾部消毒——
   spawn 时父历史尾部必然悬挂 assistant(tool_calls)（spawn 调用本身），

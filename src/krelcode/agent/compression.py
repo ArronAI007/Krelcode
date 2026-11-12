@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 
 from ..core.messages import Message
 from ..llm.base import LLMProvider, collect

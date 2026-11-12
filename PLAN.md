@@ -87,7 +87,9 @@
 
 | 42 | 子代理 fork_context | spawn_agent(fork_context=true)：深拷贝父对话历史进子代理（dataclasses.replace 逐消息拷贝，去父 system 换子代理 system）；**尾部消毒**——spawn 发生在父轮执行中，悬挂的 assistant(tool_calls) 被 sanitize_history 弹掉；消毒后若尾部是未答完的 user 消息（触发委派的那句），弹出并与子任务合并为 "[委派的子任务]"（保 user/assistant 严格交替，Anthropic 约束）；get_parent_history 用 getter 注入（/resume 重绑定后依然正确）；无源静默退化；handle.forked 观测 + status_lines 标注 | 7 个新测试：完整 fork 结构断言（system 替换/悬挂消毒/合并/角色交替）、默认不 fork、完整尾部不合并、深拷贝隔离（子改不伤父+续聊不影响父）、无源退化、工具参数与 schema | ✅ |
 
-| 测试总数：518（离线 516 + 本地端口集成 2，沙箱内自动 skip） |
+| 43 | 健壮性修补 + 质量巡检 | **子代理上下文管理缺口修复**：此前子代理 AgentLoop 无 ContextManager，长任务（多轮工具调用）历史膨胀会超模型窗口 → SubagentManager 新增 context_budget（app 与父代理同一套预算解析），spawn 时按当时 llm 建压缩器（/model 热切换后新子代理自动用新模型）· **/model 热切换同步子代理**：switcher 同时更新 subagents.llm（此前遗漏，切换后 spawn 的子代理仍用旧模型）· 质量巡检：AST 扫描清理 14 处未用 import、干净 venv 重装 0.42.0 全入口冒烟 | 5 个新测试：子代理压缩器绑定/默认不启用/spawn 时 llm 快照语义/build_loop 三态预算传导/热切换同步 manager.llm；巡检：521 全过 + venv 重装 --version/init/doctor/JSON 模式全通 | ✅ |
+
+| 测试总数：523（离线 521 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

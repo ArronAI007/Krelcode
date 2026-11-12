@@ -8,7 +8,7 @@ BPE 对英文代码的经验比例）。
 from __future__ import annotations
 
 import json
-from typing import Iterable, List
+from typing import Iterable
 
 from ..core.messages import Message
 
