@@ -11,6 +11,16 @@ Step 23 增强（对齐 Codex multi_agent 语义）：
   开新 Task 处理打断消息；队列中未处理的消息保留
 - **wait_many**：一次等多个子代理（asyncio.wait，超时不取消任务）
 
+Step 41 增强——**git worktree 隔离**（isolated=True）：
+- 子代理在独立 worktree（分支 krelcode/agent-<id>，位于
+  <workspace>/.krelcode/worktrees/<id>）中工作，文件写入被路径沙箱
+  天然限制在 worktree 内——多个子代理并行写同名文件互不干扰
+- 任务排空后未提交变更自动 commit 到隔离分支（带 -c 身份兜底，
+  不依赖用户 git config）；shutdown 回收 worktree，**分支保留**供
+  merge/cherry-pick；主工作区全程不受影响
+- 基于当前 HEAD 建分支（不含主工作区未提交改动）；要求工作区是
+  git 仓库，否则 spawn 抛 ValueError（工具层转 is_error）
+
 防递归：子代理的工具集由 tool_factory 提供（app 里 = default_tools()，
 不含 spawn 系工具），委派深度硬限制为 1 层。
 """
@@ -19,10 +29,13 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from ..agent.context import _git
 from ..agent.loop import AgentLoop
 from ..agent.prompts import build_system_prompt
+from ..session.autocommit import ensure_local_exclude, git_is_repo
 from ..core.events import EventBus, SubagentFinished, SubagentSpawned
 from ..llm.base import LLMProvider
 from ..safety.policy import AllowAllPolicy
@@ -58,6 +71,9 @@ class AgentHandle:
     turns: int = 0
     queue: List[str] = field(default_factory=list)
     task_obj: Optional[asyncio.Task] = field(default=None, repr=False)
+    # 隔离模式（Step 41）：worktree 路径与分支名；非隔离为 None
+    worktree: Optional[Path] = None
+    branch: Optional[str] = None
 
     def preview(self) -> str:
         text = self.result or self.error or ""
@@ -92,25 +108,78 @@ class SubagentManager:
 
     # -- 生命周期 ---------------------------------------------------------------------
 
-    async def spawn(self, task: str) -> AgentHandle:
-        """创建一个后台子代理并立即开始执行任务。"""
+    async def spawn(self, task: str, isolated: bool = False) -> AgentHandle:
+        """创建一个后台子代理并立即开始执行任务。
+
+        isolated=True：在独立 git worktree（分支 krelcode/agent-<id>）中执行，
+        并行写文件互不干扰；完成后变更自动提交到分支。
+        要求主工作区是 git 仓库，否则抛 ValueError。
+        """
         self._counter += 1
         agent_id = f"a{self._counter}"
+        worktree_path: Optional[Path] = None
+        branch: Optional[str] = None
+        tool_context = self.tool_context
+        if isolated:
+            worktree_path, branch = await self._create_worktree(agent_id)
+            tool_context = ToolContext(workspace_root=worktree_path)
         child_bus = EventBus()
         loop = AgentLoop(
             llm=self.llm,
             registry=ToolRegistry(self.tool_factory()),
-            tool_context=self.tool_context,
+            tool_context=tool_context,
             policy=self.policy,
             bus=child_bus,
             system_prompt=SUBAGENT_SYSTEM_PROMPT,
             max_steps=self.max_steps,
         )
-        handle = AgentHandle(id=agent_id, task=task, loop=loop)
+        handle = AgentHandle(id=agent_id, task=task, loop=loop,
+                             worktree=worktree_path, branch=branch)
         self._handles[agent_id] = handle
         handle.task_obj = asyncio.create_task(self._run(handle, task))
         await self.bus.emit(SubagentSpawned(agent_id, task))
         return handle
+
+    # -- git worktree 隔离（Step 41）---------------------------------------------------
+
+    async def _create_worktree(self, agent_id: str) -> Tuple[Path, str]:
+        ws = self.tool_context.workspace_root
+        if not await git_is_repo(ws):
+            raise ValueError(
+                "隔离子代理要求工作区是 git 仓库（先 git init，或不用 isolated）")
+        # worktree 位于 .krelcode/ 下：确保本地 exclude，不污染主仓库 status
+        await ensure_local_exclude(ws, ".krelcode/")
+        branch = f"krelcode/agent-{agent_id}"
+        path = ws / ".krelcode" / "worktrees" / agent_id
+        path.parent.mkdir(parents=True, exist_ok=True)
+        out = await _git(ws, "worktree", "add", str(path), "-b", branch)
+        if out is None:
+            raise ValueError(f"git worktree 创建失败（分支 {branch} 可能已存在）")
+        return path, branch
+
+    async def _finalize_isolated(self, handle: AgentHandle) -> None:
+        """把 worktree 中未提交的变更存档提交到隔离分支（幂等）。"""
+        wt = handle.worktree
+        if wt is None or not wt.is_dir():
+            return
+        status = await _git(wt, "status", "--porcelain")
+        if not status:
+            return
+        await _git(wt, "add", "-A")
+        label = handle.task.strip().replace("\n", " ")[:60]
+        # -c 身份兜底：不依赖用户 git config user.*
+        await _git(wt,
+                   "-c", "user.name=krelcode",
+                   "-c", "user.email=agent@krelcode.local",
+                   "commit", "-m", f"krelcode({handle.id}): {label}")
+
+    async def _remove_worktree(self, handle: AgentHandle) -> None:
+        """回收 worktree（分支保留，供 merge/cherry-pick）。"""
+        if handle.worktree is None:
+            return
+        ws = self.tool_context.workspace_root
+        await _git(ws, "worktree", "remove", "--force", str(handle.worktree))
+        await _git(ws, "worktree", "prune")
 
     async def _run(self, handle: AgentHandle, message: str) -> None:
         """执行一条消息；完成后若队列非空则继续排空（同一 Task）。"""
@@ -138,6 +207,9 @@ class SubagentManager:
             if handle.queue:
                 message = handle.queue.pop(0)
                 continue
+            if handle.worktree is not None:
+                # 队列排空：把隔离分支上的工作存档（失败/完成都保留成果）
+                await self._finalize_isolated(handle)
             return
 
     def get(self, agent_id: str) -> Optional[AgentHandle]:
@@ -218,13 +290,17 @@ class SubagentManager:
         await asyncio.wait(tasks, timeout=timeout)
 
     async def shutdown(self) -> None:
-        """取消所有运行中的子代理（进程退出前调用）。"""
+        """取消所有运行中的子代理并回收隔离 worktree（分支保留）。"""
         running = [h for h in self._handles.values() if self.is_running(h)]
         for handle in running:
             handle.task_obj.cancel()
         if running:
             await asyncio.gather(
                 *(h.task_obj for h in running), return_exceptions=True)
+        for handle in self._handles.values():
+            if handle.worktree is not None:
+                await self._finalize_isolated(handle)   # 被取消的也存档已有成果
+                await self._remove_worktree(handle)
 
     # -- 观测 -------------------------------------------------------------------------
 
@@ -235,7 +311,8 @@ class SubagentManager:
             if len(task_preview) > 60:
                 task_preview = task_preview[:60] + "…"
             queued = f" · 排队 {len(handle.queue)}" if handle.queue else ""
-            line = (f"{handle.id} [{handle.status}] {handle.turns} 轮{queued} · "
+            branch = f" · 分支 {handle.branch}" if handle.branch else ""
+            line = (f"{handle.id} [{handle.status}] {handle.turns} 轮{queued}{branch} · "
                     f"任务: {task_preview.replace(chr(10), ' ')}")
             if handle.status in (STATUS_COMPLETED, STATUS_FAILED):
                 line += f" · 结果: {handle.preview()}"

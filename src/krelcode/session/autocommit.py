@@ -21,6 +21,37 @@ LABEL_MAX_CHARS = 60
 EXCLUDE_ENTRY = ".krelcode/"
 
 
+async def git_is_repo(root: Path) -> bool:
+    """工作区是否为 git 仓库（git 不可用/非仓库 → False）。"""
+    if shutil.which("git") is None:
+        return False
+    out = await _git(Path(root), "rev-parse", "--is-inside-work-tree")
+    return out == "true"
+
+
+async def ensure_local_exclude(root: Path, entry: str = EXCLUDE_ENTRY) -> bool:
+    """把 entry 写进 .git/info/exclude（仅本地生效、幂等）；返回是否新增。"""
+    root = Path(root)
+    git_dir = await _git(root, "rev-parse", "--git-dir")
+    if not git_dir:
+        return False
+    exclude_path = (root / git_dir / "info" / "exclude").resolve() \
+        if not Path(git_dir).is_absolute() else Path(git_dir) / "info" / "exclude"
+    try:
+        exclude_path.parent.mkdir(parents=True, exist_ok=True)
+        existing = exclude_path.read_text(encoding="utf-8") if exclude_path.is_file() else ""
+        lines = [l.strip() for l in existing.splitlines()]
+        if entry in lines:
+            return False
+        with open(exclude_path, "a", encoding="utf-8") as f:
+            if existing and not existing.endswith("\n"):
+                f.write("\n")
+            f.write(f"{entry}\n")
+        return True
+    except OSError:
+        return False
+
+
 class AutoCommitter:
     def __init__(self, workspace_root: Path) -> None:
         self.root = Path(workspace_root).resolve()
@@ -36,10 +67,7 @@ class AutoCommitter:
     # -- 核心动作（也可单独调用/测试） --------------------------------------------------
 
     async def is_git_repo(self) -> bool:
-        if shutil.which("git") is None:
-            return False
-        out = await _git(self.root, "rev-parse", "--is-inside-work-tree")
-        return out == "true"
+        return await git_is_repo(self.root)
 
     async def commit_if_dirty(self) -> Optional[str]:
         """有未提交变更则 add -A + commit；返回 commit 输出（无操作返回 None）。"""
@@ -57,21 +85,4 @@ class AutoCommitter:
 
     async def ensure_local_exclude(self) -> bool:
         """把 .krelcode/ 写进 .git/info/exclude（幂等）；返回是否新增过。"""
-        git_dir = await _git(self.root, "rev-parse", "--git-dir")
-        if not git_dir:
-            return False
-        exclude_path = (self.root / git_dir / "info" / "exclude").resolve() \
-            if not Path(git_dir).is_absolute() else Path(git_dir) / "info" / "exclude"
-        try:
-            exclude_path.parent.mkdir(parents=True, exist_ok=True)
-            existing = exclude_path.read_text(encoding="utf-8") if exclude_path.is_file() else ""
-            lines = [l.strip() for l in existing.splitlines()]
-            if EXCLUDE_ENTRY in lines:
-                return False
-            with open(exclude_path, "a", encoding="utf-8") as f:
-                if existing and not existing.endswith("\n"):
-                    f.write("\n")
-                f.write(f"{EXCLUDE_ENTRY}\n")
-            return True
-        except OSError:
-            return False
+        return await ensure_local_exclude(self.root, EXCLUDE_ENTRY)

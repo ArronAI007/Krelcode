@@ -17,12 +17,16 @@ class SpawnAgentTool:
     description = (
         "创建一个后台子代理执行委派的子任务（独立上下文，与你的对话并行）。"
         "task 要自包含：子代理看不到你的对话历史。"
+        "多个子代理要并行写文件时，传 isolated=true 让每个在独立 git worktree "
+        "分支中工作（互不冲突，改动提交到 krelcode/agent-<id> 分支）。"
         "返回子代理 id；用 wait_agent 等待结果，list_agents 查看状态。"
     )
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
             "task": {"type": "string", "description": "自包含的任务描述"},
+            "isolated": {"type": "boolean",
+                         "description": "true=在独立 git worktree 分支中执行（需工作区为 git 仓库）"},
         },
         "required": ["task"],
     }
@@ -34,11 +38,17 @@ class SpawnAgentTool:
         task = args.get("task")
         if not isinstance(task, str) or not task.strip():
             return ToolResult(content="task 必须是非空字符串", is_error=True)
-        handle = await self.manager.spawn(task.strip())
+        try:
+            handle = await self.manager.spawn(
+                task.strip(), isolated=bool(args.get("isolated", False)))
+        except ValueError as e:
+            return ToolResult(content=str(e), is_error=True)
+        extra = (f"，隔离分支 {handle.branch}（worktree: {handle.worktree}）"
+                 if handle.branch else "")
         return ToolResult(
-            content=f"已启动子代理 {handle.id}（后台运行）。"
+            content=f"已启动子代理 {handle.id}（后台运行）{extra}。"
                     f"用 wait_agent(agent_id=\"{handle.id}\") 等待结果。",
-            data={"agent_id": handle.id},
+            data={"agent_id": handle.id, "branch": handle.branch},
         )
 
 
@@ -92,6 +102,9 @@ class WaitAgentTool:
                 body = handle.result if handle.status == "completed" else (handle.error or "")
                 if handle.status != "completed":
                     all_completed = False
+                if handle.branch:
+                    body += (f"\n[隔离模式: 改动已提交到分支 {handle.branch}，"
+                             f"可 git merge/cherry-pick 合入；会话结束后 worktree 自动回收]")
                 sections.append(f"[{handle.id}] {handle.status}\n{body}")
         if len(agent_ids) == 1:
             # 单 id：保持与旧版完全一致的内容格式

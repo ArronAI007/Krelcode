@@ -83,7 +83,9 @@
 
 | 40 | DeepSeek 接入开箱即用 | 配置全链路离线验证并固化：TOML api_key_env=DEEPSEEK_API_KEY / base_url=api.deepseek.com/v1 / generation.stream_options(include_usage) 让流式也回传 usage（/cost 有数据）· deepseek-chat 价目(0.28/1.10)与窗口(64k→预算 48k)已在目录 · deepseek-reasoner 的 reasoning_content 思考流自 Step 21 已支持 · scaffold 模板与 README 增加 DeepSeek 示例 | 2 个守护测试：配置→provider→请求 URL/payload 全链路、价目与窗口推导 | ✅ |
 
-| 测试总数：505（离线 503 + 本地端口集成 2，沙箱内自动 skip） |
+| 41 | 子代理 git worktree 隔离 | spawn_agent(isolated=true)：子代理在独立 worktree（.krelcode/worktrees/<id>，分支 krelcode/agent-<id>，基于 HEAD）中执行，文件写入被路径沙箱天然限制在内——**多个子代理并行写同名文件互不干扰**；任务排空后未提交变更自动 commit（-c 身份兜底，不依赖用户 git config）；shutdown 存档被取消的工作并回收 worktree，**分支保留**供 merge/cherry-pick；.krelcode/ 自动本地 exclude 不污染主仓 status；wait_agent 结果附分支与合入提示；非 git 仓库优雅降级（ValueError→is_error） | 6 个新测试（真 git 仓库）：分支提交+主区干净+回收保分支、并行同名文件无冲突（两分支各自内容）、非仓库拒绝、工具端到端（isolated 参数+分支提示+git show 验证）、被取消工作 shutdown 存档 | ✅ |
+
+| 测试总数：511（离线 509 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

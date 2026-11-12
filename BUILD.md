@@ -49,6 +49,7 @@ core 只有 313 行——内核极小、能力在边缘，正是当初对标 pi/
 | v0.31 | 热切换原子性 | /model 先建新 provider 并验证 key，成功才替换——切换失败不破坏会话 |
 | v0.34 | 协议时序 | MCP notifications/initialized 必须 await 实发——fire-and-forget 的调度延迟会让它晚于后续请求（spy 调试抓到） |
 | v0.36 | 多模态持久化 | 图片按 source_path 存 JSONL（每轮快照×base64 会撑爆文件），恢复时重载 |
+| v0.40 | 并行写冲突 | 隔离子代理走 git worktree 分支而非目录拷贝——复用 git 的合并语义，成果以分支交付（merge/cherry-pick），不做危险的自动合并 |
 | v0.33 | 扩展思考回传 | Anthropic thinking 块（含 signature/redacted）挂 Message.provider_meta 不透明状态位随历史回传——core 只携带不解读，wire 知识仍锁在 adapter 内 |
 
 ## 3. 文件导览（能力 → 位置）

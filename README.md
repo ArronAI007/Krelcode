@@ -141,7 +141,7 @@ hooks 只能由用户在配置文件定义（`krelcode.toml` 与 `.krelcode/` �
 
 ### 子代理 / 后台任务
 
-LLM 可用 `spawn_agent` 把自包含的子任务委派给后台子代理（独立上下文、并行执行），`wait_agent` 收取报告（支持逗号分隔多 id 一次等多个），`send_to_agent` 续聊追加任务——运行中默认排队、`interrupt=true` 打断当前任务立即处理（自动消毒历史防协议违规）；子代理不能再派生子代理（防递归）。REPL `/agents` 查看状态；子代理事件写入会话 JSONL 审计流。
+LLM 可用 `spawn_agent` 把自包含的子任务委派给后台子代理（独立上下文、并行执行；`isolated=true` 时在独立 git worktree 分支中写文件——并行改同名文件互不冲突，成果提交到 `krelcode/agent-<id>` 分支供 merge/cherry-pick），`wait_agent` 收取报告（支持逗号分隔多 id 一次等多个），`send_to_agent` 续聊追加任务——运行中默认排队、`interrupt=true` 打断当前任务立即处理（自动消毒历史防协议违规）；子代理不能再派生子代理（防递归）。REPL `/agents` 查看状态；子代理事件写入会话 JSONL 审计流。
 文件与命令操作限定在工作区内（相对路径基于 `--workspace`），自动跳过 `.git`/`node_modules` 等目录。
 
 安全策略（默认开启）：只读命令与常规文件写入静默放行，但 `.git/`、`.env*`、密钥文件、审批白名单自身等**受保护路径**的写入需要审批；执行代码/删文件/网络访问等 ASK 级操作弹 `[y]是/[n]否/[a]始终允许` 审批，"始终允许"按程序名持久化到 `<workspace>/.krelcode/allow_rules.json`；`sudo`、`rm -rf /`、`curl|sh` 等 DENY 级无条件拒绝。`--auto-approve` 自动批准 ASK 级，`--no-sandbox` 完全关闭。

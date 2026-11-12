@@ -244,6 +244,13 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   角色交替）→ 开新 Task；队列中未处理消息保留
 - **wait_many**：一次等多个子代理（asyncio.wait，超时不取消）；
   wait_agent 工具的 agent_id 支持逗号分隔，单 id 输出格式向后兼容
+- **git worktree 隔离**（Step 41）：spawn(isolated=true) 在
+  `.krelcode/worktrees/<id>`（分支 `krelcode/agent-<id>`，基于 HEAD）建独立
+  worktree，子代理的 ToolContext 指向它——路径沙箱天然把写入限制在分支内，
+  多个子代理并行写同名文件互不干扰；任务排空自动 commit（`-c` 身份兜底），
+  shutdown 存档被取消的工作并回收 worktree（**分支保留**供 merge/cherry-pick）；
+  `.krelcode/` 经 .git/info/exclude 本地排除（与 autocommit 共用
+  ensure_local_exclude/git_is_repo，已从 AutoCommitter 提取为模块级函数）
 - **防递归**：子代理工具集 = default_tools()（不含 spawn 系），委派深度硬限制 1 层
 - **可观测**：SubagentSpawned/SubagentFinished 上父总线——渲染器打状态行、
   recorder 落 JSONL 审计；REPL /agents 列状态
