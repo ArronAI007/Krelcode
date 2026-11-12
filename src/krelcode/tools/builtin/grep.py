@@ -15,6 +15,7 @@ from typing import Any, Dict, List
 from ..base import ToolContext, ToolResult
 from ..fsutils import is_hidden_file, is_pruned_dir
 from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
+from ..secret_guard import classify_secret_path
 
 DEFAULT_MAX_RESULTS = 100
 MAX_RESULT_LIMIT = 500
@@ -73,6 +74,8 @@ class GrepTool:
                 if include and not fnmatch.fnmatch(name, include):
                     continue
                 file_path = os.path.join(root, name)
+                if classify_secret_path(file_path, ctx.workspace_root) is not None:
+                    continue  # 敏感文件不参与搜索，防 grep 命中密钥
                 rel = os.path.relpath(file_path, ctx.workspace_root.resolve())
                 files_scanned += 1
                 try:

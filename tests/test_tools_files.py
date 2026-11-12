@@ -190,3 +190,54 @@ def test_edit_not_found_without_close_match_has_no_hint(ws, tmp_path):
         {"path": "f.py", "old_string": "zzzz completely different", "new_string": "x"}, ws))
     assert r.is_error and "未找到" in r.content
     assert "最接近的行" not in r.content
+
+
+# -- 敏感文件读保护/脱敏（Step 45）------------------------------------------------------------
+
+def test_read_env_file_redacts_values(ws, tmp_path):
+    (tmp_path / ".env").write_text(
+        "OPENAI_API_KEY=sk-openai-123\n"
+        "DEEPSEEK_API_KEY = \"sk-deep-456\"\n"
+        "export ANTHROPIC_API_KEY=sk-ant-789\n"
+        "# keep comments\n"
+        "EMPTY=\n",
+        encoding="utf-8",
+    )
+    r = run(ReadFileTool().execute({"path": ".env"}, ws))
+    assert not r.is_error
+    assert r.data["redacted"] is True
+    # 键名与结构保留，值被隐藏
+    assert "OPENAI_API_KEY=***" in r.content
+    assert "DEEPSEEK_API_KEY = ***" in r.content
+    assert "export ANTHROPIC_API_KEY=***" in r.content
+    assert "# keep comments" in r.content
+    # 任何真实值都不得出现
+    for secret in ("sk-openai-123", "sk-deep-456", "sk-ant-789"):
+        assert secret not in r.content
+
+
+def test_read_secret_file_blocked(ws, tmp_path):
+    for name in ("credentials.json", "id_rsa", "api.key"):
+        (tmp_path / name).write_text("secret-content\n", encoding="utf-8")
+        r = run(ReadFileTool().execute({"path": name}, ws))
+        assert r.is_error
+        assert "拒绝读取敏感文件" in r.content
+
+
+def test_read_krelcode_toml_redacts_api_key_only(ws, tmp_path):
+    (tmp_path / "krelcode.toml").write_text(
+        "default_provider = \"openai\"\n\n"
+        "[providers.openai]\n"
+        "model = \"deepseek-chat\"\n"
+        "api_key = \"sk-toml-secret\"\n"
+        "api_key_env = \"DEEPSEEK_API_KEY\"\n",
+        encoding="utf-8",
+    )
+    r = run(ReadFileTool().execute({"path": "krelcode.toml"}, ws))
+    assert not r.is_error
+    assert r.data["redacted"] is True
+    assert "sk-toml-secret" not in r.content
+    assert 'api_key = "***"' in r.content
+    # 非密钥配置保持可见
+    assert 'model = "deepseek-chat"' in r.content
+    assert 'api_key_env = "DEEPSEEK_API_KEY"' in r.content

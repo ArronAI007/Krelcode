@@ -89,8 +89,9 @@
 
 | 43 | 健壮性修补 + 质量巡检 | **子代理上下文管理缺口修复**：此前子代理 AgentLoop 无 ContextManager，长任务（多轮工具调用）历史膨胀会超模型窗口 → SubagentManager 新增 context_budget（app 与父代理同一套预算解析），spawn 时按当时 llm 建压缩器（/model 热切换后新子代理自动用新模型）· **/model 热切换同步子代理**：switcher 同时更新 subagents.llm（此前遗漏，切换后 spawn 的子代理仍用旧模型）· 质量巡检：AST 扫描清理 14 处未用 import、干净 venv 重装 0.42.0 全入口冒烟 | 5 个新测试：子代理压缩器绑定/默认不启用/spawn 时 llm 快照语义/build_loop 三态预算传导/热切换同步 manager.llm；巡检：521 全过 + venv 重装 --version/init/doctor/JSON 模式全通 | ✅ |
 | 44 | 敏感环境变量剥离 | run_command 子进程执行前用 scrub_environment 从环境副本剥离敏感变量（*_API_KEY/*_API_TOKEN/*_TOKEN/*_SECRET/*_PASSWORD/*_CREDENTIALS/*_PRIVATE_KEY/*_ACCESS_KEY/*_SESSION_TOKEN + AWS_ACCESS_KEY_ID/GOOGLE_APPLICATION_CREDENTIALS 显式名单），按名字黑名单匹配、保留 PATH/HOME 等正常变量——防 agent 用 env/子进程顺手读出 LLM API key | 3 个新测试：scrub 单元（9 类敏感名剔除 + 正常变量保留）、extra_names 扩展、run_command("env") 端到端不泄漏 key 名/值 | ✅ |
+| 45 | 敏感文件读保护与脱敏 | read_file 对纯密钥/凭据文件（*.pem/*.key/*.p12/*.pfx/id_rsa*/id_ed25519*/credentials*/secrets.*/.npmrc/.netrc/.pgpass/.htpasswd）直接拒读；对 .env/.env.* 与 krelcode.toml 脱敏后返回（KEY=VALUE 值隐藏、保留键名/export/注释；TOML 只隐藏 api_key 值，model/api_key_env 等其余配置照常可见）· grep 跳过所有敏感文件（含非隐藏的 credentials/secrets/krelcode.toml，防命中密钥）· 新增 tools/secret_guard.py（classify_secret_path + redact_secret_text，纯函数零依赖） | 4 个新测试：.env 值脱敏+结构保留、凭据文件拒读（3 类）、krelcode.toml 仅 api_key 脱敏、grep 跳过敏感文件 | ✅ |
 
-| 测试总数：526（离线 524 + 本地端口集成 2，沙箱内自动 skip） |
+| 测试总数：530（离线 528 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

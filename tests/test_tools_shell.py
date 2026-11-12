@@ -151,6 +151,19 @@ def test_grep_path_outside_workspace(repo):
     assert r.is_error and "越出工作区" in r.content
 
 
+def test_grep_skips_sensitive_files(repo, tmp_path):
+    # 非隐藏敏感文件里的关键字不应被 grep 命中（防密钥外泄）
+    (tmp_path / "credentials.json").write_text("needle-secret\n", encoding="utf-8")
+    (tmp_path / "secrets.yaml").write_text("needle-secret\n", encoding="utf-8")
+    (tmp_path / "krelcode.toml").write_text("needle-secret\n", encoding="utf-8")
+    (tmp_path / "normal.txt").write_text("needle-secret\n", encoding="utf-8")
+    r = run(GrepTool().execute({"pattern": "needle-secret"}, repo))
+    assert not r.is_error
+    assert "normal.txt" in r.content
+    for sensitive in ("credentials.json", "secrets.yaml", "krelcode.toml"):
+        assert sensitive not in r.content
+
+
 # -- glob ------------------------------------------------------------------------------
 
 def test_glob_recursive_sorted_by_mtime(ws, tmp_path):

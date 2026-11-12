@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 from ..base import ToolContext, ToolResult
 from ..paths import PathOutsideWorkspaceError, read_text_file, resolve_in_workspace
+from ..secret_guard import classify_secret_path, redact_secret_text
 
 MAX_LINES = 2000          # 单次最多返回行数（可被 limit 覆盖到更小）
 MAX_LINE_CHARS = 2000     # 单行超长截断
@@ -40,17 +41,28 @@ class ReadFileTool:
         if path.is_dir():
             return ToolResult(content=f"目标是目录，不是文件: {path}", is_error=True)
 
+        category = classify_secret_path(path, ctx.workspace_root)
+        if category == "block":
+            return ToolResult(content=f"拒绝读取敏感文件（凭据/密钥）: {path.name}", is_error=True)
+
         try:
             text = read_text_file(path)
         except (ValueError, OSError) as e:
             return ToolResult(content=str(e), is_error=True)
 
+        redacted = category in ("redact_env", "redact_toml")
+        if redacted:
+            text = redact_secret_text(text, category)
+
         offset = _positive_int(args.get("offset"), 1)
         limit = min(_positive_int(args.get("limit"), MAX_LINES), MAX_LINES)
-        return ToolResult(
-            content=_render(text, offset, limit),
-            data={"path": str(path), "total_lines": text.count("\n") + (1 if text and not text.endswith("\n") else 0)},
-        )
+        data = {
+            "path": str(path),
+            "total_lines": text.count("\n") + (1 if text and not text.endswith("\n") else 0),
+        }
+        if redacted:
+            data["redacted"] = True
+        return ToolResult(content=_render(text, offset, limit), data=data)
 
 
 def _positive_int(value: Any, default: int) -> int:
