@@ -16,6 +16,12 @@ CONFIG_TEMPLATE = '''# Krelcode 配置（krelcode --config 或放在工作区根
 api_key_env = "OPENAI_API_KEY"
 # generation = { temperature = 0.3 }       # 生成参数透传（top_p、max_tokens…）
 
+# ---- DeepSeek 示例（OpenAI 兼容端点）：取消注释并置顶 default_provider = "openai" ----
+# model = "deepseek-chat"                  # 工具调用用 chat；deepseek-reasoner 思考流已支持
+# base_url = "https://api.deepseek.com/v1"
+# api_key_env = "DEEPSEEK_API_KEY"
+# generation = { stream_options = { include_usage = true } }   # 流式回传 usage，/cost 才有数据
+
 [providers.anthropic]
 # model = "claude-sonnet-4-5"
 api_key_env = "ANTHROPIC_API_KEY"

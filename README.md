@@ -39,6 +39,12 @@ krelcode               # 进入 REPL
 # 离线体验 mock 模式：第一轮会演示完整 tool-call 循环（LLM→审批→执行get_time→回填→总结）
 PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --mock
 
+# DeepSeek（OpenAI 兼容端点）：
+export DEEPSEEK_API_KEY=sk-...
+PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider openai \
+  --base-url https://api.deepseek.com/v1 --model deepseek-chat
+# 建议写进 krelcode.toml（krelcode init 生成的模板里有现成注释示例），之后直接运行 krelcode
+
 # 真实模式：统一 Provider 机制，--provider openai / anthropic / gemini
 export OPENAI_API_KEY=sk-...          # 或 ANTHROPIC_API_KEY / GEMINI_API_KEY
 PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider openai -m "现在纽约几点？"

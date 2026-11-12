@@ -81,7 +81,9 @@
 
 | 39 | 配置参考文档 | CONFIG.md：全部 CLI 旗标（3 子命令+25 旗标）、17+ REPL 命令（含 steering 语义与 @语法）、TOML 全键（providers/mcp_servers/hooks）、环境变量、.krelcode 状态目录布局、安全策略速查表（ALLOW/ASK/DENY 分级）、15 事件与 10 审计记录类型、JSON 输出模式——**配 5 个文档一致性守护测试**（每个 CLI 旗标/子命令/REPL 命令/env/hook 触发器必须在文档中，防文档腐化） | 守护测试全过；顺带在整理时校验了实现与文档零漂移 | ✅ |
 
-| 测试总数：503（离线 501 + 本地端口集成 2，沙箱内自动 skip） |
+| 40 | DeepSeek 接入开箱即用 | 配置全链路离线验证并固化：TOML api_key_env=DEEPSEEK_API_KEY / base_url=api.deepseek.com/v1 / generation.stream_options(include_usage) 让流式也回传 usage（/cost 有数据）· deepseek-chat 价目(0.28/1.10)与窗口(64k→预算 48k)已在目录 · deepseek-reasoner 的 reasoning_content 思考流自 Step 21 已支持 · scaffold 模板与 README 增加 DeepSeek 示例 | 2 个守护测试：配置→provider→请求 URL/payload 全链路、价目与窗口推导 | ✅ |
+
+| 测试总数：505（离线 503 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

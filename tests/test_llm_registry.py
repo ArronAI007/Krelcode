@@ -82,3 +82,39 @@ def test_load_config_toml(tmp_path):
 
 def test_registry_extensible():
     assert set(PROVIDERS) >= {"openai", "anthropic", "mock"}
+
+
+# -- DeepSeek（OpenAI 兼容端点）配置路径守护 -----------------------------------------------------------
+
+def test_deepseek_config_path(monkeypatch):
+    """DeepSeek 全链路：TOML(api_key_env/base_url/generation) → provider → 请求形态。"""
+    import json as _json
+
+    from krelcode.core.messages import Message as Msg
+    from krelcode.llm.registry import create_provider, resolve_settings
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-ds")
+    config = {"providers": {"openai": {
+        "model": "deepseek-chat",
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "generation": {"stream_options": {"include_usage": True}},
+    }}}
+    settings = resolve_settings(provider="openai", config=config)
+    assert settings.api_key == "sk-test-ds" and settings.model == "deepseek-chat"
+
+    provider = create_provider(settings)
+    req = provider.build_request([Msg.user("hi")], None)
+    assert req["url"] == "https://api.deepseek.com/v1/chat/completions"
+    payload = _json.loads(req["body"])
+    assert payload["model"] == "deepseek-chat"
+    assert payload["stream_options"] == {"include_usage": True}   # usage 统计生效
+
+
+def test_deepseek_pricing_and_window():
+    from krelcode.agent.pricing import (
+        default_budget_for, match_context_window, match_pricing,
+    )
+    assert match_pricing("deepseek-chat") is not None
+    assert match_context_window("deepseek-reasoner") == 64_000
+    assert default_budget_for("deepseek-chat") == 48_000      # 64k × 75%
