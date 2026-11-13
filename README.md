@@ -32,7 +32,7 @@ krelcode               # 进入 REPL
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（594 个，全离线*）
+# 运行全部测试（595 个，全离线*）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 

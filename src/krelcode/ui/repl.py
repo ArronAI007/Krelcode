@@ -118,22 +118,13 @@ def _stdout_write(s: str) -> None:
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
-# Common terminal fonts reserve two cells for these prompt glyphs even though
-# Unicode East Asian Width classifies them as narrow. Counting them explicitly
-# keeps cursor placement and the slash-menu gutter on the same visual column.
-_DOUBLE_WIDTH_UI_CHARS = frozenset({"❯", "↳"})
-
-
-def _char_display_width(ch: str) -> int:
-    if ch in _DOUBLE_WIDTH_UI_CHARS:
-        return 2
-    return 2 if unicodedata.east_asian_width(ch) in "WF" else 1
 
 
 def _display_width(text: str) -> int:
     """终端显示宽度：CJK 宽字符按 2 列计算，ANSI 控制序列按 0 计算。"""
     plain = _ANSI_RE.sub("", text)
-    return sum(_char_display_width(ch) for ch in plain)
+    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1
+               for ch in plain)
 
 
 def _truncate_display(text: str, width: int) -> str:
@@ -144,7 +135,7 @@ def _truncate_display(text: str, width: int) -> str:
     out = []
     used = 0
     for ch in text:
-        char_width = _char_display_width(ch)
+        char_width = 2 if unicodedata.east_asian_width(ch) in "WF" else 1
         if used + char_width > width - 1:
             break
         out.append(ch)
@@ -250,7 +241,9 @@ class PromptWriter:
         was_visible = self.enabled and self._visible
         if was_visible:
             self._clear_suggestions()
-            self._write(self.CURSOR_DOWN * (2 if raw else 1))
+            # 下移到输出区后必须回到第 0 列；否则命令输出的首行会从输入
+            # 末尾所在列开始，表现为第一个工具/结果缩进异常。
+            self._write(self.CURSOR_DOWN * (2 if raw else 1) + "\r")
         self._visible = False
         self._last = ""
         self._submitted_raw = raw if was_visible else None

@@ -52,7 +52,7 @@ def test_prompt_writer_show_hide_submitted():
 
     before = buf.text
     p.submitted(raw=True)                   # 原生编辑器：光标越过下边界
-    assert buf.text == before + p.CURSOR_DOWN * 2
+    assert buf.text == before + p.CURSOR_DOWN * 2 + "\r"
     assert not p._visible
     before = buf.text
     p.hide()                                # 提交后无需再清行
@@ -225,10 +225,21 @@ def test_slash_menu_uses_prompt_width_as_shared_left_gutter():
     editor._refresh(prompt, list("/"))
 
     gutter = " " * repl._display_width(prompt)
-    assert len(gutter) == 3       # ❯ 占 2 列 + 1 个空格
+    assert len(gutter) == 2       # ❯ 占 1 列 + 1 个空格
     assert len(p._suggestions) > 1
     assert all(line.startswith(gutter + "/") for line in p._suggestions)
     assert all(line.index("/") == len(gutter) for line in p._suggestions)
+
+
+def test_prompt_submission_resets_output_column_to_zero():
+    buf = Buf()
+    p = PromptWriter(write=buf.write, enabled=True, color=False)
+    p.show(IDLE_PROMPT)
+    p.update(IDLE_PROMPT + "/tools", [])
+    before = len(buf.parts)
+    p.submitted(raw=True)
+    submitted_output = "".join(buf.parts[before:])
+    assert submitted_output == p.CURSOR_DOWN * 2 + "\r"
 
 
 # -- 启动横幅 ---------------------------------------------------------------------------------
