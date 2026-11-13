@@ -101,8 +101,9 @@
 | 54 | Thinking 折叠与 Markdown 展开 | 修复 reasoning 正文实时刷屏和换行被压成空格的问题：renderer 在 UI 层缓存整轮 thinking，正文事件到达时只输出一行 `✻ Thinking… · 输入 /thinking 展开`；同一轮多段 thinking 空行拼接，`RunStarted` 清理上一轮缓存，thinking 仍不进入 history · 新增 `/thinking` 命令，按原始 Markdown 多行展开并做零依赖终端上色：保留标题、列表缩进、空行、行内代码/粗体与 fenced code block；展开输出继续经过 SecretRedactor | 6 个新增/替换测试：默认单行折叠且正文不泄漏、Markdown 多行结构保留、多段 thinking 聚合且只显示一条摘要、新轮次清空缓存、`/thinking` 命令、展开内容脱敏 | ✅ |
 | 55 | `/exit` 终端收尾 | 修复 `/exit` 后 zsh 显示反色 `%`（PROMPT_EOL_MARK）的问题：原生行编辑器提交后光标停在候选区空行，进程退出时缺少最终换行 → 新增 `PromptWriter.finish()`，根据 raw/fallback 提交位置回到下边界并输出 `CRLF`；REPL `finally` 统一调用，覆盖 `/exit`、EOF、运行中 `/exit` 和异常退出 | 1 个新测试：raw 提交回到下边界后补换行、fallback 提交直接补换行，输出必以 `\n` 结束 | ✅ |
 | 56 | 运行中展开 Thinking | 修复摘要已出现但 `/thinking` 无法展开：RUNNING 分支此前只允许 `/stop`、`/exit`，运行中输入会被通用提示拒绝 → 将 `/thinking` 加入运行态 slash 白名单并单独处理，直接展开当前已缓存的 Markdown；运行提示和折叠摘要明确显示“输入 /thinking 展开” | 1 个端到端测试：流式 thinking 生成后任务仍在 sleep，输入 `/thinking` 成功输出完整 Markdown，且不再出现“任务运行中”拒绝提示 | ✅ |
+| 57 | 输入框历史问题导航 | 零依赖 `InputHistory`：记录当前 REPL 会话非空、非斜杠命令的用户原始输入，连续重复去重，最多 200 条；`TerminalLineEditor` 解析上下方向键（CSI/SS3 两种序列），`↑` 向旧、`↓` 向新；首次导航保存当前未提交草稿，越过最新历史后恢复草稿；输入在 `@文件` 展开前记录 | 2 个新测试：历史去重/命令过滤/草稿恢复、空历史对象不被替换且 ↑/↓ 在两条问题间完整往返、其他方向键忽略 | ✅ |
 
-| 测试总数：580（离线 578 + 本地端口集成 2，沙箱内自动 skip） |
+| 测试总数：582（离线 580 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

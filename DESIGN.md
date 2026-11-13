@@ -394,6 +394,11 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
 
 ## 交互层增强（Step 22）
 
+- **输入历史导航**：`ui/repl.py` 的 `InputHistory` 只保存当前 REPL
+  会话中非空、非斜杠命令的用户原始输入（连续重复去重，最多 200 条）；
+  `TerminalLineEditor` 解析 `ESC[A/B` 与 `ESCOA/B`，`↑` 向旧浏览、`↓`
+  向新浏览，越过最新项时恢复导航开始前的草稿。历史在进入 agent 前记录，
+  因此 `@文件` 仍保留用户原始写法，不会把展开后的文件正文塞进输入历史
 - **@文件引用**（ui/atfiles.py）：UI 层展开——进入 history 的已是展开后文本，
   provider/内核零感知。词首 `@path` 触发（`(?<![\w@])` 防 email 误伤）；
   路径与工具层同规则约束在工作区内；不存在/二进制/越界/超限一律保留原文

@@ -7,7 +7,8 @@ from krelcode.core.events import (
     LLMStreamDelta, LLMThinkingDelta, RunFinished, RunStarted,
 )
 from krelcode.ui.repl import (
-    IDLE_PROMPT, RUNNING_PROMPT, PromptWriter, TerminalLineEditor, print_banner,
+    IDLE_PROMPT, RUNNING_PROMPT, InputHistory, PromptWriter, TerminalLineEditor,
+    print_banner,
 )
 from krelcode.ui.repl import match_slash_commands
 from krelcode.ui.render import (
@@ -151,6 +152,52 @@ def test_prompt_writer_finish_leaves_clean_shell_line():
     before = buf.text
     p.finish()
     assert buf.text == before + "\r\n"
+
+
+def test_input_history_navigation_restores_draft():
+    history = InputHistory()
+    history.add("第一个问题")
+    history.add("第一个问题")                  # 连续重复不重复记录
+    history.add("/help")                      # 斜杠命令不进入问题历史
+    history.add("第二个问题")
+    assert len(history) == 2
+
+    assert history.previous("未提交草稿") == "第二个问题"
+    assert history.previous("") == "第一个问题"
+    assert history.previous("") == "第一个问题"   # 到最旧后停住
+    assert history.next("") == "第二个问题"
+    assert history.next("") == "未提交草稿"       # 越过最新后恢复草稿
+    assert history.next("继续编辑") == "继续编辑"  # 已在草稿区时 Down 不跳回历史
+
+
+def test_line_editor_up_down_keys_navigate_history():
+    buf = Buf()
+    prompt = PromptWriter(write=buf.write, enabled=True, color=False)
+    history = InputHistory()
+    history.add("历史问题一")
+    history.add("历史问题二")
+    editor = TerminalLineEditor(
+        prompt, match_slash_commands, color=False, history=history)
+    assert editor._history is history             # 空历史也不能被替换成新对象
+
+    buffer = list("当前草稿")
+    assert editor._navigate_history(b"[A", buffer) is True
+    assert "".join(buffer) == "历史问题二"
+    assert editor._navigate_history(b"[A", buffer) is True
+    assert "".join(buffer) == "历史问题一"
+    assert editor._navigate_history(b"[B", buffer) is True
+    assert "".join(buffer) == "历史问题二"
+    assert editor._navigate_history(b"[B", buffer) is True
+    assert "".join(buffer) == "当前草稿"
+    assert editor._navigate_history(b"[C", buffer) is False
+
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, b"[A")
+        assert editor._read_escape_sequence(read_fd) == b"[A"
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
 
 
 def test_line_editor_filters_menu_and_tab_completes():

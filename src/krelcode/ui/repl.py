@@ -61,7 +61,7 @@ HELP_TEXT = """可用命令：
   /reset         清空对话历史
   /exit          退出（Ctrl-D / Ctrl-C 同样有效）
 任务运行中：直接输入文字 = 插话（steering）；/thinking 展开思考；/stop 中止。
-输入 / 会实时显示匹配命令，Tab 可补全唯一匹配。
+输入 / 会实时显示匹配命令，Tab 可补全唯一匹配；↑/↓ 调取本次会话的历史问题。
 其他任何输入都会作为消息发给 agent；消息里可用 @路径 引用文件。"""
 
 RUNNING_HINT = "  （任务运行中：直接输入=插话，/thinking 展开思考，/stop 中止，/exit 退出）"
@@ -267,15 +267,65 @@ class PromptWriter:
         self._submitted_raw = None
 
 
+class InputHistory:
+    """当前 REPL 会话的用户问题历史；只记录普通输入，不记录斜杠命令。"""
+
+    def __init__(self, limit: int = 200) -> None:
+        self._entries: list[str] = []
+        self._limit = max(1, limit)
+        self._index: Optional[int] = None
+        self._draft = ""
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def add(self, text: str) -> None:
+        text = text.strip()
+        if not text or text.startswith("/"):
+            return
+        if self._entries and self._entries[-1] == text:
+            return
+        self._entries.append(text)
+        if len(self._entries) > self._limit:
+            del self._entries[:len(self._entries) - self._limit]
+        self.reset_navigation()
+
+    def reset_navigation(self) -> None:
+        self._index = None
+        self._draft = ""
+
+    def previous(self, current: str) -> str:
+        if not self._entries:
+            return current
+        if self._index is None:
+            self._draft = current
+            self._index = len(self._entries) - 1
+        elif self._index > 0:
+            self._index -= 1
+        return self._entries[self._index]
+
+    def next(self, current: str) -> str:
+        if self._index is None:
+            return current
+        if self._index + 1 < len(self._entries):
+            self._index += 1
+            return self._entries[self._index]
+        draft = self._draft
+        self.reset_navigation()
+        return draft
+
+
 class TerminalLineEditor:
-    """零依赖字符级编辑器：实时回显并刷新 slash command 候选。"""
+    """零依赖字符级编辑器：回显、slash 候选和上下键历史导航。"""
 
     def __init__(self, prompt: PromptWriter,
                  suggest: Callable[[str], list[tuple[str, str]]],
-                 color: bool = False) -> None:
+                 color: bool = False,
+                 history: Optional[InputHistory] = None) -> None:
         self._prompt = prompt
         self._suggest = suggest
         self._color = color
+        self._history = history if history is not None else InputHistory()
 
     @property
     def available(self) -> bool:
@@ -293,13 +343,16 @@ class TerminalLineEditor:
         termios.tcsetattr(fd, termios.TCSADRAIN, editor_settings)
         buffer: list[str] = []
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self._history.reset_navigation()
         try:
             while True:
                 data = os.read(fd, 1)
                 if not data:
                     raise EOFError
-                if data == b"\x1b":             # 方向键等转义序列：忽略
-                    self._drain_escape(fd)
+                if data == b"\x1b":
+                    sequence = self._read_escape_sequence(fd)
+                    self._navigate_history(sequence, buffer)
+                    self._refresh(prompt_text(), buffer)
                     continue
                 char = decoder.decode(data)
                 if not char:
@@ -322,9 +375,22 @@ class TerminalLineEditor:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
     @staticmethod
-    def _drain_escape(fd: int) -> None:
-        while select.select([fd], [], [], 0.01)[0]:
-            os.read(fd, 1)
+    def _read_escape_sequence(fd: int) -> bytes:
+        """读取 ESC 后紧跟的方向键序列；其他终端转义自然忽略。"""
+        sequence = []
+        while len(sequence) < 8 and select.select([fd], [], [], 0.01)[0]:
+            sequence.append(os.read(fd, 1))
+        return b"".join(sequence)
+
+    def _navigate_history(self, sequence: bytes, buffer: list[str]) -> bool:
+        """应用 ↑/↓；返回是否识别为历史导航键。"""
+        if sequence in (b"[A", b"OA"):
+            buffer[:] = list(self._history.previous("".join(buffer)))
+            return True
+        if sequence in (b"[B", b"OB"):
+            buffer[:] = list(self._history.next("".join(buffer)))
+            return True
+        return False
 
     def _complete(self, buffer: list[str]) -> None:
         matches = [name for name, _ in self._suggest("".join(buffer))]
@@ -389,8 +455,8 @@ def print_banner(loop: AgentLoop, tool_names: Optional[list],
 
     accent = (lambda s: f"{CYAN}{s}{RESET}") if color else (lambda s: s)
     write("")
-    write(f"  {accent('/help')} 查看命令 · {accent('@路径')} 引用文件 · "
-          f"{accent('/exit')} 退出")
+    write(f"  {accent('/help')} 查看命令 · ↑/↓ 历史问题 · "
+          f"{accent('@路径')} 引用文件 · {accent('/exit')} 退出")
     write("")
 
 
@@ -419,6 +485,7 @@ async def run_repl(
         _stdout_write(s)
 
     renderer = StreamRenderer(write=_prompt_write, redactor=redactor)
+    input_history = InputHistory()
     unsubscribe = loop.bus.subscribe(renderer)
     workspace_root = loop.tool_context.workspace_root
 
@@ -436,7 +503,8 @@ async def run_repl(
     def suggest(text: str) -> list[tuple[str, str]]:
         return match_slash_commands(text, running=state["running"])
 
-    editor = TerminalLineEditor(prompt, suggest, color=use_color)
+    editor = TerminalLineEditor(
+        prompt, suggest, color=use_color, history=input_history)
 
     def restore_prompt() -> None:
         prompt.show(current_prompt())
@@ -534,8 +602,9 @@ async def run_repl(
                 return 0
 
             user_input = item.strip()
+            input_history.add(user_input)
 
-            # 3) RUNNING 状态：steering / /stop / /exit
+            # 3) RUNNING 状态：steering / /thinking / /stop / /exit
             if running is not None:
                 prompt.hide()
                 if user_input == "/stop":
