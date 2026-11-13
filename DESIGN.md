@@ -153,11 +153,18 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   adapter 各自包装（OpenAI function.parameters / Anthropic input_schema）
 - **transport 抽象**：urllib 同步实现 + `asyncio.to_thread` 桥；测试注入 FakeTransport 全离线
 - **工厂与配置**：`resolve_settings()` 按 显式参数 > TOML([providers.NAME]) > 环境变量 > 默认 解析；
-  `create_provider(settings)` 按名建实例；`register()` 是第三方 provider 扩展点
+  `create_provider(settings)` 按名建实例；`register()` 是第三方 provider 扩展点；
+  `list_providers()` 枚举全部已注册 provider 与默认 key 环境变量（Step 51）
+- **provider 自描述组装**（Step 51）：`create_provider` 不再按名字写分支；
+  provider 用 `STANDARD_CONFIG`（是否接收 model/api_key/base_url/timeout/generation）
+  与 `EXTRA_CONFIG_KEYS`（构造函数额外接受的 TOML 键）声明自己，工厂 generic 组装
+- **装饰器透明性**：`RetryingProvider` 用 `__getattr__` 代理 inner 的 `api_key`/`base_url`
+  等属性——否则脱敏层经包装链看不到真实 key，安全网会静默失效（Step 51 修复）
+- **能力协商**：`ProviderCapabilities.supports_tools` 为 False 时 AgentLoop 不传 tools
 - **非法工具参数约定**：arguments 非合法 JSON 时 adapter 填 `INVALID_ARGUMENTS_KEY` 保留原文，
   循环层转成 is_error 工具结果回填，让 LLM 自我修正
 
-新增一个 provider = 新建一个 adapter 文件 + registry 里注册一行，其余层零改动。
+新增一个 provider = 新建一个 adapter 文件 + registry 里注册一行（声明 STANDARD_CONFIG/EXTRA_CONFIG_KEYS 即可接入 TOML 配置），其余层零改动。
 
 ## 上下文管理（Step 7）
 

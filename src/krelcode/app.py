@@ -252,7 +252,8 @@ class _RunSummary:
 
 
 def build_model_switcher(args: argparse.Namespace, config: Dict[str, Any],
-                         loop: AgentLoop, usage: UsageTracker, subagents=None):
+                         loop: AgentLoop, usage: UsageTracker, subagents=None,
+                         redactor: Optional[SecretRedactor] = None):
     """/model 热切换：返回 callable(new_spec|None) -> 结果描述文本。
 
     new_spec 支持 "model"（沿用当前 provider）或 "provider/model"。
@@ -300,6 +301,9 @@ def build_model_switcher(args: argparse.Namespace, config: Dict[str, Any],
                 loop.context_manager.max_tokens = new_budget
                 budget_note = f"，压缩预算 {new_budget}"
         usage.model = getattr(inner, "model", None)
+        # 新 provider 的 key 也纳入脱敏集合（旧 key 保留，避免历史旧内容漏网）
+        if redactor is not None:
+            redactor.add(getattr(inner, "api_key", None))
         return f"已切换: {provider.name} / {getattr(inner, 'model', '?')}{budget_note}"
 
     return switch
@@ -389,7 +393,8 @@ async def async_main(args: argparse.Namespace) -> int:
         checkpoints.attach(loop.bus)
     usage = UsageTracker(model=getattr(loop.llm, "model", None))
     usage.attach(loop.bus)
-    model_switch = build_model_switcher(args, config, loop, usage, subagents=subagents)
+    model_switch = build_model_switcher(
+        args, config, loop, usage, subagents=subagents, redactor=redactor)
     hook_specs = parse_hooks(config)
     if hook_specs:
         hooks = HookRunner(loop.tool_context.workspace_root, hook_specs, log=note)

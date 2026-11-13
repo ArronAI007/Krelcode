@@ -17,7 +17,9 @@ from .providers.anthropic import AnthropicProvider
 from .providers.gemini import GeminiProvider
 from .providers.mock import MockProvider
 from .providers.openai import OpenAIProvider
-from .registry import ProviderSettings, create_provider, register, resolve_settings
+from .registry import (
+    ProviderSettings, create_provider, list_providers, register, resolve_settings,
+)
 from .transport import Transport, TransportResponse, UrllibTransport
 
 __all__ = [
@@ -26,5 +28,6 @@ __all__ = [
     "FINISH_STOP", "FINISH_TOOLS", "FINISH_LENGTH",
     "OpenAIProvider", "AnthropicProvider", "GeminiProvider", "MockProvider",
     "ProviderSettings", "create_provider", "resolve_settings", "register",
+    "list_providers",
     "Transport", "TransportResponse", "UrllibTransport",
 ]

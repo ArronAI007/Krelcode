@@ -167,7 +167,13 @@ class AgentLoop:
                 await self._emit(
                     ContextCompressed(before, estimate_history_tokens(self.history))
                 )
-        tools = self.registry.tool_specs() or None
+        # 能力协商：provider 声明不支持 tools 时不 advertise，避免 400。
+        # 无 capabilities 属性的测试替身保持旧行为（照常传 tools）。
+        capabilities = getattr(self.llm, "capabilities", None)
+        if capabilities is not None and not capabilities.supports_tools:
+            tools = None
+        else:
+            tools = self.registry.tool_specs() or None
         finished: Optional[StreamFinished] = None
         async for event in self.llm.stream(self.history, tools):
             if isinstance(event, TextDelta):

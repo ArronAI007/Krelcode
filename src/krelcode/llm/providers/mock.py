@@ -22,6 +22,8 @@ ScriptItem = Union[str, Message]
 class MockProvider:
     name = "mock"
     capabilities = ProviderCapabilities(supports_tools=True, supports_streaming=True)
+    # mock 不接收 model/api_key/base_url/timeout/generation 等标准 wire 配置
+    STANDARD_CONFIG = False
 
     def __init__(
         self,

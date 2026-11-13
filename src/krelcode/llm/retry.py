@@ -73,6 +73,21 @@ class RetryingProvider:
     def capabilities(self) -> ProviderCapabilities:
         return self._inner.capabilities
 
+    @property
+    def api_key(self):
+        """透明暴露 inner 的 key：装饰器不应让脱敏层看不到真实凭据。"""
+        return getattr(self._inner, "api_key", None)
+
+    def __getattr__(self, name: str):
+        """透明代理其余 provider 属性（base_url/generation/max_tokens 等）。
+
+        仅在正常属性查找失败时调用。下划线属性不代理，既避免 __init__
+        期间的递归，也不泄露装饰器自身状态。
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._inner, name)
+
     async def stream(
         self,
         messages: Sequence[Message],

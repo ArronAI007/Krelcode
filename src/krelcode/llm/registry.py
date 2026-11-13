@@ -4,7 +4,11 @@
 - resolve_settings(): 按「显式参数 > TOML 配置 > 环境变量 > 默认值」解析
 - create_provider(): 按名字构造 provider 实例
 
-新增 provider 只需实现 LLMProvider 端口并 register()，其他任何层不改。
+新增 provider 只需实现 LLMProvider 端口并 register()，其他任何层不改：
+- 默认接收标准配置 model/api_key/base_url/timeout/generation
+- `STANDARD_CONFIG = False` 可声明「不接收标准配置」（如 mock）
+- `EXTRA_CONFIG_KEYS = (...)` 声明构造函数额外接受的 TOML 键
+  （如 anthropic 的 max_tokens/prompt_cache/thinking_budget）
 """
 
 from __future__ import annotations
@@ -41,6 +45,14 @@ def register(name: str, factory: Callable[..., LLMProvider]) -> None:
     PROVIDERS[name] = factory
 
 
+def list_providers() -> Dict[str, str]:
+    """返回已注册 provider → 默认 api_key 环境变量名（无约定则为空串）。
+
+    供 doctor/补全/诊断统一展示当前支持的全部 provider。
+    """
+    return {name: API_KEY_ENV.get(name, "") for name in sorted(PROVIDERS)}
+
+
 @dataclass
 class ProviderSettings:
     provider: str = "openai"
@@ -69,7 +81,7 @@ def resolve_settings(
     )
     if name not in PROVIDERS:
         raise ConfigError(
-            f"未知 provider: {name}（可用: {', '.join(sorted(PROVIDERS))}）"
+            f"未知 provider: {name}（可用: {', '.join(list_providers())}）"
         )
     section: Dict[str, Any] = dict((config.get("providers") or {}).get(name) or {})
 
@@ -97,14 +109,18 @@ def resolve_settings(
 
 
 def create_provider(settings: ProviderSettings, **overrides: Any) -> LLMProvider:
-    """按 settings 构造 provider；overrides 供测试注入 transport 等。"""
+    """按 settings 构造 provider；overrides 供测试注入 transport 等。
+
+    不按 provider 名字分支：标准字段 + provider 用 `EXTRA_CONFIG_KEYS`
+    声明的专属键，统一 generic 组装，新增 provider 无需改本函数。
+    """
     factory = PROVIDERS.get(settings.provider)
     if factory is None:
         raise ConfigError(
-            f"未知 provider: {settings.provider}（可用: {', '.join(sorted(PROVIDERS))}）"
+            f"未知 provider: {settings.provider}（可用: {', '.join(list_providers())}）"
         )
     kwargs: Dict[str, Any] = {}
-    if settings.provider != "mock":
+    if getattr(factory, "STANDARD_CONFIG", True):
         kwargs.update(
             model=settings.model,
             api_key=settings.api_key,
@@ -114,12 +130,12 @@ def create_provider(settings: ProviderSettings, **overrides: Any) -> LLMProvider
         generation = settings.extra.get("generation")
         if isinstance(generation, dict) and generation:
             kwargs["generation"] = generation
-        if settings.provider == "anthropic":
-            if settings.max_tokens:
-                kwargs["max_tokens"] = settings.max_tokens
-            if "prompt_cache" in settings.extra:
-                kwargs["prompt_cache"] = bool(settings.extra["prompt_cache"])
-            if settings.extra.get("thinking_budget"):
-                kwargs["thinking_budget"] = int(settings.extra["thinking_budget"])
+        for key in getattr(factory, "EXTRA_CONFIG_KEYS", ()):
+            if key == "max_tokens":
+                value = settings.max_tokens
+            else:
+                value = settings.extra.get(key)
+            if value is not None:
+                kwargs[key] = value
     kwargs.update(overrides)
     return factory(**kwargs)  # type: ignore[operator]

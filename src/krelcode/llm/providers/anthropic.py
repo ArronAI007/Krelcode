@@ -134,6 +134,8 @@ def tool_specs_to_anthropic(tools: Sequence[ToolSpec]) -> List[Dict[str, Any]]:
 class AnthropicProvider:
     name = "anthropic"
     capabilities = ProviderCapabilities(supports_tools=True, supports_streaming=True)
+    # TOML [providers.anthropic] 中除标准字段外、构造函数额外接受的键
+    EXTRA_CONFIG_KEYS = ("max_tokens", "prompt_cache", "thinking_budget")
 
     DEFAULT_BASE_URL = "https://api.anthropic.com"
     DEFAULT_MODEL = "claude-sonnet-4-5"
