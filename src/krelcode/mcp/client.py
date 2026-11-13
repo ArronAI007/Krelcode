@@ -1,6 +1,7 @@
 """MCP 客户端：JSON-RPC 2.0 协议层（传输无关）。
 
-传输经 MCPTransport 端口注入：command → StdioTransport，url → SSETransport。
+传输经 MCPTransport 端口注入：command → StdioTransport；
+url → StreamableHTTPTransport（默认，2025-03-26）或 SSETransport（旧规范）。
 生命周期：start()（connect + initialize 握手）→ 各 API → close()。
 失败安全：传输断开时所有 pending 请求立即以 MCPError 失败，后续调用直接报错。
 """
@@ -36,6 +37,9 @@ class MCPServerConfig:
     headers: Dict[str, str] = field(default_factory=dict)
     # "streamable-http"（默认，2025-03-26 规范）或 "sse"（旧 2024-11-05 规范）
     transport: Optional[str] = None
+    # streamable-http GET 监听流重连（0 = 不重连）
+    listener_retries: int = 3
+    listener_retry_delay: float = 1.0
     # 通用
     timeout: float = 30.0
 
@@ -43,7 +47,11 @@ class MCPServerConfig:
         if self.url:
             kind = (self.transport or TRANSPORT_STREAMABLE).lower()
             if kind in (TRANSTREAMABLE_ALIASES := ("streamable-http", "http", "streamable", "auto")):
-                return StreamableHTTPTransport(self.url, self.headers, self.timeout)
+                return StreamableHTTPTransport(
+                    self.url, self.headers, self.timeout,
+                    listener_retries=self.listener_retries,
+                    listener_retry_delay=self.listener_retry_delay,
+                )
             if kind == TRANSPORT_SSE:
                 return SSETransport(self.url, self.headers, self.timeout)
             raise MCPError(
@@ -77,6 +85,7 @@ class MCPClient:
         self._disconnect_reason = ""
         self.server_info: Dict[str, Any] = {}
         self.capabilities: Dict[str, Any] = {}
+        self.server_protocol_version: Optional[str] = None
 
     # -- 生命周期 ---------------------------------------------------------------
 
@@ -96,6 +105,11 @@ class MCPClient:
         if isinstance(result, dict):
             self.server_info = result.get("serverInfo", {}) or {}
             self.capabilities = result.get("capabilities", {}) or {}
+            self.server_protocol_version = result.get("protocolVersion")
+            # 后续 HTTP 请求用协商版本填充 MCP-Protocol-Version（streamable）
+            setter = getattr(self._transport, "set_protocol_version", None)
+            if setter is not None and self.server_protocol_version:
+                setter(self.server_protocol_version)
         await self._notify("notifications/initialized")
 
     async def close(self) -> None:

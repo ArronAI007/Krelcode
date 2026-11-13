@@ -228,7 +228,13 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   · StreamableHTTPTransport（2025-03-26 规范，url 默认）：单端点 POST，
     响应按 Content-Type 二态处理（application/json 单条 / text/event-stream 流），
     Mcp-Session-Id 会话头自动捕获携带，404=会话过期→fail-closed 断连，
-    通知回 202，流内服务器请求自动应答 -32601，GET 监听流惰性尝试一次（405 容忍）
+    通知回 202，流内服务器请求自动应答 -32601；JSON-RPC batch 数组逐条分发
+    · 可恢复性（Step 52）：SSE 解析 `id:`/`retry:`，GET 监听流断流后指数退避
+      重连并携带 `Last-Event-ID`（服务器补发断线期间事件）；405/401/403 不重试
+    · 协议版本（Step 52）：请求携带 `MCP-Protocol-Version`，initialize 协商后
+      切换为服务器返回版本（兼容 2025-06-18 起的强制头，旧服务器忽略）
+    · 会话终止（Step 52）：close() 尽力 DELETE（带 Mcp-Session-Id），失败静默
+    · 监听流重连参数可配置：TOML `listener_retries` / `listener_retry_delay`
   配置 `command` → stdio；`url` → streamable-http（默认），`transport = "sse"` 回退旧规范
 - **capabilities 门控**：initialize 握手的 capabilities 决定注册哪些工具——
   tools → 每远程工具一个 MCPTool；resources → list_resources/read_resource；

@@ -40,6 +40,8 @@ api_key_env = "GEMINI_API_KEY"
 # [mcp_servers.remote]
 # url = "http://localhost:3000/mcp"        # 默认 streamable-http
 # transport = "sse"                        # 旧规范时显式指定
+# listener_retries = 3                     # GET 监听流断线重连次数（0=不重连）
+# listener_retry_delay = 1.0               # 基础退避秒数（指数增长）
 
 # ---- 事件钩子 ----
 # [[hooks]]

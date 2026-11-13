@@ -96,8 +96,9 @@
 | 49 | 上下文级脱敏 | 堵住「工具结果进入 LLM 历史」这最后一道明文密钥漏洞：此前 SecretRedactor 只保护 renderer/recorder/-m 输出，但 `run_command("cat ~/.krelcode/config.toml")` 等会把明文 key 写进 loop.history 并回传模型。AgentLoop 新增可选 redactor 参数，`_execute_tool_calls` 在 `_persist_large_output` 之前对 result.content 统一 redact，历史/事件/大输出落盘三者同步脱敏 · app 组装根把已注入 api_key 的 redactor 挂到 loop.redactor | 3 个新测试：历史工具结果脱敏+回传模型第二轮调用脱敏、ToolCallCompleted 事件脱敏、未注入 redactor 时行为不变 | ✅ |
 | 50 | 子代理上下文级脱敏 | 把 SecretRedactor 传导到子代理：SubagentManager 新增可选 redactor 参数并在 spawn 时注入子 AgentLoop，堵住子代理独立历史里 `run_command("cat config")` 等路径把明文 key 回传子模型 · app 组装根把已注入 api_key 的 redactor 同时挂到 subagents.redactor | 2 个新测试：子代理工具结果脱敏+回传第二轮调用脱敏、未注入 redactor 时行为不变 | ✅ |
 | 51 | 统一 Provider 机制收尾 | 四处收尾，其中一处是**关键修复**：RetryingProvider 此前不透传 api_key，默认 `--retries 2` 下 `redactor.add(loop.llm.api_key)` 拿到 None，Step 46/49/50 的脱敏实际失效 → 新增 api_key 属性 + `__getattr__` 透明代理（base_url/generation 等也一并透出）· AgentLoop 尊重 `capabilities.supports_tools=False`，不再向无工具能力 provider advertise tools · create_provider 去掉 `if provider == "anthropic"` 名字硬编码，改为 provider 自描述 `EXTRA_CONFIG_KEYS`/`STANDARD_CONFIG`，新增 provider 无需改工厂 · 新增 `list_providers()` 统一枚举（含默认 key 环境变量）· `/model` 热切换把新 provider 的 key 追加进 SecretRedactor（旧 key 保留） | 9 个新测试：retry 透明代理 api_key/base_url、redactor 经 RetryingProvider 拿到 key、supports_tools 三态、自描述 EXTRA_CONFIG_KEYS/STANDARD_CONFIG、anthropic 专属键仍生效、list_providers、/model 切换同步脱敏集合 | ✅ |
+| 52 | MCP Streamable HTTP 进阶 | 补齐 2025-03-26/2025-06-18 规范中此前缺失的传输能力：**可恢复性**——SSEEventParser 解析 `id:`/`retry:`，GET 监听流断线后指数退避重连并携带 `Last-Event-ID`，服务器可补发断线期间事件 · **协议版本头**——所有请求带 `MCP-Protocol-Version`，initialize 协商后自动切换为服务器返回版本（旧服务器忽略未知头）· **会话终止**——close() 尽力 DELETE（带 Mcp-Session-Id），405/404/网络失败静默容忍 · **batch 响应**——JSON 数组逐条分发（2025-03-26 兼容）· 监听流重连参数可经 TOML `listener_retries`/`listener_retry_delay` 配置 | 8 个新测试：SSE id/retry 解析、batch 响应、版本头协商、Last-Event-ID 重连、405 不重试、close DELETE 带会话头、DELETE 失败容忍、TOML 配置传导 | ✅ |
 
-| 测试总数：551（离线 549 + 本地端口集成 2，沙箱内自动 skip） |
+| 测试总数：559（离线 557 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

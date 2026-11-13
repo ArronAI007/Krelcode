@@ -79,6 +79,8 @@ timeout = 30
 [mcp_servers.remote]         # Streamable HTTP（2025-03-26 规范，url 默认）
 url = "http://localhost:3000/mcp"
 headers = { Authorization = "Bearer ..." }
+# listener_retries = 3       # GET 监听流断线重连次数（0=不重连）
+# listener_retry_delay = 1.0 # 基础退避秒数（指数增长）
 
 [mcp_servers.legacy]         # 旧 HTTP+SSE 规范：显式 transport = "sse"
 url = "http://localhost:3001/sse"

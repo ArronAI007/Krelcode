@@ -36,6 +36,8 @@ def config_from_spec(name: str, spec: Any) -> Optional[MCPServerConfig]:
         url=str(url) if url else None,
         headers=dict(spec.get("headers") or {}),
         transport=spec.get("transport"),
+        listener_retries=int(spec.get("listener_retries", 3)),
+        listener_retry_delay=float(spec.get("listener_retry_delay", 1.0)),
         timeout=float(spec.get("timeout", 30.0)),
     )
 
