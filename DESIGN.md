@@ -73,8 +73,8 @@ class ApprovalPolicy(Protocol):
 # 实现：AllowAllPolicy（--no-sandbox）/ SandboxPolicy（默认）：
 #   · 只读工具(get_time/read_file/grep/glob)放行；write/edit 由路径约束兜底放行
 #   · run_command → safety.commands.classify_command()：DENY/ASK/ALLOW 三级
-#   · run_command 子进程执行前剥离敏感环境变量（*_API_KEY/*_TOKEN/*_SECRET 等，
-#     黑名单按名字匹配，保留 PATH/HOME），防 agent 用 `env` 顺手读出 LLM key（Step 44）
+#   · run_command 子进程执行前剥离敏感环境变量（*_API_KEY/*_TOKEN/*_SECRET 等），
+#     HOME/TMP/cache 重定向到 `.krelcode/sandbox/`，防 `env` 顺手读出宿主凭据（Step 44/52）
 #   · 敏感文件读保护：read_file 拒读纯密钥文件、对 .env/krelcode.toml 脱敏，
 #     grep 跳过敏感文件（Step 45）
 #   · 输出/历史脱敏：SecretRedactor 持有已解析 key，renderer/recorder/-m 输出
@@ -87,6 +87,15 @@ class ApprovalPolicy(Protocol):
 #     - ASK：执行代码/装依赖/git 写操作/删文件/网络/未知命令
 #   · ASK 处理链：持久化 allow 规则(按程序名) → --auto-approve → 交互 approver(y/n/a)
 #     → 都没有则拒绝（fail-closed）；拒绝原因经 PermissionDenied 事件 + is_error 回填 LLM
+
+# safety/sandbox.py —— 运行时执行边界（Step 61，与审批策略正交）
+# ExecutionSandbox(workspace_root, backend=auto, network=False)
+#   · 所有 shell/exec 都先 audit：越界/敏感路径、shell 包装递归、命令替换、已知网络命令
+#   · macOS Seatbelt：workspace rw；系统 runtime ro；user Home denied；network denied
+#   · Linux bubblewrap：unshare-all/cap-drop；workspace bind；runtime/extra roots ro
+#   · auto 会真实 probe 后端，不可执行时退回 static 并在启动日志告警
+#   · static 只是兼容护栏，无法抵御解释器代码的动态绕过，不宣称内核级隔离
+#   · ToolContext 默认自动挂载；Subagent isolated worktree 用 rebind 切换根目录
 
 # core/events.py —— 事件总线
 class EventBus:

@@ -12,7 +12,7 @@ import krelcode.doctor as doctor
 from krelcode.doctor import (
     STATUS_FAIL, STATUS_OK, STATUS_WARN, check_config, check_default_provider,
     check_git, check_mcp_servers, check_provider_keys, check_python,
-    check_workspace_writable, exit_code, format_report, mask_key,
+    check_sandbox, check_workspace_writable, exit_code, format_report, mask_key,
     run_all_checks,
 )
 from krelcode.scaffold import CONFIG_TEMPLATE, scaffold_workspace
@@ -117,6 +117,14 @@ def test_check_workspace_writable(tmp_path):
     blocker.write_text("x", encoding="utf-8")
     bad = check_workspace_writable(blocker / "sub")   # 文件下建目录 → OSError
     assert bad.status == STATUS_FAIL
+
+
+def test_check_sandbox_reports_static_as_warning_and_invalid_as_failure():
+    static = check_sandbox({"sandbox": {"backend": "static", "network": False}})
+    assert static.status == STATUS_WARN
+    assert "backend=static" in static.detail and "静态护栏" in static.detail
+    invalid = check_sandbox({"sandbox": {"backend": "unknown"}})
+    assert invalid.status == STATUS_FAIL
 
 
 def test_check_mcp_servers(tmp_path):

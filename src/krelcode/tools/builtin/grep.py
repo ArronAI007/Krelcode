@@ -10,11 +10,14 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict, List
 
 from ..base import ToolContext, ToolResult
 from ..fsutils import is_hidden_file, is_pruned_dir
-from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
+from ..paths import (
+    PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,
+)
 from ..secret_guard import classify_secret_path
 
 DEFAULT_MAX_RESULTS = 100
@@ -67,16 +70,21 @@ class GrepTool:
         truncated = False
         files_scanned = 0
         for root, dirs, files in os.walk(base):
-            dirs[:] = sorted(d for d in dirs if not is_pruned_dir(d))
+            dirs[:] = sorted(
+                d for d in dirs
+                if not is_pruned_dir(d) and not Path(root, d).is_symlink())
             for name in sorted(files):
                 if is_hidden_file(name):
                     continue
                 if include and not fnmatch.fnmatch(name, include):
                     continue
-                file_path = os.path.join(root, name)
+                file_path = Path(root) / name
+                if not safe_file_in_workspace(file_path, ctx.workspace_root):
+                    continue
                 if classify_secret_path(file_path, ctx.workspace_root) is not None:
                     continue  # 敏感文件不参与搜索，防 grep 命中密钥
-                rel = os.path.relpath(file_path, ctx.workspace_root.resolve())
+                rel = file_path.resolve().relative_to(
+                    ctx.workspace_root.resolve()).as_posix()
                 files_scanned += 1
                 try:
                     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -101,12 +109,15 @@ class GrepTool:
         if not matches:
             return ToolResult(
                 content=f"未找到匹配: {pattern!r}（扫描 {files_scanned} 个文件）",
-                data={"count": 0},
+                data={"count": 0, "files_scanned": files_scanned},
             )
         note = f"\n[已达上限 {max_results} 条，结果被截断；可缩小 path/include 范围]" if truncated else ""
         return ToolResult(
             content="\n".join(matches) + note,
-            data={"count": len(matches), "truncated": truncated},
+            data={
+                "count": len(matches), "truncated": truncated,
+                "files_scanned": files_scanned,
+            },
         )
 
 

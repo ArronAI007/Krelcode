@@ -7,7 +7,9 @@ from typing import Any, Dict, List
 
 from ..base import ToolContext, ToolResult
 from ..fsutils import filter_pruned
-from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
+from ..paths import (
+    PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,
+)
 
 MAX_RESULTS = 200
 
@@ -47,7 +49,10 @@ class GlobTool:
         except (ValueError, OSError) as e:
             return ToolResult(content=f"非法 glob 模式: {e}", is_error=True)
 
-        matches: List[Path] = filter_pruned(raw_matches, base)
+        matches: List[Path] = [
+            path for path in filter_pruned(raw_matches, base)
+            if safe_file_in_workspace(path, ctx.workspace_root)
+        ]
         matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         total = len(matches)
         shown = matches[:MAX_RESULTS]

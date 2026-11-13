@@ -33,6 +33,7 @@ from .llm.registry import create_provider, resolve_settings
 from .llm.retry import RetryPolicy, RetryingProvider
 from .mcp.supervisor import MCPSupervisor
 from .safety.policy import AllowAllPolicy, SandboxPolicy
+from .safety.sandbox import ExecutionSandbox, SandboxError
 from .session.autocommit import AutoCommitter
 from .session.checkpoint import CheckpointManager
 from .session.recorder import (
@@ -143,6 +144,22 @@ def build_policy(args: argparse.Namespace, workspace_root: Path, bus: EventBus):
     )
 
 
+def build_execution_sandbox(
+    args: argparse.Namespace, config: Dict[str, Any], workspace_root: Path,
+) -> Optional[ExecutionSandbox]:
+    """显式 CLI > TOML [sandbox] > auto；--no-sandbox 同时关闭运行时隔离。"""
+    if getattr(args, "no_sandbox", False):
+        return None
+    section = config.get("sandbox") or {}
+    if not isinstance(section, dict):
+        section = {}
+    backend = getattr(args, "sandbox_backend", None) or section.get("backend", "auto")
+    network_arg = getattr(args, "sandbox_network", None)
+    network = bool(section.get("network", False)) if network_arg is None else bool(network_arg)
+    return ExecutionSandbox(
+        workspace_root, backend=str(backend), network=network)
+
+
 def build_skill_manager(args: argparse.Namespace, config: Dict[str, Any]) -> SkillManager:
     """按配置和 CLI 构建 SkillManager；CLI 路径最后扫描、同名覆盖配置路径。"""
     skill_config = config.get("skills") or {}
@@ -207,7 +224,18 @@ async def build_loop(
                           or default_budget_for(getattr(llm, "model", None))
                           or DEFAULT_CONTEXT_BUDGET)
         context_manager = ContextManager(llm, max_tokens=context_budget)
-    tool_context = ToolContext(workspace_root=workspace_root)
+    sandbox = build_execution_sandbox(args, config, workspace_root)
+    if sandbox is not None:
+        log(f"[sandbox] backend={sandbox.backend} "
+            f"network={'on' if sandbox.network else 'off'}")
+        if sandbox.backend == "static":
+            log("[sandbox] 警告：OS 隔离后端不可用，当前为静态护栏模式"
+                "（无法抵御解释器中的动态绕过）")
+    tool_context = ToolContext(
+        workspace_root=workspace_root,
+        sandbox=sandbox,
+        sandbox_enabled=sandbox is not None,
+    )
     policy = build_policy(args, workspace_root, bus)
     tool_factory = lambda: default_tools() + skill_tools
     registry = ToolRegistry(
@@ -391,8 +419,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="额外 skill 根目录（可重复；优先级高于项目/全局目录）")
     p.add_argument("--auto-approve", action="store_true",
                    help="ASK 级操作自动批准（信任模式；DENY 级仍然拒绝）")
+    p.add_argument("--sandbox-backend", choices=("auto", "static", "seatbelt", "bubblewrap"),
+                   default=None, help="运行时 Sandbox 后端（默认 auto；显式后端不可用则启动失败）")
+    p.add_argument("--sandbox-network", action="store_true", default=None,
+                   help="允许 Sandbox 子进程访问网络（默认关闭）")
     p.add_argument("--no-sandbox", action="store_true",
-                   help="关闭安全策略（AllowAll，仅建议在隔离环境中使用）")
+                   help="关闭审批策略与运行时 Sandbox（AllowAll，仅建议在隔离环境中使用）")
     p.add_argument("--context-tokens", type=int, default=None,
                    help="上下文 token 预算，超限自动压缩（默认: 模型上下文窗口×75%%，"
                         f"未知模型回退 {DEFAULT_CONTEXT_BUDGET}）")
@@ -420,7 +452,11 @@ async def async_main(args: argparse.Namespace) -> int:
     note = (lambda msg: print(msg, file=sys.stderr)) if quiet else print
     config_path = Path(args.config) if args.config else None
     config = load_config(config_path)
-    loop, subagents = await build_loop(args, config, log=note)
+    try:
+        loop, subagents = await build_loop(args, config, log=note)
+    except SandboxError as e:
+        print(f"Sandbox 配置错误: {e}", file=sys.stderr)
+        return 2
     redactor = SecretRedactor()
     redactor.add(getattr(loop.llm, "api_key", None))
     loop.redactor = redactor

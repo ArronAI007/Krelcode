@@ -106,7 +106,9 @@
 | 59 | Slash 菜单对齐尝试 | 初次误判为提示符双列宽度问题，候选 gutter 改为按提示符显示宽度动态生成；宽度特殊计数随后被证明会导致输入正文与光标错位，由 Step 60 回退并修正真正根因 | 1 个测试：全部候选共享 gutter | ⚠️ 已由 60 修正 |
 | 60 | 命令输出首行与光标对齐 | 修正 59 的错误宽度假设并解决真正根因：`Enter` 提交后光标只下移两行、未回第 0 列，导致 `/tools` 等命令的第一行从输入末尾列开始；提交动作现在以 `\r` 归零列。撤销把 `❯`/`↳` 当双列的特殊处理，恢复终端标准 EAW 宽度，修复输入正文与光标错位；候选 gutter 仍按提示符真实显示宽度动态生成 | 2 个新增/替换测试：`❯ ` 按 2 列、所有候选共享 gutter；提交后固定输出 `CURSOR_DOWN×2 + \r`，后续首行从第 0 列开始 | ✅ |
 
-| 测试总数：595（离线 593 + 本地端口集成 2，沙箱内自动 skip） |
+| 61 | 运行时 Sandbox 加固 | `ExecutionSandbox` 统一命令/Skill 执行：macOS Seatbelt 与 Linux bubblewrap 文件/网络隔离，实际 probe 失败自动降级 static；静态审计覆盖越界/敏感路径、`sh -c`/`eval` 递归、命令替换、HOME/PWD 变量和已知网络命令；ToolContext 默认挂载，隔离子代理 `rebind()`；API key/token/proxy/SSH agent/动态加载变量统一剥离，HOME/TMP/cache 重定向；grep/glob/repo_map/find_refs/check_syntax 防 symlink 越界与敏感文件；MCP stdio 不继承宿主秘密；CLI/TOML 可配置 backend/network；doctor 显示实际后端并警告 static 降级 | 21 个新测试：审计绕过矩阵、后端 probe/fallback、Seatbelt profile/bwrap argv、环境净化、run_command/Skill 接线、五类搜索 symlink、MCP env、build_loop/no-sandbox/TOML/rebind、doctor Sandbox 报告；全量 614 通过（2 个本地端口测试 skip） | ✅ |
+
+| 测试总数：616（离线 614 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

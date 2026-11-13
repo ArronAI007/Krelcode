@@ -17,7 +17,10 @@ from typing import Any, Dict, List, Tuple
 
 from ..base import ToolContext, ToolResult
 from ..fsutils import is_hidden_file, is_pruned_dir
-from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
+from ..paths import (
+    PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,
+)
+from ..secret_guard import classify_secret_path
 
 DEFAULT_MAX_RESULTS = 100
 MAX_RESULT_LIMIT = 500
@@ -97,7 +100,7 @@ class FindRefsTool:
         lines_out: List[str] = []
         truncated = False
         files_scanned = 0
-        for py_file in _iter_py_files(base):
+        for py_file in _iter_py_files(base, ctx.workspace_root):
             files_scanned += 1
             hits = _scan_file(py_file, symbol)
             if not hits:
@@ -130,12 +133,20 @@ class FindRefsTool:
             data={"count": len(lines_out), "truncated": truncated})
 
 
-def _iter_py_files(base: Path):
+def _iter_py_files(base: Path, workspace_root: Path):
     for root, dirs, files in os.walk(base):
-        dirs[:] = sorted(d for d in dirs if not is_pruned_dir(d))
+        dirs[:] = sorted(
+            d for d in dirs
+            if not is_pruned_dir(d) and not Path(root, d).is_symlink())
         for name in sorted(files):
-            if name.endswith(".py") and not is_hidden_file(name):
-                yield Path(root) / name
+            if not name.endswith(".py") or is_hidden_file(name):
+                continue
+            path = Path(root) / name
+            if not safe_file_in_workspace(path, workspace_root):
+                continue
+            if classify_secret_path(path, workspace_root) is not None:
+                continue
+            yield path
 
 
 def _scan_file(path: Path, symbol: str) -> List[Tuple[int, str]]:

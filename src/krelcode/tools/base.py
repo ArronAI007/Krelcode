@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Protocol
+from typing import Any, Dict, Optional, Protocol
+
+from ..safety.sandbox import ExecutionSandbox
 
 
 @dataclass
@@ -23,10 +25,17 @@ class ToolResult:
 
 @dataclass
 class ToolContext:
-    """工具执行环境。Step 6 会在这里挂沙箱与审批回调。"""
+    """工具执行环境；默认自动创建运行时 Sandbox（fail-safe）。"""
 
     workspace_root: Path
-    # 预留：approval_callback / logger / config
+    sandbox: Optional[ExecutionSandbox] = None
+    sandbox_enabled: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.sandbox_enabled:
+            self.sandbox = None
+        elif self.sandbox is None:
+            self.sandbox = ExecutionSandbox(self.workspace_root)
 
 
 class Tool(Protocol):

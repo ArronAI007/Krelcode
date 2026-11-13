@@ -7,7 +7,15 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
+from ..safety.environment import scrub_environment
 from .transport import MCPError
+
+
+def build_stdio_environment(overlay: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """从宿主环境剥离秘密，再合并用户在 MCP 配置中显式声明的环境变量。"""
+    env = scrub_environment(os.environ)
+    env.update(dict(overlay or {}))
+    return env
 
 
 class StdioTransport:
@@ -24,8 +32,7 @@ class StdioTransport:
         self._disconnected = False
 
     async def connect(self, on_message, on_disconnect) -> None:
-        env = dict(os.environ)
-        env.update(self.env_overlay)
+        env = build_stdio_environment(self.env_overlay)
         try:
             self._proc = await asyncio.create_subprocess_exec(
                 self.command, *self.args,

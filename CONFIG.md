@@ -13,7 +13,7 @@ krelcode [子命令] [选项]
 
 | 子命令 | 说明 | 专属旗标 |
 |--------|------|----------|
-| `doctor` | 环境自检（Python/key/配置/git/工作区/MCP 命令），✓⚠✗ 报告；有 ✗ 退出码 1 | — |
+| `doctor` | 环境自检（Python/key/配置/git/工作区/Sandbox/MCP 命令），✓⚠✗ 报告；有 ✗ 退出码 1 | — |
 | `init` | 生成 `krelcode.toml` + `AGENTS.md` 模板（不覆盖已有文件） | `--force` |
 | `review` | 评审当前 git 变更（只读工具集，天然安全） | `--staged`（只评审暂存区）、`--focus "重点"` |
 
@@ -39,7 +39,9 @@ krelcode [子命令] [选项]
 | `--no-skills` | — | 关闭 Agent Skills（不发现、不注册 Skill 工具） |
 | `--skills-dir <路径>` | — | 追加 Skill 根目录，可重复；也支持 TOML `[skills].paths` |
 | `--auto-approve` | — | ASK 级操作自动批准（DENY 级仍拒绝） |
-| `--no-sandbox` | — | 关闭安全策略（AllowAll，自担风险） |
+| `--sandbox-backend auto\|static\|seatbelt\|bubblewrap` | auto | 运行时隔离后端；显式后端不可用则启动失败 |
+| `--sandbox-network` | — | 允许 Sandbox 子进程访问网络（默认关闭） |
+| `--no-sandbox` | — | 同时关闭审批策略与运行时 Sandbox（AllowAll，自担风险） |
 | `--no-mcp` | — | 不启动配置中的 MCP 服务器 |
 | `--resume` | — | 恢复会话：裸旗=最新，`--resume <path>`=指定 |
 | `--no-session` | — | 关闭会话 JSONL 录制 |
@@ -105,6 +107,10 @@ thinking_budget = 10000              # 扩展思考（≥1024；缺省不启用�
 model = "gemini-2.5-flash"
 api_key_env = "GEMINI_API_KEY"       # GOOGLE_API_KEY 兜底
 
+[sandbox]
+backend = "auto"                     # auto / static / seatbelt / bubblewrap
+network = false                      # 默认禁止子进程联网；CLI --sandbox-network 可开启
+
 [skills]
 enabled = true                       # false 等价 --no-skills
 paths = ["./team-skills", "/opt/shared-skills"]  # 额外目录，可相对工作区
@@ -148,6 +154,7 @@ timeout = 30
 ├── checkpoints/       文件快照（/undo 数据源，NNNN-<ts>/meta.json + files/）
 ├── tool_outputs/      超长工具输出全文（历史里留截断+路径引用）
 ├── exports/           /export 缺省输出目录
+├── sandbox/            隔离 HOME/TMP/cache（命令与 Skill 脚本使用）
 └── allow_rules.json   审批白名单（{"allow_programs": [...]}，仅用户可改）
 ```
 
@@ -158,7 +165,7 @@ Skill 发现目录（后者覆盖前者同名项）：`~/.agents/skills`、`~/.k
 `<workspace>/.agents/skills`、`<workspace>/.krelcode/skills`，再追加
 `[skills].paths` / `--skills-dir`。每个 Skill 是包含 `SKILL.md` 的目录。
 
-## 6. 安全策略速查（SandboxPolicy，默认开启）
+## 6. 安全策略速查（审批策略 + 运行时 Sandbox，默认开启）
 
 | 操作 | 处置 |
 |------|------|
@@ -167,10 +174,19 @@ Skill 发现目录（后者覆盖前者同名项）：`~/.agents/skills`、`~/.k
 | write/edit 受保护路径：`.git/`、`.krelcode/`、`krelcode.toml`、`.env*`、`*.pem/*.key/*.p12/*.pfx`、`id_rsa*`、`secrets.*`、`credentials*`、`.npmrc/.netrc/.pgpass/.htpasswd` | ASK（非交互拒绝） |
 | run_command 只读命令（ls/cat/grep/git status·log·diff…） | 放行 |
 | run_command 执行代码/装依赖/删文件/git 写操作/网络/未知命令/重定向 | ASK |
-| run_skill_script（Skill 内 bundled 脚本） | ASK（参数数组、不经过 shell、剥离敏感环境变量） |
+| run_skill_script（Skill 内 bundled 脚本） | ASK；参数数组不经过 shell，子进程走运行时 Sandbox |
 | run_command：sudo/su、dd/mkfs/diskutil、shutdown/reboot、rm 灾难目标、curl\|sh、fork 炸弹 | **DENY（不可越过，--auto-approve 也拒）** |
 | ASK 处理链 | allow_rules 命中 → --auto-approve → 交互 [y/n/a] → 都没有则拒绝（fail-closed） |
-| 文件/命令路径约束 | 一律 resolve 后限定工作区内（含 symlink 逃逸防护） |
+| 文件/命令路径约束 | resolve 后限定工作区（含 symlink 逃逸防护）；Skill 根目录仅额外只读 |
+| 子进程环境 | 剥离 API key/token/password/proxy/SSH agent/动态加载注入变量，HOME/TMP 重定向到 `.krelcode/sandbox/` |
+| OS 隔离后端 | macOS `seatbelt` 或 Linux `bubblewrap`：工作区可写、系统运行时只读、Home 不可读、网络默认关闭 |
+| `static` 降级模式 | 跨平台硬性审计：越界/敏感路径、`sh -c`/`eval` 递归、命令替换、已知网络命令；**不能抵御解释器代码中的动态绕过** |
+
+`auto` 会实际探测 `sandbox-exec`/`bwrap` 是否可运行；探测失败自动降级为
+`static` 并在启动时告警。需要强隔离时应显式检查启动日志中的
+`[sandbox] backend=...`，Linux 可安装 bubblewrap，macOS 使用系统 Seatbelt。
+MCP stdio 子进程默认同样剥离宿主密钥，但 `[mcp_servers.*].env` 中显式配置的
+值视为用户信任输入而保留。
 
 ## 7. 事件清单（EventBus，hooks/UI/审计的消费面）
 

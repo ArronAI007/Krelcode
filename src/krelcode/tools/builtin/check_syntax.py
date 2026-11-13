@@ -13,7 +13,10 @@ import ast
 
 from ..base import ToolContext, ToolResult
 from ..fsutils import is_hidden_file, is_pruned_dir
-from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
+from ..paths import (
+    PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,
+)
+from ..secret_guard import classify_secret_path
 
 MAX_FILES = 1_000
 MAX_ERRORS = 50
@@ -43,9 +46,13 @@ class CheckSyntaxTool:
             return ToolResult(content=f"路径不存在: {target}", is_error=True)
 
         if target.is_file():
-            py_files = [target] if target.suffix == ".py" else []
+            if (target.suffix == ".py"
+                    and classify_secret_path(target, ctx.workspace_root) is None):
+                py_files = [target]
+            else:
+                py_files = []
         else:
-            py_files = list(_iter_py_files(target))
+            py_files = list(_iter_py_files(target, ctx.workspace_root))
         if not py_files:
             return ToolResult(content="未找到 Python 文件")
         if len(py_files) > MAX_FILES:
@@ -77,13 +84,21 @@ class CheckSyntaxTool:
             data={"files": len(py_files), "errors": 0})
 
 
-def _iter_py_files(base: Path):
+def _iter_py_files(base: Path, workspace_root: Path):
     import os
     for root, dirs, files in os.walk(base):
-        dirs[:] = sorted(d for d in dirs if not is_pruned_dir(d))
+        dirs[:] = sorted(
+            d for d in dirs
+            if not is_pruned_dir(d) and not Path(root, d).is_symlink())
         for name in sorted(files):
-            if name.endswith(".py") and not is_hidden_file(name):
-                yield Path(root) / name
+            if not name.endswith(".py") or is_hidden_file(name):
+                continue
+            path = Path(root) / name
+            if not safe_file_in_workspace(path, workspace_root):
+                continue
+            if classify_secret_path(path, workspace_root) is not None:
+                continue
+            yield path
 
 
 def _rel(path: Path, root: Path) -> str:

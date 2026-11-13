@@ -129,7 +129,9 @@ def classify_command(raw: str) -> Tuple[str, str]:
 
 
 def _tokenize(raw: str) -> List[str]:
-    lex = shlex.shlex(raw, punctuation_chars=True)
+    # POSIX 模式与真实 /bin/sh 一致：去掉成对引号，否则 `sh -c '...'`
+    # 的嵌套命令会带着字面引号进入安全审计，绕过路径检查。
+    lex = shlex.shlex(raw, posix=True, punctuation_chars=True)
     lex.whitespace_split = True
     return list(lex)
 

@@ -10,11 +10,10 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..safety.environment import scrub_environment
+from ..safety.sandbox import SandboxError
 from ..tools.base import ToolContext, ToolResult
-from ..tools.builtin.run_command import (
-    MAX_OUTPUT_CHARS, SENSITIVE_ENV_NAMES, SENSITIVE_ENV_PATTERNS,
-    scrub_environment,
-)
+from ..tools.builtin.run_command import MAX_OUTPUT_CHARS
 from ..core.textutil import truncate_middle
 from .manager import SkillManager
 from .models import SkillError
@@ -202,14 +201,32 @@ class RunSkillScriptTool:
             return ToolResult(content=str(e), is_error=True)
 
         timeout = _clamp_timeout(args.get("timeout"))
-        env = scrub_environment(
-            os.environ,
-            patterns=SENSITIVE_ENV_PATTERNS,
-            names=SENSITIVE_ENV_NAMES,
-        )
+        sandbox = getattr(ctx, "sandbox", None)
+        extra_roots = [skill.directory]
+        if sandbox is not None:
+            violation = sandbox.audit_exec(
+                command, skill.directory, allowed_read_roots=extra_roots)
+            if violation:
+                return ToolResult(
+                    content=f"Sandbox 拒绝 Skill 脚本: {violation}", is_error=True,
+                    data={"sandbox_denied": True},
+                )
+            try:
+                prepared = sandbox.prepare_exec(
+                    command, skill.directory, extra_read_roots=extra_roots)
+            except SandboxError as e:
+                return ToolResult(
+                    content=f"Sandbox 准备失败: {e}", is_error=True,
+                    data={"sandbox_denied": True},
+                )
+            exec_argv = prepared.argv
+            env = prepared.env
+        else:
+            exec_argv = command
+            env = scrub_environment(os.environ)
         try:
             proc = await asyncio.create_subprocess_exec(
-                *command,
+                *exec_argv,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=str(skill.directory),
@@ -237,7 +254,10 @@ class RunSkillScriptTool:
         return ToolResult(
             content=f"exit_code: {code}\n{output if output.strip() else '（无输出）'}",
             is_error=code != 0,
-            data={"exit_code": code, "timed_out": False, "script": script},
+            data={
+                "exit_code": code, "timed_out": False, "script": script,
+                "sandbox_backend": getattr(sandbox, "backend", "none"),
+            },
         )
 
 

@@ -38,6 +38,20 @@ def resolve_in_workspace(ctx: ToolContext, raw: str) -> Path:
     return resolved
 
 
+def safe_file_in_workspace(path: Path, workspace_root: Path) -> bool:
+    """遍历器专用：文件 resolve 后必须仍在工作区且是可读普通文件。
+
+    `os.walk(followlinks=False)` 不会递归 symlink 目录，但仍会把指向外部的
+    symlink 文件放进 files；搜索/解析类工具必须在打开前再经过本函数。
+    """
+    try:
+        root = Path(workspace_root).resolve()
+        resolved = Path(path).resolve(strict=True)
+        return resolved.is_file() and (resolved == root or root in resolved.parents)
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def read_text_file(path: Path) -> str:
     """读文本文件；二进制/非法编码转成清晰的工具错误。"""
     try:

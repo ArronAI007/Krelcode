@@ -7,6 +7,7 @@
 - 配置文件（显式 --config 必须存在且可解析；缺省探测报告命中的文件）
 - git 可用性 + 工作区是否仓库 + 当前分支
 - 工作区可写性（.krelcode 状态目录可创建）
+- 运行时 Sandbox 后端（OS 隔离可用性；static 降级明确警告）
 - MCP 服务器：stdio → 命令存在性（which/路径）；url → 仅提示（不联网）
 
 状态：ok(✓) / warn(⚠ 不阻断) / fail(✗ 影响使用)。exit code：有 fail → 1。
@@ -26,6 +27,7 @@ from typing import Any, Dict, List, Optional
 from .agent.pricing import match_context_window
 from .config import DEFAULT_PATHS
 from .llm.registry import API_KEY_ENV, PROVIDERS, resolve_settings
+from .safety.sandbox import ExecutionSandbox, SandboxError
 
 STATUS_OK = "ok"
 STATUS_WARN = "warn"
@@ -174,6 +176,28 @@ def check_workspace_writable(workspace: Path) -> CheckResult:
         return CheckResult("工作区可写", STATUS_FAIL, f"{workspace}: {e}")
 
 
+def check_sandbox(config: Optional[Dict[str, Any]] = None) -> CheckResult:
+    config = config or {}
+    section = config.get("sandbox") or {}
+    if not isinstance(section, dict):
+        return CheckResult("运行时 Sandbox", STATUS_FAIL, "[sandbox] 必须是 TOML table")
+    backend = str(section.get("backend", "auto"))
+    network = bool(section.get("network", False))
+    try:
+        sandbox = ExecutionSandbox(
+            Path.cwd(), backend=backend, network=network)
+    except SandboxError as e:
+        return CheckResult("运行时 Sandbox", STATUS_FAIL, str(e))
+    state = "network=on" if sandbox.network else "network=off"
+    if sandbox.backend == "static":
+        return CheckResult(
+            "运行时 Sandbox", STATUS_WARN,
+            f"backend=static {state}（仅静态护栏；OS 隔离不可用或有意外显式配置）")
+    return CheckResult(
+        "运行时 Sandbox", STATUS_OK,
+        f"backend={sandbox.backend} {state}（OS 文件/网络隔离）")
+
+
 def check_mcp_servers(config: Dict[str, Any]) -> List[CheckResult]:
     results: List[CheckResult] = []
     servers: Dict[str, Any] = config.get("mcp_servers") or {}
@@ -210,6 +234,7 @@ def run_all_checks(workspace: Path, config: Dict[str, Any],
         check_config(config_path),
         check_git(workspace),
         check_workspace_writable(workspace),
+        check_sandbox(config),
     ]
     results.extend(check_mcp_servers(config))
     return results

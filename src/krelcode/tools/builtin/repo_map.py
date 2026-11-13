@@ -17,7 +17,10 @@ from typing import Any, Dict, List, Tuple
 
 from ..base import ToolContext, ToolResult
 from ..fsutils import is_hidden_file, is_pruned_dir
-from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
+from ..paths import (
+    PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,
+)
+from ..secret_guard import classify_secret_path
 
 MAX_TOTAL_CHARS = 20_000
 MAX_FILE_BYTES = 1_000_000  # 超过 1MB 的文件不解析
@@ -58,7 +61,7 @@ class RepoMapTool:
         total = 0
         file_count = 0
         truncated = False
-        for path in _iter_source_files(base):
+        for path in _iter_source_files(base, ctx.workspace_root):
             symbols = extract_symbols(path)
             if not symbols:
                 continue
@@ -83,16 +86,22 @@ class RepoMapTool:
         return ToolResult(content=body, data={"files": file_count, "truncated": truncated})
 
 
-def _iter_source_files(base: Path):
+def _iter_source_files(base: Path, workspace_root: Path):
     """遍历源码文件（剪枝隐藏/依赖目录），路径排序保证输出稳定。"""
     for root, dirs, files in os.walk(base):
-        dirs[:] = sorted(d for d in dirs if not is_pruned_dir(d))
+        dirs[:] = sorted(
+            d for d in dirs
+            if not is_pruned_dir(d) and not Path(root, d).is_symlink())
         for name in sorted(files):
             if is_hidden_file(name):
                 continue
             if Path(name).suffix.lower() not in {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs"}:
                 continue
             path = Path(root) / name
+            if not safe_file_in_workspace(path, workspace_root):
+                continue
+            if classify_secret_path(path, workspace_root) is not None:
+                continue
             try:
                 if path.stat().st_size > MAX_FILE_BYTES:
                     continue

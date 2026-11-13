@@ -32,6 +32,11 @@ api_key_env = "ANTHROPIC_API_KEY"
 # model = "gemini-2.5-flash"
 api_key_env = "GEMINI_API_KEY"
 
+# ---- 运行时 Sandbox（命令 / Skill 脚本子进程）----
+# [sandbox]
+# backend = "auto"        # auto / static / seatbelt(macOS) / bubblewrap(Linux)
+# network = false         # 默认断网；需要依赖下载时临时启用 --sandbox-network
+
 # ---- Agent Skills（SKILL.md 指令包）----
 # [skills]
 # enabled = true                    # false 等价 --no-skills

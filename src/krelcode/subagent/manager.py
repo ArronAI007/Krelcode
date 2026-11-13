@@ -147,7 +147,13 @@ class SubagentManager:
         tool_context = self.tool_context
         if isolated:
             worktree_path, branch = await self._create_worktree(agent_id)
-            tool_context = ToolContext(workspace_root=worktree_path)
+            parent_sandbox = getattr(self.tool_context, "sandbox", None)
+            tool_context = ToolContext(
+                workspace_root=worktree_path,
+                sandbox=(parent_sandbox.rebind(worktree_path)
+                         if parent_sandbox is not None else None),
+                sandbox_enabled=parent_sandbox is not None,
+            )
         child_bus = EventBus()
         loop = AgentLoop(
             llm=self.llm,
