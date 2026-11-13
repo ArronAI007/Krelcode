@@ -39,7 +39,7 @@ RESET = "\x1b[0m"
 ASSISTANT_MARK = "⏺ "
 RESULT_MARK = "⎿ "
 THINKING_MARK = "✻ "
-THINKING_COLLAPSED = f"{THINKING_MARK}Thinking… · /thinking 展开"
+THINKING_COLLAPSED = f"{THINKING_MARK}Thinking… · 输入 /thinking 展开"
 
 TOOL_CONTENT_PREVIEW = 200
 

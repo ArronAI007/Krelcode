@@ -102,8 +102,9 @@ def test_slash_commands_filter_by_prefix():
     assert match_slash_commands("/nope") == []
 
 
-def test_running_only_suggests_stop_and_exit():
+def test_running_suggests_thinking_stop_and_exit():
     assert match_slash_commands("/", running=True) == [
+        ("/thinking", "展开最近一次思考"),
         ("/stop", "中止正在运行的任务"),
         ("/exit", "退出 Krelcode"),
     ]

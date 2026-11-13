@@ -307,6 +307,36 @@ def test_stop_cancels_running_task(tmp_path, capsys):
     assert loop.history[-1].content == "[已被用户中止]"
 
 
+def test_thinking_can_expand_while_run_in_progress(tmp_path, capsys):
+    class SlowThinkingProvider:
+        name = "slow-thinking"
+        model = "m"
+
+        async def stream(self, messages, tools=None):
+            from krelcode.llm.base import (
+                StreamFinished, TextDelta, ThinkingDelta,
+            )
+            yield ThinkingDelta("# 分析\n\n- 先检查缓存")
+            await asyncio.sleep(0.2)
+            yield TextDelta("最终回答")
+            yield StreamFinished(
+                message=Message.assistant("最终回答"),
+                finish_reason="stop", usage={})
+
+    loop = make_loop_with(tmp_path, SlowThinkingProvider())
+    inp = TimedInput([
+        ("任务", 0),
+        ("/thinking", 0.05),      # thinking 已生成，任务仍在运行
+        ("/exit", 0.3),
+    ])
+    rc = asyncio.run(run_repl(loop, input_fn=inp))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "✻ Thinking（Markdown）" in out
+    assert "# 分析\n\n- 先检查缓存" in out
+    assert "任务运行中" not in out
+
+
 def test_slash_command_while_running_shows_hint(tmp_path, capsys):
     loop = make_loop_with(tmp_path, SlowToolProvider(delay=0.3))
     inp = TimedInput([("任务", 0), ("/help", 0.05), ("/stop", 0.1), ("/exit", 0.05)])

@@ -381,8 +381,8 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   adapter 内翻译到统一事件（signature_delta 忽略）
 - 约定：思考文本**不进** message.content、不进 history、不进会话快照——
   只经 `LLMThinkingDelta` 事件流向 UI。Step 54 起 renderer 在 UI 层缓存整轮
-  thinking，默认只显示一行 `✻ Thinking… · /thinking 展开`；用户执行
-  `/thinking` 时再按原始 Markdown 展开（保留标题、列表缩进、空行与 fenced
+  thinking，默认只显示一行 `✻ Thinking… · 输入 /thinking 展开`；用户执行
+  `/thinking` 时再按原始 Markdown 展开（运行中同样允许，立即读取当前缓存）（保留标题、列表缩进、空行与 fenced
   code，终端上色不改变文本结构）。同一轮多次 thinking 以空行拼接，新一轮
   `RunStarted` 清空旧缓存
 - RetryingProvider/collect 等对 ThinkingDelta 天然透明

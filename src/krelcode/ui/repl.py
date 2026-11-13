@@ -60,11 +60,11 @@ HELP_TEXT = """可用命令：
   /stop          中止正在运行的任务（历史自动修复）
   /reset         清空对话历史
   /exit          退出（Ctrl-D / Ctrl-C 同样有效）
-任务运行中：直接输入文字 = 插话（steering，模型在下一步看到）；/stop 中止。
+任务运行中：直接输入文字 = 插话（steering）；/thinking 展开思考；/stop 中止。
 输入 / 会实时显示匹配命令，Tab 可补全唯一匹配。
 其他任何输入都会作为消息发给 agent；消息里可用 @路径 引用文件。"""
 
-RUNNING_HINT = "  （任务运行中：直接输入=插话，/stop 中止，/exit 退出）"
+RUNNING_HINT = "  （任务运行中：直接输入=插话，/thinking 展开思考，/stop 中止，/exit 退出）"
 STOPPED_NOTE = "  ⎿ 已中止（历史已修复，可继续对话）"
 
 IDLE_PROMPT = "❯ "
@@ -94,7 +94,7 @@ SLASH_COMMANDS = (
 )
 
 RUNNING_SLASH_COMMANDS = tuple(
-    item for item in SLASH_COMMANDS if item[0] in {"/stop", "/exit"}
+    item for item in SLASH_COMMANDS if item[0] in {"/thinking", "/stop", "/exit"}
 )
 
 
@@ -553,6 +553,11 @@ async def run_repl(
                     await asyncio.gather(running, return_exceptions=True)
                     renderer.end_stream()
                     return 0
+                if user_input == "/thinking":
+                    if not renderer.expand_thinking():
+                        print("  （思考内容尚未生成）")
+                    restore_prompt()
+                    continue
                 if user_input.startswith("/"):
                     print(RUNNING_HINT)
                     restore_prompt()
