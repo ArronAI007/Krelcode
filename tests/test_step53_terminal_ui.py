@@ -107,9 +107,13 @@ def test_prompt_writer_renders_slash_menu_below_input():
     buf = Buf()
     p = PromptWriter(write=buf.write, enabled=True, color=False)
     p.show(IDLE_PROMPT)
+    before = len(buf.parts)
     p.update(IDLE_PROMPT + "/", ["  /help       显示本帮助",
                                   "  /history    查看当前对话历史"])
-    assert f"{IDLE_PROMPT}/" in buf.text
+    update_output = "".join(buf.parts[before:])
+    assert update_output.count(f"{IDLE_PROMPT}/") == 1  # 不产生第二行重复提示符
+    assert update_output.count(p._rule) == 1            # 下边界随输入行同步重绘
+    assert p.SAVE_CURSOR in update_output and p.RESTORE_CURSOR in update_output
     assert "  /help       显示本帮助" in buf.text
     assert "  /history    查看当前对话历史" in buf.text
     assert len(p._suggestions) == 2

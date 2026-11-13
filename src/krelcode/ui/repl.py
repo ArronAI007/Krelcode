@@ -153,6 +153,8 @@ class PromptWriter:
     CLEAR_LINE = "\r\x1b[2K"
     CURSOR_UP = "\x1b[1A"
     CURSOR_DOWN = "\x1b[1B"
+    SAVE_CURSOR = "\x1b7"
+    RESTORE_CURSOR = "\x1b8"
 
     def __init__(self, write: Optional[Callable[[str], None]] = None,
                  enabled: Optional[bool] = None,
@@ -164,6 +166,7 @@ class PromptWriter:
         self._last = ""
         self._prompt_width = 0
         self._suggestions: tuple[str, ...] = ()
+        self._rule = ""
 
     def show(self, text: str) -> None:
         if not self.enabled:
@@ -181,6 +184,7 @@ class PromptWriter:
         self._last = block
         self._prompt_width = _display_width(text)
         self._suggestions = ()
+        self._rule = rule
 
     def update(self, text: str, suggestions: Optional[list[str]] = None) -> None:
         """重绘输入行及其下方候选菜单，光标最终回到输入行末尾。"""
@@ -189,6 +193,9 @@ class PromptWriter:
         self._clear_suggestions()
         self._write(self.CLEAR_LINE + text)
         self._prompt_width = _display_width(text)
+        # 同时重绘下边界，防止终端残留上一版输入行形成“第二行提示符”。
+        self._write(self.SAVE_CURSOR + self.CURSOR_DOWN + "\r" + self.CLEAR_LINE)
+        self._write(self._rule + self.RESTORE_CURSOR)
         self._render_suggestions(suggestions or [])
 
     def _render_suggestions(self, suggestions: list[str]) -> None:
@@ -197,24 +204,25 @@ class PromptWriter:
         if not items:
             return
         # 候选菜单放在下边界之外，形成类似下拉列表的效果。
+        self._write(self.SAVE_CURSOR)
         self._write(self.CURSOR_DOWN * 2 + "\r")
         for i, line in enumerate(items):
             self._write(line)
             if i + 1 < len(items):
                 self._write("\n")
-        self._write(self.CURSOR_UP * (len(items) + 1) + "\r")
-        self._write(f"\x1b[{self._prompt_width}C")
+        self._write(self.RESTORE_CURSOR)
 
     def _clear_suggestions(self) -> None:
         if not self._suggestions:
             return
         count = len(self._suggestions)
+        self._write(self.SAVE_CURSOR)
         self._write(self.CURSOR_DOWN * 2 + "\r")
         for i in range(count):
             self._write(self.CLEAR_LINE)
             if i + 1 < count:
                 self._write("\n")
-        self._write(self.CURSOR_UP * (count + 1) + "\r")
+        self._write(self.RESTORE_CURSOR)
         self._suggestions = ()
 
     def submitted(self, *, raw: bool = True) -> None:
@@ -264,7 +272,6 @@ class TerminalLineEditor:
         termios.tcsetattr(fd, termios.TCSADRAIN, editor_settings)
         buffer: list[str] = []
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
-        self._refresh(prompt_text(), buffer)
         try:
             while True:
                 data = os.read(fd, 1)
