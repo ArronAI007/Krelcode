@@ -109,6 +109,7 @@ class SubagentManager:
         max_steps: int = 30,
         context_budget: Optional[int] = None,
         redactor: Optional[SecretRedactor] = None,
+        system_prompt_provider: Optional[Callable[[], str]] = None,
     ) -> None:
         self.llm = llm
         self.tool_factory = tool_factory
@@ -120,6 +121,7 @@ class SubagentManager:
         # 无压缩将超出模型窗口导致 provider 400。None=不启用（向后兼容）。
         self.context_budget = context_budget
         self.redactor = redactor
+        self.system_prompt_provider = system_prompt_provider
         self._handles: Dict[str, AgentHandle] = {}
         self._counter = 0
         # fork_context 数据源：app 组装根注入 lambda: loop.history
@@ -153,7 +155,11 @@ class SubagentManager:
             tool_context=tool_context,
             policy=self.policy,
             bus=child_bus,
-            system_prompt=SUBAGENT_SYSTEM_PROMPT,
+            system_prompt=(
+                self.system_prompt_provider()
+                if self.system_prompt_provider is not None
+                else SUBAGENT_SYSTEM_PROMPT
+            ),
             max_steps=self.max_steps,
             # spawn 时以当时的 self.llm 建压缩器（/model 热切换后新建的子代理自动用新模型）
             context_manager=(ContextManager(self.llm, max_tokens=self.context_budget)

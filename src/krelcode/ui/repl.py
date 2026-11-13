@@ -48,6 +48,8 @@ HELP_TEXT = """可用命令：
   /resume <n>    切换到第 n 个会话（/sessions 里的序号；latest=最新）
   /mcp           查看 MCP 服务器状态；/mcp reload 重读配置并热重启
   /agents        列出子代理（后台任务）状态
+  /skills        列出 Skill；/skills reload 热重载；/skills show <name> 查看详情
+  /skill <name> [参数]  用户主动加载并执行一个 Skill
   /undo          回滚上一轮对话的文件改动（检查点恢复；/undo list 查看栈）
   /cost          显示 token 用量（本轮 + 会话累计 + 估算成本）
   /model [p/m]   查看/热切换模型（"gpt-4o" 沿用当前 provider，
@@ -81,6 +83,8 @@ SLASH_COMMANDS = (
     ("/resume", "恢复指定会话"),
     ("/mcp", "查看或重载 MCP"),
     ("/agents", "查看子代理状态"),
+    ("/skills", "查看或重载 Skills"),
+    ("/skill", "调用指定 Skill"),
     ("/undo", "回滚上一轮文件改动"),
     ("/cost", "查看 token 用量与成本"),
     ("/model", "查看或切换模型"),
@@ -471,6 +475,8 @@ async def run_repl(
     checkpoints=None,
     usage=None,
     model_switch=None,
+    skills=None,
+    skills_reload=None,
     input_fn=None,
     redactor=None,
 ) -> int:
@@ -657,13 +663,20 @@ async def run_repl(
                 mcp_supervisor=mcp_supervisor, mcp_reload=mcp_reload,
                 subagents=subagents, checkpoints=checkpoints, usage=usage,
                 restore_session=restore_session, workspace_root=workspace_root,
-                model_switch=model_switch,
+                model_switch=model_switch, skills=skills,
+                skills_reload=skills_reload,
             )
-            if handled is not None:
+            if handled is not None and not isinstance(handled, str):
                 restore_prompt()
                 continue
-            # 普通消息：@展开（文本注入 + 图片附件）→ 后台任务启动
-            expanded, at_notes, at_images = expand_at_files(user_input, workspace_root)
+            run_input = handled if isinstance(handled, str) else user_input
+            # /skill 已加载完整指令，不能再把正文里的 @作用域 误当文件引用；
+            # 普通消息仍执行 @ 文本/图片展开。
+            if isinstance(handled, str):
+                expanded, at_notes, at_images = run_input, [], []
+            else:
+                expanded, at_notes, at_images = expand_at_files(
+                    run_input, workspace_root)
             for note_text in at_notes:
                 print(f"  [@] {note_text}")
             state["running"] = True
@@ -682,8 +695,9 @@ async def run_repl(
 
 async def _handle_command(user_input, loop, renderer, *, session_path, sessions_dir,
                           mcp_supervisor, mcp_reload, subagents, checkpoints,
-                          usage, restore_session, workspace_root, model_switch=None):
-    """处理 IDLE 态斜杠命令；非命令返回 None。"""
+                          usage, restore_session, workspace_root, model_switch=None,
+                          skills=None, skills_reload=None):
+    """处理 IDLE 态斜杠命令；非命令返回 None，待运行 prompt 返回字符串。"""
     if not user_input.startswith("/"):
         return None
 
@@ -730,6 +744,57 @@ async def _handle_command(user_input, loop, renderer, *, session_path, sessions_
         else:
             lines = subagents.status_lines()
             print("\n".join(f"  {l}" for l in lines) if lines else "  （暂无子代理）")
+    elif user_input == "/skills" or user_input.startswith("/skills "):
+        if skills is None or not getattr(skills, "enabled", False):
+            print("  （Skills 未启用：移除 --no-skills 或在配置中设置 skills.enabled=true）")
+        else:
+            parts = user_input.split(maxsplit=2)
+            sub = parts[1].strip() if len(parts) > 1 else ""
+            if sub == "reload":
+                report = skills_reload() if skills_reload else skills.reload()
+                print(f"  [skills] 已重载 {report.count} 个 Skill")
+                for issue in report.issues:
+                    print(f"  [skills] 跳过无效 Skill: {issue.path}: {issue.message}")
+            elif sub == "show":
+                if len(parts) < 3 or not parts[2].strip():
+                    print("  用法: /skills show <name>")
+                else:
+                    _print_skill_details(skills, parts[2].strip())
+            else:
+                query = sub
+                items = skills.list(query=query)
+                if not items:
+                    print("  （没有匹配的 Skill）" if query else "  （未发现 Skill）")
+                for skill in items:
+                    flags = []
+                    if not skill.user_invocable:
+                        flags.append("仅模型")
+                    if skill.disable_model_invocation:
+                        flags.append("仅用户")
+                    flag_text = f" [{', '.join(flags)}]" if flags else ""
+                    hint = f" · {skill.argument_hint}" if skill.argument_hint else ""
+                    print(f"  {skill.name}: {skill.description}{hint}{flag_text}")
+                if items:
+                    print("  使用 /skills show <name> 查看详情，/skill <name> [参数] 调用")
+                for issue in skills.issues:
+                    print(f"  [skills] 跳过无效 Skill: {issue.path}: {issue.message}")
+    elif user_input.startswith("/skill "):
+        if skills is None or not getattr(skills, "enabled", False):
+            print("  （Skills 未启用：移除 --no-skills 或在配置中设置 skills.enabled=true）")
+        else:
+            parts = user_input.split(maxsplit=2)
+            if len(parts) < 2 or not parts[1].strip():
+                print("  用法: /skill <name> [参数]")
+            else:
+                name = parts[1].strip()
+                arguments = parts[2] if len(parts) > 2 else ""
+                try:
+                    prompt = skills.user_prompt(name, arguments)
+                except Exception as e:
+                    print(f"  [skill] {e}")
+                else:
+                    print(f"  [skill] 已加载并执行: {name}")
+                    return prompt
     elif user_input == "/undo" or user_input.startswith("/undo "):
         if checkpoints is None:
             print("  （检查点未启用：--no-checkpoint）")
@@ -787,7 +852,10 @@ async def _handle_command(user_input, loop, renderer, *, session_path, sessions_
             from ..agent.prompts import build_system_prompt
             ctx_text = await build_workspace_context(workspace_root)
             if loop.history and loop.history[0].role == "system":
-                loop.history[0].content = build_system_prompt(ctx_text)
+                base_prompt = build_system_prompt(ctx_text)
+                loop.skill_base_prompt = base_prompt
+                loop.history[0].content = (
+                    skills.apply_to_prompt(base_prompt) if skills else base_prompt)
                 print("  [context] 工作区上下文已刷新（目录树/git/规则文件）")
             else:
                 print("  [context] 历史中无 system 消息，未刷新")
@@ -836,6 +904,36 @@ async def _handle_command(user_input, loop, renderer, *, session_path, sessions_
     else:
         print(f"  （未知命令: {user_input.split()[0]}，/help 查看可用命令）")
     return False
+
+
+def _print_skill_details(skills, name: str) -> None:
+    """在 REPL 中展示 Skill 元数据、资源和完整说明。"""
+    try:
+        skill = skills.get(name)
+        if skill is None:
+            raise ValueError(f"未知 Skill: {name}")
+        print(f"  [skill] {skill.name}")
+        print(f"  描述: {skill.description}")
+        print(f"  来源: {skill.source}")
+        print(f"  位置: {skill.location}")
+        if skill.argument_hint:
+            print(f"  参数: {skill.argument_hint}")
+        if skill.allowed_tools:
+            print(f"  建议工具: {', '.join(skill.allowed_tools)}")
+        if skill.version:
+            print(f"  版本: {skill.version}")
+        if skill.license:
+            print(f"  许可证: {skill.license}")
+        resources = skills.list_resources(name)
+        if resources:
+            print("  资源:")
+            for resource in resources[:50]:
+                print(f"    {resource.kind:4s} {resource.size:>8d}  {resource.path}")
+            if len(resources) > 50:
+                print(f"    … 另有 {len(resources) - 50} 个资源")
+        print("\n" + skills.load(name, for_model=False))
+    except Exception as e:
+        print(f"  [skill] {e}")
 
 
 def _resolve_resume_target(target: str, sessions_dir: Optional[Path]) -> Optional[Path]:

@@ -32,6 +32,11 @@ api_key_env = "ANTHROPIC_API_KEY"
 # model = "gemini-2.5-flash"
 api_key_env = "GEMINI_API_KEY"
 
+# ---- Agent Skills（SKILL.md 指令包）----
+# [skills]
+# enabled = true                    # false 等价 --no-skills
+# paths = ["./team-skills"]        # 额外目录；相对路径基于工作区
+
 # ---- MCP 服务器（stdio 或 Streamable HTTP）----
 # [mcp_servers.fetch]
 # command = "uvx"

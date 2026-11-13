@@ -36,6 +36,8 @@ krelcode [子命令] [选项]
 | `--context-tokens` | 窗口×75% | 压缩预算；未知模型回退 100000 |
 | `--no-compress` | — | 关闭上下文压缩（驱逐+摘要） |
 | `--no-context` | — | 跳过启动时工作区上下文注入 |
+| `--no-skills` | — | 关闭 Agent Skills（不发现、不注册 Skill 工具） |
+| `--skills-dir <路径>` | — | 追加 Skill 根目录，可重复；也支持 TOML `[skills].paths` |
 | `--auto-approve` | — | ASK 级操作自动批准（DENY 级仍拒绝） |
 | `--no-sandbox` | — | 关闭安全策略（AllowAll，自担风险） |
 | `--no-mcp` | — | 不启动配置中的 MCP 服务器 |
@@ -63,6 +65,10 @@ krelcode [子命令] [选项]
 | `/export [路径]` | 导出会话 Markdown（缺省 `.krelcode/exports/`） |
 | `/undo` · `/undo list` | 回滚上一轮文件改动 · 查看检查点栈 |
 | `/agents` | 子代理状态（含排队深度） |
+| `/skills [关键词]` | 列出或搜索 Skill |
+| `/skills reload` | 重读全部 Skill 目录并刷新 system prompt 索引 |
+| `/skills show <name>` | 查看元数据、资源与完整 `SKILL.md` |
+| `/skill <name> [参数]` | 用户主动加载并执行 Skill；参数替换 `$ARGUMENTS` |
 | `/mcp` · `/mcp reload` | MCP 服务器状态 · 重读配置热重载 |
 | `/allow [add\|remove <程序名>]` | 命令审批白名单管理（持久化） |
 | `/stop` | 中止运行中任务（历史自动修复） |
@@ -98,6 +104,10 @@ thinking_budget = 10000              # 扩展思考（≥1024；缺省不启用�
 [providers.gemini]
 model = "gemini-2.5-flash"
 api_key_env = "GEMINI_API_KEY"       # GOOGLE_API_KEY 兜底
+
+[skills]
+enabled = true                       # false 等价 --no-skills
+paths = ["./team-skills", "/opt/shared-skills"]  # 额外目录，可相对工作区
 
 [mcp_servers.fetch]                  # stdio 传输
 command = "uvx"
@@ -144,15 +154,20 @@ timeout = 30
 全局：`~/.krelcode/config.toml`（配置）、`~/.krelcode/AGENTS.md`（全局规则，
 与项目级 `AGENTS.md`/`KRELCODE.md` 分层注入，项目规则在后=更具体者优先）。
 
+Skill 发现目录（后者覆盖前者同名项）：`~/.agents/skills`、`~/.krelcode/skills`、
+`<workspace>/.agents/skills`、`<workspace>/.krelcode/skills`，再追加
+`[skills].paths` / `--skills-dir`。每个 Skill 是包含 `SKILL.md` 的目录。
+
 ## 6. 安全策略速查（SandboxPolicy，默认开启）
 
 | 操作 | 处置 |
 |------|------|
-| 只读工具（get_time/read_file/grep/glob/find_refs/repo_map/check_syntax） | 放行 |
+| 只读工具（get_time/read_file/grep/glob/find_refs/repo_map/check_syntax，以及 list/load/read Skill） | 放行 |
 | write_file/edit_file（普通路径） | 放行（工作区约束兜底） |
 | write/edit 受保护路径：`.git/`、`.krelcode/`、`krelcode.toml`、`.env*`、`*.pem/*.key/*.p12/*.pfx`、`id_rsa*`、`secrets.*`、`credentials*`、`.npmrc/.netrc/.pgpass/.htpasswd` | ASK（非交互拒绝） |
 | run_command 只读命令（ls/cat/grep/git status·log·diff…） | 放行 |
 | run_command 执行代码/装依赖/删文件/git 写操作/网络/未知命令/重定向 | ASK |
+| run_skill_script（Skill 内 bundled 脚本） | ASK（参数数组、不经过 shell、剥离敏感环境变量） |
 | run_command：sudo/su、dd/mkfs/diskutil、shutdown/reboot、rm 灾难目标、curl\|sh、fork 炸弹 | **DENY（不可越过，--auto-approve 也拒）** |
 | ASK 处理链 | allow_rules 命中 → --auto-approve → 交互 [y/n/a] → 都没有则拒绝（fail-closed） |
 | 文件/命令路径约束 | 一律 resolve 后限定工作区内（含 symlink 逃逸防护） |

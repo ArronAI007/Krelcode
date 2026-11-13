@@ -32,7 +32,7 @@ krelcode               # 进入 REPL
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（574 个，全离线*）
+# 运行全部测试（593 个，全离线*）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -57,7 +57,7 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --mode
 #   api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/tools`、`/session`、`/sessions`、`/resume <n|latest|path>`、`/mcp`（状态）、`/mcp reload`（热重载）、`/agents`（子代理状态）、`/compact`（立即压缩历史）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（管理命令审批白名单：add/remove 程序名，持久化到工作区）、`/context`（上下文统计）、`/context refresh`（重采工作区上下文）、`/export [路径]`（会话导出 Markdown）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/tools`、`/session`、`/sessions`、`/resume <n|latest|path>`、`/mcp`（状态）、`/mcp reload`（热重载）、`/agents`（子代理状态）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/compact`（立即压缩历史）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（管理命令审批白名单：add/remove 程序名，持久化到工作区）、`/context`（上下文统计）、`/context refresh`（重采工作区上下文）、`/export [路径]`（会话导出 Markdown）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
 
 **Steering**：任务运行中直接打字 = 插话（模型在下一步看到，无需等任务结束）；`/thinking` 可在任务运行中立即展开已生成的思考；`/stop` 随时中止（历史自动修复，可立即续聊）。
 
@@ -95,7 +95,37 @@ transport = "sse"
 
 内置 `repo_map` 工具：Python 用 ast 精确提取类/函数/方法+行号（零依赖，不引 tree-sitter），JS/TS 用正则，20K 字符预算，LLM 可按行号接 `read_file` 精读。
 
-当前内置工具（14 个）：`get_time`、`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`、`repo_map`、`find_refs`（ast 级符号引用查找）、`check_syntax`（批量语法检查），以及子代理工具 `spawn_agent`、`wait_agent`、`send_to_agent`、`list_agents`；另加 MCP 远程工具。
+当前内置工具（14 个）：`get_time`、`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`、`repo_map`、`find_refs`（ast 级符号引用查找）、`check_syntax`（批量语法检查），以及子代理工具 `spawn_agent`、`wait_agent`、`send_to_agent`、`list_agents`；启用 Skills 时另加 5 个 Skill 工具，并叠加 MCP 远程工具。
+
+### Agent Skills
+
+Skill 是包含 `SKILL.md` 的指令/资源目录，兼容 Agent Skills 的文件系统约定。Krelcode 依次发现 `~/.agents/skills`、`~/.krelcode/skills`、`<workspace>/.agents/skills`、`<workspace>/.krelcode/skills`，随后追加 TOML `[skills].paths` 与 `--skills-dir`；后扫描的同名 Skill 覆盖前者。
+
+```text
+.agents/skills/release-notes/
+├── SKILL.md
+├── references/format.md
+└── scripts/collect.py
+```
+
+```markdown
+---
+name: release-notes
+description: Generate release notes from git history
+argument-hint: <version>
+allowed-tools: [Read, Grep, Bash]
+---
+# Release notes
+
+Read $SKILL_DIR/references/format.md, inspect changes, and generate notes for $ARGUMENTS.
+```
+
+- **渐进披露**：system prompt 只注入名称+描述；模型匹配后调用 `list_skills` → `load_skill` 读取完整正文，避免一次性塞满上下文。
+- **资源按需读取**：`list_skill_resources` 浏览目录，`read_skill_resource` 支持 `offset/limit`；拒绝路径逃逸、symlink 越界与纯凭据文件，`.env` 类内容自动脱敏。
+- **脚本受控执行**：`run_skill_script` 使用参数数组而非 shell 字符串，支持 Python/Shell/Node/Ruby/Perl，剥离 API key 等敏感环境变量，超时终止进程组；默认走 ASK 审批。
+- **调用控制**：`user-invocable` / `disable-model-invocation` 分别控制用户和模型能否调用；`allowed-tools` 作为执行指导展示。
+- **热重载**：新增或修改 Skill 后执行 `/skills reload`，当前主代理和新子代理立即使用最新索引；`--no-skills` 完全关闭。
+- **用户直调**：`/skill release-notes v0.55.0` 将完整 Skill 指令和参数作为消息交给主循环。
 
 ### 代码评审
 
@@ -161,6 +191,7 @@ core/    wire-free 规范消息·事件总线·错误（零依赖内核）
 llm/     统一 Provider 机制：transport+SSE / OpenAI·Anthropic·Mock 适配器 / 工厂+配置
 agent/   AgentLoop 主循环（只依赖端口，不认识具体工具/模型）
 tools/   Tool 端口 + Registry + builtin/（每工具一个文件）
+skills/  SKILL.md 发现/解析、渐进加载、资源、脚本、热重载
 safety/  ApprovalPolicy 端口（Step 6 加沙箱）
 ui/      REPL（事件总线旁路订阅者）
 app.py   组装根：唯一知道所有具体类的地方，负责依赖注入

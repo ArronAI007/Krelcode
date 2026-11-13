@@ -38,7 +38,8 @@ from .session.checkpoint import CheckpointManager
 from .session.recorder import (
     SessionRecorder, latest_session, load_history, new_session_path,
 )
-from .subagent.manager import SubagentManager
+from .skills import SkillManager, build_skill_tools
+from .subagent.manager import SUBAGENT_SYSTEM_PROMPT, SubagentManager
 from .tools.base import Tool, ToolContext
 from .tools.builtin.check_syntax import CheckSyntaxTool
 from .tools.builtin.edit_file import EditFileTool
@@ -142,6 +143,35 @@ def build_policy(args: argparse.Namespace, workspace_root: Path, bus: EventBus):
     )
 
 
+def build_skill_manager(args: argparse.Namespace, config: Dict[str, Any]) -> SkillManager:
+    """按配置和 CLI 构建 SkillManager；CLI 路径最后扫描、同名覆盖配置路径。"""
+    skill_config = config.get("skills") or {}
+    enabled = (not getattr(args, "no_skills", False)
+               and bool(skill_config.get("enabled", True)))
+    configured = skill_config.get("paths") or []
+    if isinstance(configured, str):
+        configured = [configured]
+    cli_paths = getattr(args, "skills_dir", None) or []
+    return SkillManager(
+        Path(args.workspace).resolve(),
+        extra_paths=list(configured) + list(cli_paths),
+        enabled=enabled,
+    )
+
+
+def refresh_skill_system_prompt(loop: AgentLoop) -> None:
+    """热重载/恢复会话后，把最新 skill 索引写回 system message。"""
+    manager = getattr(loop, "skill_manager", None)
+    base = getattr(loop, "skill_base_prompt", None)
+    if manager is None or base is None:
+        return
+    prompt = manager.apply_to_prompt(base)
+    if loop.history and loop.history[0].role == "system":
+        loop.history[0].content = prompt
+    elif not loop.history:
+        loop.history.append(Message.system(prompt))
+
+
 async def build_loop(
     args: argparse.Namespace,
     config: Dict[str, Any],
@@ -160,6 +190,15 @@ async def build_loop(
         context = await build_workspace_context(workspace_root)
     bus = EventBus()
     llm = build_llm(args, config, log=log)
+    skill_manager = build_skill_manager(args, config)
+    skill_tools = build_skill_tools(skill_manager) if skill_manager.enabled else []
+    if skill_manager.enabled:
+        if skill_manager.list():
+            log("[skills] 已加载 "
+                + ", ".join(s.name for s in skill_manager.list())
+                + f"（{len(skill_manager.list())} 个）")
+        for issue in skill_manager.issues:
+            log(f"[skills] 跳过无效 skill: {issue.path}: {issue.message}")
     context_manager = None
     context_budget = None
     if not args.no_compress:
@@ -170,25 +209,30 @@ async def build_loop(
         context_manager = ContextManager(llm, max_tokens=context_budget)
     tool_context = ToolContext(workspace_root=workspace_root)
     policy = build_policy(args, workspace_root, bus)
-    registry = ToolRegistry(default_tools() + list(extra_tools or []))
+    tool_factory = lambda: default_tools() + skill_tools
+    registry = ToolRegistry(
+        default_tools() + skill_tools + list(extra_tools or []))
     manager = SubagentManager(
         llm=llm,
-        tool_factory=default_tools,
+        tool_factory=tool_factory,
         tool_context=tool_context,
         policy=policy,
         bus=bus,
         max_steps=args.max_steps,
         context_budget=context_budget,   # 子代理长任务同样受压缩保护
+        system_prompt_provider=(
+            lambda: skill_manager.apply_to_prompt(SUBAGENT_SYSTEM_PROMPT)),
     )
     for tool in manager.build_tools():
         registry.register(tool)
+    skill_base_prompt = build_system_prompt(context)
     loop = AgentLoop(
         llm=llm,
         registry=registry,
         tool_context=tool_context,
         policy=policy,
         bus=bus,
-        system_prompt=build_system_prompt(context),
+        system_prompt=skill_manager.apply_to_prompt(skill_base_prompt),
         max_steps=args.max_steps,
         repeat_failure_limit=args.repeat_failure_limit,
         context_manager=context_manager,
@@ -196,6 +240,8 @@ async def build_loop(
     )
     # fork_context 数据源：getter 形式，/resume 重绑定 loop.history 后依然正确
     manager.get_parent_history = lambda: loop.history
+    loop.skill_manager = skill_manager
+    loop.skill_base_prompt = skill_base_prompt
     return loop, manager
 
 
@@ -233,6 +279,7 @@ def restore_session(loop: AgentLoop, path: Path, log=print) -> bool:
     if history[0].role != "system":
         history.insert(0, Message.system(build_system_prompt()))
     loop.history = history
+    refresh_skill_system_prompt(loop)
     log(f"（已恢复会话 {path}，共 {len(history)} 条消息）")
     return True
 
@@ -338,6 +385,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="LLM 瞬态失败（429/5xx/网络）自动重试次数，指数退避（默认 2，0 关闭）")
     p.add_argument("--no-context", action="store_true",
                    help="跳过启动时的工作区上下文注入（目录树/git/AGENTS.md）")
+    p.add_argument("--no-skills", action="store_true",
+                   help="禁用 Agent Skills 发现、索引与相关工具")
+    p.add_argument("--skills-dir", action="append", default=[],
+                   help="额外 skill 根目录（可重复；优先级高于项目/全局目录）")
     p.add_argument("--auto-approve", action="store_true",
                    help="ASK 级操作自动批准（信任模式；DENY 级仍然拒绝）")
     p.add_argument("--no-sandbox", action="store_true",
@@ -395,6 +446,11 @@ async def async_main(args: argparse.Namespace) -> int:
     usage.attach(loop.bus)
     model_switch = build_model_switcher(
         args, config, loop, usage, subagents=subagents, redactor=redactor)
+
+    def reload_skills():
+        report = loop.skill_manager.reload()
+        refresh_skill_system_prompt(loop)
+        return report
     hook_specs = parse_hooks(config)
     if hook_specs:
         hooks = HookRunner(loop.tool_context.workspace_root, hook_specs, log=note)
@@ -458,6 +514,8 @@ async def async_main(args: argparse.Namespace) -> int:
             usage=usage,
             model_switch=model_switch,
             redactor=redactor,
+            skills=loop.skill_manager,
+            skills_reload=reload_skills,
         )
     finally:
         await subagents.shutdown()

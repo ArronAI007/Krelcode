@@ -37,6 +37,7 @@ src/krelcode/
 │   ├── base.py       # Tool 协议 + ToolResult + ToolContext
 │   ├── registry.py   # ToolRegistry -> OpenAI tools schema
 │   └── builtin/      # 每个工具一个文件，互相独立
+├── skills/      # 文件系统型 Agent Skills：发现/解析/渐进加载/资源/脚本
 ├── safety/      # 策略层（实现 ApprovalPolicy 端口）
 │   └── policy.py     # Decision / AllowAllPolicy（Step 6 加沙箱与交互审批）
 ├── session/     # (Step 8) JSONL 持久化，事件总线订阅者
@@ -432,6 +433,34 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   同名词干扰；语法损坏文件静默跳过；剪枝与限额与 grep 一致
 - **check_syntax**：批量 ast.parse 语法自检（不执行代码），错误输出
   `路径:行:列: 消息`；agent 批量编辑后的廉价验证手段
+
+## Agent Skills（Step 58）
+
+Skill 是用户可安装的指令包，不是 Python 插件；Krelcode 只解析和执行
+`SKILL.md` 中声明的自然语言流程，不 import/exec Skill 本体。数据流严格分层：
+
+1. **发现**：`SkillManager` 按 global → project → custom 扫描固定根目录和
+   `[skills].paths` / `--skills-dir`；后者同名覆盖前者。无 frontmatter、
+   非法名称或缺 description 的目录记录为 issue 后跳过，不阻断启动。
+2. **索引**：system prompt 只注入 `name + description + source`，受数量/字符预算
+   限制；这层渐进披露让模型先判断相关性，而不是把全部正文塞进上下文。
+3. **加载**：`load_skill` 按需读取完整正文，替换 `$ARGUMENTS` /
+   `${ARGUMENTS}` / `$SKILL_DIR` / `${SKILL_DIR}`，并附资源清单与
+   `allowed-tools` 指导。`disable-model-invocation` 阻止模型主动加载，
+   `user-invocable` 控制 `/skill`。
+4. **资源**：`list_skill_resources` + `read_skill_resource` 支持分段读取；
+   所有路径 resolve 后必须留在 Skill 目录内（防 `..` 与 symlink 逃逸）。
+   纯凭据文件拒绝读取，`.env`/`krelcode.toml` 走现有 SecretGuard 脱敏。
+5. **脚本**：`run_skill_script` 只接受参数数组，`create_subprocess_exec` 直达
+   解释器；复用 run_command 的敏感环境变量黑名单，cwd 锁在 Skill 目录，
+   超时按进程组终止。策略层把脚本执行归入 SHELL_TOOLS，默认 ASK。
+6. **热重载与隔离**：`/skills reload` 原子替换 manager 内存索引并重写 system
+   prompt；主代理与后续子代理共享 manager，子代理通过 provider 读取最新索引。
+   `--no-skills` 同时关闭发现和 5 个 Skill 工具注册。
+
+安全边界：Skill 正文和 bundled script 都来自用户安装内容，等同用户信任的
+指令/代码；脚本仍必须审批。模型不能借资源 reader 越过 Skill 根目录，也不应
+把 Skill 当作任意文件的通用读取后门。
 
 ## CLI 子命令（Step 28）
 

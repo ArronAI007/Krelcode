@@ -49,9 +49,12 @@ class AllowAllPolicy:
 
 
 # 工具风险分类（与 tools/builtin 对应；文件写工具的路径约束在 tools/paths.py 兜底）
-READONLY_TOOLS = {"get_time", "read_file", "grep", "glob"}
+READONLY_TOOLS = {
+    "get_time", "read_file", "grep", "glob",
+    "list_skills", "load_skill", "list_skill_resources", "read_skill_resource",
+}
 WORKSPACE_WRITE_TOOLS = {"write_file", "edit_file"}
-SHELL_TOOLS = {"run_command"}
+SHELL_TOOLS = {"run_command", "run_skill_script"}
 
 # approver：async (tool_call, reason) -> "yes" | "no" | "always"
 Approver = Callable[[ToolCall, str], Union[str, Awaitable[str]]]
@@ -90,7 +93,13 @@ class SandboxPolicy:
         return await self._ask(tool_call, f"未分级工具 {name}，保守请求审批")
 
     async def _check_command(self, tool_call: ToolCall) -> Decision:
-        command = str(tool_call.arguments.get("command", ""))
+        if tool_call.name == "run_skill_script":
+            script = str(tool_call.arguments.get("script", ""))
+            raw_args = tool_call.arguments.get("args") or []
+            suffix = " ".join(str(a) for a in raw_args) if isinstance(raw_args, list) else ""
+            command = f"skill-script {script} {suffix}".strip()
+        else:
+            command = str(tool_call.arguments.get("command", ""))
         risk, reason = classify_command(command)
         if risk == RISK_DENY:
             return deny(reason)
