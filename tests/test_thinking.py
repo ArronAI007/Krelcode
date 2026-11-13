@@ -151,9 +151,9 @@ def test_renderer_thinking_stream_and_closing():
     r = StreamRenderer(write=buf.write, color=False)
     r(LLMThinkingDelta("想一下"))
     r(LLMThinkingDelta("再想"))
-    assert buf.text == "  [thinking] 想一下再想"      # 前缀只打一次
+    assert buf.text == "✻ Thinking… 想一下再想"       # 前缀只打一次
     r(EvDelta("回复"))                                 # 思考行收束后接正文
-    assert buf.text == "  [thinking] 想一下再想\nagent> 回复"
+    assert buf.text == "✻ Thinking… 想一下再想\n⏺ 回复"
 
 
 def test_renderer_thinking_newlines_flattened():

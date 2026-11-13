@@ -32,17 +32,33 @@ def make_renderer(color=False):
 def test_streaming_deltas_rendered_incrementally():
     r, buf = make_renderer()
     r(LLMStreamDelta("Hel"))
-    assert buf.text == "agent> Hel"      # 首个 delta 带前缀，立即输出
+    assert buf.text == "⏺ Hel"          # 首个 delta 带助手标记，立即输出
     r(LLMStreamDelta("lo"))
-    assert buf.text == "agent> Hello"
+    assert buf.text == "⏺ Hello"
     r(RunFinished("Hello"))
-    assert buf.text == "agent> Hello\n"  # 结束补换行，且不重复打印全文
+    assert buf.text == "⏺ Hello\n"      # 结束补换行，且不重复打印全文
+
+
+def test_model_trailing_newline_does_not_create_blank_line():
+    r, buf = make_renderer()
+    r(LLMStreamDelta("回答"))
+    r(LLMStreamDelta("\n"))
+    r(RunFinished("回答\n"))
+    assert buf.text == "⏺ 回答\n"
+    assert "\n\n" not in buf.text
 
 
 def test_unstreamed_final_text_printed_once():
     r, buf = make_renderer()
     r(RunFinished("[krelcode] 判定为循环，已中止本轮。"))
-    assert buf.text == "agent> [krelcode] 判定为循环，已中止本轮。\n"
+    assert buf.text == "⏺ [krelcode] 判定为循环，已中止本轮。\n"
+
+
+def test_unstreamed_final_text_with_newline_has_single_terminator():
+    r, buf = make_renderer()
+    r(RunFinished("已中止\n"))
+    assert buf.text == "⏺ 已中止\n"
+    assert "\n\n" not in buf.text
 
 
 def test_tool_activity_interrupts_stream():
@@ -54,10 +70,10 @@ def test_tool_activity_interrupts_stream():
     r(LLMStreamDelta("现在是12点"))
     r(RunFinished("让我想现在是12点"))
     lines = buf.text.splitlines()
-    assert lines[0] == "agent> 让我想想"
-    assert "[tool] 调用 get_time" in lines[1]
-    assert "[tool] ✓ get_time → 12:00" in lines[2]
-    assert lines[3] == "agent> 现在是12点"
+    assert lines[0] == "⏺ 让我想想"
+    assert "⏺ get_time" in lines[1]
+    assert "⎿ ✓ get_time → 12:00" in lines[2]
+    assert lines[3] == "⏺ 现在是12点"
 
 
 def test_error_and_denied_and_compressed_lines():
@@ -67,9 +83,9 @@ def test_error_and_denied_and_compressed_lines():
     r(ContextCompressed(1000, 200))
     r(ErrorOccurred("boom", "pytest"))
     text = buf.text
-    assert "[deny] rm 被拒绝: 危险命令" in text
-    assert "[context] 历史已压缩: 1000 → 200 tokens" in text
-    assert "[error] pytest: boom" in text
+    assert "⎿ ✗ rm 被拒绝: 危险命令" in text
+    assert "⎿ 历史已压缩: 1000 → 200 tokens" in text
+    assert "⎿ ✗ pytest: boom" in text
 
 
 def test_long_tool_content_truncated():
@@ -87,7 +103,7 @@ def test_edit_file_diff_colorized():
     diff = "已编辑 f.py（替换 1 处）\n--- a/f.py\n+++ b/f.py\n@@ -1 +1 @@\n-a = 1\n+a = 2"
     r(ToolCallCompleted(tc, diff, False))
     assert GREEN in buf.text and RED in buf.text and RESET in buf.text
-    assert "[tool] ✓ edit_file: 已编辑 f.py（替换 1 处）" in buf.text
+    assert "✓ edit_file: 已编辑 f.py（替换 1 处）" in buf.text
 
 
 def test_edit_file_error_not_treated_as_diff():

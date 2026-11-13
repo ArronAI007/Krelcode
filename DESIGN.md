@@ -189,8 +189,16 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
 ## 交互与会话（Step 8）
 
 - **StreamRenderer**（ui/render.py）：EventBus 订阅者，LLMStreamDelta 逐字流式打印
-  （首个 delta 打 "agent> " 前缀）；工具活动/审批/压缩事件打断流式行后续接；
-  RunFinished 兜底打印未经流式的系统消息（max_steps/卡死中止）。write/color 可注入，测试无需终端
+  （助手文本用 `⏺`，工具结果用 `⎿`）；工具活动/审批/压缩事件打断流式行后续接；
+  RunFinished 兜底打印未经流式的系统消息（max_steps/卡死中止），并避免模型自带
+  尾部换行时产生空行。write/color 可注入，测试无需终端
+- **REPL**（ui/repl.py）：启动信息卡片展示 provider/模型/工作区/工具/会话；输入区
+  用横跨终端的上下两条 `─` 边界包住提示符（pi 风格），空闲提示符 `❯`、运行中
+  提示符 `↳`；输出前用 ANSI 清除输入行与下边界，提交后光标越过下边界，避免正文
+  覆盖边框。POSIX TTY 使用零依赖字符级行编辑器（cbreak + `os.read`）：输入 `/`
+  时按前缀实时过滤命令并在下边界外渲染候选列表，Tab 补全唯一命令；运行中只提示
+  `/stop`、`/exit`。真实 TTY 的输入读取放在 daemon 线程，避免退出时被阻塞的
+  `input()` 拖住，测试仍通过 async input_fn 注入
 - **diff 上色**：edit_file 结果的 unified diff 红绿高亮；tty 检测 + NO_COLOR 尊重；
   错误信息不走 diff 渲染
 - **SessionRecorder**（session/recorder.py）：JSONL 双记录——审计事件流
@@ -370,7 +378,7 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   OpenRouter 系的 `reasoning`、Anthropic 的 `thinking_delta` 都在各自
   adapter 内翻译到统一事件（signature_delta 忽略）
 - 约定：思考文本**不进** message.content、不进 history、不进会话快照——
-  只经 `LLMThinkingDelta` 事件流向 UI（渲染器 dim `[thinking]` 前缀流式展示，
+  只经 `LLMThinkingDelta` 事件流向 UI（渲染器 dim `✻ Thinking…` 前缀流式展示，
   内部换行压平防串行，任意其他事件到达即收束思考行）
 - RetryingProvider/collect 等对 ThinkingDelta 天然透明
 - **Anthropic 扩展思考回传**（Step 34）：thinking/signature/redacted_thinking

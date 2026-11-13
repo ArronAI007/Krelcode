@@ -32,6 +32,11 @@ CYAN = "\x1b[36m"
 DIM = "\x1b[2m"
 RESET = "\x1b[0m"
 
+# Claude Code / Hermes 风格的行首标记：⏺ 助手动作、⎿ 工具结果、✻ 思考
+ASSISTANT_MARK = "⏺ "
+RESULT_MARK = "⎿ "
+THINKING_MARK = "✻ "
+
 TOOL_CONTENT_PREVIEW = 200
 
 
@@ -78,20 +83,33 @@ class StreamRenderer:
         self._color = auto_color() if color is None else color
         self._streaming = False
         self._thinking = False
+        self._at_line_start = True
 
     def _write(self, s: str) -> None:
         # 所有终端输出都经此出口：脱敏后统一写出
         if self._redactor is not None:
             s = self._redactor.redact(s)
         self._raw_write(s)
+        if s:
+            self._at_line_start = s.endswith("\n")
+
+    def _ensure_newline(self) -> None:
+        """只在当前行仍有内容时换行，避免模型自带尾部换行时出现空行。"""
+        if not self._at_line_start:
+            self._write("\n")
 
     # EventBus handler（同步即可）
+    def _mark(self, mark: str) -> str:
+        return f"{CYAN}{mark}{RESET}" if self._color else mark
+
     def __call__(self, event: AgentEvent) -> None:
         if isinstance(event, LLMThinkingDelta):
             if not self._thinking:
                 self._end_stream_only()
-                prefix = "  [thinking] " if not self._color else f"  {DIM}[thinking]{RESET} "
-                self._write(prefix)
+                label = f"{THINKING_MARK}Thinking… "
+                if self._color:
+                    label = f"{DIM}{THINKING_MARK}Thinking…{RESET} "
+                self._write(label)
                 self._thinking = True
             self._write(event.text.replace("\n", " "))
             return
@@ -99,48 +117,53 @@ class StreamRenderer:
         self._end_thinking()
         if isinstance(event, LLMStreamDelta):
             if not self._streaming:
-                self._write("agent> ")
+                self._write(self._mark(ASSISTANT_MARK))
                 self._streaming = True
             self._write(event.text)
         elif isinstance(event, ToolCallStarted):
             self.end_stream()
             args = event.tool_call.arguments
-            self._write(f"  {DIM}[tool] 调用 {event.tool_call.name}({args}){RESET}\n"
-                        if self._color else
-                        f"  [tool] 调用 {event.tool_call.name}({args})\n")
+            self._write(
+                f"  {self._mark(ASSISTANT_MARK)}{event.tool_call.name}({args})\n")
         elif isinstance(event, ToolCallCompleted):
             self.end_stream()
             self._render_tool_result(event)
         elif isinstance(event, PermissionDenied):
             self.end_stream()
-            self._write(f"  [deny] {event.tool_call.name} 被拒绝: {event.reason}\n")
+            self._write(
+                f"  {self._mark(RESULT_MARK)}✗ {event.tool_call.name} 被拒绝: {event.reason}\n")
         elif isinstance(event, UserSteered):
             self.end_stream()
             preview = event.text if len(event.text) <= 60 else event.text[:60] + "…"
-            self._write(f"  [steering] 插话已注入: {preview}\n")
+            self._write(f"  {self._mark(RESULT_MARK)}插话已注入: {preview}\n")
         elif isinstance(event, SubagentSpawned):
             self.end_stream()
             task = event.task if len(event.task) <= 60 else event.task[:60] + "…"
-            self._write(f"  [agent] 子代理 {event.agent_id} 启动: {task}\n")
+            self._write(
+                f"  {self._mark(ASSISTANT_MARK)}agent {event.agent_id} 启动: {task}\n")
         elif isinstance(event, SubagentFinished):
             self.end_stream()
+            detail = f": {event.preview}" if event.preview else ""
             self._write(
-                f"  [agent] 子代理 {event.agent_id} {event.status}"
-                + (f": {event.preview}" if event.preview else "") + "\n")
+                f"  {self._mark(RESULT_MARK)}agent {event.agent_id} "
+                f"{event.status}{detail}\n")
         elif isinstance(event, ContextCompressed):
             self.end_stream()
             self._write(
-                f"  [context] 历史已压缩: {event.before_tokens} → {event.after_tokens} tokens\n")
+                f"  {self._mark(RESULT_MARK)}历史已压缩: "
+                f"{event.before_tokens} → {event.after_tokens} tokens\n")
         elif isinstance(event, ErrorOccurred):
             self.end_stream()
-            self._write(f"  [error] {event.context}: {event.error}\n")
+            self._write(
+                f"  {self._mark(RESULT_MARK)}✗ {event.context}: {event.error}\n")
         elif isinstance(event, RunFinished):
             if self._streaming:
-                self._write("\n")
+                self._ensure_newline()
                 self._streaming = False
             else:
                 # 未经流式的最终文本（如 max_steps/卡死中止的系统消息）
-                self._write(f"agent> {event.final_text}\n")
+                self._write(f"{self._mark(ASSISTANT_MARK)}{event.final_text}")
+                self._ensure_newline()
 
     def end_stream(self) -> None:
         """结束当前流式行（工具活动插入前调用）。"""
@@ -149,25 +172,26 @@ class StreamRenderer:
 
     def _end_stream_only(self) -> None:
         if self._streaming:
-            self._write("\n")
+            self._ensure_newline()
             self._streaming = False
 
     def _end_thinking(self) -> None:
         if self._thinking:
-            self._write("\n")
+            self._ensure_newline()
             self._thinking = False
 
     def _render_tool_result(self, event: ToolCallCompleted) -> None:
-        mark = "✗" if event.is_error else "✓"
+        status = "✗" if event.is_error else "✓"
         name = event.tool_call.name
+        prefix = f"  {self._mark(RESULT_MARK)}"
         if not event.is_error and name == "edit_file":
             # edit_file：首行结果 + 完整（工具已限 100 行）上色 diff
             lines = event.content.split("\n", 1)
-            self._write(f"  [tool] {mark} {name}: {lines[0]}\n")
+            self._write(f"{prefix}{status} {name}: {lines[0]}\n")
             if len(lines) > 1:
                 self._write(colorize_diff(lines[1], self._color) + "\n")
             return
         content = event.content.replace("\n", " ")
         if len(content) > TOOL_CONTENT_PREVIEW:
             content = content[:TOOL_CONTENT_PREVIEW] + "…"
-        self._write(f"  [tool] {mark} {name} → {content}\n")
+        self._write(f"{prefix}{status} {name} → {content}\n")

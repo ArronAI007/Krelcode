@@ -32,6 +32,16 @@ def test_entry_point_callable():
     assert callable(main)
 
 
+def test_ctrl_c_exits_cleanly(monkeypatch):
+    import krelcode.app as app
+
+    async def interrupted(_args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(app, "async_main", interrupted)
+    assert app.main([]) == 130
+
+
 def test_version_flag(capsys):
     from krelcode.app import build_parser
     parser = build_parser()

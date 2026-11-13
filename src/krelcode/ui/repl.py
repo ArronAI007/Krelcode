@@ -1,7 +1,7 @@
 """REPL：常驻 reader + 状态机（Step 26 重构，支持运行中 steering 与 /stop）。
 
 结构：
-- reader task 持续读输入 → inbox 队列（input_fn 可注入，测试零终端）
+- 真实 TTY 由 daemon reader 线程持续读输入 → inbox 队列；测试经 input_fn 注入，零终端
 - 主循环用 asyncio.wait 同时盯 inbox 与运行中的 agent 任务：
   · IDLE：处理 /命令；普通消息（含 @文件展开）→ 启动 loop.run 后台任务
   · RUNNING：普通文本 → loop.steering_queue（模型在下一 step 看到）；
@@ -13,14 +13,30 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
+import os
+import re
+import select
+import shutil
+import sys
+import threading
+import unicodedata
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
+try:  # POSIX TTY；Windows 自动退回普通 input()
+    import termios
+    import tty
+except ImportError:  # pragma: no cover - Windows
+    termios = None
+    tty = None
+
+from .. import __version__
 from ..agent.loop import AgentLoop
 from ..session.export import export_session
 from ..session.manager import format_sessions, list_sessions
 from .atfiles import expand_at_files
-from .render import StreamRenderer
+from .render import CYAN, DIM, RESET, StreamRenderer, auto_color
 
 HELP_TEXT = """可用命令：
   /help          显示本帮助
@@ -44,10 +60,310 @@ HELP_TEXT = """可用命令：
   /reset         清空对话历史
   /exit          退出（Ctrl-D / Ctrl-C 同样有效）
 任务运行中：直接输入文字 = 插话（steering，模型在下一步看到）；/stop 中止。
+输入 / 会实时显示匹配命令，Tab 可补全唯一匹配。
 其他任何输入都会作为消息发给 agent；消息里可用 @路径 引用文件。"""
 
 RUNNING_HINT = "  （任务运行中：直接输入=插话，/stop 中止，/exit 退出）"
-STOPPED_NOTE = "  [stopped] 已中止（历史已修复，可继续对话）"
+STOPPED_NOTE = "  ⎿ 已中止（历史已修复，可继续对话）"
+
+IDLE_PROMPT = "❯ "
+RUNNING_PROMPT = "↳ "
+
+SLASH_COMMANDS = (
+    ("/help", "显示本帮助"),
+    ("/history", "查看当前对话历史"),
+    ("/tools", "列出已注册工具"),
+    ("/session", "显示当前会话文件"),
+    ("/sessions", "列出工作区会话"),
+    ("/resume", "恢复指定会话"),
+    ("/mcp", "查看或重载 MCP"),
+    ("/agents", "查看子代理状态"),
+    ("/undo", "回滚上一轮文件改动"),
+    ("/cost", "查看 token 用量与成本"),
+    ("/model", "查看或切换模型"),
+    ("/allow", "管理命令审批白名单"),
+    ("/context", "查看或刷新上下文"),
+    ("/export", "导出当前会话"),
+    ("/compact", "立即压缩历史"),
+    ("/stop", "中止正在运行的任务"),
+    ("/reset", "清空对话历史"),
+    ("/exit", "退出 Krelcode"),
+)
+
+RUNNING_SLASH_COMMANDS = tuple(
+    item for item in SLASH_COMMANDS if item[0] in {"/stop", "/exit"}
+)
+
+
+def match_slash_commands(text: str, *, running: bool = False,
+                         limit: int = 8) -> list[tuple[str, str]]:
+    """返回与当前输入前缀匹配的 slash 命令；进入参数后不再弹菜单。"""
+    if not text.startswith("/") or any(ch.isspace() for ch in text):
+        return []
+    source = RUNNING_SLASH_COMMANDS if running else SLASH_COMMANDS
+    matches = [item for item in source if item[0].startswith(text)]
+    return matches[:limit]
+
+
+def _stdout_write(s: str) -> None:
+    sys.stdout.write(s)
+    sys.stdout.flush()
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _display_width(text: str) -> int:
+    """终端显示宽度：CJK 宽字符按 2 列计算，ANSI 控制序列按 0 计算。"""
+    plain = _ANSI_RE.sub("", text)
+    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1
+               for ch in plain)
+
+
+def _truncate_display(text: str, width: int) -> str:
+    if _display_width(text) <= width:
+        return text
+    if width <= 1:
+        return "…"[:width]
+    out = []
+    used = 0
+    for ch in text:
+        char_width = 2 if unicodedata.east_asian_width(ch) in "WF" else 1
+        if used + char_width > width - 1:
+            break
+        out.append(ch)
+        used += char_width
+    return "".join(out) + "…"
+
+
+def _pad_display(text: str, width: int) -> str:
+    return text + " " * max(0, width - _display_width(text))
+
+
+def _input_rule(color: bool = False) -> str:
+    """pi 风格输入区上边界；留 1 列避免终端自动换行产生空行。"""
+    columns = shutil.get_terminal_size((80, 24)).columns
+    rule = "─" * max(1, columns - 1)
+    return f"{DIM}{rule}{RESET}" if color else rule
+
+
+class PromptWriter:
+    """上下边界包住输入行；TTY 用 ANSI 移动光标，非 TTY 不输出。"""
+
+    CLEAR_LINE = "\r\x1b[2K"
+    CURSOR_UP = "\x1b[1A"
+    CURSOR_DOWN = "\x1b[1B"
+
+    def __init__(self, write: Optional[Callable[[str], None]] = None,
+                 enabled: Optional[bool] = None,
+                 color: Optional[bool] = None) -> None:
+        self._write = write or _stdout_write
+        self.enabled = sys.stdout.isatty() if enabled is None else enabled
+        self._color = auto_color() if color is None else color
+        self._visible = False
+        self._last = ""
+        self._prompt_width = 0
+        self._suggestions: tuple[str, ...] = ()
+
+    def show(self, text: str) -> None:
+        if not self.enabled:
+            return
+        rule = _input_rule(self._color)
+        # 先画出上下边界，再把光标移回中间输入行的提示符末尾。
+        block = (f"{rule}\n{text}\n{rule}\r{self.CURSOR_UP}"
+                 f"\x1b[{_display_width(text)}C")
+        if self._visible and block == self._last:
+            return
+        if self._visible:
+            self.hide()
+        self._write(block)
+        self._visible = True
+        self._last = block
+        self._prompt_width = _display_width(text)
+        self._suggestions = ()
+
+    def update(self, text: str, suggestions: Optional[list[str]] = None) -> None:
+        """重绘输入行及其下方候选菜单，光标最终回到输入行末尾。"""
+        if not self.enabled or not self._visible:
+            return
+        self._clear_suggestions()
+        self._write(self.CLEAR_LINE + text)
+        self._prompt_width = _display_width(text)
+        self._render_suggestions(suggestions or [])
+
+    def _render_suggestions(self, suggestions: list[str]) -> None:
+        items = tuple(suggestions)
+        self._suggestions = items
+        if not items:
+            return
+        # 候选菜单放在下边界之外，形成类似下拉列表的效果。
+        self._write(self.CURSOR_DOWN * 2 + "\r")
+        for i, line in enumerate(items):
+            self._write(line)
+            if i + 1 < len(items):
+                self._write("\n")
+        self._write(self.CURSOR_UP * (len(items) + 1) + "\r")
+        self._write(f"\x1b[{self._prompt_width}C")
+
+    def _clear_suggestions(self) -> None:
+        if not self._suggestions:
+            return
+        count = len(self._suggestions)
+        self._write(self.CURSOR_DOWN * 2 + "\r")
+        for i in range(count):
+            self._write(self.CLEAR_LINE)
+            if i + 1 < count:
+                self._write("\n")
+        self._write(self.CURSOR_UP * (count + 1) + "\r")
+        self._suggestions = ()
+
+    def submitted(self, *, raw: bool = True) -> None:
+        # Enter 后光标停在下边界行首；越过边界，后续输出不覆盖它。
+        if self.enabled and self._visible:
+            self._clear_suggestions()
+            self._write(self.CURSOR_DOWN * (2 if raw else 1))
+        self._visible = False
+        self._last = ""
+
+    def hide(self) -> None:
+        if not self.enabled or not self._visible:
+            return
+        self._clear_suggestions()
+        # 当前光标位于中间输入行；清掉输入行与下边界，再回到输入行落笔。
+        self._write(self.CLEAR_LINE)
+        self._write(self.CURSOR_DOWN)
+        self._write(self.CLEAR_LINE)
+        self._write(self.CURSOR_UP + "\r")
+        self._visible = False
+        self._last = ""
+
+
+class TerminalLineEditor:
+    """零依赖字符级编辑器：实时回显并刷新 slash command 候选。"""
+
+    def __init__(self, prompt: PromptWriter,
+                 suggest: Callable[[str], list[tuple[str, str]]],
+                 color: bool = False) -> None:
+        self._prompt = prompt
+        self._suggest = suggest
+        self._color = color
+
+    @property
+    def available(self) -> bool:
+        return bool(termios and tty and sys.stdin.isatty())
+
+    def readline(self, prompt_text: Callable[[], str]) -> str:
+        if not self.available:
+            return input("")
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+        # 保留输出处理（\n 正常换行），但不让 Ctrl-C 绕过 finally 恢复终端。
+        editor_settings = termios.tcgetattr(fd)
+        editor_settings[3] &= ~termios.ISIG
+        termios.tcsetattr(fd, termios.TCSADRAIN, editor_settings)
+        buffer: list[str] = []
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self._refresh(prompt_text(), buffer)
+        try:
+            while True:
+                data = os.read(fd, 1)
+                if not data:
+                    raise EOFError
+                if data == b"\x1b":             # 方向键等转义序列：忽略
+                    self._drain_escape(fd)
+                    continue
+                char = decoder.decode(data)
+                if not char:
+                    continue
+                if char in ("\r", "\n"):
+                    return "".join(buffer)
+                if char in ("\x7f", "\x08"):
+                    if buffer:
+                        buffer.pop()
+                elif char == "\x04":             # Ctrl-D
+                    raise EOFError
+                elif char == "\x03":             # Ctrl-C（通常由 ISIG 先行处理）
+                    raise KeyboardInterrupt
+                elif char == "\t":
+                    self._complete(buffer)
+                elif char >= " " and char != "\x7f":
+                    buffer.append(char)
+                self._refresh(prompt_text(), buffer)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+    @staticmethod
+    def _drain_escape(fd: int) -> None:
+        while select.select([fd], [], [], 0.01)[0]:
+            os.read(fd, 1)
+
+    def _complete(self, buffer: list[str]) -> None:
+        matches = [name for name, _ in self._suggest("".join(buffer))]
+        if not matches:
+            return
+        if len(matches) == 1:
+            buffer[:] = list(matches[0] + " ")
+            return
+        common = os.path.commonprefix(matches)
+        if len(common) > len(buffer):
+            buffer[:] = list(common)
+
+    def _refresh(self, prompt_text: str, buffer: list[str]) -> None:
+        text = prompt_text + "".join(buffer)
+        matches = self._suggest("".join(buffer))
+        columns = shutil.get_terminal_size((80, 24)).columns
+        lines = []
+        for name, description in matches:
+            label = f"{name:<11}"
+            line = _truncate_display(f"  {label}{description}", max(1, columns - 1))
+            if self._color:
+                prefix = f"  {CYAN}{name:<11}{RESET}"
+                line = prefix + line[len(f"  {label}"):]
+            lines.append(line)
+        self._prompt.update(text, lines)
+
+
+def print_banner(loop: AgentLoop, tool_names: Optional[list],
+                 session_path: Optional[str] = None,
+                 write: Callable[[str], None] = print,
+                 color: Optional[bool] = None) -> None:
+    """启动信息卡片：模型、工作区、工具与会话，保持主流 coding agent 风格。"""
+    if color is None:
+        color = auto_color()
+    provider = getattr(loop.llm, "name", "?")
+    model = getattr(loop.llm, "model", "?")
+    workspace = loop.tool_context.workspace_root
+    columns = shutil.get_terminal_size((80, 24)).columns
+    inner = max(36, min(columns - 4, 96))
+    title = f"✻ Krelcode v{__version__}"
+    title_rendered = f"{CYAN}{title}{RESET}" if color else title
+    fill = max(0, inner - _display_width(title) - 3)
+
+    write(f"  ╭─ {title_rendered} " + "─" * fill + "╮")
+
+    def row(label: str, value: str, path: bool = False) -> None:
+        available = inner - 14
+        if path and _display_width(value) > available:
+            value = "…" + value[-(available - 1):]
+        else:
+            value = _truncate_display(value, available)
+        label_text = f"{label:<10}"
+        rendered_label = f"{DIM}{label_text}{RESET}" if color else label_text
+        write(f"  │ {_pad_display(rendered_label + value, inner - 2)} │")
+
+    row("provider", f"{provider} · {model}")
+    row("workspace", str(workspace), path=True)
+    row("tools", f"{len(tool_names or [])} 个 · /tools 查看")
+    if session_path:
+        row("session", session_path, path=True)
+    write("  ╰" + "─" * inner + "╯")
+
+    accent = (lambda s: f"{CYAN}{s}{RESET}") if color else (lambda s: s)
+    write("")
+    write(f"  {accent('/help')} 查看命令 · {accent('@路径')} 引用文件 · "
+          f"{accent('/exit')} 退出")
+    write("")
 
 
 async def run_repl(
@@ -66,31 +382,76 @@ async def run_repl(
 ) -> int:
     from ..app import restore_session  # 延迟导入避免 ui→app 循环依赖
 
-    renderer = StreamRenderer(redactor=redactor)
+    use_color = auto_color()
+    prompt = PromptWriter(color=use_color)
+
+    def _prompt_write(s: str) -> None:
+        # 任何异步输出前先清掉提示符，输出后再由主循环决定是否重绘
+        prompt.hide()
+        _stdout_write(s)
+
+    renderer = StreamRenderer(write=_prompt_write, redactor=redactor)
     unsubscribe = loop.bus.subscribe(renderer)
-    read_line = input_fn or (lambda prompt: asyncio.to_thread(input, prompt))
     workspace_root = loop.tool_context.workspace_root
 
-    tools_note = f"，工具: {', '.join(tool_names)}" if tool_names else ""
-    print(f"Krelcode REPL（/help 查看命令，/exit 退出{tools_note}）")
+    print_banner(loop, tool_names, session_path=session_path)
 
     running: Optional[asyncio.Task] = None
-    state = {"running": False}
+    state = {"running": False, "raw_input": False}
     inbox: asyncio.Queue = asyncio.Queue()
+    input_ready = threading.Event()
 
     def current_prompt() -> str:
-        return "↪ > " if state["running"] else "you> "
+        text = RUNNING_PROMPT if state["running"] else IDLE_PROMPT
+        return f"{CYAN}{text}{RESET}" if use_color else text
+
+    def suggest(text: str) -> list[tuple[str, str]]:
+        return match_slash_commands(text, running=state["running"])
+
+    editor = TerminalLineEditor(prompt, suggest, color=use_color)
+
+    def restore_prompt() -> None:
+        prompt.show(current_prompt())
+        input_ready.set()
 
     async def reader() -> None:
+        assert input_fn is not None
         while True:
             try:
-                line = await read_line(current_prompt())
+                line = await input_fn("")
             except (EOFError, KeyboardInterrupt):
                 await inbox.put(None)
                 return
             except asyncio.CancelledError:
                 raise
             await inbox.put(line)
+
+    def start_stdin_reader() -> None:
+        """真实终端使用 daemon 线程，避免退出时被阻塞的 input() 拖住。"""
+        event_loop = asyncio.get_running_loop()
+
+        def push(line) -> None:
+            try:
+                event_loop.call_soon_threadsafe(inbox.put_nowait, line)
+            except RuntimeError:
+                pass  # 事件循环已经结束，daemon 线程可自行退出
+
+        def read_stdin() -> None:
+            while True:
+                input_ready.wait()
+                try:
+                    state["raw_input"] = editor.available
+                    line = editor.readline(current_prompt)
+                except (EOFError, KeyboardInterrupt, OSError):
+                    line = None
+                input_ready.clear()
+                push(line)
+                if line is None:
+                    return
+
+        threading.Thread(
+            target=read_stdin, name="krelcode-stdin", daemon=True,
+        ).start()
 
     def drain_steering_notes() -> None:
         """任务结束后丢弃未送达的插话（可见地），避免悄悄留到下一轮。"""
@@ -99,9 +460,12 @@ async def run_repl(
                 leftover = loop.steering_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-            print(f"  [steering] 任务已结束，未送达的插话被丢弃: {str(leftover)[:60]}")
+            print(f"  ⎿ 任务已结束，未送达的插话已丢弃: {str(leftover)[:60]}")
 
-    reader_task = asyncio.create_task(reader())
+    restore_prompt()
+    reader_task = asyncio.create_task(reader()) if input_fn is not None else None
+    if reader_task is None:
+        start_stdin_reader()
     inbox_get = asyncio.create_task(inbox.get())
     try:
         while True:
@@ -112,6 +476,7 @@ async def run_repl(
 
             # 1) 运行中的任务结束（自然完成/异常/被取消）
             if running is not None and running in done:
+                prompt.hide()
                 state["running"] = False
                 try:
                     running.result()
@@ -123,24 +488,28 @@ async def run_repl(
                     print(f"错误：{type(e).__name__}: {e}")
                 running = None
                 drain_steering_notes()
+                restore_prompt()
 
             if inbox_get not in done:
                 continue
             item = inbox_get.result()
+            prompt.submitted(raw=state["raw_input"])
             inbox_get = asyncio.create_task(inbox.get())
 
             # 2) EOF：停掉运行中任务并退出
             if item is None:
+                prompt.hide()
                 if running is not None:
                     running.cancel()
                     await asyncio.gather(running, return_exceptions=True)
-                print()
+                    renderer.end_stream()
                 return 0
 
             user_input = item.strip()
 
             # 3) RUNNING 状态：steering / /stop / /exit
             if running is not None:
+                prompt.hide()
                 if user_input == "/stop":
                     running.cancel()
                     await asyncio.gather(running, return_exceptions=True)
@@ -149,29 +518,37 @@ async def run_repl(
                     renderer.end_stream()
                     print(STOPPED_NOTE)
                     drain_steering_notes()
+                    restore_prompt()
                     continue
                 if user_input == "/exit":
                     running.cancel()
                     await asyncio.gather(running, return_exceptions=True)
-                    print()
+                    renderer.end_stream()
                     return 0
                 if user_input.startswith("/"):
                     print(RUNNING_HINT)
+                    restore_prompt()
                     continue
                 if user_input:
                     loop.steering_queue.put_nowait(user_input)
                     preview = user_input if len(user_input) <= 40 else user_input[:40] + "…"
-                    print(f"  [steering] 插话已排队（模型下一步看到）: {preview}")
+                    print(f"  ⎿ 插话已排队（模型下一步看到）: {preview}")
+                restore_prompt()
                 continue
 
             # 4) IDLE 状态：命令与消息
             if not user_input:
+                restore_prompt()
                 continue
             if user_input == "/exit":
+                prompt.hide()
                 return 0
             if user_input == "/stop":
+                prompt.hide()
                 print("  （当前没有运行中的任务）")
+                restore_prompt()
                 continue
+            prompt.hide()
             handled = await _handle_command(
                 user_input, loop, renderer,
                 session_path=session_path, sessions_dir=sessions_dir,
@@ -181,17 +558,21 @@ async def run_repl(
                 model_switch=model_switch,
             )
             if handled is not None:
-                if handled is False:      # /reset 等已处理
-                    continue
+                restore_prompt()
                 continue
             # 普通消息：@展开（文本注入 + 图片附件）→ 后台任务启动
             expanded, at_notes, at_images = expand_at_files(user_input, workspace_root)
             for note_text in at_notes:
                 print(f"  [@] {note_text}")
             state["running"] = True
+            if prompt.enabled:
+                status = "  ⋯ 工作中 · 输入文字可插话 · /stop 中止"
+                print(f"{DIM}{status}{RESET}" if use_color else status)
             running = asyncio.create_task(loop.run(expanded, images=at_images or None))
+            restore_prompt()
     finally:
-        reader_task.cancel()
+        if reader_task is not None:
+            reader_task.cancel()
         inbox_get.cancel()
         unsubscribe()
 

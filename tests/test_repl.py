@@ -75,7 +75,7 @@ def test_plain_message_streamed_reply(tmp_path, capsys):
     loop = make_loop(tmp_path, scripted=["你好回复"])
     drive(loop, ["hi", "/exit"])
     out = capsys.readouterr().out
-    assert "agent> 你好回复" in out
+    assert "⏺ 你好回复" in out
     assert loop.history[1] == Message.user("hi")
 
 
@@ -286,9 +286,9 @@ def test_steering_injected_while_running(tmp_path, capsys):
     rc = asyncio.run(run_repl(loop, input_fn=inp))
     out = capsys.readouterr().out
     assert rc == 0
-    assert "[steering] 插话已排队" in out
-    assert "[steering] 插话已注入: 顺便注意拼写" in out     # 渲染器确认注入
-    assert "agent> 已完成" in out
+    assert "插话已排队" in out
+    assert "⎿ 插话已注入: 顺便注意拼写" in out     # 渲染器确认注入
+    assert "⏺ 已完成" in out
     # 注入点在 tool 结果之后（合法交替位），带前缀
     steer = [m for m in loop.history
              if m.role == "user" and "[用户插话]" in (m.content or "")]
@@ -301,7 +301,7 @@ def test_stop_cancels_running_task(tmp_path, capsys):
     rc = asyncio.run(run_repl(loop, input_fn=inp))
     out = capsys.readouterr().out
     assert rc == 0
-    assert "[stopped] 已中止" in out
+    assert "⎿ 已中止" in out
     # 历史被修复：未答完的 user 消息后补了中止说明
     assert loop.history[-1].role == "assistant"
     assert loop.history[-1].content == "[已被用户中止]"

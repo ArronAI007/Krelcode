@@ -412,7 +412,6 @@ async def async_main(args: argparse.Namespace) -> int:
     try:
         session_path = setup_session(args, loop, log=note, redactor=redactor)
         sessions_dir = loop.tool_context.workspace_root / ".krelcode" / "sessions"
-        model = getattr(loop.llm, "model", "?")
         if args.message:
             if args.output_format == "json":
                 summary = _RunSummary()
@@ -447,7 +446,6 @@ async def async_main(args: argparse.Namespace) -> int:
             if usage.session.calls:
                 print(f"[usage] {usage.session.text()}{usage.cost_note()}")
             return 0
-        print(f"[provider: {loop.llm.name} | model: {model}]")
         return await run_repl(
             loop,
             tool_names=loop.registry.names(),
@@ -493,10 +491,14 @@ def main(argv=None) -> int:
         return _run_doctor(args)
     if args.command == "init":
         return _run_init(args)
-    if args.command == "review":
-        from .review import run_review
-        return asyncio.run(run_review(args))
-    return asyncio.run(async_main(args))
+    try:
+        if args.command == "review":
+            from .review import run_review
+            return asyncio.run(run_review(args))
+        return asyncio.run(async_main(args))
+    except KeyboardInterrupt:
+        # asyncio.run() 已完成任务取消与资源清理；CLI 不应输出 Python traceback。
+        return 130
 
 
 if __name__ == "__main__":
