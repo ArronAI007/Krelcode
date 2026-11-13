@@ -3,13 +3,16 @@
 import os
 from types import SimpleNamespace
 
-from krelcode.core.events import LLMStreamDelta, LLMThinkingDelta, RunFinished
+from krelcode.core.events import (
+    LLMStreamDelta, LLMThinkingDelta, RunFinished, RunStarted,
+)
 from krelcode.ui.repl import (
     IDLE_PROMPT, RUNNING_PROMPT, PromptWriter, TerminalLineEditor, print_banner,
 )
 from krelcode.ui.repl import match_slash_commands
 from krelcode.ui.render import (
-    ASSISTANT_MARK, RESULT_MARK, THINKING_MARK, StreamRenderer,
+    ASSISTANT_MARK, RESULT_MARK, THINKING_COLLAPSED, THINKING_MARK,
+    StreamRenderer,
 )
 
 
@@ -92,6 +95,9 @@ def test_slash_commands_filter_by_prefix():
     assert match_slash_commands("/mo") == [
         ("/model", "查看或切换模型"),
     ]
+    assert match_slash_commands("/thi") == [
+        ("/thinking", "展开最近一次思考"),
+    ]
     assert match_slash_commands("/model gpt") == []       # 进入参数后关闭菜单
     assert match_slash_commands("/nope") == []
 
@@ -168,11 +174,14 @@ def test_banner_contains_key_info(tmp_path):
 
 def test_renderer_uses_assistant_side_markers():
     r, buf = make_renderer()
+    r(RunStarted("问题"))
     r(LLMThinkingDelta("先想一下"))
     r(LLMStreamDelta("答案"))
     r(RunFinished("答案"))
     text = buf.text
-    assert text.startswith(f"{THINKING_MARK}Thinking… 先想一下")
+    assert text.startswith(THINKING_COLLAPSED)
+    assert f"{THINKING_MARK}Thinking…" in text
+    assert "先想一下" not in text                   # thinking 默认折叠为一行
     assert f"{ASSISTANT_MARK}答案" in text
     # 不再出现旧式用户侧标签
     assert "[thinking]" not in text and "agent>" not in text

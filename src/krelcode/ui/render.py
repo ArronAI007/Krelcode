@@ -7,6 +7,7 @@ write/color 均可注入，测试无需真实终端。
 from __future__ import annotations
 
 import os
+import re
 import sys
 from typing import Callable, Optional
 
@@ -19,6 +20,7 @@ from ..core.events import (
     LLMThinkingDelta,
     PermissionDenied,
     RunFinished,
+    RunStarted,
     SubagentFinished,
     SubagentSpawned,
     ToolCallCompleted,
@@ -30,12 +32,14 @@ GREEN = "\x1b[32m"
 RED = "\x1b[31m"
 CYAN = "\x1b[36m"
 DIM = "\x1b[2m"
+BOLD = "\x1b[1m"
 RESET = "\x1b[0m"
 
 # Claude Code / Hermes 风格的行首标记：⏺ 助手动作、⎿ 工具结果、✻ 思考
 ASSISTANT_MARK = "⏺ "
 RESULT_MARK = "⎿ "
 THINKING_MARK = "✻ "
+THINKING_COLLAPSED = f"{THINKING_MARK}Thinking… · /thinking 展开"
 
 TOOL_CONTENT_PREVIEW = 200
 
@@ -64,6 +68,46 @@ def colorize_diff(text: str, enabled: bool = True) -> str:
     return "\n".join(out)
 
 
+_INLINE_CODE_RE = re.compile(r"(`[^`\n]+`)")
+_BOLD_RE = re.compile(r"(\*\*[^*\n]+\*\*)")
+
+
+def colorize_markdown(text: str, enabled: bool = True) -> str:
+    """轻量终端 Markdown 上色，保留标题、列表、空行和 fenced code 结构。"""
+    if not enabled or not text:
+        return text
+    out = []
+    in_fence = False
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith(("```", "~~~")):
+            out.append(DIM + line + RESET)
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            out.append(line)
+            continue
+        if re.match(r"^\s{0,3}#{1,6}\s+", line):
+            out.append(BOLD + CYAN + line + RESET)
+            continue
+        list_match = re.match(r"^(\s*)([-*+]|\d+\.)(\s+.*)$", line)
+        if list_match:
+            prefix, marker, rest = list_match.groups()
+            out.append(prefix + CYAN + marker + RESET + rest)
+            continue
+        quote_match = re.match(r"^(\s*>+)(.*)$", line)
+        if quote_match:
+            marker, rest = quote_match.groups()
+            out.append(CYAN + marker + RESET + rest)
+            continue
+        line = _INLINE_CODE_RE.sub(
+            lambda m: CYAN + m.group(1) + RESET, line)
+        line = _BOLD_RE.sub(
+            lambda m: BOLD + m.group(1) + RESET, line)
+        out.append(line)
+    return "\n".join(out)
+
+
 def _default_write(s: str) -> None:
     sys.stdout.write(s)
     sys.stdout.flush()
@@ -83,7 +127,10 @@ class StreamRenderer:
         self._color = auto_color() if color is None else color
         self._streaming = False
         self._thinking = False
+        self._thinking_summary_shown = False
         self._at_line_start = True
+        # 仅 UI 层保留最近一轮完整 thinking；绝不写入 AgentLoop.history。
+        self.thinking_text = ""
 
     def _write(self, s: str) -> None:
         # 所有终端输出都经此出口：脱敏后统一写出
@@ -103,17 +150,25 @@ class StreamRenderer:
         return f"{CYAN}{mark}{RESET}" if self._color else mark
 
     def __call__(self, event: AgentEvent) -> None:
+        if isinstance(event, RunStarted):
+            # 新一轮开始前清空缓存；上一轮的 thinking 在 idle 期间仍可展开。
+            self._end_thinking()
+            self._end_stream_only()
+            self.thinking_text = ""
+            self._thinking_summary_shown = False
+            return
         if isinstance(event, LLMThinkingDelta):
+            if not event.text:
+                return
             if not self._thinking:
                 self._end_stream_only()
-                label = f"{THINKING_MARK}Thinking… "
-                if self._color:
-                    label = f"{DIM}{THINKING_MARK}Thinking…{RESET} "
-                self._write(label)
+                if self.thinking_text:
+                    self.thinking_text = self.thinking_text.rstrip("\n") + "\n\n"
                 self._thinking = True
-            self._write(event.text.replace("\n", " "))
+            # 默认不输出 reasoning 正文；只缓存原始 Markdown，等待 /thinking。
+            self.thinking_text += event.text
             return
-        # 任何非思考事件：先收束思考行
+        # 任何非思考事件：先把本轮折叠状态收束为一行。
         self._end_thinking()
         if isinstance(event, LLMStreamDelta):
             if not self._streaming:
@@ -176,9 +231,28 @@ class StreamRenderer:
             self._streaming = False
 
     def _end_thinking(self) -> None:
-        if self._thinking:
-            self._ensure_newline()
-            self._thinking = False
+        if not self._thinking:
+            return
+        self._thinking = False
+        if not self._thinking_summary_shown and self.thinking_text.strip():
+            summary = THINKING_COLLAPSED
+            if self._color:
+                summary = f"{DIM}{summary}{RESET}"
+            self._write(summary + "\n")
+            self._thinking_summary_shown = True
+
+    def expand_thinking(self) -> bool:
+        """把最近一轮 thinking 以多行 Markdown 输出；无内容时返回 False。"""
+        if not self.thinking_text.strip():
+            return False
+        self.end_stream()
+        header = "✻ Thinking（Markdown）"
+        if self._color:
+            header = f"{DIM}{header}{RESET}"
+        self._write(header + "\n")
+        self._write(colorize_markdown(self.thinking_text.strip("\n"), self._color))
+        self._ensure_newline()
+        return True
 
     def _render_tool_result(self, event: ToolCallCompleted) -> None:
         status = "✗" if event.is_error else "✓"

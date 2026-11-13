@@ -3,7 +3,9 @@
 import asyncio
 import json
 
-from krelcode.core.events import EventBus, ToolCallCompleted
+from krelcode.core.events import (
+    EventBus, LLMStreamDelta, LLMThinkingDelta, RunStarted, ToolCallCompleted,
+)
 from krelcode.core.messages import Message, ToolCall
 from krelcode.core.redact import SecretRedactor
 from krelcode.session.recorder import SessionRecorder
@@ -52,6 +54,18 @@ def test_renderer_redacts_secret_in_tool_result():
     renderer(ToolCallCompleted(tc, "result sk-secret-123 here", False))
     assert "sk-secret-123" not in buf.text
     assert "***" in buf.text
+
+
+def test_renderer_redacts_secret_in_expanded_thinking():
+    redactor = SecretRedactor(["sk-secret-123"])
+    buf = Buffer()
+    renderer = StreamRenderer(write=buf.write, color=False, redactor=redactor)
+    renderer(RunStarted("q"))
+    renderer(LLMThinkingDelta("# 检查\n\n发现 sk-secret-123"))
+    renderer(LLMStreamDelta("完成"))
+    renderer.expand_thinking()
+    assert "sk-secret-123" not in buf.text
+    assert "发现 ***" in buf.text
 
 
 # -- 会话落盘脱敏 -------------------------------------------------------------------------

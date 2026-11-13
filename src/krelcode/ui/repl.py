@@ -41,6 +41,7 @@ from .render import CYAN, DIM, RESET, StreamRenderer, auto_color
 HELP_TEXT = """可用命令：
   /help          显示本帮助
   /history       查看当前对话历史
+  /thinking      展开最近一次思考（保留 Markdown 多行）
   /tools         列出已注册工具
   /session       显示当前会话文件路径
   /sessions      列出工作区的全部会话
@@ -73,6 +74,7 @@ MENU_ROWS = 8
 SLASH_COMMANDS = (
     ("/help", "显示本帮助"),
     ("/history", "查看当前对话历史"),
+    ("/thinking", "展开最近一次思考"),
     ("/tools", "列出已注册工具"),
     ("/session", "显示当前会话文件"),
     ("/sessions", "列出工作区会话"),
@@ -729,6 +731,9 @@ async def _handle_command(user_input, loop, renderer, *, session_path, sessions_
             print(f"  [export] 已导出: {out}")
         except OSError as e:
             print(f"  [export] 导出失败: {e}")
+    elif user_input == "/thinking":
+        if not renderer.expand_thinking():
+            print("  （暂无思考内容）")
     elif user_input == "/history":
         for m in loop.history:
             content = m.content or ""

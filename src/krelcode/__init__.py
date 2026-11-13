@@ -1,3 +1,3 @@
 """Krelcode: a coding agent built step by step."""
 
-__version__ = "0.52.2"
+__version__ = "0.53.0"
