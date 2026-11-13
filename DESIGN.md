@@ -197,9 +197,10 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   提示符 `↳`；输出前用 ANSI 清除输入行与下边界，提交后光标越过下边界，避免正文
   覆盖边框。POSIX TTY 使用零依赖字符级行编辑器（cbreak + `os.read`）：输入 `/`
   时按前缀实时过滤命令并在下边界外渲染候选列表，Tab 补全唯一命令；运行中只提示
-  `/stop`、`/exit`。候选菜单用 ANSI save/restore cursor 绘制；每次输入变化同步
-  重绘下边界，避免部分终端残留旧提示符形成重复行。真实 TTY 的输入读取放在 daemon
-  线程，避免退出时被阻塞的 `input()` 拖住，测试仍通过 async input_fn 注入
+  `/stop`、`/exit`。输入框下方固定预留 8 行候选区，菜单变化时只在该区域原地覆盖；
+  撤销 `/` 会清空候选区但保持区域高度不变，因此不会把历史搜索内容推到终端
+  scrollback。真实 TTY 的输入读取放在 daemon 线程，避免退出时被阻塞的 `input()`
+  拖住，测试仍通过 async input_fn 注入
 - **diff 上色**：edit_file 结果的 unified diff 红绿高亮；tty 检测 + NO_COLOR 尊重；
   错误信息不走 diff 渲染
 - **SessionRecorder**（session/recorder.py）：JSONL 双记录——审计事件流

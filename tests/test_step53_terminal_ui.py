@@ -41,7 +41,7 @@ def test_prompt_writer_show_hide_submitted():
     assert lines[0] and set(lines[0]) == {"─"}
     assert lines[1] == IDLE_PROMPT
     assert lines[2].startswith(lines[0])      # 下边界与上边界等宽
-    assert p.CURSOR_UP in lines[2]            # 光标被移回中间输入行
+    assert p.CURSOR_UP in buf.text             # 光标被移回中间输入行
     p.show(IDLE_PROMPT)                     # 幂等：不重复打印
     assert buf.text.count(IDLE_PROMPT) == 1
 
@@ -113,12 +113,18 @@ def test_prompt_writer_renders_slash_menu_below_input():
     update_output = "".join(buf.parts[before:])
     assert update_output.count(f"{IDLE_PROMPT}/") == 1  # 不产生第二行重复提示符
     assert update_output.count(p._rule) == 1            # 下边界随输入行同步重绘
-    assert p.SAVE_CURSOR in update_output and p.RESTORE_CURSOR in update_output
+    assert p.CURSOR_DOWN * 2 in update_output            # 固定候选区原地覆盖
     assert "  /help       显示本帮助" in buf.text
     assert "  /history    查看当前对话历史" in buf.text
     assert len(p._suggestions) == 2
     p.update(IDLE_PROMPT + "/mo", ["  /model      查看或切换模型"])
     assert p._suggestions == ("  /model      查看或切换模型",)
+    before = len(buf.parts)
+    p.update(IDLE_PROMPT, [])                # 撤销 `/`：候选区立即清空
+    cancelled_output = "".join(buf.parts[before:])
+    assert p._suggestions == ()
+    assert "/model" not in cancelled_output and "/help" not in cancelled_output
+    assert cancelled_output.count(IDLE_PROMPT) == 1
     p.submitted(raw=True)
     assert p._suggestions == ()
 
@@ -207,4 +213,3 @@ def test_answer_returns_directly_to_bounded_input_prompt():
     assert lines[1] and set(lines[1]) == {"─"}
     assert lines[2] == IDLE_PROMPT
     assert lines[3].startswith(lines[1])     # 下边界
-    assert len(lines) == 4                   # 回答与输入边界之间没有空行

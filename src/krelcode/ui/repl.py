@@ -68,6 +68,7 @@ STOPPED_NOTE = "  ⎿ 已中止（历史已修复，可继续对话）"
 
 IDLE_PROMPT = "❯ "
 RUNNING_PROMPT = "↳ "
+MENU_ROWS = 8
 
 SLASH_COMMANDS = (
     ("/help", "显示本帮助"),
@@ -153,8 +154,6 @@ class PromptWriter:
     CLEAR_LINE = "\r\x1b[2K"
     CURSOR_UP = "\x1b[1A"
     CURSOR_DOWN = "\x1b[1B"
-    SAVE_CURSOR = "\x1b7"
-    RESTORE_CURSOR = "\x1b8"
 
     def __init__(self, write: Optional[Callable[[str], None]] = None,
                  enabled: Optional[bool] = None,
@@ -172,9 +171,12 @@ class PromptWriter:
         if not self.enabled:
             return
         rule = _input_rule(self._color)
-        # 先画出上下边界，再把光标移回中间输入行的提示符末尾。
-        block = (f"{rule}\n{text}\n{rule}\r{self.CURSOR_UP}"
-                 f"\x1b[{_display_width(text)}C")
+        # 输入框下方固定预留候选区；后续菜单只原地覆盖，不向历史追加行。
+        block = f"{rule}\n{text}\n{rule}"
+        for _ in range(MENU_ROWS):
+            block += "\n" + self.CLEAR_LINE
+        block += (self.CURSOR_UP * (MENU_ROWS + 1) + "\r"
+                  + f"\x1b[{_display_width(text)}C")
         if self._visible and block == self._last:
             return
         if self._visible:
@@ -194,8 +196,8 @@ class PromptWriter:
         self._write(self.CLEAR_LINE + text)
         self._prompt_width = _display_width(text)
         # 同时重绘下边界，防止终端残留上一版输入行形成“第二行提示符”。
-        self._write(self.SAVE_CURSOR + self.CURSOR_DOWN + "\r" + self.CLEAR_LINE)
-        self._write(self._rule + self.RESTORE_CURSOR)
+        self._write(self.CURSOR_DOWN + "\r" + self.CLEAR_LINE + self._rule)
+        self._write(self.CURSOR_UP + "\r" + f"\x1b[{self._prompt_width}C")
         self._render_suggestions(suggestions or [])
 
     def _render_suggestions(self, suggestions: list[str]) -> None:
@@ -203,26 +205,27 @@ class PromptWriter:
         self._suggestions = items
         if not items:
             return
-        # 候选菜单放在下边界之外，形成类似下拉列表的效果。
-        self._write(self.SAVE_CURSOR)
+        # 候选菜单在固定区域内原地覆盖，行数始终不变。
         self._write(self.CURSOR_DOWN * 2 + "\r")
-        for i, line in enumerate(items):
-            self._write(line)
-            if i + 1 < len(items):
+        for i in range(MENU_ROWS):
+            self._write(self.CLEAR_LINE)
+            if i < len(items):
+                self._write(items[i])
+            if i + 1 < MENU_ROWS:
                 self._write("\n")
-        self._write(self.RESTORE_CURSOR)
+        self._write(self.CURSOR_UP * (MENU_ROWS + 1) + "\r")
+        self._write(f"\x1b[{self._prompt_width}C")
 
     def _clear_suggestions(self) -> None:
         if not self._suggestions:
             return
-        count = len(self._suggestions)
-        self._write(self.SAVE_CURSOR)
         self._write(self.CURSOR_DOWN * 2 + "\r")
-        for i in range(count):
+        for i in range(MENU_ROWS):
             self._write(self.CLEAR_LINE)
-            if i + 1 < count:
+            if i + 1 < MENU_ROWS:
                 self._write("\n")
-        self._write(self.RESTORE_CURSOR)
+        self._write(self.CURSOR_UP * (MENU_ROWS + 1) + "\r")
+        self._write(f"\x1b[{self._prompt_width}C")
         self._suggestions = ()
 
     def submitted(self, *, raw: bool = True) -> None:
