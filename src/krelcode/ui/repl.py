@@ -168,6 +168,7 @@ class PromptWriter:
         self._prompt_width = 0
         self._suggestions: tuple[str, ...] = ()
         self._rule = ""
+        self._submitted_raw: Optional[bool] = None
 
     def show(self, text: str) -> None:
         if not self.enabled:
@@ -189,6 +190,7 @@ class PromptWriter:
         self._prompt_width = _display_width(text)
         self._suggestions = ()
         self._rule = rule
+        self._submitted_raw = None
 
     def update(self, text: str, suggestions: Optional[list[str]] = None) -> None:
         """重绘输入行及其下方候选菜单，光标最终回到输入行末尾。"""
@@ -231,12 +233,14 @@ class PromptWriter:
         self._suggestions = ()
 
     def submitted(self, *, raw: bool = True) -> None:
-        # Enter 后光标停在下边界行首；越过边界，后续输出不覆盖它。
-        if self.enabled and self._visible:
+        # Enter 后越过下边界，后续输出不覆盖它。
+        was_visible = self.enabled and self._visible
+        if was_visible:
             self._clear_suggestions()
             self._write(self.CURSOR_DOWN * (2 if raw else 1))
         self._visible = False
         self._last = ""
+        self._submitted_raw = raw if was_visible else None
 
     def hide(self) -> None:
         if not self.enabled or not self._visible:
@@ -249,6 +253,18 @@ class PromptWriter:
         self._write(self.CURSOR_UP + "\r")
         self._visible = False
         self._last = ""
+
+    def finish(self) -> None:
+        """退出前把光标移到下边界之后并补换行，避免 shell 显示 PROMPT_EOL_MARK。"""
+        if not self.enabled:
+            return
+        if self._visible:
+            self.hide()
+        elif self._submitted_raw:
+            # 原生编辑器提交时下移 2 行；回到下边界再换行，避免留下空行。
+            self._write(self.CURSOR_UP)
+        self._write("\r\n")
+        self._submitted_raw = None
 
 
 class TerminalLineEditor:
@@ -586,6 +602,7 @@ async def run_repl(
         if reader_task is not None:
             reader_task.cancel()
         inbox_get.cancel()
+        prompt.finish()
         unsubscribe()
 
 

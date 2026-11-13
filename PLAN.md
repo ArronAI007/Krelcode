@@ -99,8 +99,9 @@
 | 52 | MCP Streamable HTTP 进阶 | 补齐 2025-03-26/2025-06-18 规范中此前缺失的传输能力：**可恢复性**——SSEEventParser 解析 `id:`/`retry:`，GET 监听流断线后指数退避重连并携带 `Last-Event-ID`，服务器可补发断线期间事件 · **协议版本头**——所有请求带 `MCP-Protocol-Version`，initialize 协商后自动切换为服务器返回版本（旧服务器忽略未知头）· **会话终止**——close() 尽力 DELETE（带 Mcp-Session-Id），405/404/网络失败静默容忍 · **batch 响应**——JSON 数组逐条分发（2025-03-26 兼容）· 监听流重连参数可经 TOML `listener_retries`/`listener_retry_delay` 配置 | 8 个新测试：SSE id/retry 解析、batch 响应、版本头协商、Last-Event-ID 重连、405 不重试、close DELETE 带会话头、DELETE 失败容忍、TOML 配置传导 | ✅ |
 | 53 | 终端交互界面 | 启动信息卡片（provider/模型/工作区/工具/会话，CJK 宽度感知裁切）· 去除 `you>`，空闲提示符统一为 `❯` · 输入区增加横跨终端的 pi 风格上下 `─` 双边界，ANSI 光标控制确保输入落在中间行 · 零依赖 POSIX TTY 字符级行编辑器：输入 `/` 实时弹出并过滤 slash commands，Tab 补全唯一命令，运行中只提示 `/stop`、`/exit` · 输入框下方固定预留 8 行候选区，菜单原地覆盖；撤销 `/` 后清空候选但不改变区域高度，不向 scrollback 留下搜索内容 · thinking/tool 改为助手侧 `✻ Thinking…` / `⏺` / `⎿` 树形标记 · 回答结束只补一个必要换行并立即回到新的双边界输入区（模型自带尾部换行不产生空行）· 真实 TTY 输入改 daemon 线程，`/exit` 不被阻塞的 `input()` 拖住；Ctrl-C 静默返回 130 | 13 个新测试：提示符显示/提交/清理、双边界宽度与防自动换行、slash 前缀过滤/运行中过滤/候选原地覆盖且仅一行提示符/Tab 补全/撤销后菜单清空、启动卡片、助手侧标记、工具树、普通/带尾换行回答无空行、回答后直接回双边界提示符、Ctrl-C 干净退出；伪终端验证 `/` 撤销后候选完全消失、再次输入 `/m` 仅显示匹配项 | ✅ |
 | 54 | Thinking 折叠与 Markdown 展开 | 修复 reasoning 正文实时刷屏和换行被压成空格的问题：renderer 在 UI 层缓存整轮 thinking，正文事件到达时只输出一行 `✻ Thinking… · /thinking 展开`；同一轮多段 thinking 空行拼接，`RunStarted` 清理上一轮缓存，thinking 仍不进入 history · 新增 `/thinking` 命令，按原始 Markdown 多行展开并做零依赖终端上色：保留标题、列表缩进、空行、行内代码/粗体与 fenced code block；展开输出继续经过 SecretRedactor | 6 个新增/替换测试：默认单行折叠且正文不泄漏、Markdown 多行结构保留、多段 thinking 聚合且只显示一条摘要、新轮次清空缓存、`/thinking` 命令、展开内容脱敏 | ✅ |
+| 55 | `/exit` 终端收尾 | 修复 `/exit` 后 zsh 显示反色 `%`（PROMPT_EOL_MARK）的问题：原生行编辑器提交后光标停在候选区空行，进程退出时缺少最终换行 → 新增 `PromptWriter.finish()`，根据 raw/fallback 提交位置回到下边界并输出 `CRLF`；REPL `finally` 统一调用，覆盖 `/exit`、EOF、运行中 `/exit` 和异常退出 | 1 个新测试：raw 提交回到下边界后补换行、fallback 提交直接补换行，输出必以 `\n` 结束 | ✅ |
 
-| 测试总数：578（离线 576 + 本地端口集成 2，沙箱内自动 skip） |
+| 测试总数：579（离线 577 + 本地端口集成 2，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

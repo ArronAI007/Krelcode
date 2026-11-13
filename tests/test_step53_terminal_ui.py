@@ -135,6 +135,23 @@ def test_prompt_writer_renders_slash_menu_below_input():
     assert p._suggestions == ()
 
 
+def test_prompt_writer_finish_leaves_clean_shell_line():
+    buf = Buf()
+    p = PromptWriter(write=buf.write, enabled=True, color=False)
+    p.show(IDLE_PROMPT)
+    p.submitted(raw=True)
+    before = buf.text
+    p.finish()
+    assert buf.text == before + p.CURSOR_UP + "\r\n"
+    assert buf.text.endswith("\n")                # zsh 不再显示 PROMPT_EOL_MARK `%`
+
+    p.show(IDLE_PROMPT)
+    p.submitted(raw=False)
+    before = buf.text
+    p.finish()
+    assert buf.text == before + "\r\n"
+
+
 def test_line_editor_filters_menu_and_tab_completes():
     buf = Buf()
     p = PromptWriter(write=buf.write, enabled=True, color=False)
