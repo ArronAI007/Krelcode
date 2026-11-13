@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from krelcode.core.events import (
     LLMStreamDelta, LLMThinkingDelta, RunFinished, RunStarted,
 )
+from krelcode.ui import repl
 from krelcode.ui.repl import (
     IDLE_PROMPT, RUNNING_PROMPT, InputHistory, PromptWriter, TerminalLineEditor,
     print_banner,
@@ -213,6 +214,21 @@ def test_line_editor_filters_menu_and_tab_completes():
     chars = list("/mod")
     editor._complete(chars)
     assert "".join(chars) == "/model "
+
+
+def test_slash_menu_uses_prompt_width_as_shared_left_gutter():
+    buf = Buf()
+    p = PromptWriter(write=buf.write, enabled=True, color=False)
+    prompt = IDLE_PROMPT
+    p.show(prompt)
+    editor = TerminalLineEditor(p, match_slash_commands, color=False)
+    editor._refresh(prompt, list("/"))
+
+    gutter = " " * repl._display_width(prompt)
+    assert len(gutter) == 3       # ❯ 占 2 列 + 1 个空格
+    assert len(p._suggestions) > 1
+    assert all(line.startswith(gutter + "/") for line in p._suggestions)
+    assert all(line.index("/") == len(gutter) for line in p._suggestions)
 
 
 # -- 启动横幅 ---------------------------------------------------------------------------------

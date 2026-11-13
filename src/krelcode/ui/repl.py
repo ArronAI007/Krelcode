@@ -118,13 +118,22 @@ def _stdout_write(s: str) -> None:
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+# Common terminal fonts reserve two cells for these prompt glyphs even though
+# Unicode East Asian Width classifies them as narrow. Counting them explicitly
+# keeps cursor placement and the slash-menu gutter on the same visual column.
+_DOUBLE_WIDTH_UI_CHARS = frozenset({"❯", "↳"})
+
+
+def _char_display_width(ch: str) -> int:
+    if ch in _DOUBLE_WIDTH_UI_CHARS:
+        return 2
+    return 2 if unicodedata.east_asian_width(ch) in "WF" else 1
 
 
 def _display_width(text: str) -> int:
     """终端显示宽度：CJK 宽字符按 2 列计算，ANSI 控制序列按 0 计算。"""
     plain = _ANSI_RE.sub("", text)
-    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1
-               for ch in plain)
+    return sum(_char_display_width(ch) for ch in plain)
 
 
 def _truncate_display(text: str, width: int) -> str:
@@ -135,7 +144,7 @@ def _truncate_display(text: str, width: int) -> str:
     out = []
     used = 0
     for ch in text:
-        char_width = 2 if unicodedata.east_asian_width(ch) in "WF" else 1
+        char_width = _char_display_width(ch)
         if used + char_width > width - 1:
             break
         out.append(ch)
@@ -411,13 +420,17 @@ class TerminalLineEditor:
         text = prompt_text + "".join(buffer)
         matches = self._suggest("".join(buffer))
         columns = shutil.get_terminal_size((80, 24)).columns
+        # 候选命令从输入正文的起始列开始，而不是依赖固定的两空格。
+        # 这样首项与后续项、以及输入行里的 `/` 始终共享同一条左对齐线。
+        indent = " " * _display_width(prompt_text)
         lines = []
         for name, description in matches:
             label = f"{name:<11}"
-            line = _truncate_display(f"  {label}{description}", max(1, columns - 1))
+            line = _truncate_display(
+                f"{indent}{label}{description}", max(1, columns - 1))
             if self._color:
-                prefix = f"  {CYAN}{name:<11}{RESET}"
-                line = prefix + line[len(f"  {label}"):]
+                prefix = f"{indent}{CYAN}{name:<11}{RESET}"
+                line = prefix + line[len(f"{indent}{label}"):]
             lines.append(line)
         self._prompt.update(text, lines)
 
