@@ -36,6 +36,7 @@ from ..core.messages import (
 )
 from ..llm.base import LLMProvider, StreamFinished, TextDelta, ThinkingDelta
 from .compression import ContextManager
+from .scope import ReadScope, infer_read_scope, scope_violation
 from .tokens import estimate_history_tokens
 from ..safety.policy import ApprovalPolicy
 from ..tools.base import ToolContext, ToolResult
@@ -85,6 +86,7 @@ class AgentLoop:
         self.redactor = redactor
         self._token_total = 0
         self._failure_counts: Dict[str, int] = {}
+        self._read_scope: Optional[ReadScope] = None
         # 运行中用户插话队列（REPL steering）：每个 step 开始前注入历史
         self.steering_queue: asyncio.Queue = asyncio.Queue()
         self.history: List[Message] = (
@@ -111,6 +113,7 @@ class AgentLoop:
         self.history.append(Message.user(user_input, images=images or None))
         self._failure_counts = {}
         self._token_total = 0
+        self._read_scope = infer_read_scope(self.tool_context.workspace_root, user_input)
         await self._emit(RunStarted(user_input))
 
         try:
@@ -288,6 +291,10 @@ class AgentLoop:
                 is_error=True,
             )
         args = dict(tool_call.arguments)
+
+        violation = scope_violation(self._read_scope, tool_call, self.tool_context)
+        if violation is not None:
+            return ToolResult(content=violation, is_error=True)
 
         # 4) 执行（异常 → is_error 结果回填，错误恢复原则）
         try:
