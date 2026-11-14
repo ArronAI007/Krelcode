@@ -37,7 +37,8 @@ def test_repl_commands_documented():
     for command in ("/help", "/history", "/tools", "/session", "/sessions",
                     "/resume", "/mcp", "/agents", "/skills", "/skill",
                     "/undo", "/model", "/allow", "/cost", "/context",
-                    "/compact", "/export", "/reset", "/stop", "/exit"):
+                    "/compact", "/export", "/reset", "/stop", "/exit",
+                    "/thinking", "/tool-output"):
         assert f"`{command}" in text, f"CONFIG.md 缺少 REPL 命令: {command}"
 
 

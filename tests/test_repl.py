@@ -79,6 +79,21 @@ def test_plain_message_streamed_reply(tmp_path, capsys):
     assert loop.history[1] == Message.user("hi")
 
 
+def test_tool_output_command_lists_and_expands_numbered_result(tmp_path, capsys):
+    provider = MockProvider(scripted=[
+        Message.assistant(tool_calls=[ToolCall("c1", "echo", {"m": "x"})]),
+        "完成",
+    ])
+    loop = make_loop_with(tmp_path, provider)
+    drive(loop, ["执行", "/tool-output", "/tool-output 1", "/exit"])
+    out = capsys.readouterr().out
+    assert "输出已折叠（/tool-output 1 展开）" in out
+    assert "工具输出列表（默认折叠）" in out
+    assert "#1 echo" in out
+    assert "Tool output #1" in out
+    assert "echo: x" in out
+
+
 def test_exception_path_prints_error(tmp_path, capsys):
     class BoomProvider(MockProvider):
         async def stream(self, messages, tools=None):
@@ -335,6 +350,37 @@ def test_thinking_can_expand_while_run_in_progress(tmp_path, capsys):
     assert "✻ Thinking（Markdown）" in out
     assert "# 分析\n\n- 先检查缓存" in out
     assert "任务运行中" not in out
+
+
+def test_tool_output_can_expand_while_run_in_progress(tmp_path, capsys):
+    class ToolThenWaitProvider:
+        name = "tool-wait"
+        model = "m"
+
+        def __init__(self):
+            self.calls = 0
+
+        async def stream(self, messages, tools=None):
+            from krelcode.llm.base import StreamFinished
+            self.calls += 1
+            if self.calls == 1:
+                msg = Message.assistant(tool_calls=[ToolCall("c1", "echo", {"m": "x"})])
+            else:
+                await asyncio.sleep(0.3)
+                msg = Message.assistant("最终回答")
+            yield StreamFinished(message=msg, finish_reason="stop", usage={})
+
+    loop = make_loop_with(tmp_path, ToolThenWaitProvider())
+    inp = TimedInput([
+        ("任务", 0),
+        ("/tool-output 1", 0.1),  # 工具已结束，LLM 仍在生成最终回答
+        ("/exit", 0.3),
+    ])
+    rc = asyncio.run(run_repl(loop, input_fn=inp))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Tool output #1" in out
+    assert "│ echo: x" in out
 
 
 def test_slash_command_while_running_shows_hint(tmp_path, capsys):

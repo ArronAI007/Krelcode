@@ -11,9 +11,12 @@ import os
 import re
 import sys
 import textwrap
-from typing import Callable, Optional
+import unicodedata
+from dataclasses import dataclass
+from typing import Callable, Dict, Optional
 
 from ..core.redact import SecretRedactor
+from ..core.messages import ToolCall
 from ..core.events import (
     AgentEvent,
     ContextCompressed,
@@ -36,6 +39,8 @@ CYAN = "\x1b[36m"
 DIM = "\x1b[2m"
 BOLD = "\x1b[1m"
 RESET = "\x1b[0m"
+TOOL_PANEL_BG = "\x1b[48;5;236m"
+TOOL_PANEL_FG = "\x1b[38;5;252m"
 
 # Claude Code / Hermes 风格的行首标记：⏺ 助手动作、⎿ 工具结果、✻ 思考
 ASSISTANT_MARK = "⏺ "
@@ -48,9 +53,22 @@ THINKING_COLLAPSED = (
 TOOL_ARGUMENT_INLINE_LIMIT = 100
 TOOL_ARGUMENT_PREVIEW_LINES = 8
 TOOL_ARGUMENT_PREVIEW_CHARS = 1200
-TOOL_CONTENT_PREVIEW_LINES = 40
-TOOL_CONTENT_PREVIEW_CHARS = 3000
+TOOL_OUTPUT_EXPANDED_LINES = 120
+TOOL_OUTPUT_EXPANDED_CHARS = 12_000
+TOOL_OUTPUT_DISPLAY_WIDTH = 120
+TOOL_PANEL_WIDTH = 78
 TOOL_OUTPUT_INDENT = "    "
+
+
+@dataclass
+class ToolOutputRecord:
+    """UI 层工具输出记录；正文默认折叠，按编号手动展开。"""
+
+    index: int
+    tool_call: ToolCall
+    content: str = ""
+    is_error: Optional[bool] = None
+    expanded: bool = False
 
 
 def auto_color() -> bool:
@@ -152,6 +170,23 @@ def _clip_preview(
     return clipped
 
 
+def _wrap_tool_content(text: str, width: int = TOOL_OUTPUT_DISPLAY_WIDTH) -> list[str]:
+    """只对超宽物理行硬换行，保留原行边界和全部空白。"""
+    lines = []
+    for line in text.splitlines() or [""]:
+        if not line:
+            lines.append("")
+            continue
+        lines.extend(line[start:start + width] for start in range(0, len(line), width))
+    return lines
+
+
+def _visible_width(text: str) -> int:
+    """终端可见宽度；忽略 ANSI，CJK 宽字符按 2 列计算。"""
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in plain)
+
+
 def _format_tool_arguments(arguments: dict) -> str:
     """短参数用近似 Python 调用语法；长参数和多行文本展开并缩进。"""
     if not arguments:
@@ -208,6 +243,8 @@ class StreamRenderer:
         self._at_line_start = True
         # 仅 UI 层保留最近一轮完整 thinking；绝不写入 AgentLoop.history。
         self.thinking_text = ""
+        self.tool_outputs: list[ToolOutputRecord] = []
+        self._tool_by_call_id: Dict[str, ToolOutputRecord] = {}
 
     def _write(self, s: str) -> None:
         # 所有终端输出都经此出口：脱敏后统一写出
@@ -233,6 +270,9 @@ class StreamRenderer:
             self._end_stream_only()
             self.thinking_text = ""
             self._thinking_summary_shown = False
+            # 工具调用 ID 只在单轮内保证唯一；新轮次必须重新映射，
+            # 否则常见的 "c1" 会错误复用上一轮输出。
+            self._tool_by_call_id.clear()
             return
         if isinstance(event, LLMThinkingDelta):
             if not event.text:
@@ -254,6 +294,7 @@ class StreamRenderer:
             self._write(event.text)
         elif isinstance(event, ToolCallStarted):
             self.end_stream()
+            self._register_tool_call(event.tool_call)
             self._render_tool_call(event)
         elif isinstance(event, ToolCallCompleted):
             self.end_stream()
@@ -332,28 +373,122 @@ class StreamRenderer:
         return True
 
     def _render_tool_result(self, event: ToolCallCompleted) -> None:
-        status = "✗" if event.is_error else "✓"
-        name = event.tool_call.name
-        prefix = f"  {self._mark(RESULT_MARK)}"
-        if not event.is_error and name == "edit_file":
-            # edit_file：首行结果 + 完整（工具已限 100 行）上色 diff
-            lines = event.content.split("\n", 1)
-            self._write(f"{prefix}{status} {name}: {lines[0]}\n")
-            if len(lines) > 1:
-                self._write(colorize_diff(lines[1], self._color) + "\n")
-            return
-        content = _clip_preview(
-            event.content,
-            TOOL_CONTENT_PREVIEW_LINES,
-            TOOL_CONTENT_PREVIEW_CHARS,
-            "工具输出",
-        )
-        if "\n" not in content:
-            self._write(f"{prefix}{status} {name} → {content}\n")
-            return
-        self._write(f"{prefix}{status} {name}\n")
-        for line in content.splitlines():
-            self._write(f"{TOOL_OUTPUT_INDENT}{line}\n")
+        record = self._tool_by_call_id.get(self._tool_key(event.tool_call))
+        if record is None:
+            record = self._register_tool_call(event.tool_call)
+        record.content = self._redact(event.content)
+        record.is_error = event.is_error
+        status = self._tool_status(record)
+        line_count = len(record.content.splitlines()) if record.content else 0
+        char_count = len(record.content)
+        detail = f"{line_count} 行 / {char_count} 字符" if record.content else "无输出"
+        self._write(
+            f"  {self._mark(RESULT_MARK)}{status} {event.tool_call.name} "
+            f"#{record.index} · {detail} · 输出已折叠"
+            f"（/tool-output {record.index} 展开）\n")
+
+    def _redact(self, text: str) -> str:
+        return self._redactor.redact(text) if self._redactor is not None else text
+
+    def _register_tool_call(self, tool_call: ToolCall) -> ToolOutputRecord:
+        key = self._tool_key(tool_call)
+        existing = self._tool_by_call_id.get(key)
+        if existing is not None:
+            return existing
+        record = ToolOutputRecord(index=len(self.tool_outputs) + 1, tool_call=tool_call)
+        self.tool_outputs.append(record)
+        self._tool_by_call_id[key] = record
+        return record
+
+    @staticmethod
+    def _tool_key(tool_call: ToolCall) -> str:
+        return tool_call.id or f"object:{id(tool_call)}"
+
+    def _tool_status(self, record: ToolOutputRecord) -> str:
+        if record.is_error is None:
+            symbol = "…"
+        else:
+            symbol = "✗" if record.is_error else "✓"
+        if not self._color:
+            return symbol
+        color = RED if record.is_error else (CYAN if record.is_error is None else GREEN)
+        return f"{color}{symbol}{RESET}"
+
+    def _panel_line(self, text: str) -> None:
+        if self._color:
+            self._write(f"{TOOL_PANEL_BG}{TOOL_PANEL_FG}{text}")
+            padding = max(0, TOOL_PANEL_WIDTH - _visible_width(text))
+            if padding:
+                if RESET in text:
+                    self._write(f"{RESET}{TOOL_PANEL_BG}{TOOL_PANEL_FG}")
+                self._write(" " * padding)
+            self._write(RESET + "\n")
+        else:
+            self._write(text + "\n")
+
+    def _find_tool_output(self, selector: str) -> Optional[ToolOutputRecord]:
+        if not self.tool_outputs:
+            return None
+        value = selector.strip().lstrip("#")
+        if value in ("", "last", "latest"):
+            return self.tool_outputs[-1]
+        try:
+            index = int(value)
+        except ValueError:
+            return None
+        return next((r for r in self.tool_outputs if r.index == index), None)
+
+    def list_tool_outputs(self) -> bool:
+        """列出本轮会话可展开的工具输出。"""
+        if not self.tool_outputs:
+            return False
+        self.end_stream()
+        self._write("  工具输出列表（默认折叠）:\n")
+        for record in self.tool_outputs:
+            status = self._tool_status(record)
+            content = record.content
+            line_count = len(content.splitlines()) if content else 0
+            char_count = len(content)
+            state = "已展开" if record.expanded else "已折叠"
+            self._write(
+                f"    #{record.index} {record.tool_call.name} {status} · "
+                f"{line_count} 行 / {char_count} 字符 · {state}\n")
+        self._write("  使用 /tool-output <编号> 或 /tool-output last 展开。\n")
+        return True
+
+    def expand_tool_output(self, selector: str = "last") -> bool:
+        """展开指定工具输出；selector 支持编号、#编号、last。"""
+        record = self._find_tool_output(selector)
+        if record is None:
+            return False
+        self.end_stream()
+        record.expanded = True
+        status = self._tool_status(record)
+        self._write(
+            f"  {self._mark(RESULT_MARK)}{status} {record.tool_call.name} "
+            f"#{record.index} · 工具输出\n")
+        header_prefix = f"  ┌─ Tool output #{record.index} · {record.tool_call.name} "
+        header = header_prefix + "─" * max(3, TOOL_PANEL_WIDTH - len(header_prefix))
+        self._panel_line(header)
+        if not record.content.strip():
+            content = "（无输出）"
+        else:
+            content = _clip_preview(
+                record.content,
+                TOOL_OUTPUT_EXPANDED_LINES,
+                TOOL_OUTPUT_EXPANDED_CHARS,
+                "工具输出",
+            )
+        if not record.is_error and record.tool_call.name == "edit_file":
+            content = colorize_diff(content, self._color)
+        for line in _wrap_tool_content(content):
+            self._panel_line(f"  │ {line}")
+        self._panel_line("  └" + "─" * (TOOL_PANEL_WIDTH - 3))
+        return True
+
+    def clear_tool_outputs(self) -> None:
+        self.tool_outputs.clear()
+        self._tool_by_call_id.clear()
 
     def _render_tool_call(self, event: ToolCallStarted) -> None:
         name = event.tool_call.name

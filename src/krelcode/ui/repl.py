@@ -42,6 +42,7 @@ HELP_TEXT = """可用命令：
   /help          显示本帮助
   /history       查看当前对话历史
   /thinking      展开最近一次思考（保留 Markdown 多行）
+  /tool-output   列出工具输出；/tool-output <编号|last> 展开灰色面板
   /tools         列出已注册工具
   /session       显示当前会话文件路径
   /sessions      列出工作区的全部会话
@@ -62,11 +63,13 @@ HELP_TEXT = """可用命令：
   /stop          中止正在运行的任务（历史自动修复）
   /reset         清空对话历史
   /exit          退出（Ctrl-D / Ctrl-C 同样有效）
-任务运行中：直接输入文字 = 插话（steering）；/thinking 展开思考；/stop 中止。
+任务运行中：直接输入文字 = 插话（steering）；/thinking 展开思考；
+/tool-output <编号> 展开工具输出；/stop 中止。
 输入 / 会实时显示匹配命令，Tab 可补全唯一匹配；↑/↓ 调取本次会话的历史问题。
 其他任何输入都会作为消息发给 agent；消息里可用 @路径 引用文件。"""
 
-RUNNING_HINT = "  （任务运行中：直接输入=插话，/thinking 展开思考，/stop 中止，/exit 退出）"
+RUNNING_HINT = ("  （任务运行中：直接输入=插话，/thinking 展开思考，"
+                "/tool-output <编号> 展开输出，/stop 中止，/exit 退出）")
 STOPPED_NOTE = "  ⎿ 已中止（历史已修复，可继续对话）"
 
 IDLE_PROMPT = "❯ "
@@ -77,6 +80,7 @@ SLASH_COMMANDS = (
     ("/help", "显示本帮助"),
     ("/history", "查看当前对话历史"),
     ("/thinking", "展开最近一次思考"),
+    ("/tool-output", "查看或展开工具输出"),
     ("/tools", "列出已注册工具"),
     ("/session", "显示当前会话文件"),
     ("/sessions", "列出工作区会话"),
@@ -98,7 +102,8 @@ SLASH_COMMANDS = (
 )
 
 RUNNING_SLASH_COMMANDS = tuple(
-    item for item in SLASH_COMMANDS if item[0] in {"/thinking", "/stop", "/exit"}
+    item for item in SLASH_COMMANDS
+    if item[0] in {"/thinking", "/tool-output", "/stop", "/exit"}
 )
 
 
@@ -639,6 +644,15 @@ async def run_repl(
                         print("  （思考内容尚未生成）")
                     restore_prompt()
                     continue
+                if user_input == "/tool-output" or user_input.startswith("/tool-output "):
+                    parts = user_input.split(maxsplit=1)
+                    if len(parts) == 1:
+                        if not renderer.list_tool_outputs():
+                            print("  （暂无可展开的工具输出）")
+                    elif not renderer.expand_tool_output(parts[1].strip()):
+                        print("  （未找到工具输出；输入 /tool-output 查看编号）")
+                    restore_prompt()
+                    continue
                 if user_input.startswith("/"):
                     print(RUNNING_HINT)
                     restore_prompt()
@@ -728,6 +742,7 @@ async def _handle_command(user_input, loop, renderer, *, session_path, sessions_
             print(f"  （找不到会话: {target}；用 /sessions 查看列表）")
         else:
             restore_session(loop, path)
+            renderer.clear_tool_outputs()
     elif user_input == "/mcp" or user_input.startswith("/mcp "):
         if mcp_supervisor is None:
             print("  （MCP 未启用）")
@@ -899,6 +914,13 @@ async def _handle_command(user_input, loop, renderer, *, session_path, sessions_
     elif user_input == "/thinking":
         if not renderer.expand_thinking():
             print("  （暂无思考内容）")
+    elif user_input == "/tool-output" or user_input.startswith("/tool-output "):
+        parts = user_input.split(maxsplit=1)
+        if len(parts) == 1:
+            if not renderer.list_tool_outputs():
+                print("  （暂无可展开的工具输出）")
+        elif not renderer.expand_tool_output(parts[1].strip()):
+            print("  （未找到工具输出；输入 /tool-output 查看编号）")
     elif user_input == "/history":
         for m in loop.history:
             content = m.content or ""
@@ -906,6 +928,7 @@ async def _handle_command(user_input, loop, renderer, *, session_path, sessions_
             print(f"  [{m.role}]{extra} {content}")
     elif user_input == "/reset":
         loop.reset()
+        renderer.clear_tool_outputs()
         print("（历史已清空）")
     else:
         print(f"  （未知命令: {user_input.split()[0]}，/help 查看可用命令）")

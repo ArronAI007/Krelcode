@@ -53,6 +53,9 @@ def test_renderer_redacts_secret_in_tool_result():
     tc = ToolCall("c1", "get_time", {"tz": "UTC"})
     renderer(ToolCallCompleted(tc, "result sk-secret-123 here", False))
     assert "sk-secret-123" not in buf.text
+    assert "输出已折叠" in buf.text
+    assert renderer.expand_tool_output("1")
+    assert "sk-secret-123" not in buf.text
     assert "***" in buf.text
 
 

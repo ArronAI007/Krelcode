@@ -4,10 +4,12 @@ import pytest
 
 from krelcode.core.events import (
     ContextCompressed, ErrorOccurred, LLMStreamDelta, PermissionDenied,
-    RunFinished, ToolCallCompleted, ToolCallStarted,
+    RunFinished, RunStarted, ToolCallCompleted, ToolCallStarted,
 )
 from krelcode.core.messages import ToolCall
-from krelcode.ui.render import GREEN, RED, RESET, StreamRenderer, colorize_diff
+from krelcode.ui.render import (
+    GREEN, RED, RESET, TOOL_PANEL_BG, StreamRenderer, colorize_diff,
+)
 
 
 class Buffer:
@@ -72,7 +74,9 @@ def test_tool_activity_interrupts_stream():
     lines = buf.text.splitlines()
     assert lines[0] == "⏺ 让我想想"
     assert "⏺ get_time" in lines[1]
-    assert "⎿ ✓ get_time → 12:00" in lines[2]
+    assert "⎿ ✓ get_time #1" in lines[2]
+    assert "输出已折叠（/tool-output 1 展开）" in lines[2]
+    assert "12:00" not in buf.text
     assert lines[3] == "⏺ 现在是12点"
 
 
@@ -91,9 +95,11 @@ def test_error_and_denied_and_compressed_lines():
 def test_long_tool_content_truncated():
     r, buf = make_renderer()
     tc = ToolCall("c1", "grep", {})
-    r(ToolCallCompleted(tc, "y" * 5000, False))
+    r(ToolCallCompleted(tc, "y" * 20_000, False))
+    assert "yyyy" not in buf.text
+    assert r.expand_tool_output("1")
     assert "工具输出已截断" in buf.text
-    assert len(buf.text) < 3200
+    assert len(buf.text) < 13_500
 
 
 def test_multiline_tool_result_preserves_code_layout():
@@ -105,12 +111,12 @@ def test_multiline_tool_result_preserves_code_layout():
         "     3→        return 'ok'"
     )
     r(ToolCallCompleted(tc, content, False))
-    assert buf.text == (
-        "  ⎿ ✓ read_file\n"
-        "         1→def run():\n"
-        "         2→    if ready:\n"
-        "         3→        return 'ok'\n"
-    )
+    assert "输出已折叠" in buf.text
+    assert "def run" not in buf.text
+    assert r.expand_tool_output("#1")
+    assert "  │      1→def run():" in buf.text
+    assert "  │      2→    if ready:" in buf.text
+    assert "  │      3→        return 'ok'" in buf.text
 
 
 def test_multiline_tool_arguments_are_indented():
@@ -138,15 +144,54 @@ def test_edit_file_diff_colorized():
     tc = ToolCall("c1", "edit_file", {})
     diff = "已编辑 f.py（替换 1 处）\n--- a/f.py\n+++ b/f.py\n@@ -1 +1 @@\n-a = 1\n+a = 2"
     r(ToolCallCompleted(tc, diff, False))
+    assert r.expand_tool_output("1")
     assert GREEN in buf.text and RED in buf.text and RESET in buf.text
-    assert "✓ edit_file: 已编辑 f.py（替换 1 处）" in buf.text
+    assert "edit_file #1" in buf.text and "✓" in buf.text
+    assert TOOL_PANEL_BG in buf.text
 
 
 def test_edit_file_error_not_treated_as_diff():
     r, buf = make_renderer(color=True)
     tc = ToolCall("c1", "edit_file", {})
     r(ToolCallCompleted(tc, "-未找到 old_string", True))
+    assert r.expand_tool_output("1")
     assert GREEN not in buf.text  # 错误信息不走 diff 上色
+
+
+def test_tool_outputs_are_numbered_collapsed_and_individually_expandable():
+    r, buf = make_renderer()
+    first = ToolCall("c1", "read_file", {"path": "a.py"})
+    second = ToolCall("c2", "grep", {"pattern": "x"})
+    r(ToolCallStarted(first))
+    r(ToolCallCompleted(first, "a.py content", False))
+    r(ToolCallStarted(second))
+    r(ToolCallCompleted(second, "a.py:1: x", False))
+    assert "#1 · 1 行" in buf.text and "#2 · 1 行" in buf.text
+    assert "a.py content" not in buf.text and "a.py:1: x" not in buf.text
+    assert r.expand_tool_output("last")
+    assert "a.py:1: x" in buf.text
+    assert "a.py content" not in buf.text
+
+
+def test_tool_call_ids_can_repeat_across_runs():
+    r, buf = make_renderer()
+    for value in ("first", "second"):
+        r(RunStarted("q"))
+        tc = ToolCall("c1", "get_time", {})
+        r(ToolCallStarted(tc))
+        r(ToolCallCompleted(tc, value, False))
+    assert len(r.tool_outputs) == 2
+    assert "#1 · 1 行" in buf.text and "#2 · 1 行" in buf.text
+
+
+def test_tool_output_panel_has_gray_background():
+    r, buf = make_renderer(color=True)
+    tc = ToolCall("c1", "run_command", {"command": "pwd"})
+    r(ToolCallCompleted(tc, "exit_code: 0\n/tmp", False))
+    assert r.expand_tool_output("1")
+    assert TOOL_PANEL_BG in buf.text
+    assert f"│ exit_code: 0" in buf.text
+    assert f"│ /tmp" in buf.text
 
 
 def test_colorize_diff_pure_function():

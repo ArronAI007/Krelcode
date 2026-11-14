@@ -107,6 +107,7 @@ def test_slash_commands_filter_by_prefix():
 def test_running_suggests_thinking_stop_and_exit():
     assert match_slash_commands("/", running=True) == [
         ("/thinking", "展开最近一次思考"),
+        ("/tool-output", "查看或展开工具输出"),
         ("/stop", "中止正在运行的任务"),
         ("/exit", "退出 Krelcode"),
     ]
@@ -291,7 +292,11 @@ def test_tool_lines_use_tree_markers():
     r(ToolCallCompleted(tc, "exit_code: 0\n/tmp", False))
     text = buf.text
     assert f"  {ASSISTANT_MARK}run_command(" in text
-    assert f"  {RESULT_MARK}✓ run_command\n    exit_code: 0\n    /tmp" in text
+    assert f"  {RESULT_MARK}✓ run_command #1" in text
+    assert "输出已折叠（/tool-output 1 展开）" in text
+    assert "exit_code: 0" not in text
+    assert r.expand_tool_output("1")
+    assert "│ exit_code: 0\n" in buf.text and "│ /tmp" in buf.text
 
 
 # -- 回答结束不产生多余空行 ---------------------------------------------------------------------
