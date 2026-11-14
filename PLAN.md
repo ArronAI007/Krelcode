@@ -108,8 +108,9 @@
 | 62 | 全局安装器 | 新增 `install.sh`：优先 `uv tool install`，uv 缺失或失败时提供 Krelcode 私有 venv 回退；自动写入 shell PATH、支持本地源码/GitHub/tag/升级/卸载/dry-run；私有环境从源码复制，无需 pip/setuptools 网络依赖；卸载保留 `~/.krelcode` 用户配置 | 3 个安装器测试：语法/帮助、dry-run 源解析、含空格路径的离线全局安装、导入路径、PATH 写入与卸载 | ✅ |
 | 63 | 全局安装容错 | 修复 uv 在找不到固定 Python 版本时尝试从 GitHub 下载、失败后又无法发现本机解释器的问题：通用探测显式解释器、PATH、VIRTUAL_ENV、CONDA、pyenv、asdf、mise、uv 管理版本和常见兜底路径；使用 uv 时禁止再次下载 Python，失败自动回退私有 venv；新增 `--python PATH` 与 `--python-mirror URL` | 安装器测试增加 fake uv 参数/环境断言，验证复用本机 Python、`UV_PYTHON_DOWNLOADS=never`、uv 失败回退与最终命令可运行 | ✅ |
 | 64 | 零参数安装体验 | 默认流程改为自动发现 Python 3.11+ 后直接创建 Krelcode 私有 venv，普通安装不再调用 uv 或下载 Python；仅系统没有兼容 Python、或 venv 创建失败时，才自动准备 uv 和独立 Python；支持 uv 自举；帮助与 README 只保留一条安装命令，解释器/镜像等降为高级兜底 | 安装器测试验证系统 Python 安装不会调用 uv、含空格路径、自动 PATH、版本、导入和卸载；临时 HOME 下真实执行默认安装流程并通过 | ✅ |
+| 65 | 进程入口分流 | 对齐 Claude Code 的 `cli → main → app` 延迟加载边界：控制台脚本与 `python -m krelcode` 统一进入轻量 `entrypoints.cli`；`--version` 零配置、零 Agent 依赖直接返回；完整 argparse/help 与 doctor/init/review 路由移入 `entrypoints.main`；Provider/MCP/Sandbox/REPL 只在对话或 headless run 时由 `app.py` 组装。app.main/build_parser 保留兼容委托，不建立第二套参数定义 | 9 个新入口测试：版本不加载 main/app/config、坏配置仍可输出版本、`python -m` 一致性、argv 原样转发、option-value 不误判、doctor 不加载组装根、help 不加载组装根、全量 642 通过（2 个本地端口测试 skip） | ✅ |
 
-| 测试总数：619（离线 617 + 本地端口集成 2，沙箱内自动 skip） |
+| 测试总数：644（642 离线通过 + 2 个本地端口集成，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

@@ -43,8 +43,11 @@ src/krelcode/
 ├── session/     # (Step 8) JSONL 持久化，事件总线订阅者
 ├── ui/          # 交互层：事件总线订阅者，不被任何层引用
 │   └── repl.py
+├── entrypoints/ # 进程入口：light cli fast-path → full main → lazy app
+│   ├── cli.py   # --version 零配置/零 Agent 依赖；其余 argv 原样下发
+│   └── main.py  # 完整参数解析 + doctor/init/review/REPL 路由
 ├── app.py       # 组装根(composition root)：唯一知道所有具体类的地方
-└── __main__.py
+└── __main__.py  # 与控制台脚本共用 entrypoints.cli:main
 ```
 
 依赖方向（严格单向）：
@@ -470,6 +473,26 @@ Skill 是用户可安装的指令包，不是 Python 插件；Krelcode 只解析
 安全边界：Skill 正文和 bundled script 都来自用户安装内容，等同用户信任的
 指令/代码；脚本仍必须审批。模型不能借资源 reader 越过 Skill 根目录，也不应
 把 Skill 当作任意文件的通用读取后门。
+
+## 进程入口分流
+
+控制台脚本和 `python -m krelcode` 都进入 `entrypoints/cli.py`，与 Claude Code
+的 `cli → main` 分层一致：
+
+```
+argv
+ └─ cli.py（仅标准库）
+     ├─ argv[0] == --version → 直接输出版本（不读配置、不导入 Agent）
+     └─ 其他 → 延迟导入 entrypoints/main.py
+                ├─ 完整 argparse/help
+                ├─ doctor / init → 仅加载命令所需模块
+                ├─ review → 延迟加载 review runner
+                └─ 对话 / -m → 最后才导入 app.py 组装 Provider/MCP/Sandbox/UI
+```
+
+这里不做两套参数定义：fast-path 只识别无歧义的版本请求，所有正式参数语义仍由
+完整 parser 负责；未识别参数原样转发。未来 bridge/daemon/background/template
+runner 可在 cli 层增加独立动态导入项，而无需把对应实现拉进默认启动路径。
 
 ## CLI 子命令（Step 28）
 

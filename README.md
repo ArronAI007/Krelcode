@@ -234,6 +234,7 @@ agent/   AgentLoop 主循环（只依赖端口，不认识具体工具/模型）
 tools/   Tool 端口 + Registry + builtin/（每工具一个文件）
 skills/  SKILL.md 发现/解析、渐进加载、资源、脚本、热重载
 safety/  ApprovalPolicy 端口（Step 6 加沙箱）
+entrypoints/ 进程入口：cli 轻量 fast-path → main 完整参数路由 → app 按需启动
 ui/      REPL（事件总线旁路订阅者）
 app.py   组装根：唯一知道所有具体类的地方，负责依赖注入
 ```

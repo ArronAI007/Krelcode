@@ -19,7 +19,7 @@ classifiers = [
 ]
 
 [project.scripts]
-krelcode = "krelcode.app:main"
+krelcode = "krelcode.entrypoints.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]

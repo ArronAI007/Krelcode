@@ -21,14 +21,14 @@ def test_pyproject_metadata():
     assert project["dependencies"] == []           # 零第三方运行时依赖的承诺
     assert project["requires-python"] == ">=3.11"  # tomllib 需要 3.11+
     # 控制台入口
-    assert project["scripts"]["krelcode"] == "krelcode.app:main"
+    assert project["scripts"]["krelcode"] == "krelcode.entrypoints.cli:main"
     # 版本与包内 __version__ 一致
     import krelcode
     assert project["version"] == krelcode.__version__
 
 
 def test_entry_point_callable():
-    from krelcode.app import main
+    from krelcode.entrypoints.cli import main
     assert callable(main)
 
 
