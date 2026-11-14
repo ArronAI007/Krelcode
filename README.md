@@ -26,7 +26,8 @@ krelcode
 - 没有 `uv` 时自动回退到 Krelcode 私有 venv；该环境只供 Krelcode 使用，用户无需操作。
 - 默认环境目录为 `~/.local/share/krelcode`，命令安装到 `~/.local/bin/krelcode`。
 - 安装器会把 `~/.local/bin` 写入当前 shell 配置；新终端中可直接运行 `krelcode`。
-- macOS/Linux 支持一键安装；私有 venv 回退需要 Python ≥ 3.11，使用 uv 时可由 uv 管理 Python 版本。
+- 安装器不假设 Python 来自某个固定目录：依次检查显式解释器、PATH、当前虚拟环境、conda/pyenv/asdf/mise 和 uv 已管理的 Python；只有都找不到时才让 uv 下载。
+- macOS/Linux 支持一键安装；Python 必须在 3.11+，或由 uv 自动安装。
 
 在源码目录安装：
 
@@ -44,13 +45,22 @@ krelcode --version
 ./install.sh --uninstall              # 卸载程序，保留 ~/.krelcode 配置
 ```
 
+如果 uv 下载 Python 失败，可以复用已有解释器，或指定 Python 下载镜像：
+
+```bash
+./install.sh --python /path/to/python3.12
+./install.sh --python-mirror https://your-mirror.example/python-build-standalone
+```
+
+等价环境变量为 `KRELCODE_PYTHON`、`KRELCODE_PYTHON_MIRROR` 和 `KRELCODE_PYTHON_VERSION`。私有 venv 回退只需要一个 Python 3.11+ 解释器，不会向当前项目的 venv 安装文件。
+
 从 GitHub 卸载可执行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ArronAI007/Krelcode/main/install.sh | bash -s -- --uninstall
 ```
 
-安装脚本会在运行前自动选择 GitHub 或当前源码树；如需指定版本或安装源，可使用 `--tag v0.57.0`、`--source <路径|URL>`。开发调试仍可使用 `pip install -e .`。
+安装脚本会在运行前自动选择 GitHub 或当前源码树；如需指定版本或安装源，可使用 `--tag v0.57.1`、`--source <路径|URL>`。开发调试仍可使用 `pip install -e .`。
 
 ## 起步
 

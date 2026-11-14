@@ -48,12 +48,24 @@ def test_installer_is_executable_and_has_valid_help():
 def test_installer_dry_run_resolves_local_source_and_tag():
     local = run_installer(
         "--dry-run", "--source", str(ROOT),
+        "--python", sys.executable,
         "--home", "/tmp/krelcode-test", "--bin-dir", "/tmp/krelcode-bin",
         "--no-modify-path",
     )
     assert local.returncode == 0, local.stderr
     assert f"source={ROOT}" in local.stdout
     assert "backend=" in local.stdout
+    assert f"local_python={sys.executable}" in local.stdout
+
+    mirrored = run_installer(
+        "--dry-run", "--source", str(ROOT), "--python", sys.executable,
+        "--python-mirror", "https://mirror.example/python",
+        "--home", "/tmp/krelcode-test", "--bin-dir", "/tmp/krelcode-bin",
+        "--no-modify-path",
+    )
+    assert mirrored.returncode == 0, mirrored.stderr
+    assert f"local_python={sys.executable}" in mirrored.stdout
+    assert "python_mirror=https://mirror.example/python" in mirrored.stdout
 
     tagged = run_installer(
         "--dry-run", "--tag", f"v{VERSION}",
@@ -64,7 +76,7 @@ def test_installer_dry_run_resolves_local_source_and_tag():
     assert f"source=git+https://github.com/ArronAI007/Krelcode.git@v{VERSION}" in tagged.stdout
 
 
-def test_private_venv_install_is_offline_global_and_uninstall_keeps_config(tmp_path):
+def test_uv_failure_falls_back_to_offline_global_install(tmp_path):
     home = tmp_path / "home dir"
     install_root = tmp_path / "app home"
     bin_dir = tmp_path / "bin dir"
@@ -72,6 +84,21 @@ def test_private_venv_install_is_offline_global_and_uninstall_keeps_config(tmp_p
     config = home / ".krelcode" / "config.toml"
     config.parent.mkdir()
     config.write_text("default_provider = \"mock\"\n", encoding="utf-8")
+
+    fake_bin = tmp_path / "fake bin"
+    fake_bin.mkdir()
+    uv_log = tmp_path / "uv args.log"
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        "#!/bin/sh\n"
+        "{\n"
+        "  printf 'UV_PYTHON_DOWNLOADS=%s\\n' \"${UV_PYTHON_DOWNLOADS:-}\"\n"
+        "  printf 'ARG=%s\\n' \"$@\"\n"
+        "} > \"$KRELCODE_UV_LOG\"\n"
+        "exit 42\n",
+        encoding="utf-8",
+    )
+    fake_uv.chmod(0o755)
 
     env = dict(os.environ)
     # 模拟真实用户环境，避免源码测试的 PYTHONPATH 覆盖私有环境安装包。
@@ -82,14 +109,22 @@ def test_private_venv_install_is_offline_global_and_uninstall_keeps_config(tmp_p
         "ZDOTDIR": str(home),
         "SHELL": "/bin/zsh",
         "KRELCODE_PYTHON": sys.executable,
+        "KRELCODE_UV_LOG": str(uv_log),
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
     })
     common = (
-        "--no-uv", "--source", str(ROOT), "--home", str(install_root),
+        "--source", str(ROOT), "--home", str(install_root),
         "--bin-dir", str(bin_dir),
     )
     installed = run_installer(*common, env=env)
     assert installed.returncode == 0, installed.stderr + installed.stdout
     assert "无需构建依赖" in installed.stdout
+    assert "uv 安装失败，回退到 Krelcode 私有 venv" in installed.stdout
+    uv_args = uv_log.read_text(encoding="utf-8")
+    assert "UV_PYTHON_DOWNLOADS=never" in uv_args
+    assert "ARG=--no-build-isolation" in uv_args
+    assert "ARG=--python" in uv_args
+    assert f"ARG={sys.executable}" in uv_args
 
     command = bin_dir / "krelcode"
     assert command.is_symlink()

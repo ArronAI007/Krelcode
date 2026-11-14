@@ -7,6 +7,7 @@ DEFAULT_REPO="https://github.com/ArronAI007/Krelcode.git"
 INSTALL_ROOT="${KRELCODE_INSTALL_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/krelcode}"
 BIN_DIR="${KRELCODE_BIN_DIR:-$HOME/.local/bin}"
 PYTHON_SPEC="${KRELCODE_PYTHON_VERSION:-3.12}"
+PYTHON_MIRROR="${KRELCODE_PYTHON_MIRROR:-}"
 SOURCE=""
 SOURCE_EXPLICIT=0
 TAG=""
@@ -29,10 +30,11 @@ Krelcode 全局安装器
 
 选项:
   --source PATH|URL     安装源（默认自动选择当前源码树或 GitHub 仓库）
-  --tag TAG             从 GitHub 安装指定 tag，如 --tag v0.57.0
+  --tag TAG             从 GitHub 安装指定 tag，如 --tag v0.57.1
   --home PATH           私有运行环境目录（默认 ~/.local/share/krelcode）
   --bin-dir PATH        可执行文件目录（默认 ~/.local/bin）
-  --python VERSION      uv 使用的 Python 版本（默认 3.12）
+  --python VERSION|PATH 指定 Python 版本或解释器；默认优先复用本机 Python 3.11+
+  --python-mirror URL    uv 下载 Python 时使用的镜像地址
   --no-uv               不使用 uv，改用私有的标准库 venv 环境
   --no-modify-path      不自动向 shell 配置写入 PATH
   --force               覆盖非 Krelcode 管理的同名命令
@@ -40,6 +42,11 @@ Krelcode 全局安装器
   --uninstall           卸载程序；保留 ~/.krelcode 用户配置
   --dry-run             只打印安装计划，不修改文件
   -h, --help            显示帮助
+
+环境变量:
+  KRELCODE_PYTHON         指定 Python 解释器路径（优先级最高）
+  KRELCODE_PYTHON_VERSION  指定 Python 版本请求
+  KRELCODE_PYTHON_MIRROR    uv 下载 Python 使用的镜像
 
 安装器会自行创建 Krelcode 私有环境。用户不需要运行 python -m venv，
 也不需要手动激活环境；安装完成后直接运行 krelcode。
@@ -60,6 +67,7 @@ while [[ $# -gt 0 ]]; do
         --home) need_value "$@"; INSTALL_ROOT="$2"; shift 2 ;;
         --bin-dir) need_value "$@"; BIN_DIR="$2"; shift 2 ;;
         --python) need_value "$@"; PYTHON_SPEC="$2"; shift 2 ;;
+        --python-mirror) need_value "$@"; PYTHON_MIRROR="$2"; shift 2 ;;
         --no-uv) USE_UV=0; shift ;;
         --no-modify-path) MODIFY_PATH=0; shift ;;
         --force) FORCE=1; shift ;;
@@ -89,13 +97,135 @@ BIN_DIR="$(expand_path "$BIN_DIR")"
 [[ -n "$INSTALL_ROOT" && "$INSTALL_ROOT" != "/" && "$INSTALL_ROOT" != "$HOME" ]] \
     || die "拒绝使用不安全的安装目录: $INSTALL_ROOT"
 
+try_python() {
+    local candidate="$1"
+    local resolved
+    [[ -n "$candidate" ]] || return 1
+    if [[ "$candidate" == */* ]]; then
+        [[ -x "$candidate" ]] || return 1
+        resolved="$candidate"
+    else
+        resolved="$(command -v "$candidate" 2>/dev/null || true)"
+        [[ -n "$resolved" ]] || return 1
+    fi
+    "$resolved" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' \
+        >/dev/null 2>&1 || return 1
+    printf '%s' "$resolved"
+}
+
 find_python() {
-    local candidate
-    for candidate in "${KRELCODE_PYTHON:-}" python3 python; do
-        [[ -n "$candidate" ]] || continue
-        if command -v "$candidate" >/dev/null 2>&1 && \
-           "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
-            command -v "$candidate"
+    local requested="${1:-}"
+    local candidates=()
+    local candidate resolved base root uv_python_dir
+
+    # 1) 显式解释器、用户请求的版本，以及 PATH 中的常见命令。
+    [[ -n "${KRELCODE_PYTHON:-}" ]] && candidates+=("$KRELCODE_PYTHON")
+    if [[ -n "$requested" ]]; then
+        case "$requested" in
+            */*) candidates+=("$requested") ;;
+            python*) candidates+=("$requested") ;;
+            [0-9]*) candidates+=("python$requested") ;;
+            *) candidates+=("$requested") ;;
+        esac
+    fi
+    candidates+=(python3.14 python3.13 python3.12 python3.11 python3 python)
+    for candidate in "${candidates[@]}"; do
+        if resolved="$(try_python "$candidate")"; then
+            printf '%s' "$resolved"
+            return 0
+        fi
+    done
+
+    # 2) 当前 shell 与版本管理器已经知道的环境。
+    candidates=("")
+    [[ -n "${VIRTUAL_ENV:-}" ]] && candidates+=("$VIRTUAL_ENV/bin/python")
+    [[ -n "${CONDA_PREFIX:-}" ]] && candidates+=("$CONDA_PREFIX/bin/python")
+    if [[ -n "${CONDA_EXE:-}" && "${CONDA_EXE%/bin/conda}" != "$CONDA_EXE" ]]; then
+        candidates+=("${CONDA_EXE%/bin/conda}/bin/python")
+    fi
+    uv_python_dir="${UV_PYTHON_INSTALL_DIR:-$HOME/.local/share/uv/python}"
+    for candidate in "$uv_python_dir"/*/bin/python3 "$uv_python_dir"/*/bin/python \
+                     "$INSTALL_ROOT"/python/*/bin/python3 "$INSTALL_ROOT"/python/*/bin/python; do
+        [[ -e "$candidate" ]] && candidates+=("$candidate")
+    done
+    for root in "$HOME/.pyenv/versions" "$HOME/.asdf/installs/python" \
+                "$HOME/.local/share/mise/installs/python"; do
+        for candidate in "$root"/*/bin/python "$root"/*/bin/python3; do
+            [[ -e "$candidate" ]] && candidates+=("$candidate")
+        done
+    done
+    for candidate in "${candidates[@]}"; do
+        if resolved="$(try_python "$candidate")"; then
+            printf '%s' "$resolved"
+            return 0
+        fi
+    done
+
+    # 3) 通过已安装的管理工具动态查询，而不是假设固定安装目录。
+    if [[ -n "${UV_BIN:-}" ]]; then
+        for base in 3.14 3.13 3.12 3.11 3; do
+            resolved="$(UV_PYTHON_INSTALL_DIR="$INSTALL_ROOT/python" \
+                UV_PYTHON_DOWNLOADS=never "$UV_BIN" python find "$base" \
+                --no-project --no-cache 2>/dev/null || true)"
+            if resolved="$(try_python "$resolved")"; then
+                printf '%s' "$resolved"
+                return 0
+            fi
+        done
+    fi
+    if command -v conda >/dev/null 2>&1; then
+        base="$(conda info --base 2>/dev/null || true)"
+        if resolved="$(try_python "$base/bin/python")"; then
+            printf '%s' "$resolved"
+            return 0
+        fi
+    fi
+    if command -v pyenv >/dev/null 2>&1; then
+        resolved="$(pyenv which python 2>/dev/null || true)"
+        if resolved="$(try_python "$resolved")"; then
+            printf '%s' "$resolved"
+            return 0
+        fi
+    fi
+    if command -v asdf >/dev/null 2>&1; then
+        resolved="$(asdf where python 2>/dev/null || true)/bin/python"
+        if resolved="$(try_python "$resolved")"; then
+            printf '%s' "$resolved"
+            return 0
+        fi
+    fi
+    if command -v mise >/dev/null 2>&1; then
+        resolved="$(mise which python 2>/dev/null || true)"
+        if resolved="$(try_python "$resolved")"; then
+            printf '%s' "$resolved"
+            return 0
+        fi
+    fi
+    if command -v brew >/dev/null 2>&1; then
+        for base in 3.14 3.13 3.12 3.11; do
+            resolved="$(brew --prefix "python@$base" 2>/dev/null || true)/bin/python3"
+            if resolved="$(try_python "$resolved")"; then
+                printf '%s' "$resolved"
+                return 0
+            fi
+        done
+        resolved="$(brew --prefix python3 2>/dev/null || true)/bin/python3"
+        if resolved="$(try_python "$resolved")"; then
+            printf '%s' "$resolved"
+            return 0
+        fi
+    fi
+
+    # 4) 常见路径只作为最后兜底。
+    candidates=(
+        /opt/homebrew/bin/python3 /usr/local/bin/python3
+        /opt/anaconda3/bin/python /opt/conda/bin/python
+        "$HOME/anaconda3/bin/python" "$HOME/miniconda3/bin/python"
+        "$HOME/miniforge3/bin/python" /usr/bin/python3
+    )
+    for candidate in "${candidates[@]}"; do
+        if resolved="$(try_python "$candidate")"; then
+            printf '%s' "$resolved"
             return 0
         fi
     done
@@ -133,6 +263,16 @@ if [[ "$USE_UV" == 1 ]] && command -v uv >/dev/null 2>&1; then
     UV_BIN="$(command -v uv)"
 fi
 
+if [[ "$PYTHON_SPEC" == */* ]]; then
+    LOCAL_PYTHON="$(try_python "$PYTHON_SPEC")" || \
+        die "--python 指定的解释器不存在或版本低于 3.11: $PYTHON_SPEC"
+elif [[ -n "${KRELCODE_PYTHON:-}" ]]; then
+    LOCAL_PYTHON="$(try_python "$KRELCODE_PYTHON")" || \
+        die "KRELCODE_PYTHON 指定的解释器不存在或版本低于 3.11: $KRELCODE_PYTHON"
+else
+    LOCAL_PYTHON="$(find_python "$PYTHON_SPEC" || true)"
+fi
+
 if [[ "$DRY_RUN" == 1 ]]; then
     if [[ "$ACTION" == "uninstall" ]]; then
         printf 'action=uninstall\ninstall_root=%s\nbin_dir=%s\n' "$INSTALL_ROOT" "$BIN_DIR"
@@ -143,8 +283,9 @@ if [[ "$DRY_RUN" == 1 ]]; then
     else
         backend="private-venv"
     fi
-    printf 'action=install\nbackend=%s\nsource=%s\ninstall_root=%s\nbin_dir=%s\npython=%s\n' \
-        "$backend" "$SOURCE" "$INSTALL_ROOT" "$BIN_DIR" "$PYTHON_SPEC"
+    printf 'action=install\nbackend=%s\nsource=%s\ninstall_root=%s\nbin_dir=%s\npython=%s\nlocal_python=%s\npython_mirror=%s\n' \
+        "$backend" "$SOURCE" "$INSTALL_ROOT" "$BIN_DIR" "$PYTHON_SPEC" \
+        "${LOCAL_PYTHON:-none}" "${PYTHON_MIRROR:-default}"
     exit 0
 fi
 
@@ -248,22 +389,52 @@ fi
 mkdir -p "$INSTALL_ROOT" "$BIN_DIR"
 
 if [[ -n "$UV_BIN" ]]; then
-    log "使用 uv tool 安装（Krelcode 环境由 uv 隔离管理）"
-    if ! UV_TOOL_DIR="$INSTALL_ROOT/uv/tools" \
-         UV_TOOL_BIN_DIR="$BIN_DIR" \
-         UV_CACHE_DIR="$INSTALL_ROOT/cache/uv" \
-            "$UV_BIN" tool install --force --no-progress \
-            --python "$PYTHON_SPEC" "$SOURCE"; then
-        log "uv 安装失败，回退到 Krelcode 私有 venv"
-        UV_BIN=""
+    if [[ -n "$LOCAL_PYTHON" ]]; then
+        UV_PYTHON="$LOCAL_PYTHON"
+        UV_PYTHON_DOWNLOADS="never"
+        log "使用 uv tool 安装（复用本机 Python: $LOCAL_PYTHON）"
     else
-        BACKEND="uv-tool"
+        log "本机未找到 Python 3.11+，使用 uv 安装独立的 Python $PYTHON_SPEC"
+        UV_PYTHON_INSTALL_ARGS=(python install --no-progress --no-bin)
+        if [[ -n "$PYTHON_MIRROR" ]]; then
+            UV_PYTHON_INSTALL_ARGS+=(--mirror "$PYTHON_MIRROR")
+        fi
+        if UV_PYTHON_INSTALL_DIR="$INSTALL_ROOT/python" \
+           UV_CACHE_DIR="$INSTALL_ROOT/cache/uv" \
+                "$UV_BIN" "${UV_PYTHON_INSTALL_ARGS[@]}" "$PYTHON_SPEC"; then
+            LOCAL_PYTHON="$(find_python "$PYTHON_SPEC" || true)"
+            if [[ -z "$LOCAL_PYTHON" ]]; then
+                log "uv 已安装 Python，但未能定位解释器；检查 $INSTALL_ROOT/python"
+                UV_BIN=""
+            fi
+        else
+            log "uv 无法下载 Python；可使用 --python-mirror 指定镜像"
+            UV_BIN=""
+        fi
+    fi
+    if [[ -n "$UV_BIN" && -n "$LOCAL_PYTHON" ]]; then
+        UV_PYTHON="$LOCAL_PYTHON"
+        UV_PYTHON_DOWNLOADS="never"
+        log "使用 uv tool 安装 Krelcode（解释器: $UV_PYTHON）"
+        if ! UV_TOOL_DIR="$INSTALL_ROOT/uv/tools" \
+             UV_TOOL_BIN_DIR="$BIN_DIR" \
+             UV_CACHE_DIR="$INSTALL_ROOT/cache/uv" \
+             UV_PYTHON_INSTALL_DIR="$INSTALL_ROOT/python" \
+             UV_PYTHON_DOWNLOADS="$UV_PYTHON_DOWNLOADS" \
+                "$UV_BIN" tool install --force --no-progress \
+                --no-build-isolation --python "$UV_PYTHON" "$SOURCE"; then
+            log "uv 安装失败，回退到 Krelcode 私有 venv"
+            UV_BIN=""
+        else
+            BACKEND="uv-tool"
+        fi
     fi
 fi
 
 if [[ -z "$UV_BIN" ]]; then
-    PYTHON_BIN="$(find_python)" || die \
-        "未找到 Python 3.11+，也没有 uv。请安装 Python 3.11+ 或 uv 后重试。"
+    [[ -n "$LOCAL_PYTHON" ]] || die \
+        "未找到可用的 Python 3.11+。请安装 Python，或修复 uv；也可用 KRELCODE_PYTHON=/path/to/python 指定解释器。"
+    PYTHON_BIN="$LOCAL_PYTHON"
     log "使用 Krelcode 私有 venv 安装（用户无需手动激活）"
     rm -rf "$INSTALL_ROOT/venv"
     "$PYTHON_BIN" -m venv "$INSTALL_ROOT/venv"

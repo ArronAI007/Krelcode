@@ -5,13 +5,13 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（v0.57.0 / Step 62）
+## 1. 项目统计（v0.57.1 / Step 63）
 
 | 维度 | 数值 |
 |------|------|
 | 源码 | 11,659 行（Python，**零第三方运行时依赖**） |
 | 测试 | 10,551 行 / 64 个文件 / 619 个用例（离线 617 + 本地端口集成 2，提权环境 619/619 全绿） |
-| 提交 | 62 个增量步骤，每步一个语义化 commit，全部含测试 |
+| 提交 | 63 个增量步骤，每步一个语义化 commit，全部含测试 |
 | 工具 | 内置 10 + 子代理 4 + MCP 远程动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
 | CLI 入口 | REPL 对话 · -m 单次（text/json）· doctor · init · review |
