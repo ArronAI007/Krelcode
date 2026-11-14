@@ -36,7 +36,7 @@ from ..core.messages import (
 )
 from ..llm.base import LLMProvider, StreamFinished, TextDelta, ThinkingDelta
 from .compression import ContextManager
-from .scope import ReadScope, infer_read_scope, scope_violation
+from .intent import TurnIntent, infer_turn_intent
 from .tokens import estimate_history_tokens
 from ..safety.policy import ApprovalPolicy
 from ..tools.base import ToolContext, ToolResult
@@ -86,7 +86,7 @@ class AgentLoop:
         self.redactor = redactor
         self._token_total = 0
         self._failure_counts: Dict[str, int] = {}
-        self._read_scope: Optional[ReadScope] = None
+        self._turn_intent = TurnIntent()
         # 运行中用户插话队列（REPL steering）：每个 step 开始前注入历史
         self.steering_queue: asyncio.Queue = asyncio.Queue()
         self.history: List[Message] = (
@@ -113,7 +113,8 @@ class AgentLoop:
         self.history.append(Message.user(user_input, images=images or None))
         self._failure_counts = {}
         self._token_total = 0
-        self._read_scope = infer_read_scope(self.tool_context.workspace_root, user_input)
+        self._turn_intent = infer_turn_intent(
+            self.tool_context.workspace_root, user_input)
         await self._emit(RunStarted(user_input))
 
         try:
@@ -187,9 +188,14 @@ class AgentLoop:
         if capabilities is not None and not capabilities.supports_tools:
             tools = None
         else:
-            tools = self.registry.tool_specs() or None
+            specs = [
+                spec for spec in self.registry.tool_specs()
+                if self._turn_intent.allows_tool(spec["name"])
+            ]
+            tools = specs or None
+        messages = self._messages_for_turn()
         finished: Optional[StreamFinished] = None
-        async for event in self.llm.stream(self.history, tools):
+        async for event in self.llm.stream(messages, tools):
             if isinstance(event, TextDelta):
                 await self._emit(LLMStreamDelta(event.text))
             elif isinstance(event, ThinkingDelta):
@@ -204,6 +210,17 @@ class AgentLoop:
             usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
         await self._emit(LLMResponseReceived(finished.message, usage))
         return finished.message
+
+    def _messages_for_turn(self) -> List[Message]:
+        """把本轮意图作为临时 system context 注入，不污染持久历史。"""
+        hint = self._turn_intent.system_hint(self.tool_context.workspace_root)
+        if not hint:
+            return self.history
+        if self.history and self.history[0].role == "system":
+            base = self.history[0].content or ""
+            system = Message.system(base + "\n\n" + hint if base else hint)
+            return [system, *self.history[1:]]
+        return [Message.system(hint), *self.history]
 
     # -- 内部：执行一批工具调用 -------------------------------------------------
 
@@ -291,10 +308,6 @@ class AgentLoop:
                 is_error=True,
             )
         args = dict(tool_call.arguments)
-
-        violation = scope_violation(self._read_scope, tool_call, self.tool_context)
-        if violation is not None:
-            return ToolResult(content=violation, is_error=True)
 
         # 4) 执行（异常 → is_error 结果回填，错误恢复原则）
         try:
