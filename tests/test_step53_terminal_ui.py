@@ -290,7 +290,7 @@ def test_tool_lines_use_tree_markers():
     r(ToolCallCompleted(tc, "exit_code: 0\n/tmp", False))
     text = buf.text
     assert f"  {ASSISTANT_MARK}run_command(" in text
-    assert f"  {RESULT_MARK}✓ run_command → exit_code: 0 /tmp" in text
+    assert f"  {RESULT_MARK}✓ run_command\n    exit_code: 0\n    /tmp" in text
 
 
 # -- 回答结束不产生多余空行 ---------------------------------------------------------------------

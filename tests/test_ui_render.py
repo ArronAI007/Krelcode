@@ -92,7 +92,43 @@ def test_long_tool_content_truncated():
     r, buf = make_renderer()
     tc = ToolCall("c1", "grep", {})
     r(ToolCallCompleted(tc, "y" * 5000, False))
-    assert "…" in buf.text and len(buf.text) < 500
+    assert "工具输出已截断" in buf.text
+    assert len(buf.text) < 3200
+
+
+def test_multiline_tool_result_preserves_code_layout():
+    r, buf = make_renderer()
+    tc = ToolCall("c1", "read_file", {"path": "agent.py"})
+    content = (
+        "     1→def run():\n"
+        "     2→    if ready:\n"
+        "     3→        return 'ok'"
+    )
+    r(ToolCallCompleted(tc, content, False))
+    assert buf.text == (
+        "  ⎿ ✓ read_file\n"
+        "         1→def run():\n"
+        "         2→    if ready:\n"
+        "         3→        return 'ok'\n"
+    )
+
+
+def test_multiline_tool_arguments_are_indented():
+    r, buf = make_renderer()
+    tc = ToolCall("c1", "run_command", {
+        "command": "set -e\necho ready\npytest -q",
+        "timeout": 60,
+    })
+    r(ToolCallStarted(tc))
+    assert buf.text == (
+        "  ⏺ run_command(\n"
+        "    command:\n"
+        "      set -e\n"
+        "      echo ready\n"
+        "      pytest -q\n"
+        "    timeout=60\n"
+        "  )\n"
+    )
 
 
 # -- diff 上色 ---------------------------------------------------------------------------

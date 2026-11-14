@@ -6,9 +6,11 @@ write/color 均可注入，测试无需真实终端。
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
+import textwrap
 from typing import Callable, Optional
 
 from ..core.redact import SecretRedactor
@@ -41,7 +43,12 @@ RESULT_MARK = "⎿ "
 THINKING_MARK = "✻ "
 THINKING_COLLAPSED = f"{THINKING_MARK}Thinking…（已折叠，输入 /thinking 展开）"
 
-TOOL_CONTENT_PREVIEW = 200
+TOOL_ARGUMENT_INLINE_LIMIT = 100
+TOOL_ARGUMENT_PREVIEW_LINES = 8
+TOOL_ARGUMENT_PREVIEW_CHARS = 1200
+TOOL_CONTENT_PREVIEW_LINES = 40
+TOOL_CONTENT_PREVIEW_CHARS = 3000
+TOOL_OUTPUT_INDENT = "    "
 
 
 def auto_color() -> bool:
@@ -113,6 +120,74 @@ def _default_write(s: str) -> None:
     sys.stdout.flush()
 
 
+def _format_json_value(value: object) -> str:
+    """用 JSON 风格显示工具参数；非 JSON 值回退到 repr。"""
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(", ", ": "))
+    except (TypeError, ValueError):
+        return repr(value)
+
+
+def _clip_preview(
+    text: str,
+    max_lines: int,
+    max_chars: int,
+    label: str,
+) -> str:
+    """按行和字符双重上限裁剪预览，明确标记被省略的内容。"""
+    normalized = text.rstrip("\n")
+    lines = normalized.splitlines()
+    if not lines:
+        return "（空）"
+    clipped_lines = lines[:max_lines]
+    clipped = "\n".join(clipped_lines)
+    truncated = len(lines) > max_lines
+    if len(clipped) > max_chars:
+        clipped = clipped[:max_chars].rstrip()
+        truncated = True
+    if truncated:
+        clipped += f"\n…（{label}已截断，共 {len(lines)} 行 / {len(normalized)} 字符）"
+    return clipped
+
+
+def _format_tool_arguments(arguments: dict) -> str:
+    """短参数用近似 Python 调用语法；长参数和多行文本展开并缩进。"""
+    if not arguments:
+        return ""
+    inline = ", ".join(
+        f"{key}={_format_json_value(value)}"
+        for key, value in arguments.items()
+    )
+    has_multiline = any(
+        isinstance(value, str) and "\n" in value
+        for value in arguments.values()
+    )
+    if not has_multiline and len(inline) <= TOOL_ARGUMENT_INLINE_LIMIT:
+        return inline
+
+    lines = []
+    for key, value in arguments.items():
+        if isinstance(value, str) and "\n" in value:
+            lines.append(f"{key}:")
+            preview = _clip_preview(
+                value,
+                TOOL_ARGUMENT_PREVIEW_LINES,
+                TOOL_ARGUMENT_PREVIEW_CHARS,
+                "参数",
+            )
+            lines.extend(f"  {line}" for line in preview.splitlines())
+            continue
+        rendered = f"{key}={_format_json_value(value)}"
+        lines.extend(textwrap.wrap(
+            rendered,
+            width=TOOL_ARGUMENT_INLINE_LIMIT - 8,
+            subsequent_indent="    ",
+            break_long_words=True,
+            break_on_hyphens=False,
+        ) or [rendered])
+    return "\n".join(lines)
+
+
 class StreamRenderer:
     """把事件流渲染到终端：LLM 文本增量流式打印，工具活动打状态行。"""
 
@@ -177,9 +252,7 @@ class StreamRenderer:
             self._write(event.text)
         elif isinstance(event, ToolCallStarted):
             self.end_stream()
-            args = event.tool_call.arguments
-            self._write(
-                f"  {self._mark(ASSISTANT_MARK)}{event.tool_call.name}({args})\n")
+            self._render_tool_call(event)
         elif isinstance(event, ToolCallCompleted):
             self.end_stream()
             self._render_tool_result(event)
@@ -265,7 +338,27 @@ class StreamRenderer:
             if len(lines) > 1:
                 self._write(colorize_diff(lines[1], self._color) + "\n")
             return
-        content = event.content.replace("\n", " ")
-        if len(content) > TOOL_CONTENT_PREVIEW:
-            content = content[:TOOL_CONTENT_PREVIEW] + "…"
-        self._write(f"{prefix}{status} {name} → {content}\n")
+        content = _clip_preview(
+            event.content,
+            TOOL_CONTENT_PREVIEW_LINES,
+            TOOL_CONTENT_PREVIEW_CHARS,
+            "工具输出",
+        )
+        if "\n" not in content:
+            self._write(f"{prefix}{status} {name} → {content}\n")
+            return
+        self._write(f"{prefix}{status} {name}\n")
+        for line in content.splitlines():
+            self._write(f"{TOOL_OUTPUT_INDENT}{line}\n")
+
+    def _render_tool_call(self, event: ToolCallStarted) -> None:
+        name = event.tool_call.name
+        arguments = _format_tool_arguments(event.tool_call.arguments)
+        prefix = f"  {self._mark(ASSISTANT_MARK)}"
+        if "\n" not in arguments:
+            self._write(f"{prefix}{name}({arguments})\n")
+            return
+        self._write(f"{prefix}{name}(\n")
+        for line in arguments.splitlines():
+            self._write(f"{TOOL_OUTPUT_INDENT}{line}\n")
+        self._write("  )\n")
