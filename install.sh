@@ -22,34 +22,40 @@ PATH_END="# <<< krelcode installer <<<"
 
 usage() {
     cat <<'EOF'
-Krelcode 全局安装器
+Krelcode 安装器
 
 用法:
-  ./install.sh [选项]
   curl -fsSL https://raw.githubusercontent.com/ArronAI007/Krelcode/main/install.sh | bash
+  ./install.sh
 
-选项:
-  --source PATH|URL     安装源（默认自动选择当前源码树或 GitHub 仓库）
-  --tag TAG             从 GitHub 安装指定 tag，如 --tag v0.57.1
-  --home PATH           私有运行环境目录（默认 ~/.local/share/krelcode）
-  --bin-dir PATH        可执行文件目录（默认 ~/.local/bin）
-  --python VERSION|PATH 指定 Python 版本或解释器；默认优先复用本机 Python 3.11+
-  --python-mirror URL    uv 下载 Python 时使用的镜像地址
-  --no-uv               不使用 uv，改用私有的标准库 venv 环境
-  --no-modify-path      不自动向 shell 配置写入 PATH
-  --force               覆盖非 Krelcode 管理的同名命令
-  --upgrade             重新安装当前安装源（可与默认源码树/GitHub 配合）
+默认会自动完成所有安装步骤：
+  - 查找系统、conda、pyenv、asdf、mise 或 uv 管理的 Python 3.11+
+  - 创建 Krelcode 私有运行环境，不需要手动创建或激活 venv
+  - 安装 krelcode 命令，并自动配置当前 shell 的 PATH
+
+常用选项:
   --uninstall           卸载程序；保留 ~/.krelcode 用户配置
+  --upgrade             重新安装/升级
   --dry-run             只打印安装计划，不修改文件
   -h, --help            显示帮助
 
-环境变量:
-  KRELCODE_PYTHON         指定 Python 解释器路径（优先级最高）
-  KRELCODE_PYTHON_VERSION  指定 Python 版本请求
-  KRELCODE_PYTHON_MIRROR    uv 下载 Python 使用的镜像
+高级选项（通常不需要）:
+  --source PATH|URL     指定安装源
+  --tag TAG             从 GitHub 安装指定 tag，如 --tag v0.58.0
+  --home PATH           私有运行环境目录
+  --bin-dir PATH        可执行文件目录
+  --python VERSION|PATH 指定 Python 版本或解释器
+  --python-mirror URL   指定 uv 下载 Python 的镜像
+  --no-uv               禁止使用 uv 自动准备 Python
+  --no-modify-path      不修改 shell PATH
+  --force               覆盖非 Krelcode 管理的同名命令
 
-安装器会自行创建 Krelcode 私有环境。用户不需要运行 python -m venv，
-也不需要手动激活环境；安装完成后直接运行 krelcode。
+环境变量:
+  KRELCODE_PYTHON
+  KRELCODE_PYTHON_VERSION
+  KRELCODE_PYTHON_MIRROR
+  KRELCODE_INSTALL_ROOT
+  KRELCODE_BIN_DIR
 EOF
 }
 
@@ -232,6 +238,84 @@ find_python() {
     return 1
 }
 
+find_uv() {
+    local candidate
+    for candidate in "${KRELCODE_UV:-}" uv "$HOME/.local/bin/uv" \
+        "$HOME/.cargo/bin/uv" "$INSTALL_ROOT/bootstrap/uv" \
+        "$INSTALL_ROOT/bootstrap/bin/uv" "$INSTALL_ROOT"/bootstrap/*/uv; do
+        [[ -n "$candidate" ]] || continue
+        if [[ "$candidate" == */* ]]; then
+            [[ -x "$candidate" ]] && printf '%s' "$candidate" && return 0
+        elif command -v "$candidate" >/dev/null 2>&1; then
+            command -v "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+find_krelcode_python() {
+    local candidate resolved
+    for candidate in "$INSTALL_ROOT"/python/*/bin/python3 \
+                     "$INSTALL_ROOT"/python/*/bin/python3.* \
+                     "$INSTALL_ROOT"/python/*/bin/python; do
+        if resolved="$(try_python "$candidate")"; then
+            printf '%s' "$resolved"
+            return 0
+        fi
+    done
+    if [[ -n "${UV_BIN:-}" ]]; then
+        resolved="$(UV_PYTHON_INSTALL_DIR="$INSTALL_ROOT/python" \
+            UV_PYTHON_DOWNLOADS=never "$UV_BIN" python find "$PYTHON_SPEC" \
+            --no-project --no-cache 2>/dev/null || true)"
+        if resolved="$(try_python "$resolved")"; then
+            printf '%s' "$resolved"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+ensure_uv() {
+    [[ -n "$UV_BIN" ]] && return 0
+    local installer_url="https://astral.sh/uv/install.sh"
+    mkdir -p "$INSTALL_ROOT/bootstrap"
+    log "正在准备 Python 运行组件..."
+    if command -v curl >/dev/null 2>&1; then
+        curl -LsSf "$installer_url" | \
+            env UV_INSTALL_DIR="$INSTALL_ROOT/bootstrap" UV_NO_MODIFY_PATH=1 sh \
+            >/dev/null 2>&1 || true
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- "$installer_url" | \
+            env UV_INSTALL_DIR="$INSTALL_ROOT/bootstrap" UV_NO_MODIFY_PATH=1 sh \
+            >/dev/null 2>&1 || true
+    fi
+    UV_BIN="$(find_uv || true)"
+    [[ -n "$UV_BIN" ]]
+}
+
+prepare_uv_python() {
+    ensure_uv || return 1
+    log "正在自动准备 Python $PYTHON_SPEC..."
+    local args
+    args=(python install --no-progress --no-bin)
+    if [[ -n "$PYTHON_MIRROR" ]]; then
+        args+=(--mirror "$PYTHON_MIRROR")
+    fi
+    UV_PYTHON_INSTALL_DIR="$INSTALL_ROOT/python" \
+    UV_CACHE_DIR="$INSTALL_ROOT/cache/uv" \
+        "$UV_BIN" "${args[@]}" "$PYTHON_SPEC" >/dev/null 2>&1 || return 1
+    LOCAL_PYTHON="$(find_krelcode_python || true)"
+    [[ -n "$LOCAL_PYTHON" ]]
+}
+
+create_private_venv() {
+    local python_bin="$1"
+    rm -rf "$INSTALL_ROOT/venv"
+    "$python_bin" -m venv "$INSTALL_ROOT/venv" >/dev/null 2>&1 || return 1
+    [[ -x "$INSTALL_ROOT/venv/bin/python" ]]
+}
+
 default_source() {
     local here=""
     if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
@@ -259,8 +343,8 @@ if [[ -d "$SOURCE" ]]; then
 fi
 
 UV_BIN=""
-if [[ "$USE_UV" == 1 ]] && command -v uv >/dev/null 2>&1; then
-    UV_BIN="$(command -v uv)"
+if [[ "$USE_UV" == 1 ]]; then
+    UV_BIN="$(find_uv || true)"
 fi
 
 if [[ "$PYTHON_SPEC" == */* ]]; then
@@ -278,13 +362,13 @@ if [[ "$DRY_RUN" == 1 ]]; then
         printf 'action=uninstall\ninstall_root=%s\nbin_dir=%s\n' "$INSTALL_ROOT" "$BIN_DIR"
         exit 0
     fi
-    if [[ -n "$UV_BIN" ]]; then
-        backend="uv-tool"
+    if [[ -n "$LOCAL_PYTHON" ]]; then
+        python_origin="system"
     else
-        backend="private-venv"
+        python_origin="uv-auto"
     fi
-    printf 'action=install\nbackend=%s\nsource=%s\ninstall_root=%s\nbin_dir=%s\npython=%s\nlocal_python=%s\npython_mirror=%s\n' \
-        "$backend" "$SOURCE" "$INSTALL_ROOT" "$BIN_DIR" "$PYTHON_SPEC" \
+    printf 'action=install\nbackend=private-venv\nsource=%s\ninstall_root=%s\nbin_dir=%s\npython=%s\npython_origin=%s\nlocal_python=%s\npython_mirror=%s\n' \
+        "$SOURCE" "$INSTALL_ROOT" "$BIN_DIR" "$PYTHON_SPEC" "$python_origin" \
         "${LOCAL_PYTHON:-none}" "${PYTHON_MIRROR:-default}"
     exit 0
 fi
@@ -388,115 +472,83 @@ fi
 
 mkdir -p "$INSTALL_ROOT" "$BIN_DIR"
 
-if [[ -n "$UV_BIN" ]]; then
-    if [[ -n "$LOCAL_PYTHON" ]]; then
-        UV_PYTHON="$LOCAL_PYTHON"
-        UV_PYTHON_DOWNLOADS="never"
-        log "使用 uv tool 安装（复用本机 Python: $LOCAL_PYTHON）"
-    else
-        log "本机未找到 Python 3.11+，使用 uv 安装独立的 Python $PYTHON_SPEC"
-        UV_PYTHON_INSTALL_ARGS=(python install --no-progress --no-bin)
-        if [[ -n "$PYTHON_MIRROR" ]]; then
-            UV_PYTHON_INSTALL_ARGS+=(--mirror "$PYTHON_MIRROR")
-        fi
-        if UV_PYTHON_INSTALL_DIR="$INSTALL_ROOT/python" \
-           UV_CACHE_DIR="$INSTALL_ROOT/cache/uv" \
-                "$UV_BIN" "${UV_PYTHON_INSTALL_ARGS[@]}" "$PYTHON_SPEC"; then
-            LOCAL_PYTHON="$(find_python "$PYTHON_SPEC" || true)"
-            if [[ -z "$LOCAL_PYTHON" ]]; then
-                log "uv 已安装 Python，但未能定位解释器；检查 $INSTALL_ROOT/python"
-                UV_BIN=""
-            fi
-        else
-            log "uv 无法下载 Python；可使用 --python-mirror 指定镜像"
-            UV_BIN=""
-        fi
+# 默认路径：复用系统/版本管理器中的 Python，并创建 Krelcode 私有环境。
+if [[ -z "$LOCAL_PYTHON" ]]; then
+    if [[ "$USE_UV" != 1 ]]; then
+        die "系统未找到 Python 3.11+，且 uv 自动准备已禁用。"
     fi
-    if [[ -n "$UV_BIN" && -n "$LOCAL_PYTHON" ]]; then
-        UV_PYTHON="$LOCAL_PYTHON"
-        UV_PYTHON_DOWNLOADS="never"
-        log "使用 uv tool 安装 Krelcode（解释器: $UV_PYTHON）"
-        if ! UV_TOOL_DIR="$INSTALL_ROOT/uv/tools" \
-             UV_TOOL_BIN_DIR="$BIN_DIR" \
-             UV_CACHE_DIR="$INSTALL_ROOT/cache/uv" \
-             UV_PYTHON_INSTALL_DIR="$INSTALL_ROOT/python" \
-             UV_PYTHON_DOWNLOADS="$UV_PYTHON_DOWNLOADS" \
-                "$UV_BIN" tool install --force --no-progress \
-                --no-build-isolation --python "$UV_PYTHON" "$SOURCE"; then
-            log "uv 安装失败，回退到 Krelcode 私有 venv"
-            UV_BIN=""
-        else
-            BACKEND="uv-tool"
-        fi
-    fi
+    prepare_uv_python || die \
+        "无法自动准备 Python 3.11+。请检查网络后重试。"
 fi
 
-if [[ -z "$UV_BIN" ]]; then
-    [[ -n "$LOCAL_PYTHON" ]] || die \
-        "未找到可用的 Python 3.11+。请安装 Python，或修复 uv；也可用 KRELCODE_PYTHON=/path/to/python 指定解释器。"
-    PYTHON_BIN="$LOCAL_PYTHON"
-    log "使用 Krelcode 私有 venv 安装（用户无需手动激活）"
-    rm -rf "$INSTALL_ROOT/venv"
-    "$PYTHON_BIN" -m venv "$INSTALL_ROOT/venv"
-    VENV_PYTHON="$INSTALL_ROOT/venv/bin/python"
-    [[ -x "$VENV_PYTHON" ]] || die "无法创建私有 Python 环境: $INSTALL_ROOT/venv"
-    ENTRY="$INSTALL_ROOT/venv/bin/$APP_NAME"
-    PROJECT_SOURCE=""
-    if [[ -d "$SOURCE" && -f "$SOURCE/pyproject.toml" && -d "$SOURCE/src/krelcode" ]]; then
-        PROJECT_SOURCE="$SOURCE"
-    elif [[ "$SOURCE" == git+* ]]; then
-        command -v git >/dev/null 2>&1 || die "Git 安装源需要 git（或先安装 uv）"
-        GIT_SPEC="${SOURCE#git+}"
-        GIT_REPO="$GIT_SPEC"
-        GIT_TAG=""
-        if [[ "$GIT_SPEC" == *".git@"* ]]; then
-            GIT_REPO="${GIT_SPEC%.git@*}.git"
-            GIT_TAG="${GIT_SPEC##*.git@}"
-        fi
-        CLONE_DIR="$INSTALL_ROOT/source"
-        rm -rf "$CLONE_DIR"
-        if [[ -n "$GIT_TAG" ]]; then
-            git clone --quiet --depth 1 --branch "$GIT_TAG" "$GIT_REPO" "$CLONE_DIR"
-        else
-            git clone --quiet --depth 1 "$GIT_REPO" "$CLONE_DIR"
-        fi
-        PROJECT_SOURCE="$CLONE_DIR"
+if ! create_private_venv "$LOCAL_PYTHON"; then
+    if [[ "$USE_UV" != 1 ]]; then
+        die "当前 Python 无法创建私有环境；请先确认 python3 -m venv 可用。"
     fi
-
-    if [[ -n "$PROJECT_SOURCE" ]]; then
-        [[ -f "$PROJECT_SOURCE/pyproject.toml" && -d "$PROJECT_SOURCE/src/krelcode" ]] \
-            || die "源码目录结构无效: $PROJECT_SOURCE"
-        SITE_PACKAGES="$("$VENV_PYTHON" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
-        rm -rf "$SITE_PACKAGES/krelcode"
-        cp -R "$PROJECT_SOURCE/src/krelcode" "$SITE_PACKAGES/krelcode"
-        find "$SITE_PACKAGES/krelcode" -type d -name __pycache__ -prune -exec rm -rf {} +
-        find "$SITE_PACKAGES/krelcode" -type f -name '*.pyc' -delete
-        {
-            printf '#!/bin/sh\n'
-            printf 'exec %s -m krelcode "$@"\n' "$(printf '%q' "$VENV_PYTHON")"
-        } > "$ENTRY"
-        chmod +x "$ENTRY"
-        log "已从源码安装纯 Python 包（无需构建依赖）"
-    else
-        PIP_CACHE_DIR="$INSTALL_ROOT/cache/pip" \
-        PIP_DISABLE_PIP_VERSION_CHECK=1 \
-            "$VENV_PYTHON" -m pip install --no-input --upgrade --force-reinstall "$SOURCE"
-    fi
-
-    [[ -x "$ENTRY" ]] || die "安装完成但未生成 $ENTRY"
-    COMMAND_PATH="$BIN_DIR/$APP_NAME"
-    if [[ -e "$COMMAND_PATH" || -L "$COMMAND_PATH" ]]; then
-        if [[ "$FORCE" != 1 ]]; then
-            target="$(readlink "$COMMAND_PATH" 2>/dev/null || true)"
-            case "$target" in
-                "$INSTALL_ROOT"/*) ;;
-                *) die "$COMMAND_PATH 已存在且非本安装器管理；确认可覆盖后使用 --force" ;;
-            esac
-        fi
-    fi
-    ln -sfn "$ENTRY" "$COMMAND_PATH"
-    BACKEND="private-venv"
+    log "当前 Python 无法创建独立环境，正在自动准备专用 Python..."
+    prepare_uv_python || die "无法自动准备可用的 Python 3.11+。"
+    create_private_venv "$LOCAL_PYTHON" || die "无法创建 Krelcode 私有 Python 环境。"
 fi
+
+PYTHON_BIN="$LOCAL_PYTHON"
+PYTHON_VERSION="$("$PYTHON_BIN" -c 'import platform; print(platform.python_version())')"
+log "使用 Python $PYTHON_VERSION 安装（已自动创建独立环境）"
+VENV_PYTHON="$INSTALL_ROOT/venv/bin/python"
+ENTRY="$INSTALL_ROOT/venv/bin/$APP_NAME"
+PROJECT_SOURCE=""
+if [[ -d "$SOURCE" && -f "$SOURCE/pyproject.toml" && -d "$SOURCE/src/krelcode" ]]; then
+    PROJECT_SOURCE="$SOURCE"
+elif [[ "$SOURCE" == git+* ]]; then
+    command -v git >/dev/null 2>&1 || die "从 GitHub 安装需要 git，请先安装 git。"
+    GIT_SPEC="${SOURCE#git+}"
+    GIT_REPO="$GIT_SPEC"
+    GIT_TAG=""
+    if [[ "$GIT_SPEC" == *".git@"* ]]; then
+        GIT_REPO="${GIT_SPEC%.git@*}.git"
+        GIT_TAG="${GIT_SPEC##*.git@}"
+    fi
+    CLONE_DIR="$INSTALL_ROOT/source"
+    rm -rf "$CLONE_DIR"
+    if [[ -n "$GIT_TAG" ]]; then
+        git clone --quiet --depth 1 --branch "$GIT_TAG" "$GIT_REPO" "$CLONE_DIR"
+    else
+        git clone --quiet --depth 1 "$GIT_REPO" "$CLONE_DIR"
+    fi
+    PROJECT_SOURCE="$CLONE_DIR"
+fi
+
+if [[ -n "$PROJECT_SOURCE" ]]; then
+    [[ -f "$PROJECT_SOURCE/pyproject.toml" && -d "$PROJECT_SOURCE/src/krelcode" ]] \
+        || die "源码目录结构无效: $PROJECT_SOURCE"
+    SITE_PACKAGES="$("$VENV_PYTHON" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+    rm -rf "$SITE_PACKAGES/krelcode"
+    cp -R "$PROJECT_SOURCE/src/krelcode" "$SITE_PACKAGES/krelcode"
+    find "$SITE_PACKAGES/krelcode" -type d -name __pycache__ -prune -exec rm -rf {} +
+    find "$SITE_PACKAGES/krelcode" -type f -name '*.pyc' -delete
+    {
+        printf '#!/bin/sh\n'
+        printf 'exec %s -m krelcode "$@"\n' "$(printf '%q' "$VENV_PYTHON")"
+    } > "$ENTRY"
+    chmod +x "$ENTRY"
+else
+    PIP_CACHE_DIR="$INSTALL_ROOT/cache/pip" \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+        "$VENV_PYTHON" -m pip install --no-input --upgrade --force-reinstall "$SOURCE"
+fi
+
+[[ -x "$ENTRY" ]] || die "安装完成但未生成 $ENTRY"
+COMMAND_PATH="$BIN_DIR/$APP_NAME"
+if [[ -e "$COMMAND_PATH" || -L "$COMMAND_PATH" ]]; then
+    if [[ "$FORCE" != 1 ]]; then
+        target="$(readlink "$COMMAND_PATH" 2>/dev/null || true)"
+        case "$target" in
+            "$INSTALL_ROOT"/*) ;;
+            *) die "$COMMAND_PATH 已存在且非本安装器管理；确认可覆盖后使用 --force" ;;
+        esac
+    fi
+fi
+ln -sfn "$ENTRY" "$COMMAND_PATH"
+BACKEND="private-venv"
 
 printf 'backend=%s\nsource=%s\ninstalled_at=%s\n' \
     "$BACKEND" "$SOURCE" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \

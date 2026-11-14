@@ -107,6 +107,7 @@
 | 61 | 运行时 Sandbox 加固 | `ExecutionSandbox` 统一命令/Skill 执行：macOS Seatbelt 与 Linux bubblewrap 文件/网络隔离，实际 probe 失败自动降级 static；静态审计覆盖越界/敏感路径、`sh -c`/`eval` 递归、命令替换、HOME/PWD 变量和已知网络命令；ToolContext 默认挂载，隔离子代理 `rebind()`；API key/token/proxy/SSH agent/动态加载变量统一剥离，HOME/TMP/cache 重定向；grep/glob/repo_map/find_refs/check_syntax 防 symlink 越界与敏感文件；MCP stdio 不继承宿主秘密；CLI/TOML 可配置 backend/network；doctor 显示实际后端并警告 static 降级 | 21 个新测试：审计绕过矩阵、后端 probe/fallback、Seatbelt profile/bwrap argv、环境净化、run_command/Skill 接线、五类搜索 symlink、MCP env、build_loop/no-sandbox/TOML/rebind、doctor Sandbox 报告；全量 614 通过（2 个本地端口测试 skip） | ✅ |
 | 62 | 全局安装器 | 新增 `install.sh`：优先 `uv tool install`，uv 缺失或失败时提供 Krelcode 私有 venv 回退；自动写入 shell PATH、支持本地源码/GitHub/tag/升级/卸载/dry-run；私有环境从源码复制，无需 pip/setuptools 网络依赖；卸载保留 `~/.krelcode` 用户配置 | 3 个安装器测试：语法/帮助、dry-run 源解析、含空格路径的离线全局安装、导入路径、PATH 写入与卸载 | ✅ |
 | 63 | 全局安装容错 | 修复 uv 在找不到固定 Python 版本时尝试从 GitHub 下载、失败后又无法发现本机解释器的问题：通用探测显式解释器、PATH、VIRTUAL_ENV、CONDA、pyenv、asdf、mise、uv 管理版本和常见兜底路径；使用 uv 时禁止再次下载 Python，失败自动回退私有 venv；新增 `--python PATH` 与 `--python-mirror URL` | 安装器测试增加 fake uv 参数/环境断言，验证复用本机 Python、`UV_PYTHON_DOWNLOADS=never`、uv 失败回退与最终命令可运行 | ✅ |
+| 64 | 零参数安装体验 | 默认流程改为自动发现 Python 3.11+ 后直接创建 Krelcode 私有 venv，普通安装不再调用 uv 或下载 Python；仅系统没有兼容 Python、或 venv 创建失败时，才自动准备 uv 和独立 Python；支持 uv 自举；帮助与 README 只保留一条安装命令，解释器/镜像等降为高级兜底 | 安装器测试验证系统 Python 安装不会调用 uv、含空格路径、自动 PATH、版本、导入和卸载；临时 HOME 下真实执行默认安装流程并通过 | ✅ |
 
 | 测试总数：619（离线 617 + 本地端口集成 2，沙箱内自动 skip） |
 

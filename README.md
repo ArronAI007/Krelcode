@@ -12,7 +12,7 @@
 
 ## 安装
 
-### 一键全局安装（推荐）
+### 一键安装
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ArronAI007/Krelcode/main/install.sh | bash
@@ -20,47 +20,41 @@ krelcode --version
 krelcode
 ```
 
-安装器会自动准备 Krelcode 私有的隔离运行环境，**不需要手动执行 `python -m venv`，也不需要激活虚拟环境**：
+安装器会自动完成环境准备，用户不需要手动创建或激活虚拟环境：
 
-- 系统已有 `uv` 时优先使用 `uv tool install`，由 uv 管理 Python 环境。
-- 没有 `uv` 时自动回退到 Krelcode 私有 venv；该环境只供 Krelcode 使用，用户无需操作。
-- 默认环境目录为 `~/.local/share/krelcode`，命令安装到 `~/.local/bin/krelcode`。
-- 安装器会把 `~/.local/bin` 写入当前 shell 配置；新终端中可直接运行 `krelcode`。
-- 安装器不假设 Python 来自某个固定目录：依次检查显式解释器、PATH、当前虚拟环境、conda/pyenv/asdf/mise 和 uv 已管理的 Python；只有都找不到时才让 uv 下载。
-- macOS/Linux 支持一键安装；Python 必须在 3.11+，或由 uv 自动安装。
+- 自动查找系统、conda、pyenv、asdf、mise 或 uv 管理的 Python 3.11+。
+- 找到 Python 后直接创建 Krelcode 私有运行环境。
+- 系统没有可用 Python 时，安装器会自动准备 uv 和独立 Python。
+- 自动安装 `krelcode` 命令到 `~/.local/bin`，并配置当前 shell 的 PATH。
+- 卸载时保留用户配置 `~/.krelcode`。
 
 在源码目录安装：
 
 ```bash
 ./install.sh
-krelcode --version
 ```
 
-常用维护命令：
-
-```bash
-./install.sh --dry-run                # 只查看安装计划
-./install.sh --no-uv                  # 强制使用私有 venv
-./install.sh --upgrade                # 重新安装/升级
-./install.sh --uninstall              # 卸载程序，保留 ~/.krelcode 配置
-```
-
-如果 uv 下载 Python 失败，可以复用已有解释器，或指定 Python 下载镜像：
-
-```bash
-./install.sh --python /path/to/python3.12
-./install.sh --python-mirror https://your-mirror.example/python-build-standalone
-```
-
-等价环境变量为 `KRELCODE_PYTHON`、`KRELCODE_PYTHON_MIRROR` 和 `KRELCODE_PYTHON_VERSION`。私有 venv 回退只需要一个 Python 3.11+ 解释器，不会向当前项目的 venv 安装文件。
-
-从 GitHub 卸载可执行：
+卸载：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ArronAI007/Krelcode/main/install.sh | bash -s -- --uninstall
 ```
 
-安装脚本会在运行前自动选择 GitHub 或当前源码树；如需指定版本或安装源，可使用 `--tag v0.57.1`、`--source <路径|URL>`。开发调试仍可使用 `pip install -e .`。
+<details>
+<summary>高级安装选项（通常不需要）</summary>
+
+```bash
+./install.sh --dry-run                # 只查看安装计划
+./install.sh --upgrade                # 重新安装/升级
+./install.sh --no-modify-path         # 不修改 shell PATH
+./install.sh --python /path/to/python3.12
+./install.sh --python-mirror https://your-mirror.example/python-build-standalone
+./install.sh --tag v0.58.0
+```
+
+对应环境变量为 `KRELCODE_PYTHON`、`KRELCODE_PYTHON_VERSION`、`KRELCODE_PYTHON_MIRROR`、`KRELCODE_INSTALL_ROOT` 和 `KRELCODE_BIN_DIR`。这些选项只用于 CI、离线或特殊网络环境；普通用户直接执行默认的一键安装即可。开发调试仍可使用 `pip install -e .`。
+
+</details>
 
 ## 起步
 
