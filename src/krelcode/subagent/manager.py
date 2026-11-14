@@ -42,7 +42,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from ..agent.compression import ContextManager
 from ..agent.context import _git
-from ..agent.loop import AgentLoop
+from ..agent.loop import DEFAULT_MAX_STEPS, AgentLoop
 from ..agent.prompts import build_system_prompt
 from ..session.autocommit import ensure_local_exclude, git_is_repo
 from ..core.events import EventBus, SubagentFinished, SubagentSpawned
@@ -106,7 +106,7 @@ class SubagentManager:
         tool_context: ToolContext,
         policy=None,
         bus: Optional[EventBus] = None,
-        max_steps: int = 30,
+        max_steps: int = DEFAULT_MAX_STEPS,
         context_budget: Optional[int] = None,
         redactor: Optional[SecretRedactor] = None,
         system_prompt_provider: Optional[Callable[[], str]] = None,

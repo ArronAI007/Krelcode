@@ -8,7 +8,7 @@ import asyncio
 from pathlib import Path
 from typing import List
 
-from krelcode.agent.loop import MAX_STEPS_REACHED_TEXT, AgentLoop
+from krelcode.agent.loop import AgentLoop, max_steps_reached_text
 from krelcode.core.events import (
     AgentEvent, LLMResponseReceived, PermissionDenied, RunFinished,
     RunStarted, StepStarted, ToolCallCompleted, ToolCallStarted,
@@ -161,7 +161,9 @@ def test_max_steps_guard():
     loop, _, _ = make_loop([tool_call_msg(), tool_call_msg(), tool_call_msg()],
                            tools=[EchoTool()], max_steps=2)
     reply = asyncio.run(loop.run("x"))
-    assert reply == MAX_STEPS_REACHED_TEXT
+    assert reply == max_steps_reached_text(2)
+    assert "2 个模型步骤" in reply
+    assert "--max-steps 4" in reply
     assert loop.history[-1].role == "assistant"
 
 

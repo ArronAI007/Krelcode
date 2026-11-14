@@ -19,7 +19,7 @@ from .agent.compression import DEFAULT_MAX_TOKENS as DEFAULT_CONTEXT_BUDGET
 from .agent.compression import ContextManager
 from .agent.pricing import default_budget_for
 from .agent.context import build_workspace_context
-from .agent.loop import AgentLoop
+from .agent.loop import DEFAULT_MAX_STEPS, AgentLoop
 from .agent.prompts import build_system_prompt
 from .agent.usage import UsageTracker
 from .config import load_config
@@ -404,7 +404,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--base-url", default=None, help="覆盖 provider 的 base_url（任意兼容端点）")
     p.add_argument("--config", default=None, help="TOML 配置文件路径（默认 krelcode.toml 或 ~/.krelcode/config.toml）")
     p.add_argument("--workspace", default=".", help="工作区根目录（默认当前目录）")
-    p.add_argument("--max-steps", type=int, default=20, help="单轮任务的最大 LLM 迭代步数")
+    p.add_argument(
+        "--max-steps", type=int, default=DEFAULT_MAX_STEPS,
+        help=f"单轮任务的最大 LLM 迭代步数（默认 {DEFAULT_MAX_STEPS}）",
+    )
     p.add_argument("--repeat-failure-limit", type=int, default=3,
                    help="同一调用连续失败多少次判定卡死并中止（默认 3）")
     p.add_argument("--token-budget", type=int, default=None,

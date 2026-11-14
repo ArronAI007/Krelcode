@@ -41,7 +41,17 @@ from ..safety.policy import ApprovalPolicy
 from ..tools.base import ToolContext, ToolResult
 from ..tools.registry import ToolRegistry
 
-MAX_STEPS_REACHED_TEXT = "[krelcode] 已达到最大步数限制，循环中止。"
+DEFAULT_MAX_STEPS = 64
+
+
+def max_steps_reached_text(max_steps: int) -> str:
+    """步数守卫中止说明：同时给出原因和可操作的调整方式。"""
+    return (
+        f"[krelcode] 工具循环已达到单轮 {max_steps} 个模型步骤的安全上限，"
+        f"本轮已中止。可用 --max-steps {max_steps * 2} 提高上限后重试。"
+    )
+
+
 INTERRUPTED_NOTE = "[已被用户中止]"
 STEERING_PREFIX = "[用户插话] "
 
@@ -55,7 +65,7 @@ class AgentLoop:
         policy: Optional[ApprovalPolicy] = None,
         bus: Optional[EventBus] = None,
         system_prompt: str = "",
-        max_steps: int = 20,
+        max_steps: int = DEFAULT_MAX_STEPS,
         repeat_failure_limit: int = 3,
         context_manager: Optional[ContextManager] = None,
         tool_output_inline_limit: int = 12_000,
@@ -128,9 +138,10 @@ class AgentLoop:
             self._repair_after_cancel()
             raise
 
-        self.history.append(Message.assistant(MAX_STEPS_REACHED_TEXT))
-        await self._emit(RunFinished(MAX_STEPS_REACHED_TEXT))
-        return MAX_STEPS_REACHED_TEXT
+        text = max_steps_reached_text(self.max_steps)
+        self.history.append(Message.assistant(text))
+        await self._emit(RunFinished(text))
+        return text
 
     async def _inject_steering(self) -> None:
         """把插话队列里的消息注入历史（每个 step 开始前调用）。

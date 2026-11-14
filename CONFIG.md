@@ -29,7 +29,7 @@ krelcode [子命令] [选项]
 | `--workspace` | `.` | 工作区根（所有路径约束与状态目录的锚点） |
 | `-m`, `--message` | — | 单次提问模式，执行完退出 |
 | `--output-format` | text | `json`：stdout 单行结构化结果（配合 `-m`，CI 用） |
-| `--max-steps` | 20 | 单轮任务最大 LLM 迭代步数 |
+| `--max-steps` | 64 | 单轮任务最大 LLM 迭代步数；达到上限时本轮安全中止，可显式调高 |
 | `--repeat-failure-limit` | 3 | 同签名调用连续失败 N 次判定卡死中止 |
 | `--token-budget` | 不限 | 单轮 token 预算，超限优雅中止 |
 | `--retries` | 2 | LLM 瞬态失败（429/5xx/网络）重试次数，尊重 Retry-After，0 关闭 |

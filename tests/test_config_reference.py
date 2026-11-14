@@ -18,6 +18,14 @@ def test_all_cli_flags_documented():
     assert not missing, f"CONFIG.md 缺少旗标文档: {missing}"
 
 
+def test_default_max_steps_matches_agent_default():
+    from krelcode.agent.loop import DEFAULT_MAX_STEPS
+    from krelcode.app import build_parser
+
+    assert DEFAULT_MAX_STEPS >= 50
+    assert build_parser().parse_args([]).max_steps == DEFAULT_MAX_STEPS
+
+
 def test_subcommands_documented():
     text = (ROOT / "CONFIG.md").read_text(encoding="utf-8")
     for cmd in ("doctor", "init", "review"):
