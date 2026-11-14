@@ -12,10 +12,45 @@
 
 ## 安装
 
+### 一键全局安装（推荐）
+
 ```bash
-pip install .          # 或 pip install -e . 开发模式；之后 krelcode 命令全局可用
+curl -fsSL https://raw.githubusercontent.com/ArronAI007/Krelcode/main/install.sh | bash
+krelcode --version
+krelcode
+```
+
+安装器会自动准备 Krelcode 私有的隔离运行环境，**不需要手动执行 `python -m venv`，也不需要激活虚拟环境**：
+
+- 系统已有 `uv` 时优先使用 `uv tool install`，由 uv 管理 Python 环境。
+- 没有 `uv` 时自动回退到 Krelcode 私有 venv；该环境只供 Krelcode 使用，用户无需操作。
+- 默认环境目录为 `~/.local/share/krelcode`，命令安装到 `~/.local/bin/krelcode`。
+- 安装器会把 `~/.local/bin` 写入当前 shell 配置；新终端中可直接运行 `krelcode`。
+- macOS/Linux 支持一键安装；私有 venv 回退需要 Python ≥ 3.11，使用 uv 时可由 uv 管理 Python 版本。
+
+在源码目录安装：
+
+```bash
+./install.sh
 krelcode --version
 ```
+
+常用维护命令：
+
+```bash
+./install.sh --dry-run                # 只查看安装计划
+./install.sh --no-uv                  # 强制使用私有 venv
+./install.sh --upgrade                # 重新安装/升级
+./install.sh --uninstall              # 卸载程序，保留 ~/.krelcode 配置
+```
+
+从 GitHub 卸载可执行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ArronAI007/Krelcode/main/install.sh | bash -s -- --uninstall
+```
+
+安装脚本会在运行前自动选择 GitHub 或当前源码树；如需指定版本或安装源，可使用 `--tag v0.57.0`、`--source <路径|URL>`。开发调试仍可使用 `pip install -e .`。
 
 ## 起步
 
@@ -32,7 +67,7 @@ krelcode               # 进入 REPL
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（614 个，全离线*）
+# 运行全部测试（沙箱内 617 通过，2 个本地端口测试自动跳过）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
