@@ -41,7 +41,9 @@ RESET = "\x1b[0m"
 ASSISTANT_MARK = "⏺ "
 RESULT_MARK = "⎿ "
 THINKING_MARK = "✻ "
-THINKING_COLLAPSED = f"{THINKING_MARK}Thinking…（已折叠，输入 /thinking 展开）"
+THINKING_COLLAPSED = (
+    f"{THINKING_MARK}Thinking…（正文已折叠；下方为工具活动，/thinking 展开）"
+)
 
 TOOL_ARGUMENT_INLINE_LIMIT = 100
 TOOL_ARGUMENT_PREVIEW_LINES = 8
@@ -311,7 +313,9 @@ class StreamRenderer:
             summary = THINKING_COLLAPSED
             if self._color:
                 summary = f"{DIM}{summary}{RESET}"
-            self._write(summary + "\n")
+            # 空行明确分隔“思考正文”和后续工具活动，避免工具输出看起来
+            # 像是 Thinking 展开后的内容。
+            self._write(summary + "\n\n")
             self._thinking_summary_shown = True
 
     def expand_thinking(self) -> bool:

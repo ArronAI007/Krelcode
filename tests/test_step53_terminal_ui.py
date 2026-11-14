@@ -273,7 +273,8 @@ def test_renderer_uses_assistant_side_markers():
     text = buf.text
     assert text.startswith(THINKING_COLLAPSED)
     assert f"{THINKING_MARK}Thinking…" in text
-    assert "已折叠" in text
+    assert "正文已折叠" in text
+    assert "下方为工具活动" in text
     assert "先想一下" not in text                   # thinking 默认折叠为一行
     assert f"{ASSISTANT_MARK}答案" in text
     # 不再出现旧式用户侧标签
