@@ -14,32 +14,28 @@ run_command / run_skill_script 都先执行同样的硬性审计；审批不能�
 from __future__ import annotations
 
 import functools
+import glob as globlib
 import os
 import re
+import shlex
 import shutil
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
 
-from .commands import REDIRECTS, SEPARATORS, _tokenize
+from .commands import (
+    FIND_ACTION_OPTIONS, REDIRECTS, SEPARATORS, _tokenize,
+)
 from .environment import scrub_environment
+from ..tools.secret_guard import classify_secret_path
 
 SYSTEM_READ_ROOTS = (
     "/bin", "/sbin", "/usr", "/System", "/Library", "/opt",
     "/private/etc", "/dev", "/proc", "/lib", "/lib64", "/etc", "/sys",
 )
-
-SENSITIVE_PATH_PARTS = {
-    ".ssh", ".aws", ".gnupg", ".codex", ".krelcode", ".docker", ".git",
-    ".password-store", ".config", "keychains",
-}
-
-SENSITIVE_BASENAMES = {
-    ".env", ".npmrc", ".netrc", ".pgpass", ".htpasswd", "krelcode.toml",
-    "credentials", "credentials.json", "id_rsa", "id_ed25519",
-}
 
 NETWORK_PROGRAMS = {
     "curl", "wget", "fetch", "nc", "netcat", "telnet", "ssh", "scp", "sftp",
@@ -307,19 +303,21 @@ def audit_command(
     if violation:
         return violation
 
-    # Shell 的 -c/eval 内容递归审计，避免 `sh -lc 'cat ../secret'` 绕过。
-    for i, tok in enumerate(tokens[:-1]):
-        if _is_shell_command_flag(tok) or tok == "eval":
-            nested = tokens[i + 1]
-            if nested and nested not in SEPARATORS:
-                nested_violation = audit_command(
-                    nested, cwd, workspace_root, network_allowed=network_allowed)
-                if nested_violation:
-                    return f"嵌套命令违规: {nested_violation}"
     if "$HOME" in command or "${HOME}" in command:
         return "禁止通过 HOME 展开访问用户主目录"
     if "`" in command or "$(" in command:
         return "禁止命令替换/反引号（可绕过路径审计；请拆分为明确命令）"
+
+    # 递归审计 shell -c/eval、env、find -exec、xargs、rg --pre 等包装命令。
+    for nested in _embedded_commands(tokens):
+        nested_command = (
+            nested[0] if len(nested) == 1
+            else shlex.join(nested)
+        )
+        nested_violation = audit_command(
+            nested_command, cwd, workspace_root, network_allowed=network_allowed)
+        if nested_violation:
+            return f"嵌套命令违规: {nested_violation}"
     return None
 
 
@@ -353,7 +351,11 @@ def audit_argv_paths(
                     return "禁止使用 HOME/PWD/OLDPWD 变量构造访问路径"
                 if _SHELL_VARIABLE.search(token) and "/" in token:
                     return "禁止在路径参数中使用 shell 变量展开（可能绕过路径审计）"
-            sensitive_token = _looks_like_sensitive_path_token(token)
+            glob_violation = _audit_expanded_globs(token, cwd, roots)
+            if glob_violation:
+                return glob_violation
+            sensitive_token = _looks_like_sensitive_path_token(
+                token, cwd, roots)
             if not sensitive_token and not _looks_like_path(token, cwd):
                 continue
             resolved = _resolve_token(token, cwd)
@@ -362,6 +364,8 @@ def audit_argv_paths(
             if _contains_sensitive_path(resolved, roots):
                 return f"禁止访问敏感路径: {resolved}"
             if any(_inside(resolved, root) for root in roots):
+                if _is_hardlinked_file(resolved):
+                    return f"禁止通过硬链接访问工作区文件: {resolved}"
                 continue
             if index == 0 and (_is_system_executable(resolved)
                                or not _has_path_separator(token)):
@@ -385,6 +389,13 @@ def _network_violation(tokens: Sequence[str]) -> Optional[str]:
     for args in segments:
         if not args:
             continue
+        original_program = Path(args[0]).name.lower()
+        if original_program == "env":
+            nested_env = _unwrap_env(args[1:])
+            if nested_env:
+                nested = _network_violation(nested_env)
+                if nested:
+                    return nested
         program_index = _effective_program_index(args)
         program = Path(args[program_index]).name.lower()
         program_args = args[program_index + 1:]
@@ -400,6 +411,10 @@ def _network_violation(tokens: Sequence[str]) -> Optional[str]:
         if program in PACKAGE_MANAGERS and any(
                 arg.lower() in PACKAGE_NETWORK_SUBCOMMANDS for arg in program_args):
             return f"网络已禁用，拒绝执行 {program} 网络操作"
+        for nested in _embedded_commands(args):
+            violation = _network_violation(nested)
+            if violation:
+                return violation
     return None
 
 
@@ -463,7 +478,11 @@ def _looks_like_path(token: str, cwd: Path) -> bool:
     if token in {".", ".."} or token.startswith(("/", "~", "./", "../")):
         return True
     if "/" not in token:
-        return False
+        # 基名也可能指向工作区内的硬链接文件，存在时必须进入后续身份检查。
+        try:
+            return (cwd / token).exists()
+        except OSError:
+            return False
     resolved = _resolve_token(token, cwd)
     if resolved is None:
         return False
@@ -472,39 +491,240 @@ def _looks_like_path(token: str, cwd: Path) -> bool:
     return resolved.exists() or not _inside(resolved, cwd)
 
 
-def _looks_like_sensitive_name(token: str) -> bool:
-    name = Path(token.rstrip("/")).name.lower()
-    return (name in SENSITIVE_BASENAMES
-            or name.startswith(("credentials", "id_rsa", "id_ed25519", ".env"))
-            or name.startswith("secrets."))
-
-
-def _looks_like_sensitive_path_token(token: str) -> bool:
-    """即使目标尚不存在，也拦截 token 中明确出现的敏感目录/文件名。"""
-    if _looks_like_sensitive_name(token):
-        return True
-    parts = [part.lower() for part in Path(token).parts if part not in {"", "."}]
-    return any(part in SENSITIVE_PATH_PARTS for part in parts)
+def _looks_like_sensitive_path_token(
+    token: str, cwd: Path, allowed_roots: Sequence[Path],
+) -> bool:
+    """即使目标尚不存在，也使用统一凭据分类器拦截敏感路径。"""
+    resolved = _resolve_token(token, cwd)
+    return resolved is not None and _contains_sensitive_path(
+        resolved, allowed_roots)
 
 
 def _contains_sensitive_path(path: Path, allowed_roots: Sequence[Path]) -> bool:
-    relative_parts: Sequence[str]
-    for root in allowed_roots:
-        if _inside(path, root):
-            try:
-                relative_parts = path.relative_to(root).parts
-            except ValueError:
-                relative_parts = path.parts
+    return any(
+        classify_secret_path(path, root) is not None
+        for root in allowed_roots
+    )
+
+
+def _is_hardlinked_file(path: Path) -> bool:
+    try:
+        value = path.stat()
+        return stat.S_ISREG(value.st_mode) and value.st_nlink != 1
+    except OSError:
+        return False
+
+
+def _audit_expanded_globs(
+    token: str, cwd: Path, allowed_roots: Sequence[Path],
+) -> Optional[str]:
+    """审计 shell 在执行时才会展开的 glob，防止 `cat *` 绕过敏感路径规则。"""
+    if not any(char in token for char in "*?["):
+        return None
+    pattern = Path(token).expanduser()
+    if not pattern.is_absolute():
+        pattern = cwd / pattern
+    try:
+        matches = globlib.glob(str(pattern), recursive=True, include_hidden=True)
+    except (OSError, ValueError, re.error):
+        return f"无法安全展开 glob: {token}"
+    for raw_match in matches:
+        try:
+            resolved = Path(raw_match).resolve(strict=True)
+        except (OSError, ValueError):
+            continue
+        if _contains_sensitive_path(resolved, allowed_roots):
+            return f"glob 命中敏感路径: {resolved}"
+        if not any(_inside(resolved, root) for root in allowed_roots):
+            return f"glob 展开越出 Sandbox 允许范围: {resolved}"
+        if _is_hardlinked_file(resolved):
+            return f"glob 命中硬链接文件: {resolved}"
+    return None
+
+
+def _split_segments(tokens: Sequence[str]) -> List[List[str]]:
+    segments: List[List[str]] = []
+    current: List[str] = []
+    for token in tokens:
+        if token in SEPARATORS or token in REDIRECTS:
+            if current:
+                segments.append(current)
+                current = []
+            continue
+        current.append(token)
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _unwrap_env(args: Sequence[str]) -> Optional[List[str]]:
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--":
+            index += 1
             break
-    else:
-        relative_parts = path.parts
-    lowered = [part.lower() for part in relative_parts]
-    if any(part in SENSITIVE_PATH_PARTS for part in lowered):
-        return True
-    name = lowered[-1] if lowered else ""
-    return (name in SENSITIVE_BASENAMES
-            or name.startswith(("credentials", "id_rsa", "id_ed25519", ".env"))
-            or name.startswith("secrets."))
+        if arg in {"-S", "--split-string"}:
+            if index + 1 >= len(args):
+                return None
+            try:
+                return _tokenize(args[index + 1])
+            except ValueError:
+                return [args[index + 1]]
+        if arg.startswith("--split-string="):
+            try:
+                return _tokenize(arg.split("=", 1)[1])
+            except ValueError:
+                return [arg.split("=", 1)[1]]
+        if arg in {"-u", "--unset", "-C", "--chdir"}:
+            index += 2
+            continue
+        if arg.startswith(("--unset=", "--chdir=")):
+            index += 1
+            continue
+        if arg.startswith("-") and arg != "-":
+            index += 1
+            continue
+        break
+    while index < len(args) and _PATH_ASSIGNMENT.match(args[index]):
+        index += 1
+    return list(args[index:]) if index < len(args) else None
+
+
+def _unwrap_runtime_wrapper(
+    program: str, args: Sequence[str],
+) -> Optional[List[str]]:
+    index = 0
+    if program == "command":
+        while index < len(args) and args[index] in {"-p", "--"}:
+            index += 1
+        return list(args[index:]) if index < len(args) else None
+    if program == "exec":
+        while index < len(args) and args[index] == "--":
+            index += 1
+        return list(args[index:]) if index < len(args) else None
+    if program == "nohup":
+        while index < len(args) and args[index] == "--":
+            index += 1
+        return list(args[index:]) if index < len(args) else None
+    if program == "nice":
+        while index < len(args):
+            arg = args[index]
+            if arg in {"-n", "--adjustment"}:
+                index += 2
+                continue
+            if arg.startswith(("--adjustment=", "-")) and arg != "-":
+                index += 1
+                continue
+            break
+        return list(args[index:]) if index < len(args) else None
+    if program == "time":
+        while index < len(args) and args[index] in {
+                "-p", "-v", "--verbose", "--"}:
+            index += 1
+        return list(args[index:]) if index < len(args) else None
+    if program == "timeout":
+        while index < len(args) and args[index].startswith("-"):
+            if args[index] in {"-s", "--signal", "-k", "--kill-after"}:
+                index += 2
+            else:
+                index += 1
+        if index >= len(args):
+            return None
+        index += 1  # duration
+        return list(args[index:]) if index < len(args) else None
+    if program == "stdbuf":
+        while index < len(args) and args[index].startswith("-"):
+            if args[index] in {"-i", "-o", "-e"}:
+                index += 2
+            else:
+                index += 1
+        return list(args[index:]) if index < len(args) else None
+    return list(args)
+
+
+def _unwrap_xargs(args: Sequence[str]) -> Optional[List[str]]:
+    value_options = {
+        "-I", "-n", "-P", "-L", "-s", "-E", "-d", "--delimiter",
+        "--max-args", "--max-procs", "--max-lines", "--max-chars",
+        "--eof", "--replace", "--arg-file",
+    }
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--":
+            index += 1
+            break
+        if arg in value_options:
+            index += 2
+            continue
+        if arg.startswith("-"):
+            index += 1
+            continue
+        break
+    return list(args[index:]) if index < len(args) else None
+
+
+def _option_value(
+    args: Sequence[str], option: str,
+) -> Optional[str]:
+    for index, arg in enumerate(args):
+        if arg == option and index + 1 < len(args):
+            return args[index + 1]
+        if arg.startswith(f"{option}="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def _embedded_commands(tokens: Sequence[str]) -> List[List[str]]:
+    embedded: List[List[str]] = []
+    for args in _split_segments(tokens):
+        if not args:
+            continue
+        program = Path(args[0]).name.lower()
+        program_args = args[1:]
+        if program in {"sh", "bash", "zsh", "dash", "ksh"}:
+            for index, arg in enumerate(program_args):
+                if _is_shell_command_flag(arg) and index + 1 < len(program_args):
+                    embedded.append([program_args[index + 1]])
+                    break
+        elif program == "eval" and program_args:
+            embedded.append([program_args[0]])
+        elif program == "env":
+            nested = _unwrap_env(program_args)
+            if nested:
+                embedded.append(nested)
+        elif program in {
+                "command", "exec", "nohup", "nice", "time", "timeout", "stdbuf"}:
+            nested = _unwrap_runtime_wrapper(program, program_args)
+            if nested:
+                embedded.append(nested)
+        elif program == "find":
+            for index, arg in enumerate(program_args):
+                if arg in FIND_ACTION_OPTIONS and arg not in {
+                        "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}:
+                    if program_args[index + 1:]:
+                        embedded.append(program_args[index + 1:])
+                    break
+        elif program == "xargs":
+            nested = _unwrap_xargs(program_args)
+            if nested:
+                embedded.append(nested)
+        elif program == "sort":
+            value = _option_value(program_args, "--compress-program")
+            if value:
+                try:
+                    embedded.append(_tokenize(value))
+                except ValueError:
+                    embedded.append([value])
+        elif program == "rg":
+            value = _option_value(program_args, "--pre")
+            if value:
+                try:
+                    embedded.append(_tokenize(value))
+                except ValueError:
+                    embedded.append([value])
+    return embedded
 
 
 def _is_system_executable(path: Path) -> bool:

@@ -66,8 +66,9 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
                   "\"anthropic/claude-sonnet-4-5\" 跨 provider）")),
         CommandSpec(
             "allow", "管理命令审批白名单", argument_hint="[add|remove <程序名>]",
-            help=("查看命令审批白名单；/allow add <程序名> 添加、\n"
-                  "/allow remove <程序名> 移除（持久化到工作区）")),
+            help=("查看审批白名单；/allow add <程序名> 添加显式程序级规则、\n"
+                  "/allow remove <程序名> 移除（持久化到工作区；审批中的\n"
+                  "“始终允许此命令”只保存当前精确命令）")),
         CommandSpec(
             "context", "查看或刷新上下文", argument_hint="[refresh]",
             help="显示上下文统计；/context refresh 重新采集工作区上下文"),

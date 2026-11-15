@@ -39,8 +39,8 @@ REDACT_TOML_GLOBS = ("krelcode.toml",)
 
 # 目录级敏感：路径中任一段命中即整体 block。
 BLOCK_DIRS = (
-    ".git", ".krelcode", ".ssh", ".aws", ".gnupg", ".docker",
-    ".password-store", "keychains",
+    ".git", ".krelcode", ".codex", ".ssh", ".aws", ".azure", ".kube",
+    ".gnupg", ".docker", ".password-store", "keychains",
 )
 # 只对明确属于凭据存储的配置子目录做前缀拦截，避免误伤普通 `.config`。
 BLOCK_PATH_PREFIXES = (
@@ -48,6 +48,10 @@ BLOCK_PATH_PREFIXES = (
     ".config/gh",
     ".config/hub",
     ".config/op",
+    ".config/1password",
+    ".config/doctl",
+    ".config/rclone",
+    ".config/sops",
 )
 
 
@@ -63,22 +67,24 @@ def classify_secret_path(path, workspace_root) -> Optional[str]:
         rel = candidate.as_posix()
 
     parts = rel.split("/")
-    for part in parts:
+    lowered_parts = [part.lower() for part in parts]
+    for part in lowered_parts:
         if part in BLOCK_DIRS:
             return "block"
+    lowered_rel = rel.lower()
     for prefix in BLOCK_PATH_PREFIXES:
-        if rel == prefix or rel.startswith(f"{prefix}/"):
+        if lowered_rel == prefix or lowered_rel.startswith(f"{prefix}/"):
             return "block"
 
-    base = parts[-1]
+    base = lowered_parts[-1]
     for pattern in REDACT_ENV_GLOBS:
-        if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(base, pattern):
+        if fnmatch.fnmatch(lowered_rel, pattern) or fnmatch.fnmatch(base, pattern):
             return "redact_env"
     for pattern in REDACT_TOML_GLOBS:
-        if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(base, pattern):
+        if fnmatch.fnmatch(lowered_rel, pattern) or fnmatch.fnmatch(base, pattern):
             return "redact_toml"
     for pattern in BLOCK_GLOBS:
-        if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(base, pattern):
+        if fnmatch.fnmatch(lowered_rel, pattern) or fnmatch.fnmatch(base, pattern):
             return "block"
     return None
 

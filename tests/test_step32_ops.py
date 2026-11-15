@@ -55,13 +55,19 @@ def test_allow_rules_add_remove_persistence(tmp_path):
     assert rules.add_program("pytest") is True
     assert rules.add_program("pytest") is False        # 幂等
     assert rules.add_program("  ") is False            # 空白拒绝
-    assert json.loads(path.read_text()) == {"allow_programs": ["pytest"]}
+    assert json.loads(path.read_text()) == {
+        "allow_programs": ["pytest"],
+        "allow_commands": [],
+    }
 
     rules2 = AllowRules(path)                          # 重载
     assert rules2.matches("pytest -q tests/")
     assert rules2.remove_program("pytest") is True
     assert rules2.remove_program("pytest") is False    # 已不存在
-    assert json.loads(path.read_text()) == {"allow_programs": []}
+    assert json.loads(path.read_text()) == {
+        "allow_programs": [],
+        "allow_commands": [],
+    }
 
 
 # -- REPL /allow -----------------------------------------------------------------------------------

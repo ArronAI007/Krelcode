@@ -133,7 +133,7 @@ def make_console_approver():
         print(f"  [审批] {tool_call.name}: {command if command is not None else tool_call.arguments}")
         print(f"  原因: {reason}")
         try:
-            raw = await asyncio.to_thread(input, "  允许执行? [y]是 / [n]否 / [a]始终允许: ")
+            raw = await asyncio.to_thread(input, "  允许执行? [y]是 / [n]否 / [a]始终允许此命令: ")
         except (EOFError, KeyboardInterrupt):
             print()
             return NO

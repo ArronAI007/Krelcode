@@ -259,10 +259,12 @@ async def handle_allow(ctx: CommandContext) -> CommandResult:
         return _ok("  （安全策略未启用（--no-sandbox），无审批白名单）")
     parts = ctx.request.arguments.split()
     if not parts:
-        listed = rules.as_list()
+        programs = rules.as_list()
+        commands = rules.as_commands()
+        entries = [f"程序:{item}" for item in programs]
+        entries.extend(f"命令:{item}" for item in commands)
         return _ok(
-            "  已允许的程序: "
-            + (", ".join(listed) if listed else "（空）"),
+            "  已允许: " + (", ".join(entries) if entries else "（空）"),
             f"  规则文件: {rules.path or '（仅内存）'}",
         )
     if len(parts) == 2 and parts[0] == "add":

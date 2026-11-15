@@ -56,6 +56,22 @@ def test_static_audit_blocks_escape_sensitive_shell_and_network(tmp_path):
         "curl https://example.com",
         "git fetch origin",
         "env curl https://example.com",
+        "env -S 'curl https://example.com'",
+        r"find . -exec curl https://example.com {} \;",
+        r"find . -exec sh -c 'cat ../outside.txt' {} \;",
+        "sort --compress-program=curl input.txt",
+        "rg --pre 'curl https://example.com' TODO .",
+        "command curl https://example.com",
+        "exec curl https://example.com",
+        "nohup curl https://example.com",
+        "nice -n 5 curl https://example.com",
+        "time curl https://example.com",
+        "timeout 10 curl https://example.com",
+        "stdbuf -oL curl https://example.com",
+        "echo https://example.com | xargs curl",
+        "cat token.json",
+        "cat .config/gcloud/credentials.db",
+        "cat .ENV",
         "git -C . fetch origin",
         "pip install requests",
         "pip --disable-pip-version-check install requests",
@@ -66,11 +82,45 @@ def test_static_audit_blocks_escape_sensitive_shell_and_network(tmp_path):
 
 def test_static_audit_allows_workspace_commands_and_slash_arguments(tmp_path):
     (tmp_path / "README.md").write_text("demo", encoding="utf-8")
+    (tmp_path / ".config").mkdir()
+    (tmp_path / ".config" / "settings.json").write_text("{}", encoding="utf-8")
     sandbox = static_sandbox(tmp_path)
     assert sandbox.audit_command("cat README.md", tmp_path) is None
+    assert sandbox.audit_command("cat .config/settings.json", tmp_path) is None
     assert sandbox.audit_command("git status --short", tmp_path) is None
     assert sandbox.audit_command("git checkout feature/foo", tmp_path) is None
     assert sandbox.audit_command(r"grep -E 'foo/bar' README.md", tmp_path) is None
+
+
+def test_static_audit_rejects_workspace_hardlink_to_external_inode(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("outside-secret", encoding="utf-8")
+    os.link(outside, workspace / "ordinary.txt")
+    sandbox = static_sandbox(workspace)
+
+    violation = sandbox.audit_command("cat ordinary.txt", workspace)
+    assert violation and "硬链接" in violation
+    glob_violation = sandbox.audit_command("cat *", workspace)
+    assert glob_violation and "硬链接" in glob_violation
+
+
+def test_static_audit_checks_shell_glob_expansion_before_execution(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "safe.txt").write_text("safe", encoding="utf-8")
+    (workspace / ".env").write_text("API_KEY=secret", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    (workspace / "linked.txt").symlink_to(outside)
+    sandbox = static_sandbox(workspace)
+
+    assert sandbox.audit_command("cat *.txt", workspace)
+    assert sandbox.audit_command("cat *", workspace)
+    (workspace / ".env").unlink()
+    (workspace / "linked.txt").unlink()
+    assert sandbox.audit_command("cat *.txt", workspace) is None
 
 
 def test_network_commands_require_explicit_sandbox_network(tmp_path):

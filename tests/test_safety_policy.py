@@ -132,12 +132,44 @@ def test_always_persists_rule_and_reloads(ctx, tmp_path):
 
     d = run(policy.check(tc(command="pytest tests/"), ctx))
     assert d.allowed and "always" in d.reason
-    assert json.loads(rules_path.read_text()) == {"allow_programs": ["pytest"]}
+    assert json.loads(rules_path.read_text()) == {
+        "allow_programs": [],
+        "allow_commands": ["pytest tests/"],
+    }
 
-    # 新会话（新 policy 实例，无 approver）加载规则后直接放行
+    # 新会话只自动放行完全相同的规范化命令；不同参数仍需审批。
     policy2 = SandboxPolicy(approver=None, rules_path=rules_path)
-    d2 = run(policy2.check(tc(command="pytest -x other/"), ctx))
+    d2 = run(policy2.check(tc(command="pytest   tests/"), ctx))
     assert d2.allowed and "allow 规则" in d2.reason
+    d3 = run(policy2.check(tc(command="pytest -x other/"), ctx))
+    assert not d3.allowed and "非交互" in d3.reason
+
+
+def test_program_rule_does_not_authorize_compound_or_wrapped_commands():
+    rules = AllowRules()
+    assert rules.add_program("pytest")
+    assert rules.matches("pytest -q tests/")
+    assert not rules.matches("pytest && python3 unsafe.py")
+    assert not rules.matches("env pytest -q")
+    assert not rules.matches("pytest -q > report.txt")
+
+
+def test_always_records_exact_command_instead_of_first_program(tmp_path):
+    rules = AllowRules(tmp_path / "allow_rules.json")
+    assert rules.add("pytest tests/")
+    assert rules.matches("pytest   tests/")
+    assert not rules.matches("pytest other/")
+
+
+@pytest.mark.parametrize("command", [
+    "curl -H 'Authorization: Bearer secret-value' https://example.com",
+    "tool --api-key=secret-value",
+    "tool password:secret-value",
+])
+def test_probable_secret_commands_are_not_persisted(tmp_path, command):
+    rules = AllowRules(tmp_path / "allow_rules.json")
+    assert rules.add(command) is False
+    assert not rules.commands
 
 
 def test_corrupt_rules_file_fail_closed(tmp_path, ctx):

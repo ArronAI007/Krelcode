@@ -952,7 +952,7 @@ async def run_repl(
         detail = command if command is not None else tool_call.arguments
         print(f"  [审批] {tool_call.name}: {redact_value(detail)}")
         print(f"  原因: {redact_value(request.reason)}")
-        print("  允许执行? [y]是 / [n]否 / [a]始终允许（直接 Enter=否）")
+        print("  允许执行? [y]是 / [n]否 / [a]始终允许此命令（直接 Enter=否）")
 
     def resolve_approval(raw: str) -> bool:
         nonlocal pending_approval, approval_task
