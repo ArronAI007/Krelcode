@@ -5,7 +5,13 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from ..base import ToolContext, ToolResult
-from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
+from ..paths import (
+    FileChangedError,
+    PathOutsideWorkspaceError,
+    UnsafeFileError,
+    atomic_write_text,
+    resolve_in_workspace,
+)
 
 
 class WriteFileTool:
@@ -37,9 +43,8 @@ class WriteFileTool:
 
         existed = path.exists()
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
-        except OSError as e:
+            atomic_write_text(path, content)
+        except (OSError, UnsafeFileError, FileChangedError) as e:
             return ToolResult(content=f"写入失败: {e}", is_error=True)
 
         verb = "覆盖" if existed else "创建"

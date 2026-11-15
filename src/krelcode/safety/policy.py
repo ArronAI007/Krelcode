@@ -18,6 +18,7 @@ from typing import Awaitable, Callable, Optional, Protocol, Union
 
 from ..core.events import ApprovalRequested, EventBus
 from ..core.messages import ToolCall
+from ..tools.secret_guard import classify_secret_path
 from ..tools.base import (
     PermissionMode,
     RunMode,
@@ -47,13 +48,13 @@ class ApprovalPolicy(Protocol):
 
 
 class AllowAllPolicy:
-    """Step 2 占位策略：全部放行。真实沙箱见 Step 6。"""
+    """显式关闭安全策略时使用的全放行实现（--no-sandbox / 测试）。"""
 
     async def check(self, tool_call: ToolCall, ctx: ToolContext) -> Decision:
         return ALLOW
 
 
-# 工具风险分类（与 tools/builtin 对应；文件写工具的路径约束在 tools/paths.py 兜底）
+# 工具风险分类（descriptor 缺失时的兼容兜底；正常路径优先使用工具描述符）。
 READONLY_TOOLS = {
     "get_time", "read_file", "grep", "glob",
     "find_refs", "repo_map", "check_syntax",
@@ -207,4 +208,7 @@ def classify_protected_path(raw_path: str, workspace_root: Path) -> Optional[str
     for pattern in PROTECTED_GLOBS:
         if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(base, pattern):
             return f"敏感文件模式 {pattern}"
+    secret_category = classify_secret_path(raw_path, workspace_root)
+    if secret_category is not None:
+        return f"凭据文件（{secret_category}）"
     return None

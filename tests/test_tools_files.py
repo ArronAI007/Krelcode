@@ -224,20 +224,44 @@ def test_read_secret_file_blocked(ws, tmp_path):
         assert "拒绝读取敏感文件" in r.content
 
 
-def test_read_krelcode_toml_redacts_api_key_only(ws, tmp_path):
+def test_read_krelcode_toml_redacts_common_credential_keys(ws, tmp_path):
     (tmp_path / "krelcode.toml").write_text(
         "default_provider = \"openai\"\n\n"
         "[providers.openai]\n"
         "model = \"deepseek-chat\"\n"
         "api_key = \"sk-toml-secret\"\n"
-        "api_key_env = \"DEEPSEEK_API_KEY\"\n",
+        "api_key_env = \"DEEPSEEK_API_KEY\"\n"
+        "access_token = \"access-secret\"\n"
+        "client_secret = \"client-secret\"\n"
+        "password = \"password-secret\"\n"
+        "token_budget = 90000\n",
         encoding="utf-8",
     )
     r = run(ReadFileTool().execute({"path": "krelcode.toml"}, ws))
     assert not r.is_error
     assert r.data["redacted"] is True
-    assert "sk-toml-secret" not in r.content
+    for secret in (
+        "sk-toml-secret", "access-secret", "client-secret", "password-secret",
+    ):
+        assert secret not in r.content
     assert 'api_key = "***"' in r.content
+    assert 'access_token = "***"' in r.content
+    assert 'client_secret = "***"' in r.content
+    assert 'password = "***"' in r.content
     # 非密钥配置保持可见
     assert 'model = "deepseek-chat"' in r.content
     assert 'api_key_env = "DEEPSEEK_API_KEY"' in r.content
+    assert "token_budget = 90000" in r.content
+
+
+def test_read_envrc_redacts_exported_values(ws, tmp_path):
+    (tmp_path / ".envrc").write_text(
+        "export DEEPSEEK_API_KEY='sk-envrc-secret'\n"
+        "export NORMAL_SETTING=visible\n",
+        encoding="utf-8",
+    )
+    r = run(ReadFileTool().execute({"path": ".envrc"}, ws))
+    assert not r.is_error and r.data["redacted"] is True
+    assert "sk-envrc-secret" not in r.content
+    assert "export DEEPSEEK_API_KEY=***" in r.content
+    assert "export NORMAL_SETTING=***" in r.content

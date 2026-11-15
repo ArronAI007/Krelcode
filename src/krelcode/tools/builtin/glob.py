@@ -10,6 +10,7 @@ from ..fsutils import filter_pruned
 from ..paths import (
     PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,
 )
+from ..secret_guard import classify_secret_path
 
 MAX_RESULTS = 200
 
@@ -53,8 +54,16 @@ class GlobTool:
         matches: List[Path] = [
             path for path in filter_pruned(raw_matches, base)
             if safe_file_in_workspace(path, ctx.workspace_root)
+            and classify_secret_path(path, ctx.workspace_root) is None
         ]
-        matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+        def mtime(path: Path) -> int:
+            try:
+                return path.stat().st_mtime_ns
+            except OSError:
+                return 0
+
+        matches.sort(key=mtime, reverse=True)
         total = len(matches)
         shown = matches[:MAX_RESULTS]
 

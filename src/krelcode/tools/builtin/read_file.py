@@ -6,7 +6,13 @@ from pathlib import Path
 from typing import Any, Dict
 
 from ..base import ToolContext, ToolResult
-from ..paths import PathOutsideWorkspaceError, read_text_file, resolve_in_workspace
+from ..paths import (
+    FileChangedError,
+    PathOutsideWorkspaceError,
+    UnsafeFileError,
+    read_text_file,
+    resolve_in_workspace,
+)
 from ..secret_guard import classify_secret_path, redact_secret_text
 
 MAX_LINES = 2000          # 单次最多返回行数（可被 limit 覆盖到更小）
@@ -48,7 +54,7 @@ class ReadFileTool:
 
         try:
             text = read_text_file(path)
-        except (ValueError, OSError) as e:
+        except (ValueError, OSError, UnsafeFileError, FileChangedError) as e:
             return ToolResult(content=str(e), is_error=True)
 
         redacted = category in ("redact_env", "redact_toml")

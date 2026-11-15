@@ -164,6 +164,18 @@ def test_grep_skips_sensitive_files(repo, tmp_path):
         assert sensitive not in r.content
 
 
+def test_grep_skips_hardlinked_files_that_can_escape_workspace(repo, tmp_path):
+    outside = tmp_path.parent / f"{tmp_path.name}-grep-outside.txt"
+    outside.write_text("hardlink-needle\n", encoding="utf-8")
+    try:
+        os.link(outside, tmp_path / "ordinary.txt")
+        r = run(GrepTool().execute({"pattern": "hardlink-needle"}, repo))
+        assert "未找到匹配" in r.content
+        assert "ordinary.txt:" not in r.content
+    finally:
+        outside.unlink(missing_ok=True)
+
+
 # -- glob ------------------------------------------------------------------------------
 
 def test_glob_recursive_sorted_by_mtime(ws, tmp_path):
@@ -187,6 +199,14 @@ def test_glob_skips_pruned_and_hidden(ws, tmp_path):
     (tmp_path / "node_modules" / "dep.py").write_text("", encoding="utf-8")
     r = run(GlobTool().execute({"pattern": "**/*.py"}, ws))
     assert r.content.splitlines() == ["ok.py"]
+
+
+def test_glob_hides_credential_files(ws, tmp_path):
+    (tmp_path / "normal.py").write_text("", encoding="utf-8")
+    for name in ("credentials.json", "token.json", "service-account-prod.json"):
+        (tmp_path / name).write_text("{}", encoding="utf-8")
+    r = run(GlobTool().execute({"pattern": "**/*"}, ws))
+    assert r.content.splitlines() == ["normal.py"]
 
 
 def test_glob_no_match_and_absolute_pattern(ws, tmp_path):

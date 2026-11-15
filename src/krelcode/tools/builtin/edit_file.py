@@ -13,7 +13,14 @@ import difflib
 from typing import Any, Dict, List
 
 from ..base import ToolContext, ToolResult
-from ..paths import PathOutsideWorkspaceError, read_text_file, resolve_in_workspace
+from ..paths import (
+    FileChangedError,
+    PathOutsideWorkspaceError,
+    UnsafeFileError,
+    atomic_write_text,
+    read_text_file_with_snapshot,
+    resolve_in_workspace,
+)
 
 MAX_DIFF_LINES = 100
 
@@ -53,14 +60,11 @@ class EditFileTool:
             return ToolResult(content="old_string 与 new_string 相同，无需修改", is_error=True)
         if old == "":
             return ToolResult(content="old_string 不能为空（新建文件请用 write_file）", is_error=True)
-        if not path.exists():
-            return ToolResult(content=f"文件不存在: {path}", is_error=True)
-        if path.is_dir():
-            return ToolResult(content=f"目标是目录，不是文件: {path}", is_error=True)
-
         try:
-            text = read_text_file(path)
-        except (ValueError, OSError) as e:
+            text, snapshot = read_text_file_with_snapshot(path)
+        except FileNotFoundError:
+            return ToolResult(content=f"文件不存在: {path}", is_error=True)
+        except (ValueError, OSError, UnsafeFileError, FileChangedError) as e:
             return ToolResult(content=str(e), is_error=True)
 
         count = text.count(old)
@@ -83,8 +87,8 @@ class EditFileTool:
 
         updated = text.replace(old, new) if replace_all else text.replace(old, new, 1)
         try:
-            path.write_text(updated, encoding="utf-8")
-        except OSError as e:
+            atomic_write_text(path, updated, expected=snapshot)
+        except (OSError, UnsafeFileError, FileChangedError) as e:
             return ToolResult(content=f"写入失败: {e}", is_error=True)
 
         diff = _unified_diff(text, updated, str(path))

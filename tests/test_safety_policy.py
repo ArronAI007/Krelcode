@@ -63,6 +63,20 @@ def test_workspace_write_tools_allowed(ctx, name):
     assert d.allowed
 
 
+@pytest.mark.parametrize("path", [
+    ".env", "token.json", "service-account-prod.json", ".aws/credentials",
+    "infra/prod.tfstate",
+])
+def test_credential_paths_require_approval_even_when_pattern_is_not_legacy_protected(
+    ctx, path,
+):
+    policy = SandboxPolicy(approver=None)
+    decision = run(policy.check(
+        ToolCall("w", "write_file", {"path": path, "content": "x"}), ctx))
+    assert not decision.allowed
+    assert "受保护路径" in decision.reason
+
+
 def test_unknown_tool_is_asked_and_fail_closed(ctx):
     policy = SandboxPolicy(approver=None)  # 非交互
     d = run(policy.check(ToolCall("c", "mystery_tool", {}), ctx))
