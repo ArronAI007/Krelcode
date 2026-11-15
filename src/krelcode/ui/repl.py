@@ -34,7 +34,8 @@ except ImportError:  # pragma: no cover - Windows
 from .. import __version__
 from ..agent.loop import AgentLoop
 from ..agent.runtime import AgentRuntime
-from ..session.controller import HELP_TEXT, SessionController
+from ..session.commands import CommandRegistry, builtin_command_registry
+from ..session.controller import SessionController
 from ..session.input import InputAction, InputEnvelope, InputKind, InputProcessor
 from ..session.manager import resolve_resume_target
 from ..session.state import SessionViewState
@@ -48,45 +49,24 @@ IDLE_PROMPT = "❯ "
 RUNNING_PROMPT = "↳ "
 MENU_ROWS = 8
 
-SLASH_COMMANDS = (
-    ("/help", "显示本帮助"),
-    ("/history", "查看当前对话历史"),
-    ("/thinking", "展开最近一次思考"),
-    ("/tool-output", "查看或展开工具输出"),
-    ("/tools", "列出已注册工具"),
-    ("/session", "显示当前会话文件"),
-    ("/sessions", "列出工作区会话"),
-    ("/resume", "恢复指定会话"),
-    ("/mcp", "查看或重载 MCP"),
-    ("/agents", "查看子代理状态"),
-    ("/skills", "查看或重载 Skills"),
-    ("/skill", "调用指定 Skill"),
-    ("/undo", "回滚上一轮文件改动"),
-    ("/cost", "查看 token 用量与成本"),
-    ("/model", "查看或切换模型"),
-    ("/allow", "管理命令审批白名单"),
-    ("/context", "查看或刷新上下文"),
-    ("/export", "导出当前会话"),
-    ("/compact", "立即压缩历史"),
-    ("/stop", "中止正在运行的任务"),
-    ("/reset", "清空对话历史"),
-    ("/exit", "退出 Krelcode"),
-)
-
+_BUILTIN_COMMANDS = builtin_command_registry()
+SLASH_COMMANDS = tuple(
+    (spec.invocation, spec.description) for spec in _BUILTIN_COMMANDS.list())
 RUNNING_SLASH_COMMANDS = tuple(
-    item for item in SLASH_COMMANDS
-    if item[0] in {"/thinking", "/tool-output", "/stop", "/exit"}
-)
+    (spec.invocation, spec.description)
+    for spec in _BUILTIN_COMMANDS.list(running=True))
 
 
 def match_slash_commands(text: str, *, running: bool = False,
-                         limit: int = 8) -> list[tuple[str, str]]:
+                         limit: int = 8,
+                         registry: Optional[CommandRegistry] = None
+                         ) -> list[tuple[str, str]]:
     """返回与当前输入前缀匹配的 slash 命令；进入参数后不再弹菜单。"""
     if not text.startswith("/") or any(ch.isspace() for ch in text):
         return []
-    source = RUNNING_SLASH_COMMANDS if running else SLASH_COMMANDS
-    matches = [item for item in source if item[0].startswith(text)]
-    return matches[:limit]
+    catalog = registry or _BUILTIN_COMMANDS
+    return [(spec.invocation, spec.description)
+            for spec in catalog.list(query=text, running=running)[:limit]]
 
 
 def _stdout_write(s: str) -> None:
@@ -484,6 +464,7 @@ async def run_repl(
     input_history = InputHistory()
     unsubscribe = loop.bus.subscribe(renderer)
     workspace_root = loop.tool_context.workspace_root
+    processor = input_processor or InputProcessor(workspace_root)
     controller = SessionController(
         runtime,
         session_path=session_path,
@@ -497,6 +478,7 @@ async def run_repl(
         skills=skills,
         skills_reload=skills_reload,
         workspace_root=workspace_root,
+        command_registry=processor.command_registry,
     )
 
     print_banner(loop, tool_names, session_path=session_path)
@@ -506,14 +488,14 @@ async def run_repl(
     raw_inbox: asyncio.Queue = asyncio.Queue()
     action_queue: asyncio.Queue = asyncio.Queue()
     input_ready = threading.Event()
-    processor = input_processor or InputProcessor(workspace_root)
 
     def current_prompt() -> str:
         text = RUNNING_PROMPT if state.is_running else IDLE_PROMPT
         return f"{CYAN}{text}{RESET}" if use_color else text
 
     def suggest(text: str) -> list[tuple[str, str]]:
-        return match_slash_commands(text, running=state.is_running)
+        return match_slash_commands(
+            text, running=state.is_running, registry=processor.command_registry)
 
     editor = TerminalLineEditor(
         prompt, suggest, color=use_color, history=input_history)
@@ -608,6 +590,7 @@ async def run_repl(
             restore_session=None, workspace_root=workspace_root,
             model_switch=model_switch, skills=skills,
             skills_reload=skills_reload, controller=controller,
+            command_registry=processor.command_registry,
         )
 
     restore_prompt()
@@ -752,6 +735,7 @@ async def _handle_command(
     skills=None,
     skills_reload=None,
     controller: Optional[SessionController] = None,
+    command_registry: Optional[CommandRegistry] = None,
 ):
     """兼容入口：终端展示命令留在 UI，业务命令委托 SessionController。"""
     if not user_input.startswith("/"):
@@ -785,6 +769,7 @@ async def _handle_command(
             skills=skills,
             skills_reload=skills_reload,
             workspace_root=workspace_root,
+            command_registry=command_registry,
         )
     result = await controller.execute_command(user_input)
     for line in result.output:

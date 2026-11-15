@@ -14,6 +14,7 @@ from typing import Awaitable, Callable, Optional
 
 from ..core.messages import ImageRef
 from .attachments import expand_at_files
+from .commands import CommandKind, CommandRegistry, builtin_command_registry
 
 
 class InputKind(str, Enum):
@@ -24,8 +25,12 @@ class InputKind(str, Enum):
     CONTROL = "control"
 
 
-CONTROL_COMMANDS = {"/exit", "/stop"}
-UI_COMMANDS = {"/thinking", "/tool-output"}
+_INPUT_KIND_BY_COMMAND = {
+    CommandKind.COMMAND: InputKind.COMMAND,
+    CommandKind.UI_COMMAND: InputKind.UI_COMMAND,
+    CommandKind.CONTROL: InputKind.CONTROL,
+    CommandKind.PROMPT: InputKind.COMMAND,
+}
 
 
 @dataclass(frozen=True)
@@ -66,10 +71,12 @@ class InputProcessor:
         hook_context_provider: Optional[
             Callable[[str], Awaitable[tuple[str, ...]]]
         ] = None,
+        command_registry: Optional[CommandRegistry] = None,
     ) -> None:
         self.workspace_root = Path(workspace_root)
         self._expander = expander or expand_at_files
         self._hook_context_provider = hook_context_provider
+        self.command_registry = command_registry or builtin_command_registry()
 
     async def process(self, envelope: InputEnvelope) -> InputAction:
         text = envelope.raw_text.strip()
@@ -82,18 +89,18 @@ class InputProcessor:
 
         if text.startswith("/"):
             command, separator, arguments = text.partition(" ")
-            if command in CONTROL_COMMANDS:
-                kind = InputKind.CONTROL
-            elif command in UI_COMMANDS:
-                kind = InputKind.UI_COMMAND
-            else:
-                kind = InputKind.COMMAND
+            argument_text = arguments.strip() if separator else ""
+            spec = self.command_registry.resolve(command)
+            kind = (_INPUT_KIND_BY_COMMAND[spec.kind]
+                    if spec is not None else InputKind.COMMAND)
+            canonical = spec.invocation if spec is not None else command
+            normalized_text = (f"{canonical} {argument_text}".strip())
             return InputAction(
                 kind=kind,
-                text=text,
+                text=normalized_text,
                 raw_text=envelope.raw_text,
-                command=command,
-                arguments=arguments.strip() if separator else "",
+                command=canonical,
+                arguments=argument_text,
                 source=envelope.source,
             )
 

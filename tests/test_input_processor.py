@@ -7,6 +7,7 @@ import base64
 from pathlib import Path
 
 from krelcode.core.messages import ImageRef
+from krelcode.session.commands import CommandRegistry, CommandSpec
 from krelcode.session.input import InputEnvelope, InputKind, InputProcessor
 
 
@@ -116,3 +117,18 @@ def test_hook_provider_does_not_run_for_commands(tmp_path):
 
     assert action.kind is InputKind.COMMAND
     assert calls == []
+
+
+def test_registry_alias_is_canonicalized_before_dispatch(tmp_path):
+    registry = CommandRegistry([
+        CommandSpec("help", "帮助", aliases=("h",)),
+    ])
+    processor = InputProcessor(tmp_path, command_registry=registry)
+
+    action = asyncio.run(processor.process(InputEnvelope("/h topic")))
+
+    assert action.kind is InputKind.COMMAND
+    assert action.command == "/help"
+    assert action.text == "/help topic"
+    assert action.arguments == "topic"
+    assert action.raw_text == "/h topic"

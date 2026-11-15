@@ -17,39 +17,12 @@ from ..agent.loop import AgentLoop
 from ..agent.runtime import AgentRuntime
 from ..agent.prompts import build_system_prompt
 from ..agent.tokens import estimate_history_tokens
+from .commands import CommandRegistry, builtin_command_registry, render_help
 from .export import export_session
 from .manager import format_sessions, list_sessions, resolve_resume_target
 from .restore import restore_session
 
-HELP_TEXT = """可用命令：
-  /help          显示本帮助
-  /history       查看当前对话历史
-  /thinking      展开最近一次思考（保留 Markdown 多行）
-  /tool-output   列出工具输出；/tool-output <编号|last> 展开灰色面板
-  /tools         列出已注册工具
-  /session       显示当前会话文件路径
-  /sessions      列出工作区的全部会话
-  /resume <n>    切换到第 n 个会话（/sessions 里的序号；latest=最新）
-  /mcp           查看 MCP 服务器状态；/mcp reload 重读配置并热重启
-  /agents        列出子代理（后台任务）状态
-  /skills        列出 Skill；/skills reload 热重载；/skills show <name> 查看详情
-  /skill <name> [参数]  用户主动加载并执行一个 Skill
-  /undo          回滚上一轮对话的文件改动（检查点恢复；/undo list 查看栈）
-  /cost          显示 token 用量（本轮 + 会话累计 + 估算成本）
-  /model [p/m]   查看/热切换模型（"gpt-4o" 沿用当前 provider，
-                 "anthropic/claude-sonnet-4-5" 跨 provider）
-  /allow         查看命令审批白名单；/allow add <程序名> 添加、
-                 /allow remove <程序名> 移除（持久化到工作区）
-  /context       显示上下文统计；/context refresh 重新采集工作区上下文
-  /export [路径] 把当前会话导出为 Markdown（缺省存 .krelcode/exports/）
-  /compact       立即压缩对话历史（LLM 摘要，不必等预算超限）
-  /stop          中止正在运行的任务（历史自动修复）
-  /reset         清空对话历史
-  /exit          退出（Ctrl-D / Ctrl-C 同样有效）
-任务运行中：直接输入文字 = 插话（steering）；/thinking 展开思考；
-/tool-output <编号> 展开工具输出；/stop 中止。
-输入 / 会实时显示匹配命令，Tab 可补全唯一匹配；↑/↓ 调取本次会话的历史问题。
-其他任何输入都会作为消息发给 agent；消息里可用 @路径 引用文件。"""
+HELP_TEXT = render_help(builtin_command_registry())
 
 
 @dataclass(frozen=True)
@@ -84,6 +57,7 @@ class SessionController:
         skills=None,
         skills_reload=None,
         workspace_root: Optional[Path] = None,
+        command_registry: Optional[CommandRegistry] = None,
     ) -> None:
         self.runtime = (runtime if isinstance(runtime, AgentRuntime)
                         else AgentRuntime(runtime))
@@ -105,6 +79,7 @@ class SessionController:
         self.skills = skills
         self.skills_reload = skills_reload
         self.workspace_root = workspace_root or self.runtime.workspace_root
+        self.command_registry = command_registry or builtin_command_registry()
 
     @property
     def active_task(self) -> Optional[asyncio.Task]:
@@ -144,7 +119,7 @@ class SessionController:
         clear_tool_outputs = False
 
         if user_input == "/help":
-            emit(HELP_TEXT)
+            emit(render_help(self.command_registry))
         elif user_input == "/tools":
             for name in self.loop.registry.names():
                 tool = self.loop.registry.get(name)
