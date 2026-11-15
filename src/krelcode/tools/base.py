@@ -7,6 +7,7 @@ agent 循环只依赖本协议；具体工具在 builtin/ 下各自独立实现�
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional, Protocol
 
@@ -45,3 +46,24 @@ class Tool(Protocol):
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
         ...
+
+
+class ToolSource(str, Enum):
+    """工具来源；用于动态工具池过滤、/tools 展示和审计。"""
+
+    BUILTIN = "builtin"
+    SKILL = "skill"
+    SUBAGENT = "subagent"
+    MCP = "mcp"
+    PLUGIN = "plugin"
+
+
+@dataclass(frozen=True)
+class ToolDescriptor:
+    """Tool 的实现元数据，不进入 provider 的 function schema。"""
+
+    source: ToolSource = ToolSource.BUILTIN
+    mcp_server: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source", ToolSource(self.source))

@@ -2,27 +2,44 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
-from .base import Tool
+from .base import Tool, ToolDescriptor
 
 
 class ToolRegistry:
     def __init__(self, tools: Optional[List[Tool]] = None) -> None:
         self._tools: Dict[str, Tool] = {}
+        self._descriptors: Dict[str, ToolDescriptor] = {}
         for tool in tools or []:
             self.register(tool)
 
-    def register(self, tool: Tool) -> None:
+    def register(
+        self,
+        tool: Tool,
+        descriptor: Optional[ToolDescriptor] = None,
+    ) -> None:
         if tool.name in self._tools:
             raise ValueError(f"工具重复注册: {tool.name}")
         self._tools[tool.name] = tool
+        self._descriptors[tool.name] = descriptor or ToolDescriptor()
+
+    def entries(self) -> List[Tuple[Tool, ToolDescriptor]]:
+        """返回一致的工具/描述符快照，供单轮工具池构建。"""
+        return [
+            (tool, self._descriptors[name])
+            for name, tool in self._tools.items()
+        ]
+
+    def descriptor(self, name: str) -> Optional[ToolDescriptor]:
+        return self._descriptors.get(name)
 
     def get(self, name: str) -> Optional[Tool]:
         return self._tools.get(name)
 
     def unregister(self, name: str) -> bool:
         """移除一个工具；返回是否存在过。"""
+        self._descriptors.pop(name, None)
         return self._tools.pop(name, None) is not None
 
     def unregister_prefix(self, prefix: str) -> int:
@@ -30,6 +47,7 @@ class ToolRegistry:
         names = [n for n in self._tools if n.startswith(prefix)]
         for n in names:
             del self._tools[n]
+            self._descriptors.pop(n, None)
         return len(names)
 
     def names(self) -> List[str]:

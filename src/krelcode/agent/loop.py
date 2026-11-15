@@ -38,6 +38,7 @@ from ..llm.base import LLMProvider, StreamFinished, TextDelta, ThinkingDelta
 from .compression import ContextManager
 from .intent import TurnIntent, infer_turn_intent
 from .tokens import estimate_history_tokens
+from .tool_pool import TurnToolPool
 from ..safety.policy import ApprovalPolicy
 from ..tools.base import ToolContext, ToolResult
 from ..tools.registry import ToolRegistry
@@ -87,6 +88,7 @@ class AgentLoop:
         self._token_total = 0
         self._failure_counts: Dict[str, int] = {}
         self._turn_intent = TurnIntent()
+        self._active_tool_pool: Optional[TurnToolPool] = None
         # 运行中用户插话队列（REPL steering）：每个 step 开始前注入历史
         self.steering_queue: asyncio.Queue = asyncio.Queue()
         self.history: List[Message] = (
@@ -115,6 +117,9 @@ class AgentLoop:
         self._token_total = 0
         self._turn_intent = infer_turn_intent(
             self.tool_context.workspace_root, user_input)
+        # 一轮只构建一次：后续每个模型 step 和每次工具执行共用同一份能力快照。
+        self._active_tool_pool = TurnToolPool(
+            self.registry, intent=self._turn_intent)
         await self._emit(RunStarted(user_input))
 
         try:
@@ -197,10 +202,7 @@ class AgentLoop:
         if capabilities is not None and not capabilities.supports_tools:
             tools = None
         else:
-            specs = [
-                spec for spec in self.registry.tool_specs()
-                if self._turn_intent.allows_tool(spec["name"])
-            ]
+            specs = self._current_tool_pool().tool_specs()
             tools = specs or None
         messages = self._messages_for_turn()
         finished: Optional[StreamFinished] = None
@@ -219,6 +221,12 @@ class AgentLoop:
             usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
         await self._emit(LLMResponseReceived(finished.message, usage))
         return finished.message
+
+    def _current_tool_pool(self) -> TurnToolPool:
+        if self._active_tool_pool is None:
+            self._active_tool_pool = TurnToolPool(
+                self.registry, intent=self._turn_intent)
+        return self._active_tool_pool
 
     def _messages_for_turn(self) -> List[Message]:
         """把本轮意图作为临时 system context 注入，不污染持久历史。"""
@@ -288,7 +296,28 @@ class AgentLoop:
         )
 
     async def _execute_one(self, tool_call: ToolCall) -> ToolResult:
-        # 1) 审批
+        # 1) 单轮工具池是执行边界：未暴露给模型的工具绝不能进入审批/执行。
+        pool = self._current_tool_pool()
+        tool = pool.get(tool_call.name)
+        if tool is None:
+            excluded = pool.excluded_reason(tool_call.name)
+            if excluded is not None:
+                return ToolResult(
+                    content=(
+                        f"工具在本轮不可用: {tool_call.name}（{excluded}；"
+                        f"本轮可用工具: {', '.join(pool.names()) or '无'}）"
+                    ),
+                    is_error=True,
+                )
+            return ToolResult(
+                content=(
+                    f"未知工具: {tool_call.name}（本轮可用工具: "
+                    f"{', '.join(pool.names()) or '无'}）"
+                ),
+                is_error=True,
+            )
+
+        # 2) 审批
         if self.policy is not None:
             try:
                 decision = await self.policy.check(tool_call, self.tool_context)
@@ -301,14 +330,6 @@ class AgentLoop:
                 return ToolResult(
                     content=f"操作被安全策略拒绝: {decision.reason}", is_error=True
                 )
-
-        # 2) 查找工具
-        tool = self.registry.get(tool_call.name)
-        if tool is None:
-            return ToolResult(
-                content=f"未知工具: {tool_call.name}（可用工具: {', '.join(self.registry.names()) or '无'}）",
-                is_error=True,
-            )
 
         # 3) 参数校验（Step 2 只做最低限度：非法 JSON 透传标记）
         if tool_call.has_invalid_arguments:

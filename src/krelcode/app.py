@@ -41,7 +41,7 @@ from .session.restore import refresh_skill_system_prompt, restore_session
 from .session.runner import run_session
 from .skills import SkillManager, build_skill_tools
 from .subagent.manager import SUBAGENT_SYSTEM_PROMPT, SubagentManager
-from .tools.base import Tool, ToolContext
+from .tools.base import Tool, ToolContext, ToolDescriptor, ToolSource
 from .tools.builtin.check_syntax import CheckSyntaxTool
 from .tools.builtin.edit_file import EditFileTool
 from .tools.builtin.glob import GlobTool
@@ -225,8 +225,13 @@ async def build_loop(
     )
     policy = build_policy(args, workspace_root, bus)
     tool_factory = lambda: default_tools() + skill_tools
-    registry = ToolRegistry(
-        default_tools() + skill_tools + list(extra_tools or []))
+    registry = ToolRegistry(default_tools())
+    for tool in skill_tools:
+        registry.register(
+            tool, ToolDescriptor(source=ToolSource.SKILL))
+    for tool in extra_tools or []:
+        registry.register(
+            tool, ToolDescriptor(source=ToolSource.PLUGIN))
     manager = SubagentManager(
         llm=llm,
         tool_factory=tool_factory,
@@ -239,7 +244,8 @@ async def build_loop(
             lambda: skill_manager.apply_to_prompt(SUBAGENT_SYSTEM_PROMPT)),
     )
     for tool in manager.build_tools():
-        registry.register(tool)
+        registry.register(
+            tool, ToolDescriptor(source=ToolSource.SUBAGENT))
     skill_base_prompt = build_system_prompt(context)
     loop = AgentLoop(
         llm=llm,

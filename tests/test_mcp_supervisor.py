@@ -8,6 +8,7 @@ import pytest
 
 from krelcode.mcp.supervisor import MCPSupervisor, config_from_spec
 from krelcode.mcp.tools import server_prefix
+from krelcode.tools.base import ToolSource
 from krelcode.tools.registry import ToolRegistry
 
 STUB = Path(__file__).parent / "mcp_stub_server.py"
@@ -46,6 +47,11 @@ def test_sync_add_registers_tools_and_status():
             names = registry.names()
             # 7 个远程工具（含 4 个反向探测）+ 4 个能力工具（resources/prompts）
             assert len(names) == 11 and all(n.startswith("stub__") for n in names)
+            assert all(
+                registry.descriptor(name).source is ToolSource.MCP
+                and registry.descriptor(name).mcp_server == "stub"
+                for name in names
+            )
             status = sup.status()[0]
             assert status["alive"] and status["transport"] == "stdio"
             assert status["tools"] == 11 and status["server"] == "stub-server"
@@ -73,6 +79,7 @@ def test_sync_remove_unregisters_tools_and_closes():
         client = sup.clients["stub"]
         await sup.sync({})                          # 配置移除
         assert registry.names() == []
+        assert registry.descriptor("stub__echo") is None
         assert not client.alive
         assert sup.clients == {}
         assert any("已停止" in l for l in logs)

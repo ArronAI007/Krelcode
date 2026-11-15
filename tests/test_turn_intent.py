@@ -6,10 +6,10 @@ from pathlib import Path
 from krelcode.agent.intent import MODE_EXPLAIN_FILES, MODE_GENERAL, infer_turn_intent
 from krelcode.agent.loop import AgentLoop
 from krelcode.agent.prompts import build_system_prompt
-from krelcode.core.messages import Message
+from krelcode.core.messages import Message, ToolCall
 from krelcode.llm.providers.mock import MockProvider
 from krelcode.safety.policy import AllowAllPolicy
-from krelcode.tools.base import ToolContext
+from krelcode.tools.base import ToolContext, ToolResult
 from krelcode.tools.builtin.glob import GlobTool
 from krelcode.tools.builtin.read_file import ReadFileTool
 from krelcode.tools.builtin.write_file import WriteFileTool
@@ -117,3 +117,42 @@ def test_general_request_keeps_full_toolset_without_intent_hint(tmp_path):
     assert {spec["name"] for spec in provider.tools_seen[0]} == {
         "glob", "read_file", "write_file",
     }
+
+
+class SpyGlobTool:
+    name = "glob"
+    description = "列出文件"
+    parameters = {"type": "object", "properties": {}}
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def execute(self, args, ctx):
+        self.calls += 1
+        return ToolResult(content="should not execute")
+
+
+def test_unexposed_tool_is_blocked_at_execution_boundary(tmp_path):
+    target = _target(tmp_path)
+    glob = SpyGlobTool()
+    provider = MockProvider(scripted=[
+        Message.assistant(tool_calls=[
+            ToolCall("c1", glob.name, {})
+        ]),
+        "已改为直接读取目标文件",
+    ])
+    loop = AgentLoop(
+        llm=provider,
+        registry=ToolRegistry([glob, ReadFileTool()]),
+        tool_context=ToolContext(workspace_root=tmp_path, sandbox_enabled=False),
+        policy=AllowAllPolicy(),
+    )
+
+    reply = asyncio.run(loop.run(
+        f"请解释 {target.relative_to(tmp_path).as_posix()}"))
+
+    assert reply == "已改为直接读取目标文件"
+    assert {spec["name"] for spec in provider.tools_seen[0]} == {"read_file"}
+    assert glob.calls == 0
+    assert loop.history[-2].role == "tool"
+    assert "工具在本轮不可用: glob" in loop.history[-2].content

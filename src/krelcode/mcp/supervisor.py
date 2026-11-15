@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
 
+from ..tools.base import ToolDescriptor, ToolSource
 from ..tools.registry import ToolRegistry
 from .client import MCPClient, MCPServerConfig
 from .tools import discover_tools, sanitize, server_prefix
@@ -97,8 +98,10 @@ class MCPSupervisor:
         self.clients[name] = client
         self.configs[name] = cfg
         self.prompts[name] = prompts
+        descriptor = ToolDescriptor(
+            source=ToolSource.MCP, mcp_server=name)
         for tool in tools:
-            self.registry.register(tool)
+            self.registry.register(tool, descriptor)
         transport_kind = getattr(client._transport, "kind", "?")
         info = client.server_info.get("name", name)
         self._log(f"[mcp] {name}（{info}，{transport_kind}）已连接，{len(tools)} 个远程工具")
