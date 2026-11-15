@@ -42,6 +42,16 @@ api_key_env = "GEMINI_API_KEY"
 # enabled = true                    # false 等价 --no-skills
 # paths = ["./team-skills"]        # 额外目录；相对路径基于工作区
 
+# ---- 工作区上下文预算（Context v2）----
+# [context]
+# max_tokens = 6000                # 规则 + git + 目录树总预算
+# include_rules = true
+# include_git = true
+# include_tree = true
+# tree_max_depth = 3
+# tree_max_entries = 150
+# rules_max_chars = 8000
+
 # ---- MCP 服务器（stdio 或 Streamable HTTP）----
 # [mcp_servers.fetch]
 # command = "uvx"
@@ -55,9 +65,11 @@ api_key_env = "GEMINI_API_KEY"
 
 # ---- 事件钩子 ----
 # [[hooks]]
-# on = "file_edited"    # file_edited / tool_completed / tool_failed / run_finished
+# on = "file_edited"    # 生命周期触发器，完整列表见 CONFIG.md
 # command = "ruff format {path}"
+# tools = ["write_file", "edit_*"]   # 可选工具 glob 匹配
 # timeout = 30
+# enabled = true
 '''
 
 AGENTS_TEMPLATE = '''# 项目规则

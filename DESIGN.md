@@ -21,6 +21,7 @@ src/krelcode/
 ├── core/        # 内核：零依赖，只有数据类型与事件总线
 │   ├── messages.py   # Message / ToolCall（含 OpenAI 格式互转）
 │   ├── events.py     # AgentEvent 家族 + EventBus
+│   ├── hooks.py      # HookPort / HookResult：agent 只依赖的窄端口
 │   └── errors.py     # KrelcodeError / LLMError / ConfigError
 ├── llm/         # 统一 Provider 机制（模型适配层）
 │   ├── base.py       # 统一契约：LLMProvider 协议、LLMEvent、规范化 finish/usage、collect()
@@ -33,6 +34,7 @@ src/krelcode/
 ├── agent/       # 执行推进层：只 import core/端口，不认识具体 UI/Provider
 │   ├── runtime.py    # AgentRuntime：turn/steering/cancel/close 统一门面
 │   ├── loop.py       # AgentLoop：单轮模型-工具循环
+│   ├── context.py    # Context v2：分层工作区上下文与 token 预算
 │   ├── tool_pool.py  # TurnToolPool：每轮工具快照与动态目录
 │   └── prompts.py    # 系统提示词组装
 ├── tools/       # 工具层（实现 Tool 端口）
@@ -174,11 +176,13 @@ run(user_input):
 
 卡死检测签名 = 工具名 + sort_keys 序列化的参数；成功即清零该签名计数。
 
-启动时上下文注入（agent/context.py，失败安全）：
-目录树快照（剪枝隐藏/依赖目录，限深 3、限 150 项）+ git 分支与 porcelain 状态
-+ **分层规则文件**（全局 ~/.krelcode/AGENTS.md + 项目 AGENTS.md/KRELCODE.md，
-全局在前=项目更具体者优先，各自限 8K 字符），包成 <workspace_context> 注入
-system prompt；REPL `/context` 查看统计、`/context refresh` 重采并重建。
+启动时上下文装配（agent/context.py，Context v2，失败安全）：
+规则、git 分支/porcelain 状态、目录树分别建模为 `ContextSection`，带 priority
+与来源元数据；统一受 `[context].max_tokens` 预算约束，默认规则(10) > git(20) >
+tree(50)，超限时先从低优先级内容截断/省略。最终包成 `<workspace_context>` 注入
+system prompt；`WorkspaceContext.summary_lines()` 提供来源与 token 统计，REPL
+`/context` 查看、`/context refresh` 重采。运行时 Hook 上下文使用临时 system hint，
+不写入持久历史。
 
 错误恢复原则：工具抛异常/被拒绝/未知工具，都转成 `ToolResult(is_error=True)`
 回填给 LLM，让它自我修正，而不是中断循环。
@@ -398,18 +402,26 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   `{ok, reply, usage, tools_used, denied, session}`；启动提示（MCP 连接、
   自动提交、会话恢复）全部改走 stderr；异常 → `{"ok": false, "error": ...}` + 退出码 1
 
-## Hook 系统与安全补洞（Step 19）
+## Hook 系统与安全补洞（Step 19 + Hooks v2）
 
 - **写保护补洞**：`krelcode.toml`（agent 配置本体）与 `.krelcode/` 全目录
   （审批白名单/检查点/会话/工具输出）列入 SandboxPolicy 保护路径——
   堵住「LLM 改配置注入 hooks / 给自己提权 / 篡改回滚痕迹」的攻击面
-- **HookRunner**（hooks.py）：用户在 TOML 里声明 `[[hooks]]`
-  （on = file_edited / tool_completed / tool_failed / run_finished，
-  command 支持 {path} {tool} {reply} {workspace} 等模板变量，timeout 可配）；
-  EventBus 旁路订阅，典型用途：编辑后自动 formatter/linter、任务完成通知
-- 安全模型：hooks 只能来自用户配置（配置即信任，直接执行不走审批）；
-  模板变量值来自 LLM 工具参数，**一律 shlex.quote** 防命令注入；
-  钩子失败/超时只记日志（executions 留审计），绝不影响主循环
+- **Agent 端口**：`core/hooks.py` 只定义 `HookPort` 与 `HookResult`；AgentLoop
+  不认识配置/子进程实现，应用组装根注入 `HookRunner`。
+- **生命周期**：session_start/session_end、user_input/user_prompt_submit、
+  pre/post_tool_use、tool_completed/tool_failed/file_edited、pre/post_compact、
+  subagent_started/subagent_finished、run_finished。`user_prompt_submit` 位于查询
+  引擎入口，因此 REPL、headless 与子代理一致执行。
+- **结构化协议**：stdin 接收事件、工作区、data 与 tool 参数 JSON；stdout 支持
+  additional_context / system_message / decision=block；`pre_tool_use` Unix 退出
+  码 2 兼容 Claude Code 阻断语义。`tools` 支持 glob 匹配。
+- **安全模型**：hooks 只能来自用户配置（配置即信任，直接执行不走审批）；
+  子进程环境经 `scrub_environment` 剥离密钥/认证代理；模板变量只展开一次并
+  `shlex.quote`，防止递归替换与命令注入；除显式 block 外，失败/超时 fail-open。
+- **Context 集成**：session/compact Hook 上下文进入 `runtime_context`，每轮临时
+  拼入 system hint，过期/压缩上下文不会污染可恢复历史；HookTriggered 事件进入
+  UI 与 `hook_triggered` JSONL 审计。
 
 ## 韧性与自我修正辅助（Step 20）
 

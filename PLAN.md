@@ -116,8 +116,9 @@
 | 69 | 单轮工具池与来源边界 | 新增 `ToolSource/ToolDescriptor/TurnToolPool`：Registry 保留内置/Skill/子代理/MCP/插件来源与 readOnly 元数据；每轮开始固化工具快照，provider schema、执行查找、动态工具目录与执行拒绝共用同一 pool，修复“只过滤 schema、执行仍可调用未暴露工具”的边界漏洞；MCP readOnlyHint 与工具注销同步清理描述符 | 5 个新测试：来源保留/清理、意图过滤、未暴露工具执行拒绝、MCP 来源、工具池目录；全量 700 通过（2 个本地端口测试 skip） | ✅ |
 | 70 | REPL/查询引擎流程对齐 | 对齐 Claude Code 的 query-event-tool 循环：系统上下文动态注入本轮工具名、描述与 read-only/mutating 类别；同一 assistant tool_calls 批次中连续只读工具用 asyncio 并发，写工具作为 barrier 严格串行；每个工具完成立即推送 ToolCallCompleted，但历史始终按模型原序回填；每次调用派生带 ToolDescriptor 的 ToolContext 快照；readOnly 仅用于并发调度/展示，MCP 自报 readOnlyHint 不获得审批豁免 | 7 个新增测试：只读并发（调整既有用例）、写操作串行、读写 barrier 保序、完成事件实时性、动态工具目录、调用上下文描述符贯通、MCP readOnlyHint/不提权；全量 707 通过（2 个本地端口测试 skip） | ✅ |
 | 71 | REPL 前台协调收口 | 新增 `ApprovalBroker`，策略 Future 与 stdin 字符编辑器解耦，审批支持运行中/后台子代理/空闲态并统一 fail-closed；Esc/Ctrl-C 运行中中止、空闲清输入，Alt+Enter 排队下一条并自动启动；QueryEvent 改为 256 容量有界队列 + async 背压 + done-marker drain，异常/取消前先消费全部事件；app/runner 显式注入审批 broker，headless 保持无交互拒绝 | 15 个新增/扩展测试：broker rendezvous/排队取消/策略集成、REPL 收件审批、后台空闲审批、Esc/Ctrl-C、Alt+Enter 双 turn、终端控制键、背压与异常 drain；全量 750 通过（2 个本地端口测试 skip） | ✅ |
+| 72 | Hooks v2 与 Context v2 | 新增窄端口 `HookPort/HookResult`，AgentLoop 与具体 HookRunner 解耦；生命周期扩展到 session/input/tool/compact/subagent/run，支持 tools glob、enabled、stdin JSON payload、结构化 additional_context/system_message、PreToolUse block 与退出码 2；`user_input` 在 REPL/headless 统一预处理，`user_prompt_submit` 在查询入口覆盖 REPL/headless/子代理；Hook 子进程剥离密钥环境，输出/上下文/日志/审计经 SecretRedactor；子代理按 worktree rebind。Context 升级为带来源/优先级/token 预算的 `ContextSection` bundle，规则 > git > tree，`[context]` 可配置且 `/context` 显示来源统计；运行时 Hook 上下文不污染持久历史，并阻止目录树/规则 symlink 越界读取 | 24 个新增测试：Hook JSON/匹配器/阻断/超时失败安全/脱敏/模板非递归、session/compact 生命周期、headless/REPL 输入 Hook、子代理 rebind、HookTriggered 审计、Context 预算/截断/配置/来源统计/symlink 防护；全量 847 通过（2 个本地端口测试 skip） | ✅ |
 
-| 测试总数：752（750 离线通过 + 2 个本地端口集成，沙箱内自动 skip） |
+| 测试总数：849（847 离线通过 + 2 个本地端口集成，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

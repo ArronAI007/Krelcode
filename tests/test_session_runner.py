@@ -10,8 +10,10 @@ from krelcode.agent.loop import AgentLoop
 from krelcode.agent.runtime import AgentRuntime
 from krelcode.agent.usage import UsageTracker
 from krelcode.core.redact import SecretRedactor
+from krelcode.hooks import HookRunner, HookSpec
 from krelcode.llm.providers.mock import MockProvider
 from krelcode.safety.policy import AllowAllPolicy
+from krelcode.session.input import InputProcessor
 from krelcode.session.runner import run_session
 from krelcode.tools.base import ToolContext
 from krelcode.tools.registry import ToolRegistry
@@ -56,6 +58,32 @@ def test_headless_mode_runs_through_runtime(tmp_path, capsys):
     assert rc == 0
     assert "headless reply" in capsys.readouterr().out
     assert runtime.loop.history[1].content == "hello"
+
+
+def test_headless_input_processor_applies_user_input_hook(tmp_path, capsys):
+    runtime = make_runtime(tmp_path)
+    hooks = HookRunner(tmp_path, [
+        HookSpec("user_input", "printf 'headless-context'"),
+    ])
+    processor = InputProcessor(
+        tmp_path, hook_context_provider=hooks.collect_input_context)
+
+    rc = asyncio.run(run_session(
+        base_args(message="hello"),
+        runtime,
+        supervisor=None,
+        checkpoints=None,
+        usage=UsageTracker(),
+        model_switch=None,
+        skills_reload=None,
+        redactor=SecretRedactor(),
+        input_processor=processor,
+    ))
+
+    assert rc == 0
+    user_message = next(m for m in runtime.loop.history if m.role == "user")
+    assert "hello" in user_message.content
+    assert "<hook_context>\nheadless-context\n</hook_context>" in user_message.content
 
 
 def test_interactive_mode_delegates_without_importing_terminal_ui(tmp_path):

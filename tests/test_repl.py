@@ -250,11 +250,16 @@ def test_undo_command_restores_file(tmp_path, capsys):
 # -- /context 统计与刷新（Step 25）-------------------------------------------------------------------
 
 def test_context_stats_and_refresh(tmp_path, capsys):
+    from types import SimpleNamespace
+
     (tmp_path / "proj.py").write_text("x = 1", encoding="utf-8")
     loop = make_loop(tmp_path, scripted=["r1"])
+    loop.workspace_context = SimpleNamespace(
+        summary_lines=lambda: ["预算 12/512 tokens · 来源 1 个", "tree: 12 tokens"])
     drive(loop, ["/context", "/context refresh", "/exit"])
     out = capsys.readouterr().out
     assert "[context] 历史" in out and "tokens" in out          # 统计
+    assert "来源 1 个" in out                                    # bundle 摘要
     assert "已刷新" in out                                        # refresh
     system_msg = loop.history[0]
     assert system_msg.role == "system"

@@ -64,6 +64,17 @@ class ToolCallCompleted(AgentEvent):
 
 
 @dataclass(frozen=True)
+class HookTriggered(AgentEvent):
+    """Hook 已完成一次可观察/可阻断的决策（不暴露完整命令与输出）。"""
+    trigger: str
+    matched: bool = False
+    blocked: bool = False
+    tool_name: str = ""
+    reason: str = ""
+    system_message: str = ""
+
+
+@dataclass(frozen=True)
 class ApprovalRequested(AgentEvent):
     """策略层需要人工审批（UI 订阅后弹确认；非交互场景由策略 fail-closed）。"""
     tool_call: ToolCall

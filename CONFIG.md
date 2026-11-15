@@ -131,6 +131,15 @@ disabled = []                        # 本轮工具池永久排除的工具名
 enabled = true                       # false 等价 --no-skills
 paths = ["./team-skills", "/opt/shared-skills"]  # 额外目录，可相对工作区
 
+[context]                            # 启动时工作区上下文（Context v2）
+max_tokens = 6000                    # rules + git + tree 的统一 token 预算
+include_rules = true                 # ~/.krelcode/AGENTS.md + 项目规则
+include_git = true                   # 分支与 porcelain 状态
+include_tree = true                  # 剪枝后的目录树
+tree_max_depth = 3
+tree_max_entries = 150
+rules_max_chars = 8000
+
 [mcp_servers.fetch]                  # stdio 传输
 command = "uvx"
 args = ["mcp-server-fetch"]
@@ -143,13 +152,72 @@ transport = "sse"                    # 显式回退旧 HTTP+SSE（2024-11-05）
 headers = { Authorization = "Bearer ..." }
 
 [[hooks]]
-on = "file_edited"                   # file_edited/tool_completed/tool_failed/run_finished
-command = "ruff format {path}"       # 变量: {path}{tool}{reply}{error}{is_error}{workspace}（自动 shell-quote）
+on = "file_edited"                   # 触发器见下文
+command = "ruff format {path}"       # 模板变量自动 shell-quote
+tools = ["write_file", "edit_*"]     # 可选 glob；只影响工具型触发器
 timeout = 30
+enabled = true
 ```
 
 配置优先级：**显式 CLI 旗标 > TOML > 环境变量 > 内置默认**。
 未知键进 `extra` 透传（如 anthropic 的 prompt_cache/thinking_budget）。
+
+### Hooks 协议（Hooks v2）
+
+支持的触发器：
+
+- 会话/输入：`session_start`、`user_input`、`user_prompt_submit`、`session_end`
+- 工具：`pre_tool_use`、`post_tool_use`、`tool_completed`、`tool_failed`、`file_edited`
+- 上下文：`pre_compact`、`post_compact`
+- 子代理：`subagent_started`、`subagent_finished`
+- 轮次：`run_finished`
+
+`user_input` 在输入预处理层执行，保留给附件展开前的原始提示；
+`user_prompt_submit` 在查询引擎入口执行，因此 REPL、headless 与子代理都会触发。
+
+每次执行都会把 JSON payload 从 stdin 传给 Hook：
+
+```json
+{
+  "event": "pre_tool_use",
+  "workspace": "/path/to/project",
+  "timestamp": 1760000000,
+  "data": {"tool": "write_file", "path": "src/a.py"},
+  "tool": {
+    "name": "write_file",
+    "arguments": {"path": "src/a.py", "content": "..."},
+    "id": "call_1"
+  }
+}
+```
+
+同时提供 `KRELCODE_HOOK_EVENT`、`KRELCODE_WORKSPACE`、`KRELCODE_TOOL`
+环境变量。Hook 子进程使用净化环境，不继承 API key/token/proxy/SSH agent。
+Hook 命令来自用户配置，视为显式信任，不进入工具审批链；stdout 日志、注入
+上下文、用户提示与执行审计记录仍统一经过 `SecretRedactor` 脱敏。
+
+模板变量包括 `{workspace}`、`{prompt}`、`{tool}`、`{path}`、`{arguments}`、
+`{reply}`、`{error}`、`{is_error}`、`{before_tokens}`、`{after_tokens}` 等；
+未提供或未知的变量保持原样。所有替换值只展开一次并经过 `shlex.quote`，防止
+LLM 参数或用户输入注入 shell。
+
+stdout 可返回普通文本或一行 JSON：
+
+```json
+{
+  "additional_context": "注入到本轮 system context 的内容",
+  "system_message": "显示给用户的提示",
+  "decision": "block",
+  "reason": "禁止修改该文件"
+}
+```
+
+`additional_context` 也接受字符串数组；`systemMessage`、`additionalContext`
+两种 camelCase 写法兼容。上下文型 Hook 的纯文本 stdout 会作为 legacy 上下文。
+`pre_tool_use` 返回 `decision=block|deny`，或以 Unix 退出码 `2` 退出（stderr
+作为原因）时，工具不会执行。除显式阻断外，Hook 非零退出、超时或执行失败均
+fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文只用于本轮
+后续模型调用，不写入持久历史；`/context` 可查看运行中 Hook 上下文段数。
 
 ## 4. 环境变量
 
@@ -210,10 +278,11 @@ MCP stdio 子进程默认同样剥离宿主密钥，但 `[mcp_servers.*].env` �
 `RunStarted` · `StepStarted` · `LLMThinkingDelta` · `LLMStreamDelta` ·
 `LLMResponseReceived`(usage) · `ToolCallStarted` · `ToolCallCompleted`(is_error) ·
 `ApprovalRequested` · `PermissionDenied` · `ContextCompressed`(before/after) ·
-`SubagentSpawned` · `SubagentFinished` · `UserSteered` · `RunFinished` · `ErrorOccurred`
+`HookTriggered` · `SubagentSpawned` · `SubagentFinished` · `UserSteered` ·
+`RunFinished` · `ErrorOccurred`
 
 JSONL 审计记录类型：`user_input` `tool_call` `tool_result` `permission_denied`
-`context_compressed` `subagent_spawned` `subagent_finished` `user_steered`
+`hook_triggered` `context_compressed` `subagent_spawned` `subagent_finished` `user_steered`
 `run_finished` `history`(快照)。
 
 ## 8. JSON 输出模式（`-m --output-format json`）

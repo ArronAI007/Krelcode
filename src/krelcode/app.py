@@ -17,7 +17,10 @@ from . import __version__
 from .agent.compression import DEFAULT_MAX_TOKENS as DEFAULT_CONTEXT_BUDGET
 from .agent.compression import ContextManager
 from .agent.pricing import default_budget_for
-from .agent.context import build_workspace_context
+from .agent.context import (
+    ContextOptions,
+    build_workspace_context_bundle,
+)
 from .agent.loop import DEFAULT_MAX_STEPS, AgentLoop
 from .agent.prompts import build_system_prompt
 from .agent.runtime import AgentRuntime
@@ -246,10 +249,13 @@ async def build_loop(
     （不含 spawn 系工具 → 防递归），历史与总线各自独立。
     """
     workspace_root = Path(args.workspace).resolve()
+    context_options = ContextOptions.from_config(config.get("context"))
+    workspace_context = None
     context = ""
     if not args.no_context:
-        # 启动时一次性收集：目录树 + git 状态 + AGENTS.md（失败安全）
-        context = await build_workspace_context(workspace_root)
+        workspace_context = await build_workspace_context_bundle(
+            workspace_root, options=context_options)
+        context = workspace_context.text
     bus = EventBus()
     llm = build_llm(args, config, log=log)
     skill_manager = build_skill_manager(args, config)
@@ -327,6 +333,8 @@ async def build_loop(
     manager.get_parent_history = lambda: loop.history
     loop.skill_manager = skill_manager
     loop.skill_base_prompt = skill_base_prompt
+    loop.context_options = context_options
+    loop.workspace_context = workspace_context
     return loop, manager
 
 
@@ -459,8 +467,12 @@ async def async_main(args: argparse.Namespace) -> int:
     hook_specs = parse_hooks(config)
     hooks = None
     if hook_specs:
-        hooks = HookRunner(loop.tool_context.workspace_root, hook_specs, log=note)
+        hooks = HookRunner(
+            loop.tool_context.workspace_root, hook_specs, log=note,
+            redactor=redactor)
         hooks.attach(loop.bus)
+        loop.hook_port = hooks
+        subagents.hook_port = hooks
         note(f"[hooks] 已加载 {len(hook_specs)} 个钩子: "
              + ", ".join(sorted({h.on for h in hook_specs})))
     input_processor = InputProcessor(
@@ -491,6 +503,7 @@ async def async_main(args: argparse.Namespace) -> int:
             log=note,
             repl_runner=run_repl,
             approval_broker=approval_broker,
+            hooks=hooks,
         )
     finally:
         if approval_broker is not None:

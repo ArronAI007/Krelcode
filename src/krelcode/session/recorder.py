@@ -20,6 +20,7 @@ from ..core.events import (
     AgentEvent,
     ContextCompressed,
     EventBus,
+    HookTriggered,
     PermissionDenied,
     RunFinished,
     RunStarted,
@@ -79,6 +80,12 @@ class SessionRecorder:
                 content = content[:500] + "…"
             return {"type": "tool_result", "ts": ts, "id": event.tool_call.id,
                     "is_error": event.is_error, "content": content}
+        if isinstance(event, HookTriggered):
+            return {"type": "hook_triggered", "ts": ts,
+                    "trigger": event.trigger, "matched": event.matched,
+                    "blocked": event.blocked, "tool": event.tool_name,
+                    "reason": event.reason,
+                    "system_message": event.system_message}
         if isinstance(event, PermissionDenied):
             return {"type": "permission_denied", "ts": ts,
                     "name": event.tool_call.name, "reason": event.reason}

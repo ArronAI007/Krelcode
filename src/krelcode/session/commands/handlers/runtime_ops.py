@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import shlex
 
-from ....agent.context import build_workspace_context
+from ....agent.context import build_workspace_context_bundle
 from ....agent.prompts import build_system_prompt
 from ....agent.tokens import estimate_history_tokens
 from ..context import CommandContext
@@ -284,30 +284,45 @@ async def handle_cost(ctx: CommandContext) -> CommandResult:
 
 async def handle_context(ctx: CommandContext) -> CommandResult:
     if ctx.request.arguments.strip() == "refresh":
-        context = await build_workspace_context(ctx.workspace_root)
+        options = getattr(ctx.loop, "context_options", None)
+        bundle = await build_workspace_context_bundle(
+            ctx.workspace_root, options=options)
         if ctx.loop.history and ctx.loop.history[0].role == "system":
-            base_prompt = build_system_prompt(context)
+            base_prompt = build_system_prompt(bundle.text)
             ctx.loop.skill_base_prompt = base_prompt
             ctx.loop.history[0].content = (
                 ctx.skills.apply_to_prompt(base_prompt)
                 if ctx.skills else base_prompt)
-            return _ok("  [context] 工作区上下文已刷新（目录树/git/规则文件）")
+            ctx.loop.workspace_context = bundle
+            details = bundle.summary_lines()
+            return _ok(
+                "  [context] 工作区上下文已刷新",
+                *[f"  {line}" for line in details],
+            )
         return _ok("  [context] 历史中无 system 消息，未刷新")
     total = estimate_history_tokens(ctx.loop.history)
     budget = (ctx.loop.context_manager.max_tokens
               if ctx.loop.context_manager else "未启用压缩")
     tool_messages = sum(1 for message in ctx.loop.history if message.role == "tool")
-    return _ok(f"  [context] 历史 {len(ctx.loop.history)} 条消息"
-               f"（含 {tool_messages} 条工具结果） · 估算 {total} tokens"
-               f" · 预算 {budget}")
+    lines = [
+        f"  [context] 历史 {len(ctx.loop.history)} 条消息"
+        f"（含 {tool_messages} 条工具结果） · 估算 {total} tokens"
+        f" · 预算 {budget}",
+    ]
+    bundle = getattr(ctx.loop, "workspace_context", None)
+    if bundle is not None:
+        lines.extend(f"  {line}" for line in bundle.summary_lines())
+    runtime_context = getattr(ctx.loop, "runtime_context", ())
+    if runtime_context:
+        lines.append(f"  运行时 Hook 上下文: {len(runtime_context)} 段")
+    return _ok(*lines)
 
 
 async def handle_compact(ctx: CommandContext) -> CommandResult:
     if ctx.loop.context_manager is None:
         return _ok("  （上下文压缩未启用：--no-compress）")
     before = estimate_history_tokens(ctx.loop.history)
-    done = await ctx.loop.context_manager.maybe_compress(
-        ctx.loop.history, force=True)
+    done = await ctx.loop.compress_context(force=True)
     after = estimate_history_tokens(ctx.loop.history)
     if done:
         return _ok(f"  [compact] 已压缩: {before} → {after} tokens")

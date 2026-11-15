@@ -8,13 +8,15 @@ from typing import Any, Dict
 import pytest
 
 from krelcode.agent.loop import AgentLoop
-from krelcode.core.events import EventBus, RunFinished, ToolCallCompleted
+from krelcode.core.events import (
+    EventBus, HookTriggered, RunFinished, ToolCallCompleted,
+)
 from krelcode.core.messages import Message, ToolCall
 from krelcode.hooks import HookRunner, HookSpec, parse_hooks
 from krelcode.llm.providers.mock import MockProvider
 from krelcode.safety.policy import AllowAllPolicy
 from krelcode.session.input import InputProcessor
-from krelcode.tools.base import ToolContext
+from krelcode.tools.base import ToolContext, ToolResult
 from krelcode.tools.builtin.write_file import WriteFileTool
 from krelcode.tools.registry import ToolRegistry
 from krelcode.ui.repl import run_repl
@@ -225,3 +227,288 @@ def test_repl_input_hook_context_reaches_model_history(tmp_path):
     assert "解释这个仓库" in user_message.content
     assert "<hook_context>\n项目规则：先读 AGENTS.md\n</hook_context>" in user_message.content
     assert runner.executions[0]["trigger"] == "user_input"
+
+
+# -- Hook v2：结构化输入/输出、匹配器和阻断 -------------------------------------------
+
+def test_parse_hooks_supports_matchers_and_new_lifecycle_triggers():
+    specs = parse_hooks({"hooks": [
+        {"on": "pre_tool_use", "command": "check", "tools": ["edit_*", "write_file"]},
+        {"on": "session_start", "command": "load-context"},
+        {"on": "subagent_finished", "command": "notify", "enabled": False},
+        {"on": "user_prompt_submit", "command": "context", "tool": "read_file"},
+    ]})
+    assert [(s.on, s.tools) for s in specs] == [
+        ("pre_tool_use", ("edit_*", "write_file")),
+        ("session_start", ()),
+        ("user_prompt_submit", ("read_file",)),
+    ]
+
+
+def test_hook_receives_json_payload_on_stdin_and_standard_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "must-not-leak")
+    runner = HookRunner(tmp_path, [
+        HookSpec(
+            "pre_tool_use",
+            "cat > payload.json; printf '%s' \"${DEEPSEEK_API_KEY-unset}\" > env.txt",
+        ),
+    ])
+    result = asyncio.run(runner.before_tool(
+        ToolCall("c1", "write_file", {"path": "a.txt", "content": "x"})))
+    payload = __import__("json").loads((tmp_path / "payload.json").read_text())
+    assert payload["event"] == "pre_tool_use"
+    assert payload["workspace"] == str(tmp_path)
+    assert payload["tool"]["name"] == "write_file"
+    assert payload["tool"]["arguments"]["path"] == "a.txt"
+    assert (tmp_path / "env.txt").read_text() == "unset"
+    assert result.matched and not result.blocked
+
+
+def test_structured_hook_output_can_block_before_tool(tmp_path):
+    runner = HookRunner(tmp_path, [
+        HookSpec(
+            "pre_tool_use",
+            "printf '%s' '{\"decision\":\"block\",\"reason\":\"禁止写这个文件\"}'",
+        ),
+    ])
+    result = asyncio.run(runner.before_tool(
+        ToolCall("c1", "write_file", {"path": "a.txt"})))
+    assert result.blocked and "禁止写这个文件" in result.reason
+    assert runner.executions[0]["blocked"] is True
+
+
+def test_pre_tool_exit_code_two_blocks_with_stderr_reason(tmp_path):
+    runner = HookRunner(tmp_path, [
+        HookSpec("pre_tool_use", "printf '安全检查失败' >&2; exit 2"),
+    ])
+    result = asyncio.run(runner.before_tool(
+        ToolCall("c1", "run_command", {"command": "ls"})))
+    assert result.blocked and "安全检查失败" in result.reason
+
+
+def test_hook_tool_matcher_only_runs_for_selected_tools(tmp_path):
+    runner = HookRunner(tmp_path, [
+        HookSpec(
+            "pre_tool_use", "echo edit >> matched.log", tools=("edit_*",)),
+        HookSpec(
+            "pre_tool_use", "echo read >> matched.log", tools=("read_file",)),
+    ])
+    asyncio.run(runner.before_tool(ToolCall("c1", "write_file", {})))
+    asyncio.run(runner.before_tool(ToolCall("c2", "edit_file", {})))
+    assert (tmp_path / "matched.log").read_text().splitlines() == ["edit"]
+
+
+def test_structured_user_input_hook_injects_context(tmp_path):
+    runner = HookRunner(tmp_path, [
+        HookSpec(
+            "user_prompt_submit",
+            "printf '%s' '{\"additional_context\":\"来自 Hook 的规则\"}'",
+        ),
+    ])
+    result = asyncio.run(runner.run_lifecycle(
+        "user_prompt_submit", {"prompt": "解释代码"}))
+    assert result.context == ("来自 Hook 的规则",)
+
+
+def test_user_prompt_submit_runs_for_query_engine_and_stays_runtime_only(tmp_path):
+    events = []
+    bus = EventBus()
+    bus.subscribe(events.append)
+    hooks = HookRunner(tmp_path, [
+        HookSpec(
+            "user_prompt_submit",
+            "printf '%s' '{\"additional_context\":\"headless-rule\","
+            "\"systemMessage\":\"hook loaded\"}'",
+        ),
+    ])
+    provider = MockProvider(scripted=["ok"])
+    loop = AgentLoop(
+        llm=provider,
+        registry=ToolRegistry(),
+        tool_context=ToolContext(workspace_root=tmp_path),
+        policy=AllowAllPolicy(),
+        bus=bus,
+        system_prompt="SYS",
+        hook_port=hooks,
+    )
+
+    asyncio.run(loop.run("hello"))
+
+    assert loop.runtime_context == ["headless-rule"]
+    assert "<runtime_context>\nheadless-rule\n</runtime_context>" in \
+        provider.calls[0][0].content
+    assert all("headless-rule" not in (m.content or "") for m in loop.history)
+    triggered = [event for event in events if isinstance(event, HookTriggered)]
+    assert triggered[-1].trigger == "user_prompt_submit"
+    assert triggered[-1].system_message == "hook loaded"
+
+
+def test_template_values_are_not_recursively_expanded(tmp_path):
+    runner = HookRunner(tmp_path, [
+        HookSpec("user_input", "printf '%s' {prompt} > prompt.txt"),
+    ])
+    asyncio.run(runner.collect_input_context("literal {workspace} value"))
+    assert (tmp_path / "prompt.txt").read_text() == "literal {workspace} value"
+
+
+def test_hook_context_logs_and_audit_are_redacted(tmp_path):
+    class Redactor:
+        def redact(self, text):
+            return text.replace("sk-secret-value", "***")
+
+    runner = HookRunner(
+        tmp_path,
+        [HookSpec(
+            "user_prompt_submit",
+            "printf '%s' '{\"additional_context\":\"sk-secret-value\","
+            "\"systemMessage\":\"key=sk-secret-value\"}'",
+        )],
+        redactor=Redactor(),
+    )
+    result = asyncio.run(runner.run_lifecycle("user_prompt_submit", {}))
+    assert result.context == ("***",)
+    assert result.system_message == "key=***"
+    assert "sk-secret-value" not in runner.executions[0]["stdout"]
+    assert "sk-secret-value" not in runner.executions[0]["output"]
+
+
+def test_pretool_hook_blocks_before_policy_and_execution(tmp_path):
+    class SpyTool:
+        name = "spy"
+        description = "spy"
+        parameters = {"type": "object", "properties": {}}
+
+        def __init__(self):
+            self.calls = 0
+
+        async def execute(self, args, ctx):
+            self.calls += 1
+            return ToolResult(content="should not run")
+
+    spy = SpyTool()
+    hooks = HookRunner(tmp_path, [
+        HookSpec(
+            "pre_tool_use",
+            "printf '%s' '{\"decision\":\"block\",\"reason\":\"hook veto\"}'",
+            tools=("spy",),
+        ),
+    ])
+    provider = MockProvider(scripted=[
+        Message.assistant(tool_calls=[ToolCall("c1", "spy", {})]),
+        "已停止",
+    ])
+    loop = AgentLoop(
+        llm=provider,
+        registry=ToolRegistry([spy]),
+        tool_context=ToolContext(workspace_root=tmp_path),
+        policy=AllowAllPolicy(),
+        system_prompt="SYS",
+        hook_port=hooks,
+    )
+    asyncio.run(loop.run("调用工具"))
+    assert spy.calls == 0
+    tool_message = next(m for m in loop.history if m.role == "tool")
+    assert "PreToolUse Hook 阻止执行" in tool_message.content
+    assert "hook veto" in tool_message.content
+
+
+def test_posttool_hook_context_is_appended_to_tool_result(tmp_path):
+    class EchoTool:
+        name = "echo_tool"
+        description = "echo"
+        parameters = {"type": "object", "properties": {}}
+
+        async def execute(self, args, ctx):
+            return ToolResult(content="tool-output")
+
+    hooks = HookRunner(tmp_path, [
+        HookSpec(
+            "post_tool_use",
+            "printf '%s' '{\"additional_context\":\"linter: 0 issues\"}'",
+            tools=("echo_tool",),
+        ),
+    ])
+    loop = AgentLoop(
+        llm=MockProvider(scripted=[
+            Message.assistant(tool_calls=[ToolCall("c1", "echo_tool", {})]),
+            "完成",
+        ]),
+        registry=ToolRegistry([EchoTool()]),
+        tool_context=ToolContext(workspace_root=tmp_path),
+        policy=AllowAllPolicy(),
+        system_prompt="SYS",
+        hook_port=hooks,
+    )
+    asyncio.run(loop.run("执行"))
+    tool_message = next(m for m in loop.history if m.role == "tool")
+    assert "tool-output" in tool_message.content
+    assert "<hook_context>\nlinter: 0 issues\n</hook_context>" in tool_message.content
+
+
+def test_session_start_context_and_session_end_hook_run_around_session(tmp_path):
+    from krelcode.agent.usage import UsageTracker
+    from krelcode.core.redact import SecretRedactor
+    from krelcode.session.runner import run_session
+    from types import SimpleNamespace
+
+    hooks = HookRunner(tmp_path, [
+        HookSpec("session_start", "printf 'startup-context'"),
+        HookSpec("session_end", "echo ended >> lifecycle.log"),
+    ])
+    loop = AgentLoop(
+        llm=MockProvider(scripted=["ok"]),
+        registry=ToolRegistry(),
+        tool_context=ToolContext(workspace_root=tmp_path),
+        policy=AllowAllPolicy(),
+        system_prompt="SYS",
+        hook_port=hooks,
+    )
+    loop.skill_manager = None
+    runtime = __import__(
+        "krelcode.agent.runtime", fromlist=["AgentRuntime"]).AgentRuntime(loop)
+    args = SimpleNamespace(
+        message="hello", output_format="text", resume=None, no_session=True)
+    rc = asyncio.run(run_session(
+        args,
+        runtime,
+        supervisor=None,
+        checkpoints=None,
+        usage=UsageTracker(),
+        model_switch=None,
+        skills_reload=None,
+        redactor=SecretRedactor(),
+        hooks=hooks,
+    ))
+    assert rc == 0
+    assert loop.runtime_context == ["startup-context"]
+    assert (tmp_path / "lifecycle.log").read_text().strip() == "ended"
+
+
+def test_pre_and_post_compact_hooks_inject_runtime_context(tmp_path):
+    from krelcode.agent.compression import ContextManager
+
+    hooks = HookRunner(tmp_path, [
+        HookSpec("pre_compact", "printf 'pre-compact-context'"),
+        HookSpec(
+            "post_compact",
+            "printf '%s' '{\"additional_context\":\"post-compact-context\"}'",
+        ),
+    ])
+    provider = MockProvider(scripted=["summary", "finished"])
+    loop = AgentLoop(
+        llm=provider,
+        registry=ToolRegistry(),
+        tool_context=ToolContext(workspace_root=tmp_path),
+        policy=AllowAllPolicy(),
+        system_prompt="SYS",
+        context_manager=ContextManager(
+            provider, max_tokens=80, keep_recent=2, keep_recent_tools=1),
+        hook_port=hooks,
+    )
+    loop.history.extend(Message.user("old-" + "x" * 1200) for _ in range(6))
+    asyncio.run(loop.run("new request"))
+    assert "pre-compact-context" in loop.runtime_context
+    assert "post-compact-context" in loop.runtime_context
+    assert [r["trigger"] for r in hooks.executions] == [
+        "pre_compact", "post_compact",
+    ]

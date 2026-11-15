@@ -104,6 +104,34 @@ def test_spawn_and_wait_completed():
     asyncio.run(go())
 
 
+def test_subagent_hook_port_rebinds_to_child_workspace(tmp_path):
+    class HookPortStub:
+        def __init__(self):
+            self.roots = []
+
+        def rebind(self, root):
+            self.roots.append(Path(root))
+            return self
+
+    async def go():
+        hooks = HookPortStub()
+        mgr = SubagentManager(
+            llm=EchoProvider(),
+            tool_factory=list,
+            tool_context=ToolContext(workspace_root=tmp_path),
+            policy=AllowAllPolicy(),
+            bus=EventBus(),
+            max_steps=10,
+            hook_port=hooks,
+        )
+        handle = await mgr.spawn("任务")
+        await mgr.wait("a1", timeout=5)
+        assert handle.loop.hook_port is hooks
+        assert hooks.roots == [tmp_path]
+        await mgr.shutdown()
+    asyncio.run(go())
+
+
 def test_wait_unknown_id():
     async def go():
         mgr = make_manager(EchoProvider())

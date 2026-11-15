@@ -13,14 +13,16 @@ import asyncio
 import json
 from dataclasses import dataclass, replace
 from itertools import count
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional
 
+from ..core.hooks import HookPort, HookResult
 from ..core.redact import SecretRedactor
 from ..core.events import (
     AgentEvent,
     ContextCompressed,
     ErrorOccurred,
     EventBus,
+    HookTriggered,
     LLMResponseReceived,
     LLMStreamDelta,
     LLMThinkingDelta,
@@ -123,6 +125,7 @@ class AgentLoop:
         runtime_snapshot_provider: Optional[
             Callable[[RuntimeSnapshot], RuntimeSnapshot]
         ] = None,
+        hook_port: Optional[HookPort] = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -136,6 +139,8 @@ class AgentLoop:
         self.token_budget = token_budget
         self.redactor = redactor
         self.runtime_snapshot_provider = runtime_snapshot_provider
+        self.hook_port = hook_port
+        self.runtime_context: List[str] = []
         self._token_total = 0
         self._failure_counts: Dict[str, int] = {}
         self._turn_intent = TurnIntent()
@@ -156,6 +161,21 @@ class AgentLoop:
     def reset(self) -> None:
         """清空历史，只保留系统提示词。"""
         self.history = self.history[:1] if self.history and self.history[0].role == "system" else []
+
+    def add_runtime_context(self, contents: Iterable[str], source: str = "hook") -> int:
+        """注入不写入历史快照的运行时上下文（SessionStart/Compact Hook）。"""
+        added = 0
+        current_chars = sum(len(item) for item in self.runtime_context)
+        for content in contents:
+            text = str(content).strip()
+            if not text or current_chars >= 16_000:
+                continue
+            remaining = 16_000 - current_chars
+            clipped = text[:remaining]
+            self.runtime_context.append(clipped)
+            current_chars += len(clipped)
+            added += 1
+        return added
 
     # -- 对外主入口 -----------------------------------------------------------
 
@@ -204,6 +224,10 @@ class AgentLoop:
             runtime=self._turn_tool_context.runtime,
         )
         await self._emit(RunStarted(user_input))
+        await self.run_lifecycle_hook(
+            "user_prompt_submit",
+            {"prompt": user_input[:12_000]},
+        )
 
         try:
             for step in range(1, self.max_steps + 1):
@@ -308,6 +332,27 @@ class AgentLoop:
                     Message.user(STEERING_PREFIX + text, images=images or None))
             await self._emit(UserSteered(text))
 
+    async def compress_context(self, force: bool = False) -> bool:
+        """统一压缩入口：预算检查、Pre/PostCompact Hook 与事件。"""
+        if self.context_manager is None:
+            return False
+        before = estimate_history_tokens(self.history)
+        needs_compression = force or self.context_manager.over_budget(self.history)
+        if needs_compression:
+            await self.run_lifecycle_hook(
+                "pre_compact", {"before_tokens": str(before)})
+        changed = await self.context_manager.maybe_compress(
+            self.history, force=force)
+        if not changed:
+            return False
+        after = estimate_history_tokens(self.history)
+        await self.run_lifecycle_hook(
+            "post_compact",
+            {"before_tokens": str(before), "after_tokens": str(after)},
+        )
+        await self._emit(ContextCompressed(before, after))
+        return True
+
     def _repair_after_cancel(self) -> None:
         sanitize_history(self.history)
         if self.history and self.history[-1].role == "user":
@@ -316,12 +361,7 @@ class AgentLoop:
     # -- 内部：一次 LLM 调用 ---------------------------------------------------
 
     async def _llm_turn(self) -> LLMTurnResult:
-        if self.context_manager is not None:
-            before = estimate_history_tokens(self.history)
-            if await self.context_manager.maybe_compress(self.history):
-                await self._emit(
-                    ContextCompressed(before, estimate_history_tokens(self.history))
-                )
+        await self.compress_context()
         # 能力协商：provider 声明不支持 tools 时不 advertise，避免 400。
         # 无 capabilities 属性的测试替身保持旧行为（照常传 tools）。
         capabilities = getattr(self.llm, "capabilities", None)
@@ -405,6 +445,10 @@ class AgentLoop:
             self._current_tool_pool().system_hint(),
             self._turn_intent.system_hint(self.tool_context.workspace_root),
         ]
+        hints.extend(
+            f"<runtime_context>\n{context}\n</runtime_context>"
+            for context in self.runtime_context
+        )
         hint = "\n\n".join(part for part in hints if part)
         if not hint:
             return self.history
@@ -563,6 +607,13 @@ class AgentLoop:
                 is_error=True,
             )
         args = dict(tool_call.arguments)
+        pre_hook = await self._before_tool_hook(tool_call)
+        if pre_hook.blocked:
+            return ToolResult(
+                content=f"PreToolUse Hook 阻止执行: {pre_hook.reason}",
+                is_error=True,
+                data={"hook_blocked": True, "hook_trigger": "pre_tool_use"},
+            )
 
         # 3) 审批（策略看到的是已通过 schema 校验的参数）
         if self.policy is not None:
@@ -580,10 +631,74 @@ class AgentLoop:
 
         # 4) 执行（异常 → is_error 结果回填，错误恢复原则）
         try:
-            return await tool.execute(args, execution_ctx)
+            result = await tool.execute(args, execution_ctx)
         except Exception as e:
             await self._emit(ErrorOccurred(f"{type(e).__name__}: {e}", tool_call.name))
-            return ToolResult(content=f"工具执行出错: {type(e).__name__}: {e}", is_error=True)
+            result = ToolResult(
+                content=f"工具执行出错: {type(e).__name__}: {e}", is_error=True)
+
+        post_hook = await self._after_tool_hook(tool_call, result)
+        contexts = (*pre_hook.context, *post_hook.context)
+        if contexts:
+            blocks = "\n\n".join(
+                f"<hook_context>\n{item}\n</hook_context>" for item in contexts)
+            result.content = (result.content + "\n\n" + blocks).strip()
+        return result
+
+    async def run_lifecycle_hook(
+        self, trigger: str, variables: dict[str, str],
+    ) -> HookResult:
+        """执行生命周期 Hook，并统一注入运行时上下文与审计事件。"""
+        if self.hook_port is None:
+            return HookResult()
+        resolved = dict(variables)
+        resolved.setdefault("workspace", str(self.tool_context.workspace_root))
+        try:
+            result = await self.hook_port.run_lifecycle(trigger, resolved)
+        except Exception as exc:
+            await self._emit(ErrorOccurred(
+                f"{type(exc).__name__}: {exc}", f"hook.{trigger}"))
+            return HookResult()
+        if result.context:
+            self.add_runtime_context(result.context, source=trigger)
+        if result.matched:
+            await self._emit(HookTriggered(
+                trigger, True, result.blocked, "", result.reason,
+                result.system_message))
+        return result
+
+    async def _before_tool_hook(self, tool_call: ToolCall) -> HookResult:
+        if self.hook_port is None:
+            return HookResult()
+        try:
+            result = await self.hook_port.before_tool(tool_call)
+        except Exception as exc:
+            await self._emit(ErrorOccurred(
+                f"{type(exc).__name__}: {exc}", "hook.pre_tool_use"))
+            return HookResult()
+        if result.matched:
+            await self._emit(HookTriggered(
+                "pre_tool_use", True, result.blocked, tool_call.name,
+                result.reason, result.system_message))
+        return result
+
+    async def _after_tool_hook(
+        self, tool_call: ToolCall, result: ToolResult,
+    ) -> HookResult:
+        if self.hook_port is None:
+            return HookResult()
+        try:
+            hook_result = await self.hook_port.after_tool(
+                tool_call, result.content, result.is_error)
+        except Exception as exc:
+            await self._emit(ErrorOccurred(
+                f"{type(exc).__name__}: {exc}", "hook.post_tool_use"))
+            return HookResult()
+        if hook_result.matched:
+            await self._emit(HookTriggered(
+                "post_tool_use", True, hook_result.blocked, tool_call.name,
+                hook_result.reason, hook_result.system_message))
+        return hook_result
 
 
 def _call_signature(tool_call: ToolCall) -> str:

@@ -189,20 +189,25 @@ krelcode --provider openai -m "修复 tests/ 下失败的测试" --output-format
 
 ### Hooks（事件钩子）
 
-在配置文件里声明，典型用途是编辑后自动 formatter/linter：
+在配置文件里声明。Hooks v2 覆盖会话、输入、工具、压缩、子代理与轮次生命周期：
 
 ```toml
 [[hooks]]
-on = "file_edited"          # file_edited / tool_completed / tool_failed / run_finished
+on = "file_edited"
 command = "ruff format {path}"
+tools = ["write_file", "edit_*"]
 timeout = 30
 
 [[hooks]]
 on = "run_finished"
 command = "osascript -e 'display notification \"任务完成\"'"
+
+[[hooks]]
+on = "pre_tool_use"
+command = "python3 .krelcode/hooks/check_write.py"
 ```
 
-hooks 只能由用户在配置文件定义（`krelcode.toml` 与 `.krelcode/` 已列入写保护，agent 无法自我注入）；模板变量值经 shell-quote，钩子失败/超时不影响主循环。
+hooks 只能由用户在配置文件定义（`krelcode.toml` 与 `.krelcode/` 已列入写保护，agent 无法自我注入）。每次执行从 stdin 接收结构化 JSON（事件、工作区、工具名/参数），可用 `additional_context` 注入上下文、`system_message` 提示用户；`pre_tool_use` 可返回 `decision="block"` 或退出码 `2` 阻止工具。模板变量只展开一次并经 shell-quote；Hook 子进程不继承 API key/token/proxy，输出、注入上下文与审计记录同样经过密钥脱敏，失败/超时默认 fail-open。完整协议见 [CONFIG.md](CONFIG.md#hooks-协议hooks-v2)。
 
 ### git 自动提交（可选）
 
@@ -225,9 +230,9 @@ LLM 可用 `spawn_agent` 把自包含的子任务委派给后台子代理（独�
 
 体验：启动显示 provider/模型/工作区/工具/会话信息卡片；输入区用横跨终端的上下两条 `─` 边界包住 `❯` 提示符，输入 `/` 时实时弹出并过滤匹配的 slash commands（Tab 可补全唯一命令），候选菜单在固定区域原地覆盖，撤销 `/` 后不会残留搜索内容；字符级编辑器支持左右/Home/End/Delete、Ctrl-A/E/B/F、按词移动删除、多行编辑、Bracketed paste（多行代码一次粘贴且不执行终端转义）和 `Ctrl-R` 增量历史搜索；`↑/↓` 调取持久化历史，越过最新一条会恢复未提交草稿。历史默认写入 `~/.krelcode/history.jsonl`（权限 `0600`、提交前脱敏，可用 `KRELCODE_HISTORY_FILE` 覆盖）；`Alt+Enter` 入队的内容可通过 `/queue` 查看、删除、移动或清空。回答结束后立即回到新的双边界输入区；LLM 回复以 `⏺` 流式展示，reasoning 模型（DeepSeek-R1/Qwen 思考模式/Claude thinking）的思考正文默认折叠为单行暗色 `✻ Thinking…（正文已折叠；下方为工具活动，/thinking 展开）`，并用空行与后续工具活动明确分隔，执行 `/thinking` 才展开（任务运行中也可用）原始 Markdown（标题/列表/空行/fenced code 均保留），工具调用/结果使用 `⏺` / `⎿` 树形标记（统一 ThinkingDelta 事件，思考不进对话历史）；文件读取对 `.env*` 与 `krelcode.toml` 保留结构但脱敏，`credentials*`、`token.json`、云凭据、私钥和 state 文件直接拒读，glob/grep/repo-map 同样跳过；工具结果默认只显示编号与行数/字符数摘要，运行中或空闲时可用 `/tool-output` 查看列表、`/tool-output <编号|last>` 在灰色背景面板中单独展开，超宽行自动折行；高置信度识别到“只解释明确文件”时，会在模型调用前注入结构化意图并只暴露 `read_file`，避免先 glob 目录或读取 README/同级文件，模糊请求和修复/运行等动作请求保持完整工具集；edit_file 展开后的 diff 保留红绿高亮（尊重 `NO_COLOR`）；会话自动录制为 JSONL（`<workspace>/.krelcode/sessions/`，审计事件流 + 历史快照），`--resume` 恢复最近会话继续聊（`--resume <path>` 指定文件，`--no-session` 关闭）。
 
-所有终端输入在进入会话前经过统一 `InputProcessor`：规范化原始输入、区分普通消息/业务命令/展示命令/控制命令、后台展开 `@文件` 与图片附件，并执行可选 `user_input` Hook；REPL 只消费结构化 `InputAction`，不再承担输入解释。会话现场由 `SessionViewState` 显式记录 idle/running/stopping、当前 turn 与进度，历史消息仍只由 AgentLoop 持有。
+所有终端输入与 `-m` 单次输入在进入会话前经过统一 `InputProcessor`：规范化原始输入、区分普通消息/业务命令/展示命令/控制命令、后台展开 `@文件` 与图片附件，并执行可选 `user_input` Hook；REPL 只消费结构化 `InputAction`，不再承担输入解释。`user_prompt_submit` 则位于 AgentLoop 查询入口，保证 REPL、headless 与子代理一致执行。会话现场由 `SessionViewState` 显式记录 idle/running/stopping、当前 turn 与进度，历史消息仍只由 AgentLoop 持有。
 
-启动时自动注入工作区上下文（目录树 + git 分支/状态 + 分层规则：全局 `~/.krelcode/AGENTS.md` + 项目 `AGENTS.md`/`KRELCODE.md`），`--no-context` 可关闭，长会话中 `/context refresh` 可重采；同批工具调用并行执行，同一调用连续失败 3 次判定卡死自动中止（`--repeat-failure-limit` 可调）。
+启动时自动装配工作区上下文（Context v2）：分层规则、git 分支/状态与目录树统一进入 `[context].max_tokens` 预算，按规则 > git > tree 的优先级保留，超限时截断或省略低优先级来源；`--no-context` 可关闭，长会话中 `/context refresh` 可重采，`/context` 显示各来源 token 统计；同批工具调用并行执行，同一调用连续失败 3 次判定卡死自动中止（`--repeat-failure-limit` 可调）。
 
 ## 模块结构（依赖严格单向）
 

@@ -110,6 +110,7 @@ class SubagentManager:
         context_budget: Optional[int] = None,
         redactor: Optional[SecretRedactor] = None,
         system_prompt_provider: Optional[Callable[[], str]] = None,
+        hook_port=None,
     ) -> None:
         self.llm = llm
         self.tool_factory = tool_factory
@@ -122,6 +123,7 @@ class SubagentManager:
         self.context_budget = context_budget
         self.redactor = redactor
         self.system_prompt_provider = system_prompt_provider
+        self.hook_port = hook_port
         self._handles: Dict[str, AgentHandle] = {}
         self._counter = 0
         # fork_context 数据源：app 组装根注入 lambda: loop.history
@@ -166,6 +168,9 @@ class SubagentManager:
                 services=self.tool_context.services,
             )
         child_bus = EventBus()
+        child_hook_port = self.hook_port
+        if child_hook_port is not None and hasattr(child_hook_port, "rebind"):
+            child_hook_port = child_hook_port.rebind(tool_context.workspace_root)
         loop = AgentLoop(
             llm=self.llm,
             registry=ToolRegistry(self.tool_factory()),
@@ -182,6 +187,7 @@ class SubagentManager:
             context_manager=(ContextManager(self.llm, max_tokens=self.context_budget)
                              if self.context_budget else None),
             redactor=self.redactor,
+            hook_port=child_hook_port,
         )
         effective_task = task
         forked = False

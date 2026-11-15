@@ -8,7 +8,7 @@ import pytest
 
 from krelcode.agent.loop import AgentLoop
 from krelcode.core.events import (
-    EventBus, PermissionDenied, RunFinished, RunStarted,
+    EventBus, HookTriggered, PermissionDenied, RunFinished, RunStarted,
     ToolCallCompleted, ToolCallStarted,
 )
 from krelcode.core.messages import Message, ToolCall
@@ -56,15 +56,20 @@ def test_recorder_writes_events_and_history_snapshot(tmp_path):
         await bus.emit(ToolCallStarted(tc))
         await bus.emit(ToolCallCompleted(tc, "x" * 900, False))
         await bus.emit(PermissionDenied(tc, "危险"))
+        await bus.emit(HookTriggered(
+            "pre_tool_use", True, True, "get_time", "blocked",
+            "policy notice"))
         await bus.emit(RunFinished("a"))
     asyncio.run(go())
 
     lines = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines()]
     types = [l["type"] for l in lines]
     assert types == ["user_input", "tool_call", "tool_result",
-                     "permission_denied", "run_finished", "history"]
+                     "permission_denied", "hook_triggered", "run_finished",
+                     "history"]
     # 超长工具结果在审计流里截断
     assert len(lines[2]["content"]) <= 501
+    assert lines[4]["system_message"] == "policy notice"
     # history 快照可完整恢复
     assert history_from_dicts(lines[-1]["messages"]) == history
 

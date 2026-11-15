@@ -21,6 +21,7 @@ from ..core.events import (
     AgentEvent,
     ContextCompressed,
     ErrorOccurred,
+    HookTriggered,
     LLMStreamDelta,
     LLMThinkingDelta,
     PermissionDenied,
@@ -303,6 +304,12 @@ class StreamRenderer:
             self.end_stream()
             self._write(
                 f"  {self._mark(RESULT_MARK)}✗ {event.tool_call.name} 被拒绝: {event.reason}\n")
+        elif isinstance(event, HookTriggered):
+            if event.system_message:
+                self.end_stream()
+                self._write(
+                    f"  {self._mark(RESULT_MARK)}hook {event.trigger}: "
+                    f"{event.system_message}\n")
         elif isinstance(event, UserSteered):
             self.end_stream()
             preview = event.text if len(event.text) <= 60 else event.text[:60] + "…"

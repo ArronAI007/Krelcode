@@ -1,38 +1,77 @@
-"""用户 Hook 系统：配置文件定义的事件钩子（dsh「一切皆副作用」的轻量版）。
-
-典型用途：file_edited 后自动跑 formatter/linter、run_finished 后发通知。
+"""用户 Hook 系统：配置驱动、生命周期事件与结构化 I/O。
 
 安全模型：
 - hooks 只能由用户在 TOML 配置里定义（LLM 无法注册钩子）；
-  krelcode.toml 与 .krelcode/ 已列入写保护路径（Step 19a），
-  代理无法通过改配置注入钩子
-- 钩子命令以用户身份直接执行（不走 SandboxPolicy 审批）——配置即信任
-- 模板变量值来自 LLM 的工具参数（如 path），一律 shlex.quote 后再拼接，
-  防命令注入
-- 钩子失败/超时只记日志，绝不影响主循环（失败安全）
+  ``krelcode.toml`` 与 ``.krelcode/`` 已列入写保护路径，代理无法注入。
+- Hook 命令由用户显式信任，不进入工具审批；但继承的是净化后的环境，
+  默认不把宿主的 API key/token/proxy 等秘密传给 Hook 子进程。
+- 模板变量值来自 LLM 工具参数或用户输入，替换前统一 ``shlex.quote``。
+- Hook 失败、超时、输出过大都不会中断主循环；只有明确的 block 决策或
+  Unix 退出码 2 才会阻断对应的工具调用。
+
+兼容性：旧版 ``{path}``/``{prompt}`` 等模板变量、纯文本 stdout 注入和
+``user_input`` 触发器保持可用。新 Hook 同时从 stdin 收到 JSON payload，
+可将结构化决策写到 stdout。
 """
 
 from __future__ import annotations
 
 import asyncio
+import fnmatch
+import json
+import os
+import re
 import shlex
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .core.events import (
-    AgentEvent, EventBus, RunFinished, ToolCallCompleted,
+    AgentEvent,
+    EventBus,
+    RunFinished,
+    SubagentFinished,
+    SubagentSpawned,
+    ToolCallCompleted,
 )
+from .core.hooks import HookResult
+from .core.messages import ToolCall
+from .safety.environment import scrub_environment
 
 SUPPORTED_TRIGGERS = (
-    "user_input", "file_edited", "tool_completed", "tool_failed", "run_finished",
+    "session_start",
+    "user_input",
+    "user_prompt_submit",
+    "pre_tool_use",
+    "post_tool_use",
+    "file_edited",
+    "tool_completed",
+    "tool_failed",
+    "pre_compact",
+    "post_compact",
+    "subagent_started",
+    "subagent_finished",
+    "run_finished",
+    "session_end",
 )
+CONTEXT_TRIGGERS = {
+    "session_start", "user_input", "user_prompt_submit", "pre_tool_use",
+    "post_tool_use", "pre_compact", "post_compact",
+}
+TOOL_TRIGGERS = {
+    "pre_tool_use", "post_tool_use", "file_edited",
+    "tool_completed", "tool_failed",
+}
 FILE_EDIT_TOOLS = {"write_file", "edit_file"}
 OUTPUT_PREVIEW = 400
 DEFAULT_TIMEOUT = 60.0
+MAX_HOOK_STDOUT = 64_000
+MAX_HOOK_STDERR = 8_000
 MAX_INPUT_HOOK_PROMPT = 12_000
 MAX_INPUT_HOOK_CONTEXT = 4_000
+MAX_HOOK_SYSTEM_MESSAGE = 4_000
+_TEMPLATE_VARIABLE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 @dataclass(frozen=True)
@@ -40,158 +79,377 @@ class HookSpec:
     on: str
     command: str
     timeout: float = DEFAULT_TIMEOUT
+    tools: tuple[str, ...] = ()
+
+    def matches_tool(self, tool_name: str) -> bool:
+        if not self.tools:
+            return True
+        return any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in self.tools)
 
 
 def parse_hooks(config: Dict[str, Any]) -> List[HookSpec]:
-    """从 TOML config 的 [[hooks]] 数组解析；非法项跳过（返回前不抛错）。"""
+    """从 TOML config 的 ``[[hooks]]`` 数组解析；非法项跳过。"""
     raw = config.get("hooks")
     if not isinstance(raw, list):
         return []
     specs: List[HookSpec] = []
     for item in raw:
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or item.get("enabled", True) is False:
             continue
-        on = str(item.get("on", ""))
+        on = str(item.get("on", "")).strip()
         command = item.get("command")
         if on not in SUPPORTED_TRIGGERS or not isinstance(command, str) or not command.strip():
             continue
+        raw_tools = item.get("tools", item.get("tool", ()))
+        if isinstance(raw_tools, str):
+            tools = (raw_tools,)
+        elif isinstance(raw_tools, (list, tuple)):
+            tools = tuple(str(value).strip() for value in raw_tools if str(value).strip())
+        else:
+            tools = ()
         try:
-            timeout = max(0.1, min(float(item.get("timeout", DEFAULT_TIMEOUT)), 600.0))
+            timeout = max(
+                0.1, min(float(item.get("timeout", DEFAULT_TIMEOUT)), 600.0))
         except (TypeError, ValueError):
             timeout = DEFAULT_TIMEOUT
-        specs.append(HookSpec(on=on, command=command, timeout=timeout))
+        specs.append(HookSpec(on=on, command=command, timeout=timeout, tools=tools))
     return specs
 
 
 class HookRunner:
-    def __init__(self, workspace_root: Path, specs: List[HookSpec], log=print) -> None:
+    """配置 Hook 的执行器，同时实现 AgentLoop 的 HookPort。"""
+
+    def __init__(
+        self,
+        workspace_root: Path,
+        specs: List[HookSpec],
+        log=print,
+        *,
+        executions: Optional[List[Dict[str, Any]]] = None,
+        redactor=None,
+    ) -> None:
         self.root = Path(workspace_root)
         self.specs = list(specs)
         self._log = log
-        self.executions: List[Dict[str, Any]] = []  # 审计记录（测试/调试用）
+        self._redactor = redactor
+        self.executions: List[Dict[str, Any]] = (
+            executions if executions is not None else []
+        )
+
+    def rebind(self, workspace_root: Path) -> "HookRunner":
+        """为子代理 worktree 创建同配置、共享审计记录的执行器。"""
+        return HookRunner(
+            workspace_root,
+            self.specs,
+            log=self._log,
+            executions=self.executions,
+            redactor=self._redactor,
+        )
 
     def attach(self, bus: EventBus) -> None:
         bus.subscribe(self.on_event)
 
     async def on_event(self, event: AgentEvent) -> None:
         for trigger, variables in self._map_event(event):
-            for spec in self.specs:
-                if spec.on == trigger:
-                    await self.run_hook(spec, trigger, variables)
+            await self._run_matching(trigger, variables)
 
-    def _map_event(self, event: AgentEvent) -> List[tuple]:
-        """事件 → [(trigger, 模板变量)]，一个事件可触发多个 trigger。"""
+    def _map_event(self, event: AgentEvent) -> List[tuple[str, Dict[str, str]]]:
+        """观察型事件 → [(trigger, 模板变量)]。"""
         base = {"workspace": str(self.root)}
         if isinstance(event, ToolCallCompleted):
             name = event.tool_call.name
-            base.update({"tool": name, "is_error": "true" if event.is_error else "false"})
+            base.update({
+                "tool": name,
+                "is_error": "true" if event.is_error else "false",
+            })
             out = [("tool_completed", dict(base))]
             if event.is_error:
-                vars_failed = dict(base)
-                vars_failed["error"] = event.content[:OUTPUT_PREVIEW]
-                out.append(("tool_failed", vars_failed))
+                failed = dict(base)
+                failed["error"] = event.content[:OUTPUT_PREVIEW]
+                out.append(("tool_failed", failed))
             elif name in FILE_EDIT_TOOLS:
-                vars_edited = dict(base)
-                path = event.tool_call.arguments.get("path", "")
-                vars_edited["path"] = str(path)
-                out.append(("file_edited", vars_edited))
+                edited = dict(base)
+                edited["path"] = str(event.tool_call.arguments.get("path", ""))
+                out.append(("file_edited", edited))
             return out
         if isinstance(event, RunFinished):
-            vars_done = dict(base)
-            vars_done["reply"] = event.final_text[:OUTPUT_PREVIEW]
-            return [("run_finished", vars_done)]
+            done = dict(base)
+            done["reply"] = event.final_text[:OUTPUT_PREVIEW]
+            return [("run_finished", done)]
+        if isinstance(event, SubagentSpawned):
+            return [("subagent_started", {
+                **base,
+                "agent_id": event.agent_id,
+                "task": event.task[:OUTPUT_PREVIEW],
+            })]
+        if isinstance(event, SubagentFinished):
+            return [("subagent_finished", {
+                **base,
+                "agent_id": event.agent_id,
+                "status": event.status,
+                "preview": event.preview[:OUTPUT_PREVIEW],
+            })]
         return []
 
-    # -- 执行 ---------------------------------------------------------------------------
+    # -- HookPort 执行前/后 -------------------------------------------------------------
 
-    def render(self, command: str, variables: Dict[str, str]) -> str:
-        """{var} 占位替换；值一律 shell-quote（值可能来自 LLM 参数）。"""
-        rendered = command
-        for key, value in variables.items():
-            rendered = rendered.replace("{" + key + "}", shlex.quote(str(value)))
-        return rendered
+    async def before_tool(self, tool_call: ToolCall) -> HookResult:
+        variables = self._tool_variables(tool_call)
+        return await self._run_matching(
+            "pre_tool_use", variables, tool_call=tool_call)
+
+    async def after_tool(
+        self, tool_call: ToolCall, content: str, is_error: bool,
+    ) -> HookResult:
+        variables = self._tool_variables(tool_call)
+        variables.update({
+            "is_error": "true" if is_error else "false",
+            "result": content[:OUTPUT_PREVIEW],
+            "error": content[:OUTPUT_PREVIEW] if is_error else "",
+        })
+        return await self._run_matching(
+            "post_tool_use", variables, tool_call=tool_call)
+
+    def _tool_variables(self, tool_call: ToolCall) -> Dict[str, str]:
+        return {
+            "workspace": str(self.root),
+            "tool": tool_call.name,
+            "path": str(tool_call.arguments.get("path", "")),
+            "arguments": json.dumps(
+                tool_call.arguments, ensure_ascii=False, sort_keys=True),
+        }
+
+    # -- 通用上下文 Hook ----------------------------------------------------------------
 
     async def collect_input_context(self, prompt: str) -> tuple[str, ...]:
-        """运行 user_input Hook，把成功 stdout 作为一条输入上下文返回。
+        """运行前台 ``user_input`` Hook，返回成功 stdout 上下文。
 
-        Hook 失败、超时或输出为空都不会阻断用户输入。命令配置由用户显式
-        信任；prompt 经 shlex.quote 后替换模板变量，避免命令注入。
+        ``user_prompt_submit`` 属于查询引擎生命周期，在 AgentLoop 中统一执行，
+        因此 headless、REPL 与子代理不会出现行为分叉。
         """
-        contexts: list[str] = []
         variables = {
             "workspace": str(self.root),
             "prompt": prompt[:MAX_INPUT_HOOK_PROMPT],
         }
-        for spec in self.specs:
-            if spec.on != "user_input":
-                continue
-            command = self.render(spec.command, variables)
-            started = time.monotonic()
-            record: Dict[str, Any] = {"trigger": "user_input", "command": command}
-            try:
-                proc = await asyncio.create_subprocess_shell(
-                    command,
-                    cwd=str(self.root),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    start_new_session=True,
-                )
-                try:
-                    out, _ = await asyncio.wait_for(
-                        proc.communicate(), timeout=spec.timeout)
-                    record["rc"] = proc.returncode
-                    record["output"] = out.decode(
-                        "utf-8", "replace")[:MAX_INPUT_HOOK_CONTEXT]
-                except asyncio.TimeoutError:
-                    _terminate(proc)
-                    record["rc"] = None
-                    record["output"] = f"超时（>{spec.timeout:g}s），已终止"
-            except OSError as exc:
-                record["rc"] = None
-                record["output"] = f"无法启动: {exc}"
-            record["ms"] = int((time.monotonic() - started) * 1000)
-            self.executions.append(record)
-            self._log(
-                f"  [hook:user_input] rc={record['rc']} ({record['ms']}ms) "
-                f"{record['output'].strip()[:120]}")
-            if record["rc"] == 0 and record["output"].strip():
-                contexts.append(record["output"].strip())
-        return tuple(contexts)
+        result = await self._run_matching(
+            "user_input", variables, plaintext_context=True)
+        return tuple(item[:MAX_INPUT_HOOK_CONTEXT] for item in result.context)
 
-    async def run_hook(self, spec: HookSpec, trigger: str,
-                       variables: Dict[str, str]) -> None:
+    async def collect_context(
+        self, trigger: str, variables: Optional[Dict[str, str]] = None,
+    ) -> tuple[str, ...]:
+        """运行任意上下文型触发器；失败返回空元组。"""
+        result = await self.run_lifecycle(trigger, dict(variables or {}))
+        return result.context
+
+    async def run_lifecycle(
+        self, trigger: str, variables: Optional[Dict[str, str]] = None,
+    ) -> HookResult:
+        """运行生命周期 Hook；普通 stdout 在上下文型事件中可注入。"""
+        resolved = dict(variables or {})
+        resolved.setdefault("workspace", str(self.root))
+        return await self._run_matching(
+            trigger,
+            resolved,
+            plaintext_context=trigger in CONTEXT_TRIGGERS,
+        )
+
+    # -- 执行与协议 ---------------------------------------------------------------------
+
+    def render(self, command: str, variables: Dict[str, str]) -> str:
+        """单次 {var} 占位替换；值一律 shell-quote（值可能来自 LLM/用户）。"""
+        def replace(match: re.Match[str]) -> str:
+            key = match.group(1)
+            if key not in variables:
+                return match.group(0)
+            return shlex.quote(str(variables[key]))
+
+        return _TEMPLATE_VARIABLE.sub(replace, command)
+
+    async def run_hook(
+        self, spec: HookSpec, trigger: str, variables: Dict[str, str],
+        *,
+        tool_call: Optional[ToolCall] = None,
+        plaintext_context: bool = False,
+    ) -> HookResult:
         command = self.render(spec.command, variables)
+        payload = self._payload(trigger, variables, tool_call=tool_call)
         started = time.monotonic()
-        record: Dict[str, Any] = {"trigger": trigger, "command": command}
+        record: Dict[str, Any] = {
+            "trigger": trigger,
+            "command": self._redact(command),
+            "tools": list(spec.tools),
+        }
+        stdout = ""
+        stderr = ""
+        rc: Optional[int] = None
         try:
+            env = scrub_environment(os.environ)
+            env.update({
+                "KRELCODE_HOOK_EVENT": trigger,
+                "KRELCODE_WORKSPACE": str(self.root),
+            })
+            if tool_call is not None:
+                env["KRELCODE_TOOL"] = tool_call.name
             proc = await asyncio.create_subprocess_shell(
                 command,
                 cwd=str(self.root),
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
                 start_new_session=True,
             )
             try:
-                out, _ = await asyncio.wait_for(proc.communicate(), timeout=spec.timeout)
-                record["rc"] = proc.returncode
-                record["output"] = out.decode("utf-8", "replace")[:OUTPUT_PREVIEW]
+                raw_out, raw_err = await asyncio.wait_for(
+                    proc.communicate(
+                        json.dumps(payload, ensure_ascii=False).encode("utf-8")),
+                    timeout=spec.timeout,
+                )
+                rc = proc.returncode
+                stdout = raw_out.decode("utf-8", "replace")[:MAX_HOOK_STDOUT]
+                stderr = raw_err.decode("utf-8", "replace")[:MAX_HOOK_STDERR]
             except asyncio.TimeoutError:
                 _terminate(proc)
-                record["rc"] = None
-                record["output"] = f"超时（>{spec.timeout:g}s），已终止"
-        except OSError as e:
-            record["rc"] = None
-            record["output"] = f"无法启动: {e}"
-        record["ms"] = int((time.monotonic() - started) * 1000)
+                await proc.wait()
+                stderr = f"超时（>{spec.timeout:g}s），已终止"
+        except Exception as exc:
+            stderr = f"Hook 执行失败: {type(exc).__name__}: {exc}"
+
+        result = self._interpret(
+            trigger, rc, stdout, stderr,
+            plaintext_context=plaintext_context,
+        )
+        output = self._redact("\n".join(
+            part for part in (stdout.strip(), stderr.strip()) if part))
+        record.update({
+            "rc": rc,
+            "output": output[:OUTPUT_PREVIEW],
+            "stdout": self._redact(stdout[:MAX_HOOK_STDERR]),
+            "stderr": self._redact(stderr[:MAX_HOOK_STDERR]),
+            "ms": int((time.monotonic() - started) * 1000),
+            "matched": result.matched,
+            "blocked": result.blocked,
+            "reason": result.reason,
+            "context_count": len(result.context),
+        })
         self.executions.append(record)
-        self._log(f"  [hook:{trigger}] rc={record['rc']} ({record['ms']}ms) "
-                  f"{record['output'].strip()[:120]}")
+        decision = " blocked" if result.blocked else ""
+        self._log(
+            f"  [hook:{trigger}] rc={rc}{decision} ({record['ms']}ms) "
+            f"{output.strip()[:120]}")
+        return result
+
+    def _redact(self, text: str) -> str:
+        return self._redactor.redact(text) if self._redactor is not None else text
+
+    async def _run_matching(
+        self,
+        trigger: str,
+        variables: Dict[str, str],
+        *,
+        tool_call: Optional[ToolCall] = None,
+        plaintext_context: bool = False,
+    ) -> HookResult:
+        results: List[HookResult] = []
+        tool_name = tool_call.name if tool_call is not None else variables.get("tool")
+        for spec in self.specs:
+            if spec.on != trigger:
+                continue
+            if tool_name and trigger in TOOL_TRIGGERS and not spec.matches_tool(tool_name):
+                continue
+            result = await self.run_hook(
+                spec,
+                trigger,
+                variables,
+                tool_call=tool_call,
+                plaintext_context=plaintext_context,
+            )
+            results.append(result)
+            if result.blocked:
+                break
+        return HookResult.merge(results)
+
+    def _payload(
+        self, trigger: str, variables: Dict[str, str],
+        *, tool_call: Optional[ToolCall] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "event": trigger,
+            "workspace": str(self.root),
+            "timestamp": int(time.time()),
+            "data": dict(variables),
+        }
+        if tool_call is not None:
+            payload["tool"] = {
+                "name": tool_call.name,
+                "arguments": tool_call.arguments,
+                "id": tool_call.id,
+            }
+        return payload
+
+    def _interpret(
+        self,
+        trigger: str,
+        rc: Optional[int],
+        stdout: str,
+        stderr: str,
+        *,
+        plaintext_context: bool,
+    ) -> HookResult:
+        text = stdout.strip()
+        parsed: Optional[Dict[str, Any]] = None
+        if text.startswith("{"):
+            try:
+                candidate = json.loads(text)
+                if isinstance(candidate, dict):
+                    parsed = candidate
+            except json.JSONDecodeError:
+                parsed = None
+
+        contexts: List[str] = []
+        system_message = ""
+        blocked = False
+        reason = ""
+        if parsed is not None:
+            raw_context = parsed.get(
+                "additional_context", parsed.get("additionalContext"))
+            if isinstance(raw_context, str) and raw_context.strip():
+                contexts.append(raw_context.strip()[:MAX_INPUT_HOOK_CONTEXT])
+            elif isinstance(raw_context, list):
+                contexts.extend(
+                    str(item).strip()[:MAX_INPUT_HOOK_CONTEXT]
+                    for item in raw_context if str(item).strip())
+            system_message = str(
+                parsed.get("system_message", parsed.get("systemMessage", ""))
+            ).strip()[:MAX_HOOK_SYSTEM_MESSAGE]
+            decision = str(
+                parsed.get("decision", parsed.get("permissionDecision", ""))).lower()
+            if decision in {"block", "deny", "denied"}:
+                blocked = True
+                reason = str(
+                    parsed.get("reason", parsed.get("message", "Hook blocked"))).strip()
+        elif plaintext_context and rc == 0 and text:
+            contexts.append(text[:MAX_INPUT_HOOK_CONTEXT])
+
+        # Claude Code 兼容：退出码 2 = 阻断，并优先用 stderr 作为原因。
+        if trigger == "pre_tool_use" and rc == 2:
+            blocked = True
+            reason = (stderr.strip() or text or "PreToolUse Hook 退出码 2")
+        if blocked and not reason:
+            reason = "Hook 阻止了工具调用"
+        return HookResult(
+            matched=True,
+            blocked=blocked,
+            reason=self._redact(reason),
+            context=tuple(self._redact(context) for context in contexts),
+            system_message=self._redact(system_message),
+        )
 
 
 def _terminate(proc: asyncio.subprocess.Process) -> None:
-    import os
-    import signal
     if os.name == "posix":
+        import signal
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             return
