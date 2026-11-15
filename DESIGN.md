@@ -42,6 +42,9 @@ src/krelcode/
 ├── safety/      # 策略层（实现 ApprovalPolicy 端口）
 │   └── policy.py     # Decision / AllowAllPolicy（Step 6 加沙箱与交互审批）
 ├── session/     # 交互会话层 + 状态适配器
+│   ├── input.py      # InputEnvelope → InputProcessor → InputAction
+│   ├── attachments.py # @文本/图片展开（工作区约束与预算）
+│   ├── state.py      # SessionViewState：idle/running/stopping 与 turn 现场
 │   ├── controller.py # SessionController：命令/任务/steering，不依赖终端
 │   ├── runner.py     # headless/REPL 运行策略，不导入具体 UI
 │   ├── restore.py    # 会话恢复
@@ -58,15 +61,18 @@ src/krelcode/
 依赖方向（严格单向）：
 
 ```text
+InputEnvelope → session/input → InputProcessor → InputAction queue
+                                      │
 entrypoints → session/runner → session/controller → agent.runtime → ports/core
                                                         ↑
-ui ──事件总线/渲染────────────── AgentLoop ──────────────┘
+ui ──动作消费/事件总线/渲染──── AgentLoop ──────────────┘
 
 llm/tools/mcp/skills/safety/session persistence = 可替换适配器
 app.py = composition root，只负责创建与注入，不属于业务层
 ```
 
-`session.controller` 不导入 `ui`，`ui` 不导入 `app/entrypoints`，`core` 不依赖任何上层。
+`session.input` 只依赖 core/session，`session.controller` 不导入 `ui`，`ui` 不导入
+`app/entrypoints`，`core` 不依赖任何上层。
 这些边界由 `tests/test_architecture.py` 的 AST 依赖守护测试固定。
 
 ## 四个核心端口（契约）
@@ -427,7 +433,7 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   `TerminalLineEditor` 解析 `ESC[A/B` 与 `ESCOA/B`，`↑` 向旧浏览、`↓`
   向新浏览，越过最新项时恢复导航开始前的草稿。历史在进入 agent 前记录，
   因此 `@文件` 仍保留用户原始写法，不会把展开后的文件正文塞进输入历史
-- **@文件引用**（ui/atfiles.py）：UI 层展开——进入 history 的已是展开后文本，
+- **@文件引用**（session/attachments.py）：统一输入层展开——进入 history 的已是展开后文本，
   provider/内核零感知。词首 `@path` 触发（`(?<![\w@])` 防 email 误伤）；
   路径与工具层同规则约束在工作区内；不存在/二进制/越界/超限一律保留原文
   并回显说明（fail-safe）；单文件 8K 字符、单消息 5 个文件的注入预算
@@ -489,6 +495,38 @@ Skill 是用户可安装的指令包，不是 Python 插件；Krelcode 只解析
 指令/代码；脚本仍必须审批。模型不能借资源 reader 越过 Skill 根目录，也不应
 把 Skill 当作任意文件的通用读取后门。
 
+## 统一输入处理管线（Step 67）
+
+借鉴 Claude Code 将 `processUserInput` 与 REPL 分开的思路，终端不再直接解释原始
+字符串。`session.input.InputProcessor` 接收任意来源的 `InputEnvelope`，完成确定性
+处理后输出 `InputAction`：
+
+```
+raw input (terminal / API / IDE)
+  └─ InputEnvelope
+      └─ InputProcessor (async)
+          ├─ strip / empty normalization
+          ├─ classify: PROMPT | COMMAND | UI_COMMAND | CONTROL
+          ├─ @text/image expansion (asyncio.to_thread)
+          ├─ optional user_input hooks (quoted vars, timeout, fail-open)
+          └─ InputAction {text, command, arguments, images, notes, hook_context}
+              └─ REPL / future frontend queue
+```
+
+- 命令不展开 `@`，避免 `/skill ... @file` 被提前注入；业务命令仍交给
+  `SessionController`，`/thinking`、`/tool-output` 留在 UI，`/stop`、`/exit`
+  归为 CONTROL 由前台快速处理。
+- 附件与多模态 steering 共用同一动作模型；运行中插话可携带图片，且不把展开后
+  文件正文写入输入历史。
+- `user_input` Hook 只在普通 prompt 上执行，prompt 作为 shell-quote 变量传入；
+  超时、失败和空输出均不阻断消息。成功 stdout 以 `<hook_context>` 包裹并从
+  `app.py` 注入，业务层不感知 HookRunner。
+- `SessionViewState` 只保存 REPL 观察面：phase、raw input、turn id、progress；
+  AgentLoop 历史与 AgentRuntime 任务仍是各自的唯一事实源。
+
+该拆分让 input processor 可脱离终端单测，也为未来 API/IDE 前端复用命令分类、
+附件与 Hook 语义保留稳定入口。
+
 ## 四层运行职责（Step 66）
 
 在保留细粒度包结构的前提下，对外按四层理解：
@@ -496,7 +534,7 @@ Skill 是用户可安装的指令包，不是 Python 插件；Krelcode 只解析
 | 层 | 主要对象 | 边界 |
 |----|----------|------|
 | 入口分流层 | `entrypoints.cli/main` | fast-path、参数解析；不创建 Agent |
-| 交互会话层 | `ui.repl` + `session.SessionController/runner` | 终端只负责 I/O/渲染；会话控制器负责命令、turn 生命周期、steering、恢复 |
+| 交互会话层 | `ui.repl` + `session.InputProcessor/SessionViewState/SessionController/runner` | 输入先结构化；终端只负责 I/O/渲染，会话控制器负责命令、turn 生命周期、steering、恢复 |
 | 执行推进层 | `agent.AgentRuntime/AgentLoop` + 能力适配器 | 统一 turn/cancel/reload/close；Provider/工具差异在适配器消化 |
 | 基础架构层 | `core`、配置、事件总线、JSONL、Sandbox、脱敏 | 提供无业务偏向的契约、持久化和安全边界 |
 

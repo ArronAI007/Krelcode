@@ -110,8 +110,9 @@
 | 64 | 零参数安装体验 | 默认流程改为自动发现 Python 3.11+ 后直接创建 Krelcode 私有 venv，普通安装不再调用 uv 或下载 Python；仅系统没有兼容 Python、或 venv 创建失败时，才自动准备 uv 和独立 Python；支持 uv 自举；帮助与 README 只保留一条安装命令，解释器/镜像等降为高级兜底 | 安装器测试验证系统 Python 安装不会调用 uv、含空格路径、自动 PATH、版本、导入和卸载；临时 HOME 下真实执行默认安装流程并通过 | ✅ |
 | 65 | 进程入口分流 | 对齐 Claude Code 的 `cli → main → app` 延迟加载边界：控制台脚本与 `python -m krelcode` 统一进入轻量 `entrypoints.cli`；`--version` 零配置、零 Agent 依赖直接返回；完整 argparse/help 与 doctor/init/review 路由移入 `entrypoints.main`；Provider/MCP/Sandbox/REPL 只在对话或 headless run 时由 `app.py` 组装。app.main/build_parser 保留兼容委托，不建立第二套参数定义 | 9 个新入口测试：版本不加载 main/app/config、坏配置仍可输出版本、`python -m` 一致性、argv 原样转发、option-value 不误判、doctor 不加载组装根、help 不加载组装根、全量 642 通过（2 个本地端口测试 skip） | ✅ |
 | 66 | 四层架构收拢 | 引入 `SessionController`：会话命令返回结构化 `CommandResult`，任务启动/steering/停止/恢复移出终端；引入 `AgentRuntime` 统一 turn/steer/stop/reload/close，headless 与 REPL 共用；新增 `session/runner`/`bootstrap`/`restore`，`app.py` 不再直接实现 JSON/headless 流程，只负责依赖装配与运行策略选择；UI 保留 `/thinking`、`/tool-output` 展示型命令；新增 AST 架构依赖守护，禁止 core 反向依赖、agent 导入 UI/session/具体 Provider、session controller 导入 UI/app | 新增 14 个测试函数：SessionController 命令/生命周期/无 UI 依赖、AgentRuntime turn/steering/close、session runner headless/交互、5 组静态依赖边界；全量 657 通过（2 个本地端口测试 skip） | ✅ |
+| 67 | 统一输入管线与会话现场 | 对齐 Claude Code 的 `processUserInput → REPL` 分工：新增 `InputEnvelope/InputAction/InputKind/InputProcessor`，把空输入规范化、命令四分类、`@` 文本/图片展开、来源保留、可选 `user_input` Hook 与结构化动作队列从 REPL 前移；附件实现下沉到 `session/attachments`，旧 `ui/atfiles` 仅兼容包装；steering 支持多模态附件；app 组装根把 HookRunner 上下文注入 InputProcessor；新增 `SessionViewState` 显式管理 idle/running/stopping、raw input、turn id 与 progress，替换 REPL 字典状态；架构测试扩展到全部 session 模块并约束 input 只依赖 core/session | 17 个新增/扩展测试：空输入/命令分类/参数/来源、真实文本与图片附件/Hook 失败隔离、REPL→模型历史 Hook e2e、runner 注入、图片 steering、状态机转换、session 反向依赖守护；全量 674 通过（2 个本地端口测试 skip） | ✅ |
 
-| 测试总数：659（657 离线通过 + 2 个本地端口集成，沙箱内自动 skip） |
+| 测试总数：676（674 离线通过 + 2 个本地端口集成，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

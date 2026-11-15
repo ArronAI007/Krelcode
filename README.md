@@ -223,6 +223,8 @@ LLM 可用 `spawn_agent` 把自包含的子任务委派给后台子代理（独�
 
 体验：启动显示 provider/模型/工作区/工具/会话信息卡片；输入区用横跨终端的上下两条 `─` 边界包住 `❯` 提示符，输入 `/` 时实时弹出并过滤匹配的 slash commands（Tab 可补全唯一命令），候选菜单在固定区域原地覆盖，撤销 `/` 后不会残留搜索内容；输入框支持 `↑/↓` 调取本次会话的历史问题，越过最新一条会恢复未提交草稿；回答结束后立即回到新的双边界输入区；LLM 回复以 `⏺` 流式展示，reasoning 模型（DeepSeek-R1/Qwen 思考模式/Claude thinking）的思考正文默认折叠为单行暗色 `✻ Thinking…（正文已折叠；下方为工具活动，/thinking 展开）`，并用空行与后续工具活动明确分隔，执行 `/thinking` 才展开（任务运行中也可用）原始 Markdown（标题/列表/空行/fenced code 均保留），工具调用/结果使用 `⏺` / `⎿` 树形标记（统一 ThinkingDelta 事件，思考不进对话历史）；工具结果默认只显示编号与行数/字符数摘要，运行中或空闲时可用 `/tool-output` 查看列表、`/tool-output <编号|last>` 在灰色背景面板中单独展开，超宽行自动折行；高置信度识别到“只解释明确文件”时，会在模型调用前注入结构化意图并只暴露 `read_file`，避免先 glob 目录或读取 README/同级文件，模糊请求和修复/运行等动作请求保持完整工具集；edit_file 展开后的 diff 保留红绿高亮（尊重 `NO_COLOR`）；会话自动录制为 JSONL（`<workspace>/.krelcode/sessions/`，审计事件流 + 历史快照），`--resume` 恢复最近会话继续聊（`--resume <path>` 指定文件，`--no-session` 关闭）。
 
+所有终端输入在进入会话前经过统一 `InputProcessor`：规范化原始输入、区分普通消息/业务命令/展示命令/控制命令、后台展开 `@文件` 与图片附件，并执行可选 `user_input` Hook；REPL 只消费结构化 `InputAction`，不再承担输入解释。会话现场由 `SessionViewState` 显式记录 idle/running/stopping、当前 turn 与进度，历史消息仍只由 AgentLoop 持有。
+
 启动时自动注入工作区上下文（目录树 + git 分支/状态 + 分层规则：全局 `~/.krelcode/AGENTS.md` + 项目 `AGENTS.md`/`KRELCODE.md`），`--no-context` 可关闭，长会话中 `/context refresh` 可重采；同批工具调用并行执行，同一调用连续失败 3 次判定卡死自动中止（`--repeat-failure-limit` 可调）。
 
 ## 模块结构（依赖严格单向）
@@ -234,7 +236,7 @@ agent/   AgentRuntime 执行门面 + AgentLoop 主循环（只依赖端口，不
 tools/   Tool 端口 + Registry + builtin/（每工具一个文件）
 skills/  SKILL.md 发现/解析、渐进加载、资源、脚本、热重载
 safety/  ApprovalPolicy 端口（Step 6 加沙箱）
-session/ SessionController 会话命令/steering + runner/恢复/JSONL/检查点
+session/ InputProcessor 统一输入/附件/Hook + SessionController 命令/steering + SessionViewState + runner/恢复/JSONL/检查点
 entrypoints/ 进程入口：cli 轻量 fast-path → main 完整参数路由 → app 按需启动
 ui/      终端 I/O、Markdown 渲染和展示型命令（不承担会话业务状态）
 app.py   组装根：只创建对象并选择运行策略，不实现会话/执行流程
