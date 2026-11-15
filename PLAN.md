@@ -109,8 +109,9 @@
 | 63 | 全局安装容错 | 修复 uv 在找不到固定 Python 版本时尝试从 GitHub 下载、失败后又无法发现本机解释器的问题：通用探测显式解释器、PATH、VIRTUAL_ENV、CONDA、pyenv、asdf、mise、uv 管理版本和常见兜底路径；使用 uv 时禁止再次下载 Python，失败自动回退私有 venv；新增 `--python PATH` 与 `--python-mirror URL` | 安装器测试增加 fake uv 参数/环境断言，验证复用本机 Python、`UV_PYTHON_DOWNLOADS=never`、uv 失败回退与最终命令可运行 | ✅ |
 | 64 | 零参数安装体验 | 默认流程改为自动发现 Python 3.11+ 后直接创建 Krelcode 私有 venv，普通安装不再调用 uv 或下载 Python；仅系统没有兼容 Python、或 venv 创建失败时，才自动准备 uv 和独立 Python；支持 uv 自举；帮助与 README 只保留一条安装命令，解释器/镜像等降为高级兜底 | 安装器测试验证系统 Python 安装不会调用 uv、含空格路径、自动 PATH、版本、导入和卸载；临时 HOME 下真实执行默认安装流程并通过 | ✅ |
 | 65 | 进程入口分流 | 对齐 Claude Code 的 `cli → main → app` 延迟加载边界：控制台脚本与 `python -m krelcode` 统一进入轻量 `entrypoints.cli`；`--version` 零配置、零 Agent 依赖直接返回；完整 argparse/help 与 doctor/init/review 路由移入 `entrypoints.main`；Provider/MCP/Sandbox/REPL 只在对话或 headless run 时由 `app.py` 组装。app.main/build_parser 保留兼容委托，不建立第二套参数定义 | 9 个新入口测试：版本不加载 main/app/config、坏配置仍可输出版本、`python -m` 一致性、argv 原样转发、option-value 不误判、doctor 不加载组装根、help 不加载组装根、全量 642 通过（2 个本地端口测试 skip） | ✅ |
+| 66 | 四层架构收拢 | 引入 `SessionController`：会话命令返回结构化 `CommandResult`，任务启动/steering/停止/恢复移出终端；引入 `AgentRuntime` 统一 turn/steer/stop/reload/close，headless 与 REPL 共用；新增 `session/runner`/`bootstrap`/`restore`，`app.py` 不再直接实现 JSON/headless 流程，只负责依赖装配与运行策略选择；UI 保留 `/thinking`、`/tool-output` 展示型命令；新增 AST 架构依赖守护，禁止 core 反向依赖、agent 导入 UI/session/具体 Provider、session controller 导入 UI/app | 新增 14 个测试函数：SessionController 命令/生命周期/无 UI 依赖、AgentRuntime turn/steering/close、session runner headless/交互、5 组静态依赖边界；全量 657 通过（2 个本地端口测试 skip） | ✅ |
 
-| 测试总数：644（642 离线通过 + 2 个本地端口集成，沙箱内自动 skip） |
+| 测试总数：659（657 离线通过 + 2 个本地端口集成，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

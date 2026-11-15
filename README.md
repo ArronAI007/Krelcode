@@ -230,11 +230,12 @@ LLM 可用 `spawn_agent` 把自包含的子任务委派给后台子代理（独�
 ```
 core/    wire-free 规范消息·事件总线·错误（零依赖内核）
 llm/     统一 Provider 机制：transport+SSE / OpenAI·Anthropic·Mock 适配器 / 工厂+配置
-agent/   AgentLoop 主循环（只依赖端口，不认识具体工具/模型）
+agent/   AgentRuntime 执行门面 + AgentLoop 主循环（只依赖端口，不认识具体工具/模型）
 tools/   Tool 端口 + Registry + builtin/（每工具一个文件）
 skills/  SKILL.md 发现/解析、渐进加载、资源、脚本、热重载
 safety/  ApprovalPolicy 端口（Step 6 加沙箱）
+session/ SessionController 会话命令/steering + runner/恢复/JSONL/检查点
 entrypoints/ 进程入口：cli 轻量 fast-path → main 完整参数路由 → app 按需启动
-ui/      REPL（事件总线旁路订阅者）
-app.py   组装根：唯一知道所有具体类的地方，负责依赖注入
+ui/      终端 I/O、Markdown 渲染和展示型命令（不承担会话业务状态）
+app.py   组装根：只创建对象并选择运行策略，不实现会话/执行流程
 ```

@@ -30,9 +30,10 @@ src/krelcode/
 │       ├── openai.py     # OpenAI 兼容：SSE 流式、tool_call 增量聚合
 │       ├── anthropic.py  # Anthropic：content blocks、tool_use/result、system 抽离
 │       └── mock.py       # 脚本化响应，记录调用（测试/离线体验）
-├── agent/       # 主循环：只 import core 与各端口，不认识任何具体工具/模型
-│   ├── loop.py       # AgentLoop
-│   └── prompts.py    # 系统提示词组装（后续注入 AGENTS.md 等）
+├── agent/       # 执行推进层：只 import core/端口，不认识具体 UI/Provider
+│   ├── runtime.py    # AgentRuntime：turn/steering/cancel/close 统一门面
+│   ├── loop.py       # AgentLoop：单轮模型-工具循环
+│   └── prompts.py    # 系统提示词组装
 ├── tools/       # 工具层（实现 Tool 端口）
 │   ├── base.py       # Tool 协议 + ToolResult + ToolContext
 │   ├── registry.py   # ToolRegistry -> OpenAI tools schema
@@ -40,8 +41,12 @@ src/krelcode/
 ├── skills/      # 文件系统型 Agent Skills：发现/解析/渐进加载/资源/脚本
 ├── safety/      # 策略层（实现 ApprovalPolicy 端口）
 │   └── policy.py     # Decision / AllowAllPolicy（Step 6 加沙箱与交互审批）
-├── session/     # (Step 8) JSONL 持久化，事件总线订阅者
-├── ui/          # 交互层：事件总线订阅者，不被任何层引用
+├── session/     # 交互会话层 + 状态适配器
+│   ├── controller.py # SessionController：命令/任务/steering，不依赖终端
+│   ├── runner.py     # headless/REPL 运行策略，不导入具体 UI
+│   ├── restore.py    # 会话恢复
+│   └── recorder.py   # JSONL 持久化（事件总线订阅者）
+├── ui/          # 终端交互：输入、渲染、展示型命令
 │   └── repl.py
 ├── entrypoints/ # 进程入口：light cli fast-path → full main → lazy app
 │   ├── cli.py   # --version 零配置/零 Agent 依赖；其余 argv 原样下发
@@ -51,8 +56,18 @@ src/krelcode/
 ```
 
 依赖方向（严格单向）：
-`ui → agent → core`；`llm / tools / safety` 是适配器，只依赖 `core`，
-由 `app.py` 注入 `agent`。`session`、`ui` 通过订阅事件总线旁路消费，内核对其零感知。
+
+```text
+entrypoints → session/runner → session/controller → agent.runtime → ports/core
+                                                        ↑
+ui ──事件总线/渲染────────────── AgentLoop ──────────────┘
+
+llm/tools/mcp/skills/safety/session persistence = 可替换适配器
+app.py = composition root，只负责创建与注入，不属于业务层
+```
+
+`session.controller` 不导入 `ui`，`ui` 不导入 `app/entrypoints`，`core` 不依赖任何上层。
+这些边界由 `tests/test_architecture.py` 的 AST 依赖守护测试固定。
 
 ## 四个核心端口（契约）
 
@@ -473,6 +488,20 @@ Skill 是用户可安装的指令包，不是 Python 插件；Krelcode 只解析
 安全边界：Skill 正文和 bundled script 都来自用户安装内容，等同用户信任的
 指令/代码；脚本仍必须审批。模型不能借资源 reader 越过 Skill 根目录，也不应
 把 Skill 当作任意文件的通用读取后门。
+
+## 四层运行职责（Step 66）
+
+在保留细粒度包结构的前提下，对外按四层理解：
+
+| 层 | 主要对象 | 边界 |
+|----|----------|------|
+| 入口分流层 | `entrypoints.cli/main` | fast-path、参数解析；不创建 Agent |
+| 交互会话层 | `ui.repl` + `session.SessionController/runner` | 终端只负责 I/O/渲染；会话控制器负责命令、turn 生命周期、steering、恢复 |
+| 执行推进层 | `agent.AgentRuntime/AgentLoop` + 能力适配器 | 统一 turn/cancel/reload/close；Provider/工具差异在适配器消化 |
+| 基础架构层 | `core`、配置、事件总线、JSONL、Sandbox、脱敏 | 提供无业务偏向的契约、持久化和安全边界 |
+
+`app.py` 横跨四层完成对象装配，但不拥有会话命令或执行流程。headless 与 REPL
+都通过 `AgentRuntime` 执行，因此未来增加 API/IDE 入口时可复用同一会话与执行门面。
 
 ## 进程入口分流
 
