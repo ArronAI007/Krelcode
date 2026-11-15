@@ -39,6 +39,7 @@ krelcode [子命令] [选项]
 | `--no-skills` | — | 关闭 Agent Skills（不发现、不注册 Skill 工具） |
 | `--skills-dir <路径>` | — | 追加 Skill 根目录，可重复；也支持 TOML `[skills].paths` |
 | `--auto-approve` | — | ASK 级操作自动批准（DENY 级仍拒绝） |
+| `--permission-mode default\|read-only\|auto-approve\|plan` | 配置/`default` | 工具权限模式；`read-only`/`plan` 只暴露只读工具 |
 | `--sandbox-backend auto\|static\|seatbelt\|bubblewrap` | auto | 运行时隔离后端；显式后端不可用则启动失败 |
 | `--sandbox-network` | — | 允许 Sandbox 子进程访问网络（默认关闭） |
 | `--no-sandbox` | — | 同时关闭审批策略与运行时 Sandbox（AllowAll，自担风险） |
@@ -112,6 +113,15 @@ api_key_env = "GEMINI_API_KEY"       # GOOGLE_API_KEY 兜底
 [sandbox]
 backend = "auto"                     # auto / static / seatbelt / bubblewrap
 network = false                      # 默认禁止子进程联网；CLI --sandbox-network 可开启
+
+[permissions]
+mode = "default"                     # default / read-only / auto-approve / plan
+
+[features]
+enabled = []                         # 启用的功能开关名；工具池可按开关过滤
+
+[tools]
+disabled = []                        # 本轮工具池永久排除的工具名
 
 [skills]
 enabled = true                       # false 等价 --no-skills

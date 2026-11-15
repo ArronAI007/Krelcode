@@ -12,7 +12,8 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, replace
-from typing import Dict, List, Optional
+from itertools import count
+from typing import Callable, Dict, List, Optional
 
 from ..core.redact import SecretRedactor
 from ..core.events import (
@@ -49,7 +50,7 @@ from .streaming_tools import StreamingToolExecutor
 from .tokens import estimate_history_tokens
 from .tool_pool import TurnToolPool
 from ..safety.policy import ApprovalPolicy
-from ..tools.base import ToolContext, ToolResult
+from ..tools.base import RuntimeSnapshot, ToolContext, ToolResult, TurnAbortSignal
 from ..tools.registry import ToolRegistry
 
 DEFAULT_MAX_STEPS = 64
@@ -90,6 +91,9 @@ class AgentLoop:
         tool_output_inline_limit: int = 12_000,
         token_budget: Optional[int] = None,
         redactor: Optional[SecretRedactor] = None,
+        runtime_snapshot_provider: Optional[
+            Callable[[RuntimeSnapshot], RuntimeSnapshot]
+        ] = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -102,10 +106,15 @@ class AgentLoop:
         self.tool_output_inline_limit = tool_output_inline_limit
         self.token_budget = token_budget
         self.redactor = redactor
+        self.runtime_snapshot_provider = runtime_snapshot_provider
         self._token_total = 0
         self._failure_counts: Dict[str, int] = {}
         self._turn_intent = TurnIntent()
         self._active_tool_pool: Optional[TurnToolPool] = None
+        self._turn_tool_context = tool_context
+        self._turn_abort_signal = TurnAbortSignal()
+        self._turn_counter = count(1)
+        self._turn_prepared = False
         # 运行中用户插话队列（REPL steering）：每个 step 开始前注入历史
         self.steering_queue: asyncio.Queue = asyncio.Queue()
         self.history: List[Message] = (
@@ -121,7 +130,28 @@ class AgentLoop:
 
     # -- 对外主入口 -----------------------------------------------------------
 
-    async def run(self, user_input: str, images: Optional[list] = None) -> str:
+    async def run_turn(
+        self,
+        user_input: str,
+        images: Optional[list] = None,
+        *,
+        turn_id: Optional[str] = None,
+    ) -> str:
+        """QueryEngine 的窄入口；允许 runner 替换 ``run`` 时仍传入 turn id。"""
+        self._begin_turn(turn_id)
+        self._turn_prepared = True
+        try:
+            return await self.run(user_input, images=images)
+        finally:
+            self._turn_prepared = False
+
+    async def run(
+        self,
+        user_input: str,
+        images: Optional[list] = None,
+        *,
+        turn_id: Optional[str] = None,
+    ) -> str:
         """处理一轮用户输入：内部可能经历多次 LLM 调用与工具执行。
 
         images: 可选 ImageRef 列表（@图片附件），挂在 user 消息上由
@@ -129,6 +159,8 @@ class AgentLoop:
         被 cancel 时（REPL /stop）：消毒历史（弹掉不配对的尾部消息），
         若结尾是未答完的 user 消息则补一条中止说明（保角色交替），再重抛。
         """
+        if not self._turn_prepared:
+            self._begin_turn(turn_id)
         self.history.append(Message.user(user_input, images=images or None))
         self._failure_counts = {}
         self._token_total = 0
@@ -163,6 +195,7 @@ class AgentLoop:
                     await self._emit(RunFinished(text))
                     return text
         except asyncio.CancelledError:
+            self._turn_abort_signal.cancel()
             self._repair_after_cancel()
             await self._emit(RunCancelled())
             raise
@@ -171,6 +204,23 @@ class AgentLoop:
         self.history.append(Message.assistant(text))
         await self._emit(RunFinished(text))
         return text
+
+    def _begin_turn(self, turn_id: Optional[str]) -> None:
+        resolved_turn_id = turn_id or f"turn-{next(self._turn_counter)}"
+        self._turn_abort_signal = TurnAbortSignal()
+        snapshot = self.tool_context.runtime
+        if self.runtime_snapshot_provider is not None:
+            snapshot = self.runtime_snapshot_provider(snapshot)
+        snapshot = replace(snapshot, turn_id=resolved_turn_id)
+        self._turn_tool_context = replace(
+            self.tool_context,
+            runtime=snapshot,
+            abort=self._turn_abort_signal,
+        )
+
+    def abort_current_turn(self, reason: str = "用户中止") -> None:
+        """向正在执行的工具广播协作式取消；Task.cancel 仍由 Runtime 负责。"""
+        self._turn_abort_signal.cancel(reason)
 
     async def _inject_steering(self) -> None:
         """把插话队列里的消息注入历史（每个 step 开始前调用）。
@@ -375,7 +425,7 @@ class AgentLoop:
             )
 
         execution_ctx = replace(
-            self.tool_context,
+            self._turn_tool_context,
             tool_descriptor=pool.descriptor(tool_call.name),
         )
 

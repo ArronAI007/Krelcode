@@ -41,7 +41,15 @@ from .session.restore import refresh_skill_system_prompt, restore_session
 from .session.runner import run_session
 from .skills import SkillManager, build_skill_tools
 from .subagent.manager import SUBAGENT_SYSTEM_PROMPT, SubagentManager
-from .tools.base import Tool, ToolContext, ToolDescriptor, ToolSource
+from .tools.base import (
+    PermissionMode,
+    RunMode,
+    RuntimeSnapshot,
+    Tool,
+    ToolContext,
+    ToolDescriptor,
+    ToolSource,
+)
 from .tools.builtin.check_syntax import CheckSyntaxTool
 from .tools.builtin.edit_file import EditFileTool
 from .tools.builtin.glob import GlobTool
@@ -144,6 +152,49 @@ def build_policy(args: argparse.Namespace, workspace_root: Path, bus: EventBus):
     )
 
 
+def resolve_permission_mode(
+    args: argparse.Namespace, config: Dict[str, Any],
+) -> PermissionMode:
+    """CLI > [permissions].mode > --auto-approve > default。"""
+    explicit = getattr(args, "permission_mode", None)
+    if explicit:
+        return PermissionMode(explicit)
+    section = config.get("permissions") or {}
+    configured = section.get("mode") if isinstance(section, dict) else None
+    if configured:
+        return PermissionMode(str(configured))
+    if getattr(args, "auto_approve", False):
+        return PermissionMode.AUTO_APPROVE
+    return PermissionMode.DEFAULT
+
+
+def resolve_run_mode(args: argparse.Namespace) -> RunMode:
+    if getattr(args, "message", None):
+        return (RunMode.JSON if getattr(args, "output_format", "text") == "json"
+                else RunMode.PRINT)
+    return RunMode.REPL
+
+
+def _configured_features(config: Dict[str, Any]) -> frozenset[str]:
+    raw = config.get("features") or {}
+    if isinstance(raw, dict):
+        enabled = raw.get("enabled", raw)
+        if isinstance(enabled, dict):
+            return frozenset(str(k) for k, v in enabled.items() if bool(v))
+        raw = enabled
+    if isinstance(raw, str):
+        raw = [raw]
+    return frozenset(str(item) for item in raw or ())
+
+
+def _disabled_tools(config: Dict[str, Any]) -> frozenset[str]:
+    section = config.get("tools") or {}
+    raw = section.get("disabled", ()) if isinstance(section, dict) else ()
+    if isinstance(raw, str):
+        raw = [raw]
+    return frozenset(str(item) for item in raw or ())
+
+
 def build_execution_sandbox(
     args: argparse.Namespace, config: Dict[str, Any], workspace_root: Path,
 ) -> Optional[ExecutionSandbox]:
@@ -222,6 +273,12 @@ async def build_loop(
         workspace_root=workspace_root,
         sandbox=sandbox,
         sandbox_enabled=sandbox is not None,
+        runtime=RuntimeSnapshot(
+            run_mode=resolve_run_mode(args),
+            permission_mode=resolve_permission_mode(args, config),
+            features=_configured_features(config),
+            disabled_tools=_disabled_tools(config),
+        ),
     )
     policy = build_policy(args, workspace_root, bus)
     tool_factory = lambda: default_tools() + skill_tools

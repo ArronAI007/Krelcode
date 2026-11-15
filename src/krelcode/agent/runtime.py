@@ -8,10 +8,12 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Optional
 
 from ..core.messages import SteeringInput
+from ..tools.base import RuntimeSnapshot
 from .loop import AgentLoop
 from .query import QueryEngine, QuerySession
 
@@ -35,6 +37,16 @@ class AgentRuntime:
         self._query: Optional[QuerySession] = None
         self._closed = False
         self.query_engine = QueryEngine(loop)
+        loop.runtime_snapshot_provider = self._runtime_snapshot
+
+    def _runtime_snapshot(self, base: RuntimeSnapshot) -> RuntimeSnapshot:
+        """每轮开始时刷新 MCP 健康状态，其余配置保持不可变快照。"""
+        alive = frozenset()
+        if self.mcp_supervisor is not None:
+            alive = frozenset(
+                item["name"] for item in self.mcp_supervisor.status()
+                if item.get("alive"))
+        return replace(base, alive_mcp_servers=alive)
 
     @property
     def bus(self):
@@ -58,7 +70,15 @@ class AgentRuntime:
 
     async def run_once(self, message: str, *, images=None) -> str:
         """执行一次完整 turn；供 headless/API 复用。"""
-        return await self.loop.run(message, images=images)
+        query = self.start_query(message, images=images)
+        async for _ in query.events:
+            pass
+        return await query.wait()
+
+    def bind_session(self, session_id: Optional[str]) -> None:
+        """绑定持久会话 id；每轮由 AgentLoop 生成新的 turn snapshot。"""
+        runtime = replace(self.loop.tool_context.runtime, session_id=session_id)
+        self.loop.tool_context.runtime = runtime
 
     def start_query(self, message: str, *, images=None) -> QuerySession:
         """启动一条可消费 QueryEvent 流；同一 Runtime 不允许并发两轮。"""
@@ -98,6 +118,7 @@ class AgentRuntime:
             self._task = None
             return False
         if self._query is not None:
+            self.loop.abort_current_turn()
             await self._query.cancel()
         else:
             task.cancel()

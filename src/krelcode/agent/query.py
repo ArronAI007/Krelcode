@@ -79,7 +79,8 @@ class QueryEngine:
         # 先订阅再启动 task，确保 RunStarted 不会丢失。
         unsubscribe = self.loop.bus.subscribe(on_event)
         unsubscribe_holder.append(unsubscribe)
-        task = asyncio.create_task(self.loop.run(user_input, images=images))
+        task = asyncio.create_task(
+            self.loop.run_turn(user_input, images=images, turn_id=turn_id))
 
         def on_done(finished: asyncio.Task) -> None:
             try:

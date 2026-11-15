@@ -31,6 +31,7 @@ from .llm.registry import create_provider, resolve_settings
 from .llm.retry import RetryPolicy, RetryingProvider
 from .safety.policy import SandboxPolicy
 from .tools.base import ToolContext
+from .tools.base import PermissionMode, RunMode, RuntimeSnapshot
 from .tools.builtin.find_refs import FindRefsTool
 from .tools.builtin.glob import GlobTool
 from .tools.builtin.grep import GrepTool
@@ -148,7 +149,13 @@ async def run_review(args: argparse.Namespace, llm: Optional[LLMProvider] = None
     loop = AgentLoop(
         llm=provider,
         registry=ToolRegistry(readonly_tools()),
-        tool_context=ToolContext(workspace_root=workspace),
+        tool_context=ToolContext(
+            workspace_root=workspace,
+            runtime=RuntimeSnapshot(
+                run_mode=RunMode.REVIEW,
+                permission_mode=PermissionMode.READ_ONLY,
+            ),
+        ),
         # 评审模式只有只读工具；SandboxPolicy 兜底拦截任何未知工具
         policy=SandboxPolicy(approver=None, bus=bus),
         bus=bus,

@@ -46,6 +46,7 @@ async def run_session(
     """按 CLI 参数运行 headless turn 或交互 REPL。"""
     loop = runtime.loop
     session_path = setup_session(args, loop, log=log, redactor=redactor)
+    runtime.bind_session(Path(session_path).stem if session_path else None)
     sessions_dir = runtime.workspace_root / ".krelcode" / "sessions"
 
     if args.message:

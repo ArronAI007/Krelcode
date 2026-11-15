@@ -56,6 +56,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="额外 skill 根目录（可重复；优先级高于项目/全局目录）")
     p.add_argument("--auto-approve", action="store_true",
                    help="ASK 级操作自动批准（信任模式；DENY 级仍然拒绝）")
+    p.add_argument("--permission-mode",
+                   choices=("default", "read-only", "auto-approve", "plan"),
+                   default=None,
+                   help="工具权限模式（默认: 配置文件 permissions.mode 或 default）")
     p.add_argument("--sandbox-backend", choices=("auto", "static", "seatbelt", "bubblewrap"),
                    default=None, help="运行时 Sandbox 后端（默认 auto；显式后端不可用则启动失败）")
     p.add_argument("--sandbox-network", action="store_true", default=None,

@@ -49,7 +49,7 @@ from ..core.events import EventBus, SubagentFinished, SubagentSpawned
 from ..core.redact import SecretRedactor
 from ..llm.base import LLMProvider
 from ..safety.policy import AllowAllPolicy
-from ..tools.base import Tool, ToolContext
+from ..tools.base import RunMode, Tool, ToolContext, TurnAbortSignal
 from ..tools.registry import ToolRegistry
 
 SUBAGENT_SYSTEM_PROMPT = build_system_prompt(
@@ -144,7 +144,16 @@ class SubagentManager:
         agent_id = f"a{self._counter}"
         worktree_path: Optional[Path] = None
         branch: Optional[str] = None
-        tool_context = self.tool_context
+        child_runtime = replace(
+            self.tool_context.runtime,
+            run_mode=RunMode.SUBAGENT,
+            turn_id=None,
+        )
+        tool_context = replace(
+            self.tool_context,
+            runtime=child_runtime,
+            abort=TurnAbortSignal(),
+        )
         if isolated:
             worktree_path, branch = await self._create_worktree(agent_id)
             parent_sandbox = getattr(self.tool_context, "sandbox", None)
@@ -153,6 +162,8 @@ class SubagentManager:
                 sandbox=(parent_sandbox.rebind(worktree_path)
                          if parent_sandbox is not None else None),
                 sandbox_enabled=parent_sandbox is not None,
+                runtime=child_runtime,
+                services=self.tool_context.services,
             )
         child_bus = EventBus()
         loop = AgentLoop(

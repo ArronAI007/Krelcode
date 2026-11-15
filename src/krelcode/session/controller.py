@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from ..agent.loop import AgentLoop
 from ..agent.runtime import AgentRuntime
+from ..tools.base import CommandDescriptor, ToolServices
 from .commands import (
     CommandContext,
     CommandKind,
@@ -73,6 +74,7 @@ class SessionController:
         self.command_registry = command_registry or builtin_command_registry()
         sync_skill_commands(self.command_registry, self.skills)
         sync_mcp_prompt_commands(self.command_registry, self.mcp_supervisor)
+        self.refresh_tool_services()
 
     @property
     def active_task(self) -> Optional[asyncio.Task]:
@@ -126,7 +128,29 @@ class SessionController:
                 handled=True,
                 output=(f"  （未知命令: /{name}，/help 查看可用命令）",),
             )
-        return await handler(context)
+        result = await handler(context)
+        self.refresh_tool_services()
+        return result
+
+    def refresh_tool_services(self) -> None:
+        """把命令/MCP 目录刷新为 ToolUseContext 中的只读窄快照。"""
+        commands = tuple(
+            CommandDescriptor(
+                name=spec.invocation,
+                description=spec.description,
+                kind=spec.kind.value,
+                source=spec.source.value,
+            )
+            for spec in self.command_registry.specs
+        )
+        mcp_servers = ()
+        if self.mcp_supervisor is not None:
+            mcp_servers = tuple(
+                item["name"] for item in self.mcp_supervisor.status())
+        self.loop.tool_context.services = ToolServices(
+            commands=commands,
+            mcp_servers=mcp_servers,
+        )
 
     def _command_context(self, request: CommandRequest) -> CommandContext:
         return CommandContext(
