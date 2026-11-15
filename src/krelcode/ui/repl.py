@@ -35,7 +35,11 @@ from .. import __version__
 from ..agent.loop import AgentLoop
 from ..agent.query import QuerySession
 from ..agent.runtime import AgentRuntime
-from ..session.commands import CommandRegistry, builtin_command_registry
+from ..session.commands import (
+    CommandRegistry,
+    CommandResult,
+    builtin_command_registry,
+)
 from ..session.controller import SessionController
 from ..session.input import InputAction, InputEnvelope, InputKind, InputProcessor
 from ..session.manager import resolve_resume_target
@@ -567,10 +571,17 @@ async def run_repl(
         async for item in session.events:
             renderer(item.event)
 
-    def launch_prompt(action: InputAction) -> tuple[QuerySession, asyncio.Task]:
+    def launch_prompt(
+        action: InputAction,
+        *,
+        tool_allowlist: Optional[list[str]] = None,
+    ) -> tuple[QuerySession, asyncio.Task]:
         show_attachment_notes(action)
         session = controller.start_query(
-            action.text, images=list(action.images) or None)
+            action.text,
+            images=list(action.images) or None,
+            tool_allowlist=tool_allowlist,
+        )
         state.begin_turn(turn_id=session.turn_id)
         if prompt.enabled:
             status = "  ⋯ 工作中 · 输入文字可插话 · /stop 中止"
@@ -710,15 +721,21 @@ async def run_repl(
 
             prompt.hide()
             handled = await handle_command(action)
-            if isinstance(handled, str):
+            if isinstance(handled, CommandResult) and handled.run_prompt is not None:
                 # /skill 已加载完整指令，不再把 Skill 正文中的 @ 当文件引用。
                 skill_prompt = InputAction(
                     kind=InputKind.PROMPT,
-                    text=handled,
+                    text=handled.run_prompt,
                     raw_text=action.raw_text,
                     source=action.source,
                 )
-                query, render_task = launch_prompt(skill_prompt)
+                query, render_task = launch_prompt(
+                    skill_prompt,
+                    tool_allowlist=(
+                        list(handled.tool_allowlist)
+                        if handled.tool_allowlist is not None else None
+                    ),
+                )
             restore_prompt()
     finally:
         if reader_task is not None:
@@ -793,7 +810,7 @@ async def _handle_command(
     if result.clear_tool_outputs:
         renderer.clear_tool_outputs()
     if result.run_prompt is not None:
-        return result.run_prompt
+        return result
     return False
 
 

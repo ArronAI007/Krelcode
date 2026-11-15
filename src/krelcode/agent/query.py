@@ -63,7 +63,13 @@ class QueryEngine:
         self.loop = loop
         self._counter = count(1)
 
-    def start(self, user_input: str, *, images=None) -> QuerySession:
+    def start(
+        self,
+        user_input: str,
+        *,
+        images=None,
+        tool_allowlist: Optional[list[str]] = None,
+    ) -> QuerySession:
         turn_id = f"turn-{next(self._counter)}"
         queue: asyncio.Queue = asyncio.Queue()
         sequence = count()
@@ -80,7 +86,12 @@ class QueryEngine:
         unsubscribe = self.loop.bus.subscribe(on_event)
         unsubscribe_holder.append(unsubscribe)
         task = asyncio.create_task(
-            self.loop.run_turn(user_input, images=images, turn_id=turn_id))
+            self.loop.run_turn(
+                user_input,
+                images=images,
+                turn_id=turn_id,
+                tool_allowlist=tool_allowlist,
+            ))
 
         def on_done(finished: asyncio.Task) -> None:
             try:

@@ -44,6 +44,7 @@ class CommandResult:
     output: tuple[str, ...] = ()
     run_prompt: Optional[str] = None
     clear_tool_outputs: bool = False
+    tool_allowlist: Optional[tuple[str, ...]] = None
 
     @classmethod
     def unhandled(cls) -> "CommandResult":

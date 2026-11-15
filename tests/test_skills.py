@@ -243,6 +243,29 @@ def test_repl_lists_reloads_and_invokes_skill(tmp_path, capsys):
     assert "已加载并执行: explain" in capsys.readouterr().out
 
 
+def test_skill_invocation_returns_allowed_tools_for_query_pool(tmp_path):
+    root = tmp_path / ".agents" / "skills"
+    write_skill(
+        root, "fix-tests", "BODY\n",
+        "name: fix-tests\ndescription: Fix tests\n"
+        "allowed-tools: [Read, Grep, Bash]\n",
+    )
+    manager = SkillManager(tmp_path, home=tmp_path / "home")
+    loop = make_loop(tmp_path)
+    renderer = type("Renderer", (), {"expand_thinking": lambda self: False})()
+
+    result = asyncio.run(_handle_command(
+        "/skill fix-tests", loop, renderer,
+        session_path=None, sessions_dir=None, mcp_supervisor=None,
+        mcp_reload=None, subagents=None, checkpoints=None, usage=None,
+        restore_session=lambda *a, **k: None,
+        workspace_root=tmp_path, skills=manager,
+    ))
+
+    assert result.run_prompt is not None
+    assert result.tool_allowlist == ("Read", "Grep", "Bash")
+
+
 def test_context_refresh_preserves_skill_index(tmp_path):
     write_skill(tmp_path / ".agents" / "skills", "demo", "BODY\n",
                 "name: demo\ndescription: refresh me\n")

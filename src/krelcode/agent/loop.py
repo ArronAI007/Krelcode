@@ -136,9 +136,10 @@ class AgentLoop:
         images: Optional[list] = None,
         *,
         turn_id: Optional[str] = None,
+        tool_allowlist: Optional[list[str]] = None,
     ) -> str:
         """QueryEngine 的窄入口；允许 runner 替换 ``run`` 时仍传入 turn id。"""
-        self._begin_turn(turn_id)
+        self._begin_turn(turn_id, tool_allowlist=tool_allowlist)
         self._turn_prepared = True
         try:
             return await self.run(user_input, images=images)
@@ -151,6 +152,7 @@ class AgentLoop:
         images: Optional[list] = None,
         *,
         turn_id: Optional[str] = None,
+        tool_allowlist: Optional[list[str]] = None,
     ) -> str:
         """处理一轮用户输入：内部可能经历多次 LLM 调用与工具执行。
 
@@ -160,7 +162,7 @@ class AgentLoop:
         若结尾是未答完的 user 消息则补一条中止说明（保角色交替），再重抛。
         """
         if not self._turn_prepared:
-            self._begin_turn(turn_id)
+            self._begin_turn(turn_id, tool_allowlist=tool_allowlist)
         self.history.append(Message.user(user_input, images=images or None))
         self._failure_counts = {}
         self._token_total = 0
@@ -168,7 +170,10 @@ class AgentLoop:
             self.tool_context.workspace_root, user_input)
         # 一轮只构建一次：后续每个模型 step 和每次工具执行共用同一份能力快照。
         self._active_tool_pool = TurnToolPool(
-            self.registry, intent=self._turn_intent)
+            self.registry,
+            intent=self._turn_intent,
+            runtime=self._turn_tool_context.runtime,
+        )
         await self._emit(RunStarted(user_input))
 
         try:
@@ -205,13 +210,25 @@ class AgentLoop:
         await self._emit(RunFinished(text))
         return text
 
-    def _begin_turn(self, turn_id: Optional[str]) -> None:
+    def _begin_turn(
+        self,
+        turn_id: Optional[str],
+        *,
+        tool_allowlist: Optional[list[str]] = None,
+    ) -> None:
         resolved_turn_id = turn_id or f"turn-{next(self._turn_counter)}"
         self._turn_abort_signal = TurnAbortSignal()
         snapshot = self.tool_context.runtime
         if self.runtime_snapshot_provider is not None:
             snapshot = self.runtime_snapshot_provider(snapshot)
-        snapshot = replace(snapshot, turn_id=resolved_turn_id)
+        snapshot = replace(
+            snapshot,
+            turn_id=resolved_turn_id,
+            tool_allowlist=(
+                frozenset(tool_allowlist)
+                if tool_allowlist is not None else snapshot.tool_allowlist
+            ),
+        )
         self._turn_tool_context = replace(
             self.tool_context,
             runtime=snapshot,
@@ -316,7 +333,10 @@ class AgentLoop:
     def _current_tool_pool(self) -> TurnToolPool:
         if self._active_tool_pool is None:
             self._active_tool_pool = TurnToolPool(
-                self.registry, intent=self._turn_intent)
+                self.registry,
+                intent=self._turn_intent,
+                runtime=self._turn_tool_context.runtime,
+            )
         return self._active_tool_pool
 
     def _messages_for_turn(self) -> List[Message]:

@@ -113,12 +113,14 @@ async def handle_skill(ctx: CommandContext) -> CommandResult:
     arguments = parts[1] if len(parts) > 1 else ""
     try:
         prompt = ctx.skills.user_prompt(name, arguments)
+        skill = ctx.skills.get(name)
     except Exception as exc:
         return _ok(f"  [skill] {exc}")
     return CommandResult(
         handled=True,
         output=(f"  [skill] 已加载并执行: {name}",),
         run_prompt=prompt,
+        tool_allowlist=tuple(skill.allowed_tools) if skill else None,
     )
 
 
@@ -129,12 +131,14 @@ async def handle_skill_command(ctx: CommandContext) -> CommandResult:
     name = ctx.request.name
     try:
         prompt = ctx.skills.user_prompt(name, ctx.request.arguments)
+        skill = ctx.skills.get(name)
     except Exception as exc:
         return _ok(f"  [skill] {exc}")
     return CommandResult(
         handled=True,
         output=(f"  [skill] 已加载并执行: {name}",),
         run_prompt=prompt,
+        tool_allowlist=tuple(skill.allowed_tools) if skill else None,
     )
 
 

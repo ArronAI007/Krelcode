@@ -17,6 +17,8 @@ from krelcode.tools.base import (
     ToolResult,
 )
 from krelcode.tools.registry import ToolRegistry
+from krelcode.tools.builtin.read_file import ReadFileTool
+from krelcode.tools.builtin.write_file import WriteFileTool
 
 
 class InspectTool:
@@ -141,3 +143,32 @@ def test_session_controller_exposes_readonly_command_directory():
         command.name == "/help"
         for command in controller.loop.tool_context.services.commands
     )
+
+
+def test_query_tool_allowlist_restricts_schema_and_execution(tmp_path):
+    call = ToolCall("w1", "write_file", {"path": "blocked.txt", "content": "x"})
+    provider = MockProvider(scripted=[
+        Message.assistant(tool_calls=[call]),
+        "blocked",
+    ])
+    loop = AgentLoop(
+        llm=provider,
+        registry=ToolRegistry([ReadFileTool(), WriteFileTool()]),
+        tool_context=ToolContext(
+            workspace_root=tmp_path,
+            sandbox_enabled=False,
+        ),
+        policy=AllowAllPolicy(),
+        system_prompt="SYS",
+    )
+    runtime = AgentRuntime(loop)
+
+    async def scenario():
+        query = runtime.start_query("write", tool_allowlist=["Read"])
+        _ = [event async for event in query.events]
+        return await query.wait()
+
+    assert asyncio.run(scenario()) == "blocked"
+    assert [spec["name"] for spec in provider.tools_seen[0]] == ["read_file"]
+    assert "allowed-tools" in loop.history[3].content
+    assert not (tmp_path / "blocked.txt").exists()

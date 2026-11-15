@@ -76,6 +76,7 @@ class RuntimeSnapshot:
     features: FrozenSet[str] = frozenset()
     disabled_tools: FrozenSet[str] = frozenset()
     alive_mcp_servers: FrozenSet[str] = frozenset()
+    mcp_health_known: bool = False
     tool_allowlist: Optional[FrozenSet[str]] = None
 
     def __post_init__(self) -> None:
@@ -169,9 +170,17 @@ class ToolDescriptor:
     source: ToolSource = ToolSource.BUILTIN
     mcp_server: Optional[str] = None
     read_only: bool = False
+    required_feature: Optional[str] = None
+    run_modes: Optional[FrozenSet[RunMode]] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "source", ToolSource(self.source))
+        if self.run_modes is not None:
+            object.__setattr__(
+                self,
+                "run_modes",
+                frozenset(RunMode(mode) for mode in self.run_modes),
+            )
 
     @classmethod
     def from_tool(
@@ -189,4 +198,6 @@ class ToolDescriptor:
             source=source,
             mcp_server=mcp_server,
             read_only=bool(getattr(tool, "read_only", False)),
+            required_feature=getattr(tool, "required_feature", None),
+            run_modes=getattr(tool, "run_modes", None),
         )

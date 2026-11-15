@@ -42,11 +42,16 @@ class AgentRuntime:
     def _runtime_snapshot(self, base: RuntimeSnapshot) -> RuntimeSnapshot:
         """每轮开始时刷新 MCP 健康状态，其余配置保持不可变快照。"""
         alive = frozenset()
+        health_known = self.mcp_supervisor is not None
         if self.mcp_supervisor is not None:
             alive = frozenset(
                 item["name"] for item in self.mcp_supervisor.status()
                 if item.get("alive"))
-        return replace(base, alive_mcp_servers=alive)
+        return replace(
+            base,
+            alive_mcp_servers=alive,
+            mcp_health_known=health_known,
+        )
 
     @property
     def bus(self):
@@ -68,9 +73,16 @@ class AgentRuntime:
     def is_running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    async def run_once(self, message: str, *, images=None) -> str:
+    async def run_once(
+        self,
+        message: str,
+        *,
+        images=None,
+        tool_allowlist: Optional[list[str]] = None,
+    ) -> str:
         """执行一次完整 turn；供 headless/API 复用。"""
-        query = self.start_query(message, images=images)
+        query = self.start_query(
+            message, images=images, tool_allowlist=tool_allowlist)
         async for _ in query.events:
             pass
         return await query.wait()
@@ -80,11 +92,21 @@ class AgentRuntime:
         runtime = replace(self.loop.tool_context.runtime, session_id=session_id)
         self.loop.tool_context.runtime = runtime
 
-    def start_query(self, message: str, *, images=None) -> QuerySession:
+    def start_query(
+        self,
+        message: str,
+        *,
+        images=None,
+        tool_allowlist: Optional[list[str]] = None,
+    ) -> QuerySession:
         """启动一条可消费 QueryEvent 流；同一 Runtime 不允许并发两轮。"""
         if self.is_running:
             raise RuntimeError("已有任务正在运行")
-        self._query = self.query_engine.start(message, images=images)
+        self._query = self.query_engine.start(
+            message,
+            images=images,
+            tool_allowlist=tool_allowlist,
+        )
         self._task = self._query.task
         return self._query
 
