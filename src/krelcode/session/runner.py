@@ -7,6 +7,7 @@ UI 通过 ``repl_runner`` 注入，因此本模块不导入终端实现。依赖
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import List
 
@@ -45,6 +46,8 @@ async def run_session(
     hooks=None,
     log=print,
     repl_runner=None,
+    input_stream=None,
+    output_stream=None,
 ) -> int:
     """按 CLI 参数运行 headless turn 或交互 REPL。"""
     loop = runtime.loop
@@ -61,6 +64,21 @@ async def run_session(
         })
 
     async def _run_body() -> int:
+        if getattr(args, "output_format", "text") == "stream-json":
+            from .stream_json_runner import run_stream_json_session
+
+            return await run_stream_json_session(
+                runtime,
+                session_path=Path(session_path) if session_path else None,
+                input_processor=input_processor,
+                usage=usage,
+                redactor=redactor,
+                initial_prompt=args.message,
+                input_stream=input_stream or sys.stdin,
+                output_stream=output_stream or sys.stdout,
+                log=log,
+            )
+
         if args.message:
             message = args.message
             images = None

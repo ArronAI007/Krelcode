@@ -67,6 +67,13 @@ class UsageTracker:
             return None
         return round(self.session.cost, 6)
 
+    @property
+    def turn_cost_usd(self) -> Optional[float]:
+        """最近一轮成本估算；模型不在价目表时返回 None。"""
+        if match_pricing(self.model) is None:
+            return None
+        return round(self.turn.cost, 6)
+
     def cost_note(self) -> str:
         cost = self.cost_usd
         if cost is None:

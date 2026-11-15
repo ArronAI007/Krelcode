@@ -82,8 +82,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--auto-commit", action="store_true",
                    help="每轮结束若有文件变更自动 git 提交（需工作区是 git 仓库）")
     p.add_argument("-m", "--message", default=None, help="单次提问模式：执行完直接退出")
-    p.add_argument("--output-format", choices=("text", "json"), default="text",
-                   help="配合 -m：json 输出结构化结果到 stdout（启动提示走 stderr），适合 CI/脚本")
+    p.add_argument(
+        "--output-format", choices=("text", "json", "stream-json"),
+        default="text",
+        help="text 普通文本；json 单条结构化结果；stream-json 逐行 JSON 事件流",
+    )
+    p.add_argument(
+        "--input-format", choices=("text", "stream-json"), default="text",
+        help="text 普通 REPL/-m；stream-json 从 stdin 逐行读取用户消息（SDK/管道）",
+    )
     p.add_argument("--version", action="version", version=f"krelcode {__version__}")
     return p
 

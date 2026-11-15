@@ -739,3 +739,28 @@ runner 可在 cli 层增加独立动态导入项，而无需把对应实现拉�
 | ui | （Step 8）喂录制事件流断言渲染 |
 
 测试统一用 `asyncio.run(...)` 驱动协程，不引入 pytest-asyncio（保持零依赖）。
+
+## Stream JSON 与 Python SDK（Step 73）
+
+入口边界保持三层：
+
+```
+CLI / Python SDK
+      │  UTF-8 JSONL (krelcode.stream-json v1)
+session.stream_json          纯协议：输入解析 + QueryEvent 编码
+session.stream_json_runner   会话策略：多轮、request_id、interrupt/end、终态
+      │  QueryEvent(turn_id, sequence)
+agent.QueryEngine / AgentRuntime / EventBus
+```
+
+- 协议层不导入 Provider、UI、MCP 或会话持久化实现；它只把内部 `QueryEvent`
+  映射为稳定消息，保证每个 turn 恰好一个 `result`。
+- runner 用独立 stdin reader 与 turn 内控制监视器，使 `interrupt` 能在流式事件
+  等待期间真正调用 `AgentRuntime.stop()`；`end` 是优雅关闭，不丢弃已排队 user。
+- SDK 通过 `asyncio.create_subprocess_exec` 启动 `python -m krelcode`，只负责
+  请求路由、事件消费、超时和进程回收。它复用组装根，因此新增 Provider/工具/
+  MCP 能力不会出现 CLI 与 SDK 两套语义。
+- stdout 是纯协议面，所有启动日志走 stderr；JSON 对象在 dumps 前递归脱敏，
+  SDK 对 stderr 异常尾部再做一次模式脱敏。API key 永不进入 argv。
+- `result` 携带本轮/累计 usage、成本、LLM 调用数、耗时和 `duration_ms`；
+  `success/cancelled/error` 都是可机器判定的唯一终态。

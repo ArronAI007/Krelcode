@@ -28,7 +28,8 @@ krelcode [子命令] [选项]
 | `--config` | 自动探测 | TOML 配置路径 |
 | `--workspace` | `.` | 工作区根（所有路径约束与状态目录的锚点） |
 | `-m`, `--message` | — | 单次提问模式，执行完退出 |
-| `--output-format` | text | `json`：stdout 单行结构化结果（配合 `-m`，CI 用） |
+| `--output-format` | text | `text` 普通输出；`json` 单行结果（配合 `-m`）；`stream-json` JSONL 事件流（配合 `-m` 或 stream-json stdin） |
+| `--input-format` | text | `text` 普通 REPL/`-m`；`stream-json` 从 stdin 逐行读取 user/control 消息（SDK/管道） |
 | `--max-steps` | 64 | 单轮任务最大 LLM 迭代步数；达到上限时本轮安全中止，可显式调高 |
 | `--repeat-failure-limit` | 3 | 同签名调用连续失败 N 次判定卡死中止 |
 | `--token-budget` | 不限 | 单轮 token 预算，超限优雅中止 |
@@ -293,3 +294,67 @@ JSONL 审计记录类型：`user_input` `tool_call` `tool_result` `permission_de
 ```
 失败：`{"ok": false, "error": "LLMHTTPError: ..."}`，退出码 1。启动提示走 stderr。
 `krelcode review --output-format json` 同构（`review` 字段替代 `reply`）。
+
+## 9. Stream JSON v1（`--input-format/--output-format stream-json`）
+
+stdout 每行是一个 UTF-8 JSON 对象，启动日志与诊断只写 stderr。首条固定为：
+
+```json
+{"type":"system","subtype":"init","protocol":"krelcode.stream-json",
+ "protocol_version":"1","session_id":null,"cwd":"/repo","provider":"openai",
+ "model":"deepseek-flash","mode":"stream-json","permission_mode":"default",
+ "tools":["read_file"],"mcp_servers":[]}
+```
+
+stdin 支持两种 user 形式：
+
+```json
+{"type":"user","content":"解释 README","request_id":"optional-id"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"看图"},
+ {"type":"image","source":{"type":"base64","media_type":"image/png","data":"..."}}]}}
+```
+
+控制消息为 `{"type":"control","subtype":"interrupt"}` 与
+`{"type":"control","subtype":"end"}`。`interrupt` 只取消当前查询；`end` 是优雅关闭，
+会先处理此前已到达的 user 消息。每次查询恰好产生一个 `result`：
+
+```json
+{"type":"result","subtype":"success","is_error":false,"result":"最终回答",
+ "turn_id":"turn-1","sequence":42,"session_id":"...","request_id":"optional-id",
+ "usage":{"calls":2,"input":100,"output":20,"total":120,"cache_read":0,"cache_creation":0},
+ "session_usage":{},"cost_usd":0.0001,"session_cost_usd":0.0001,
+ "num_turns":2,"duration_ms":800}
+```
+
+`subtype` 可为 `success` / `cancelled` / `error`。其他消息类型包括
+`system/turn_started`、`step/started`、`assistant/text_delta|thinking_delta|message`、
+`tool/started|completed`、`permission/requested|denied`、`context/compressed`、
+`hook/triggered`、`subagent/started|finished`、`user/steered`、`error/occurred`；
+最后以 `system/session_end` 结束。所有事件都带 `turn_id`、单调 `sequence` 和
+`session_id`，user 对应的全部事件及 result 还带同一 `request_id`。
+
+## 10. Python SDK
+
+```python
+import asyncio
+from krelcode.sdk import ImageInput, KrelcodeClient, KrelcodeOptions
+
+async def main():
+    options = KrelcodeOptions(
+        workspace=".",
+        provider="openai",
+        no_session=True,
+        env={"DEEPSEEK_API_KEY": "从宿主秘密管理器注入"},
+    )
+    async with KrelcodeClient.from_options(options) as client:
+        messages = [message async for message in client.query("解释 README")]
+        follow_up = await client.run("继续检查测试")
+
+asyncio.run(main())
+```
+
+SDK 使用 `python -m krelcode` 子进程，因此与 CLI 的 Provider、工具池、MCP、
+Hooks、权限模式和 Sandbox 完全一致。常用选项与 CLI 同名；`extra_args` 只用于
+新增旗标，禁止覆盖 `-m/--message/--input-format/--output-format`。API key 不应
+写入 `extra_args` 或 user 消息，应继续使用 `[providers.*].api_key_env`。
+`stderr_tail()` 和进程异常中的诊断文本也会做二次密钥脱敏。

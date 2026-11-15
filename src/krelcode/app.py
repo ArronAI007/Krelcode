@@ -178,9 +178,12 @@ def resolve_permission_mode(
 
 
 def resolve_run_mode(args: argparse.Namespace) -> RunMode:
+    if getattr(args, "input_format", "text") == "stream-json":
+        return RunMode.JSON
     if getattr(args, "message", None):
-        return (RunMode.JSON if getattr(args, "output_format", "text") == "json"
-                else RunMode.PRINT)
+        if getattr(args, "output_format", "text") in {"json", "stream-json"}:
+            return RunMode.JSON
+        return RunMode.PRINT
     return RunMode.REPL
 
 
@@ -407,7 +410,29 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def async_main(args: argparse.Namespace) -> int:
-    quiet = bool(args.message) and args.output_format == "json"
+    input_format = getattr(args, "input_format", "text")
+    if input_format == "stream-json":
+        if args.message is not None:
+            print("--input-format stream-json 不能与 -m/--message 同时使用",
+                  file=sys.stderr)
+            return 2
+        if args.output_format != "stream-json":
+            print("--input-format stream-json 需要 --output-format stream-json",
+                  file=sys.stderr)
+            return 2
+    if (
+        args.output_format == "stream-json"
+        and args.message is None
+        and input_format != "stream-json"
+    ):
+        print("--output-format stream-json 需要 -m 或 --input-format stream-json",
+              file=sys.stderr)
+        return 2
+
+    quiet = (
+        args.message is not None
+        and args.output_format in {"json", "stream-json"}
+    ) or input_format == "stream-json"
     note = (lambda msg: print(msg, file=sys.stderr)) if quiet else print
     config_path = Path(args.config) if args.config else None
     config = load_config(config_path)

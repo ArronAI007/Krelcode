@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/ArronAI007/Krelcode/main/install.sh
 ./install.sh --no-modify-path         # 不修改 shell PATH
 ./install.sh --python /path/to/python3.12
 ./install.sh --python-mirror https://your-mirror.example/python-build-standalone
-./install.sh --tag v0.58.0
+./install.sh --tag v0.64.0
 ```
 
 对应环境变量为 `KRELCODE_PYTHON`、`KRELCODE_PYTHON_VERSION`、`KRELCODE_PYTHON_MIRROR`、`KRELCODE_INSTALL_ROOT` 和 `KRELCODE_BIN_DIR`。这些选项只用于 CI、离线或特殊网络环境；普通用户直接执行默认的一键安装即可。开发调试仍可使用 `pip install -e .`。
@@ -71,7 +71,7 @@ krelcode               # 进入 REPL
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（沙箱内 617 通过，2 个本地端口测试自动跳过）
+# 运行全部测试（沙箱内 880 通过，2 个本地端口测试自动跳过）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -186,6 +186,43 @@ krelcode --provider openai -m "修复 tests/ 下失败的测试" --output-format
 ```
 
 `--token-budget N` 可限制单轮 token 用量（超限优雅中止）；`--retries N`（默认 2）对 429/5xx/网络错误自动指数退避重试；启动提示走 stderr，stdout 保持纯净可管道。
+
+### Stream JSON / Python SDK
+
+持久进程模式使用方向固定的 JSONL 协议，stdout 只承载 `krelcode.stream-json` v1 消息：
+
+```bash
+printf '%s\n' \
+  '{"type":"user","content":"解释 README","request_id":"r1"}' \
+  '{"type":"control","subtype":"end"}' |
+  krelcode --provider openai --input-format stream-json --output-format stream-json
+```
+
+同一 stdin 可连续发送多轮 `user`；`control/interrupt` 只取消当前 turn，`control/end`
+先完成已排队的 user 消息再优雅退出。事件覆盖流式文本/思考、完整 assistant 消息、
+工具调用、权限、压缩、Hooks、子代理和唯一 `result` 终态；启动诊断全部走 stderr，
+所有输出在序列化前再次脱敏。
+
+Python SDK 零第三方依赖，通过独立子进程复用完整 CLI，不复制 Provider/MCP/Sandbox 组装：
+
+```python
+import asyncio
+from krelcode.sdk import KrelcodeClient
+
+async def main():
+    async with KrelcodeClient(workspace=".", provider="openai") as client:
+        async for message in client.query("解释 README"):
+            if message.type == "assistant" and message.subtype == "text_delta":
+                print(message.get("text"), end="", flush=True)
+        # 便利方法：消费到 result 并返回最终文本
+        print(await client.run("列出未提交变更"))
+
+asyncio.run(main())
+```
+
+SDK 支持并发查询请求路由、`client.interrupt()`、带 base64 图片的 `ImageInput`、完整
+CLI 选项、超时/异常子进程清理。API key 不放进命令行或协议消息；SDK 子进程继承
+Krelcode 原有的 `api_key_env` 环境变量机制。
 
 ### Hooks（事件钩子）
 
