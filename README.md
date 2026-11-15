@@ -96,7 +96,9 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --mode
 #   api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/tools`、`/session`、`/sessions`、`/resume <n|latest|path>`、`/mcp`（状态）、`/mcp reload`（热重载）、`/agents`（子代理状态）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/compact`（立即压缩历史）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（管理命令审批白名单：add/remove 程序名，持久化到工作区）、`/context`（上下文统计）、`/context refresh`（重采工作区上下文）、`/export [路径]`（会话导出 Markdown）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/tools`、`/session`、`/sessions`、`/resume <n|latest|path>`、`/mcp`（状态）、`/mcp reload`（热重载并重新发现 Prompt）、`/agents`（子代理状态）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/compact`（立即压缩历史）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（管理命令审批白名单：add/remove 程序名，持久化到工作区）、`/context`（上下文统计）、`/context refresh`（重采工作区上下文）、`/export [路径]`（会话导出 Markdown）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
+
+所有命令由统一 `CommandRegistry` 发现：`/help`、slash 菜单、Tab 补全、运行态过滤和 InputProcessor 共用同一份 catalog。允许用户调用的 Skill 会自动显示为 `/<skill-name> [参数]`，MCP Prompt 会命名空间化为 `/mcp__<server>__<prompt> [参数]`；`/skills reload` 与 `/mcp reload` 会原地刷新对应来源，内置命令在命名冲突时保持最高优先级。
 
 **Steering**：任务运行中直接打字 = 插话（模型在下一步看到，无需等任务结束）；`/thinking` 可在任务运行中立即展开已生成的思考；`/stop` 随时中止（历史自动修复，可立即续聊）。
 
@@ -164,7 +166,7 @@ Read $SKILL_DIR/references/format.md, inspect changes, and generate notes for $A
 - **脚本受控执行**：`run_skill_script` 使用参数数组而非 shell 字符串，支持 Python/Shell/Node/Ruby/Perl，剥离 API key 等敏感环境变量，超时终止进程组；默认走 ASK 审批。
 - **调用控制**：`user-invocable` / `disable-model-invocation` 分别控制用户和模型能否调用；`allowed-tools` 作为执行指导展示。
 - **热重载**：新增或修改 Skill 后执行 `/skills reload`，当前主代理和新子代理立即使用最新索引；`--no-skills` 完全关闭。
-- **用户直调**：`/skill release-notes v0.55.0` 将完整 Skill 指令和参数作为消息交给主循环。
+- **用户直调**：`/skill release-notes v0.55.0` 保留为通用兜底；每个 `user-invocable` Skill 也会自动注册为 `/release-notes v0.55.0`，直接加载完整指令并进入主循环。
 
 ### 代码评审
 
@@ -236,7 +238,7 @@ agent/   AgentRuntime 执行门面 + AgentLoop 主循环（只依赖端口，不
 tools/   Tool 端口 + Registry + builtin/（每工具一个文件）
 skills/  SKILL.md 发现/解析、渐进加载、资源、脚本、热重载
 safety/  ApprovalPolicy 端口（Step 6 加沙箱）
-session/ InputProcessor 统一输入/附件/Hook + SessionController 命令/steering + SessionViewState + runner/恢复/JSONL/检查点
+session/ InputProcessor + commands registry/handlers + SessionController + SessionViewState + runner/恢复/JSONL/检查点
 entrypoints/ 进程入口：cli 轻量 fast-path → main 完整参数路由 → app 按需启动
 ui/      终端 I/O、Markdown 渲染和展示型命令（不承担会话业务状态）
 app.py   组装根：只创建对象并选择运行策略，不实现会话/执行流程

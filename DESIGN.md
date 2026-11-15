@@ -45,6 +45,11 @@ src/krelcode/
 │   ├── input.py      # InputEnvelope → InputProcessor → InputAction
 │   ├── attachments.py # @文本/图片展开（工作区约束与预算）
 │   ├── state.py      # SessionViewState：idle/running/stopping 与 turn 现场
+│   ├── commands/     # CommandSpec/Registry → dispatcher/handlers
+│   │   ├── builtin.py # 22 个内置命令元数据与 help 渲染
+│   │   ├── registry.py # 解析、别名、隐藏/启用、运行态与来源冲突
+│   │   ├── sources.py # Skill / MCP Prompt → dynamic CommandSpec
+│   │   └── handlers/  # 会话、上下文、Skill、MCP 等执行器
 │   ├── controller.py # SessionController：命令/任务/steering，不依赖终端
 │   ├── runner.py     # headless/REPL 运行策略，不导入具体 UI
 │   ├── restore.py    # 会话恢复
@@ -527,6 +532,44 @@ raw input (terminal / API / IDE)
 该拆分让 input processor 可脱离终端单测，也为未来 API/IDE 前端复用命令分类、
 附件与 Hook 语义保留稳定入口。
 
+## 统一命令系统（Step 68）
+
+借鉴 Claude Code 的 command catalog/registry 思路，slash command 不再由 UI 元组、
+`HELP_TEXT`、InputProcessor 常量和 SessionController 分支分别维护：
+
+```
+Command sources
+  ├─ builtin (22)
+  ├─ user-invocable Skills
+  └─ MCP prompts
+        ↓
+CommandRegistry
+  ├─ name / alias resolution
+  ├─ source priority + conflict detection
+  ├─ enabled / hidden / running availability
+  └─ shared catalog for menu, Tab, /help and InputProcessor
+        ↓
+CommandSpec.kind
+  ├─ COMMAND    → SessionController dispatcher → isolated handler
+  ├─ UI_COMMAND → REPL renderer
+  ├─ CONTROL    → frontend fast-path
+  └─ PROMPT     → Skill / MCP prompt → run_prompt
+```
+
+- `CommandSpec` 统一携带 `name/aliases/description/argument_hint/kind/source/
+  available_during_run/source metadata`。帮助、补全、运行态白名单和执行解析均从同一
+  registry 派生，不再复制命令清单。
+- 来源优先级固定为 `builtin > skill > MCP`；冲突会记录到 `registry.conflicts`，
+  低优先级命令不会覆盖内置命令。Skill 保留 `/skill <name>` 兜底，同时自动暴露为
+  `/<skill-name>`；MCP Prompt 强制使用 `/mcp__<server>__<prompt>` 命名空间。
+- `SessionController` 已从巨型条件分支收敛为解析器和 dispatcher；18 个业务命令由
+  `commands/handlers` 中的独立函数实现。UI 命令和浏览器式终端状态仍留在 `ui/repl`。
+- `/skills reload` 原子替换 SKILL 来源；`/mcp reload` 重新拉取 `prompts/list` 并
+  原子替换 MCP 来源。MCP Prompt 的单参数整体传递，多参数支持 `key=value` 或按声明
+  顺序的位置参数。
+- registry、InputProcessor 与 REPL 共享同一可变 catalog，因此重载后补全、帮助与执行
+  立即一致，无需重启会话。
+
 ## 四层运行职责（Step 66）
 
 在保留细粒度包结构的前提下，对外按四层理解：
@@ -534,7 +577,7 @@ raw input (terminal / API / IDE)
 | 层 | 主要对象 | 边界 |
 |----|----------|------|
 | 入口分流层 | `entrypoints.cli/main` | fast-path、参数解析；不创建 Agent |
-| 交互会话层 | `ui.repl` + `session.InputProcessor/SessionViewState/SessionController/runner` | 输入先结构化；终端只负责 I/O/渲染，会话控制器负责命令、turn 生命周期、steering、恢复 |
+| 交互会话层 | `ui.repl` + `session.InputProcessor/CommandRegistry/SessionViewState/SessionController/runner` | 输入与命令先结构化；终端只负责 I/O/渲染，会话控制器负责命令分发、turn 生命周期、steering、恢复 |
 | 执行推进层 | `agent.AgentRuntime/AgentLoop` + 能力适配器 | 统一 turn/cancel/reload/close；Provider/工具差异在适配器消化 |
 | 基础架构层 | `core`、配置、事件总线、JSONL、Sandbox、脱敏 | 提供无业务偏向的契约、持久化和安全边界 |
 
