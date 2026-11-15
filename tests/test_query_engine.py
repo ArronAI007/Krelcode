@@ -11,6 +11,7 @@ from krelcode.core.errors import LLMError
 from krelcode.core.events import RunCancelled, RunFinished, RunStarted
 from krelcode.core.messages import Message
 from krelcode.llm.providers.mock import MockProvider
+from krelcode.llm.base import StreamFinished, TextDelta
 from krelcode.safety.policy import AllowAllPolicy
 from krelcode.tools.base import ToolContext
 from krelcode.tools.registry import ToolRegistry
@@ -88,3 +89,63 @@ def test_query_engine_cancel_emits_run_cancelled(tmp_path):
     events = asyncio.run(go())
 
     assert any(isinstance(event, RunCancelled) for event in events)
+
+
+def test_query_engine_applies_backpressure_to_fast_providers(tmp_path):
+    class BurstProvider(MockProvider):
+        def __init__(self):
+            super().__init__()
+            self.emitted = 0
+
+        async def stream(self, messages, tools=None):
+            text = ""
+            for index in range(80):
+                self.emitted += 1
+                chunk = str(index % 10)
+                text += chunk
+                yield TextDelta(chunk)
+            yield StreamFinished(
+                message=Message.assistant(text),
+                finish_reason="stop",
+                usage={},
+            )
+
+    provider = BurstProvider()
+    loop = make_loop(provider, tmp_path)
+
+    async def go():
+        session = QueryEngine(loop, queue_size=2).start("突发输出")
+        stream = session.events
+        first = await anext(stream)
+        await asyncio.sleep(0.02)
+        # renderer 停顿时，有界 QueryEvent 队列应阻止 provider 一次性跑完。
+        assert provider.emitted < 80
+        rest = [item async for item in stream]
+        return first, [first, *rest], await session.wait()
+
+    first, events, result = asyncio.run(go())
+    assert isinstance(first.event, RunStarted)
+    assert result == "0123456789" * 8
+    assert [item.sequence for item in events] == list(range(len(events)))
+    assert isinstance(events[-1].event, RunFinished)
+
+
+def test_query_engine_drains_events_before_propagating_error(tmp_path):
+    class PartialBoomProvider(MockProvider):
+        async def stream(self, messages, tools=None):
+            yield TextDelta("已输出")
+            raise LLMError("after partial")
+
+    loop = make_loop(PartialBoomProvider(), tmp_path)
+
+    async def go():
+        session = QueryEngine(loop, queue_size=2).start("部分输出")
+        consumed = []
+        with pytest.raises(LLMError, match="after partial"):
+            async for item in session.events:
+                consumed.append(item.event)
+        return consumed
+
+    consumed = asyncio.run(go())
+    assert consumed[0] == RunStarted("部分输出")
+    assert consumed[-1].text == "已输出"

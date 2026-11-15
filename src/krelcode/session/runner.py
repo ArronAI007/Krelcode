@@ -40,6 +40,7 @@ async def run_session(
     skills_reload,
     redactor,
     input_processor=None,
+    approval_broker=None,
     log=print,
     repl_runner=None,
 ) -> int:
@@ -102,4 +103,5 @@ async def run_session(
         skills=loop.skill_manager,
         skills_reload=skills_reload,
         input_processor=input_processor,
+        approval_broker=approval_broker,
     )

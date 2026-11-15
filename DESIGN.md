@@ -604,6 +604,33 @@ CommandSpec.kind
 `app.py` 横跨四层完成对象装配，但不拥有会话命令或执行流程。headless 与 REPL
 都通过 `AgentRuntime` 执行，因此未来增加 API/IDE 入口时可复用同一会话与执行门面。
 
+## REPL 前台协调、审批与事件背压（Step 71）
+
+交互层不再让安全策略直接 `input()`，也不让 QueryEngine 使用无界队列：
+
+```
+SandboxPolicy ──async request──> ApprovalBroker ──request queue──> REPL 前台
+       ▲                               │                               │
+       └──────── yes / no / always ────┴────────── y / n / a ──────────┘
+
+AgentLoop ──EventBus(async handler)──> bounded QueryEvent queue(256)
+                                          └─ drain in order ─> renderer ─> idle
+```
+
+- `ApprovalBroker` 是策略与终端之间的 rendezvous。策略任务只等待 Future；REPL
+  字符编辑器继续拥有 stdin。无前台、EOF、中断、查询取消和进程退出全部
+  fail-closed；后台子代理在 REPL 空闲时产生的审批同样由常驻 watcher 接收。
+- `TerminalLineEditor` 将独立 `Esc`/`Ctrl-C` 转为非文本控制动作，将
+  `Alt+Enter` 转为 `TerminalSubmission(queue_next=True)`，不会混入 prompt 文本。
+  `InputProcessor` 仍负责附件和 Hook，最终用 `InputDelivery.STEER|QUEUE` 表达投递语义。
+- 主循环用同一个 `asyncio.wait` 协调输入、query task、renderer consumer 和审批
+  watcher。任务终态必须先 drain 全部 QueryEvent 并完成 renderer，才切回 IDLE；
+  QUEUE 消息在收尾后自动启动，STEER 消息注入当前 turn 的下一步。
+- `QueryEngine` 的 EventBus handler 是 async，并把事件放入有界队列，形成真实
+  背压。完成标记由 task done callback 排在所有已产生事件之后，因此异常/取消
+  也严格遵循“先 drain 事件，再传播终态”。消费者提前退出会取消 Agent task，
+  避免孤儿查询。
+
 ## 进程入口分流
 
 控制台脚本和 `python -m krelcode` 都进入 `entrypoints/cli.py`，与 Claude Code

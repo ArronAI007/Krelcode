@@ -25,6 +25,17 @@ class InputKind(str, Enum):
     CONTROL = "control"
 
 
+class InputDelivery(str, Enum):
+    """运行中提示词的投递语义。
+
+    STEER：注入当前 turn，模型在下一 step 看到；
+    QUEUE：保留为下一条独立用户消息，当前 turn 完成后自动启动。
+    """
+
+    STEER = "steer"
+    QUEUE = "queue"
+
+
 _INPUT_KIND_BY_COMMAND = {
     CommandKind.COMMAND: InputKind.COMMAND,
     CommandKind.UI_COMMAND: InputKind.UI_COMMAND,
@@ -54,6 +65,7 @@ class InputAction:
     notes: tuple[str, ...] = ()
     source: str = "terminal"
     hook_context: tuple[str, ...] = ()
+    delivery: InputDelivery = InputDelivery.STEER
 
     @property
     def has_attachments(self) -> bool:

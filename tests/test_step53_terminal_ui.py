@@ -8,8 +8,8 @@ from krelcode.core.events import (
 )
 from krelcode.ui import repl
 from krelcode.ui.repl import (
-    IDLE_PROMPT, RUNNING_PROMPT, InputHistory, PromptWriter, TerminalLineEditor,
-    print_banner,
+    IDLE_PROMPT, RUNNING_PROMPT, InputHistory, PromptWriter, ReplControl,
+    TerminalLineEditor, TerminalSubmission, print_banner,
 )
 from krelcode.ui.repl import match_slash_commands
 from krelcode.ui.render import (
@@ -200,6 +200,14 @@ def test_line_editor_up_down_keys_navigate_history():
     finally:
         os.close(read_fd)
         os.close(write_fd)
+
+
+def test_line_editor_escape_and_alt_enter_controls():
+    buffer = list("下一条")
+    assert TerminalLineEditor._apply_escape_sequence(b"", buffer) is ReplControl.INTERRUPT
+    queued = TerminalLineEditor._apply_escape_sequence(b"\r", buffer)
+    assert queued == TerminalSubmission("下一条", queue_next=True)
+    assert TerminalLineEditor._apply_escape_sequence(b"[A", buffer) is None
 
 
 def test_line_editor_filters_menu_and_tab_completes():

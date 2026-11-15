@@ -25,8 +25,10 @@ class QueryEvent:
     event: AgentEvent
 
 
-_DONE = object()
-_CANCELLED = object()
+@dataclass(frozen=True)
+class _QueryEnd:
+    cancelled: bool = False
+    error: Optional[BaseException] = None
 
 
 class QuerySession:
@@ -59,8 +61,11 @@ class QuerySession:
 class QueryEngine:
     """创建带 turn id、sequence 和完成/异常传播的查询会话。"""
 
-    def __init__(self, loop: AgentLoop) -> None:
+    def __init__(self, loop: AgentLoop, *, queue_size: int = 256) -> None:
         self.loop = loop
+        if queue_size < 1:
+            raise ValueError("QueryEvent 队列容量必须大于 0")
+        self.queue_size = queue_size
         self._counter = count(1)
 
     def start(
@@ -71,12 +76,15 @@ class QueryEngine:
         tool_allowlist: Optional[list[str]] = None,
     ) -> QuerySession:
         turn_id = f"turn-{next(self._counter)}"
-        queue: asyncio.Queue = asyncio.Queue()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=self.queue_size)
         sequence = count()
         unsubscribe_holder = []
+        marker_tasks: list[asyncio.Task] = []
 
-        def on_event(event: AgentEvent) -> None:
-            queue.put_nowait(QueryEvent(
+        async def on_event(event: AgentEvent) -> None:
+            # 有界队列形成对 AgentLoop 的真实背压：renderer/消费者跟不上时，
+            # 查询推进层不会继续无限产生事件并吞掉内存。
+            await queue.put(QueryEvent(
                 turn_id=turn_id,
                 sequence=next(sequence),
                 event=event,
@@ -99,14 +107,18 @@ class QueryEngine:
             except Exception:
                 pass
             if finished.cancelled():
-                queue.put_nowait(_CANCELLED)
-            elif finished.exception() is not None:
-                queue.put_nowait(finished.exception())
+                end = _QueryEnd(cancelled=True)
             else:
-                queue.put_nowait(_DONE)
+                end = _QueryEnd(error=finished.exception())
+            # done callback 不能 await。单独排队结束标记；它严格排在所有已
+            # 产生事件之后，消费者由此先 drain 再传播取消/异常。
+            try:
+                marker_tasks.append(asyncio.create_task(queue.put(end)))
+            except RuntimeError:
+                pass  # 事件循环已关闭
 
         task.add_done_callback(on_done)
-        events = self._iter_events(queue, task)
+        events = self._iter_events(queue, task, marker_tasks)
         session = QuerySession(turn_id=turn_id, task=task, events=events)
         return session
 
@@ -114,16 +126,22 @@ class QueryEngine:
         self,
         queue: asyncio.Queue,
         task: asyncio.Task,
+        marker_tasks: list[asyncio.Task],
     ) -> AsyncIterator[QueryEvent]:
         try:
             while True:
                 item = await queue.get()
-                if item is _DONE or item is _CANCELLED:
+                if isinstance(item, _QueryEnd):
+                    if item.error is not None:
+                        raise item.error
                     return
-                if isinstance(item, BaseException):
-                    raise item
                 yield item
         finally:
             if not task.done():
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+            for marker in marker_tasks:
+                if not marker.done():
+                    marker.cancel()
+            if marker_tasks:
+                await asyncio.gather(*marker_tasks, return_exceptions=True)

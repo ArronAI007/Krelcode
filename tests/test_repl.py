@@ -15,13 +15,18 @@ from krelcode.agent.usage import UsageTracker
 from krelcode.core.messages import Message, ToolCall
 from krelcode.core.errors import LLMError
 from krelcode.llm.providers.mock import MockProvider
-from krelcode.safety.policy import AllowAllPolicy
+from krelcode.safety.policy import AllowAllPolicy, SandboxPolicy
 from krelcode.session.checkpoint import CheckpointManager
 from krelcode.session.codec import history_to_dicts
 from krelcode.tools.base import ToolContext
 from krelcode.tools.builtin.time_tool import GetTimeTool
 from krelcode.tools.registry import ToolRegistry
-from krelcode.ui.repl import run_repl
+from krelcode.ui.approval import ApprovalBroker
+from krelcode.ui.repl import (
+    ReplControl,
+    TerminalSubmission,
+    run_repl,
+)
 
 
 class ScriptedInput:
@@ -396,3 +401,154 @@ def test_stop_when_idle(tmp_path, capsys):
     loop = make_loop_with(tmp_path, SlowToolProvider())
     drive(loop, ["/stop", "/exit"])
     assert "当前没有运行中的任务" in capsys.readouterr().out
+
+
+def test_ctrl_c_interrupts_running_turn_without_exiting(tmp_path, capsys):
+    loop = make_loop_with(tmp_path, SlowToolProvider(delay=5))
+    inp = TimedInput([
+        ("慢任务", 0),
+        (ReplControl.INTERRUPT, 0.1),
+        ("/exit", 0.05),
+    ])
+    rc = asyncio.run(run_repl(loop, input_fn=inp))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "⎿ 已中止" in out
+    assert loop.history[-1].role == "assistant"
+    assert loop.history[-1].content == "[已被用户中止]"
+
+
+def test_ctrl_c_when_idle_clears_input_and_continues(tmp_path, capsys):
+    loop = make_loop_with(tmp_path, MockProvider(scripted=["不会出现"]))
+    rc = drive(loop, [ReplControl.INTERRUPT, "/exit"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "错误" not in out
+    assert loop.history == [Message.system("SYS")]
+
+
+def test_alt_enter_queues_next_prompt_and_runs_after_current_turn(tmp_path, capsys):
+    class TwoTurnProvider:
+        name = "two-turn"
+        model = "m"
+
+        def __init__(self):
+            self.calls = 0
+
+        async def stream(self, messages, tools=None):
+            from krelcode.llm.base import StreamFinished
+            self.calls += 1
+            if self.calls == 1:
+                await asyncio.sleep(0.12)
+                text = "第一轮完成"
+            else:
+                text = "第二轮完成"
+            yield StreamFinished(
+                message=Message.assistant(text), finish_reason="stop", usage={})
+
+    loop = make_loop_with(tmp_path, TwoTurnProvider(), tools=[])
+    inp = TimedInput([
+        ("第一轮任务", 0),
+        (TerminalSubmission("第二条独立消息", queue_next=True), 0.02),
+        ("/exit", 0.3),
+    ])
+    rc = asyncio.run(run_repl(loop, input_fn=inp))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "下一条已排队" in out
+    assert "⏺ 第一轮完成" in out
+    assert "⏺ 第二轮完成" in out
+    assert Message.user("第二条独立消息") in loop.history
+
+
+class ApprovalRequiredTool:
+    name = "approval_required"
+    description = "测试审批桥"
+    parameters = {"type": "object", "properties": {}}
+
+    async def execute(self, args, ctx):
+        from krelcode.tools.base import ToolResult
+        return ToolResult(content="approved-tool-ran")
+
+
+def test_repl_approval_uses_broker_not_stdin(tmp_path, capsys):
+    broker = ApprovalBroker()
+    provider = MockProvider(scripted=[
+        Message.assistant(tool_calls=[
+            ToolCall("c1", "approval_required", {}),
+        ]),
+        "审批后完成",
+    ])
+    loop = AgentLoop(
+        llm=provider,
+        registry=ToolRegistry([ApprovalRequiredTool()]),
+        tool_context=ToolContext(workspace_root=tmp_path),
+        policy=SandboxPolicy(approver=broker.request),
+        system_prompt="SYS",
+    )
+    class ApprovalAwareInput:
+        def __init__(self):
+            self.step = 0
+
+        async def __call__(self, prompt):
+            self.step += 1
+            if self.step == 1:
+                return "执行受控工具"
+            if self.step == 2:
+                for _ in range(100):
+                    if broker.pending is not None:
+                        return "y"
+                    await asyncio.sleep(0.01)
+                raise AssertionError("审批请求未进入 REPL")
+            if self.step == 3:
+                await asyncio.sleep(0.1)
+                return "/exit"
+            raise EOFError
+
+    rc = asyncio.run(run_repl(
+        loop, input_fn=ApprovalAwareInput(), approval_broker=broker))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "[审批] approval_required" in out
+    assert "审批结果: 已允许" in out
+    assert "⏺ 审批后完成" in out
+    # y 是审批应答，不应污染用户问题历史。
+    assert Message.user("y") not in loop.history
+
+
+def test_repl_handles_background_approval_while_idle(tmp_path, capsys):
+    broker = ApprovalBroker()
+    loop = make_loop_with(tmp_path, MockProvider())
+
+    async def scenario():
+        request = asyncio.create_task(
+            broker.request(ToolCall("bg", "unknown_tool", {}), "后台任务"))
+
+        class Input:
+            def __init__(self):
+                self.step = 0
+
+            async def __call__(self, prompt):
+                self.step += 1
+                if self.step == 1:
+                    for _ in range(100):
+                        if broker.pending is not None:
+                            await asyncio.sleep(0.02)
+                            return "y"
+                        await asyncio.sleep(0.01)
+                    raise AssertionError("后台审批未进入 REPL")
+                if self.step == 2:
+                    await asyncio.sleep(0.05)
+                    return "/exit"
+                raise EOFError
+
+        inp = Input()
+        rc = await run_repl(loop, input_fn=inp, approval_broker=broker)
+        return rc, await request
+
+    rc, answer = asyncio.run(scenario())
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert answer == "yes", out
+    assert "[审批] unknown_tool" in out
+    assert "审批结果: 已允许" in out

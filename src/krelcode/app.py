@@ -61,7 +61,7 @@ from .tools.builtin.find_refs import FindRefsTool
 from .tools.builtin.time_tool import GetTimeTool
 from .tools.builtin.write_file import WriteFileTool
 from .tools.registry import ToolRegistry
-from .ui.approval import make_console_approver
+from .ui.approval import ApprovalBroker
 from .ui.repl import run_repl
 
 
@@ -140,12 +140,18 @@ def build_mcp_roots(workspace_root: Path) -> List[Dict[str, Any]]:
     return [{"uri": workspace_root.as_uri(), "name": workspace_root.name}]
 
 
-def build_policy(args: argparse.Namespace, workspace_root: Path, bus: EventBus):
+def build_policy(
+    args: argparse.Namespace,
+    workspace_root: Path,
+    bus: EventBus,
+    *,
+    approver=None,
+):
     """--no-sandbox 回退全放行；否则 SandboxPolicy（规则分级+持久化+交互审批）。"""
     if args.no_sandbox:
         return AllowAllPolicy()
     return SandboxPolicy(
-        approver=make_console_approver(),
+        approver=approver,
         rules_path=workspace_root / ".krelcode" / "allow_rules.json",
         bus=bus,
         auto_approve=args.auto_approve,
@@ -232,6 +238,7 @@ async def build_loop(
     config: Dict[str, Any],
     extra_tools: Optional[List[Tool]] = None,
     log=print,
+    approver=None,
 ):
     """返回 (AgentLoop, SubagentManager)。
 
@@ -280,7 +287,7 @@ async def build_loop(
             disabled_tools=_disabled_tools(config),
         ),
     )
-    policy = build_policy(args, workspace_root, bus)
+    policy = build_policy(args, workspace_root, bus, approver=approver)
     tool_factory = lambda: default_tools() + skill_tools
     registry = ToolRegistry(default_tools())
     for tool in skill_tools:
@@ -396,8 +403,18 @@ async def async_main(args: argparse.Namespace) -> int:
     note = (lambda msg: print(msg, file=sys.stderr)) if quiet else print
     config_path = Path(args.config) if args.config else None
     config = load_config(config_path)
+    approval_broker = (
+        ApprovalBroker()
+        if resolve_run_mode(args) is RunMode.REPL and not getattr(args, "no_sandbox", False)
+        else None
+    )
     try:
-        loop, subagents = await build_loop(args, config, log=note)
+        loop, subagents = await build_loop(
+            args,
+            config,
+            log=note,
+            approver=approval_broker.request if approval_broker is not None else None,
+        )
     except SandboxError as e:
         print(f"Sandbox 配置错误: {e}", file=sys.stderr)
         return 2
@@ -473,8 +490,11 @@ async def async_main(args: argparse.Namespace) -> int:
             input_processor=input_processor,
             log=note,
             repl_runner=run_repl,
+            approval_broker=approval_broker,
         )
     finally:
+        if approval_broker is not None:
+            approval_broker.close()
         await runtime.close()
 
 

@@ -87,3 +87,14 @@ while steps < max_steps:
 
 见 PLAN.md：Step 1(模型层+REPL) → 2(主循环) → 3(文件工具) → 4(Shell工具)
 → 5(循环加固) → 6(安全层) → 7(上下文管理) → 8(交互增强)。
+
+## 8. Claude Code REPL 六步对齐
+
+| Claude Code 阶段 | Krelcode 对应实现 |
+|------------------|-------------------|
+| 1. REPL 组装请求并分流命令 | `InputProcessor` 统一规范化/命令分类/附件/Hook；`CommandRegistry` 分流 COMMAND/UI/CONTROL/PROMPT；`AgentRuntime.start_query` 产生 turn 级事件流 |
+| 2. QueryEngine 注入 tools 并发起流式 API | `TurnToolPool` 按权限/运行模式/MCP 健康/Skill allowlist 生成本轮 schema；Provider adapter 统一 OpenAI/Anthropic/Gemini 流式协议 |
+| 3. 流式解析 tool_use | Provider 发出 `ToolCallStarted/ArgumentsDelta/Ready`；`StreamingToolExecutor` 在模型流结束前登记已完整调用 |
+| 4. 分发并执行工具 | 连续只读工具并发；mutating/未知工具作为 barrier 串行；执行顺序为工具池边界→JSON→Schema→审批→execute |
+| 5. 封装 tool_result 回填 | `ToolResult`/富 blocks 按原 tool index 保序转成 provider wire 格式；先提交 assistant(tool_calls)，再追加全部 result |
+| 6. REPL 消费事件并继续循环 | 有界 `QueryEvent` 背压、renderer drain/flush、ApprovalBroker 前台审批、Esc/Ctrl-C 中止、Enter steering、Alt+Enter 排队下一条 |

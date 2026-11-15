@@ -21,6 +21,9 @@ import shutil
 import sys
 import threading
 import unicodedata
+from collections import deque
+from dataclasses import dataclass, replace
+from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -41,18 +44,41 @@ from ..session.commands import (
     builtin_command_registry,
 )
 from ..session.controller import SessionController
-from ..session.input import InputAction, InputEnvelope, InputKind, InputProcessor
+from ..session.input import (
+    InputAction,
+    InputDelivery,
+    InputEnvelope,
+    InputKind,
+    InputProcessor,
+)
 from ..session.manager import resolve_resume_target
 from ..session.state import SessionViewState
+from .approval import ApprovalBroker, ApprovalRequest, ALWAYS, YES
 from .render import CYAN, DIM, RESET, StreamRenderer, auto_color
 
-RUNNING_HINT = ("  （任务运行中：直接输入=插话，/thinking 展开思考，"
-                "/tool-output <编号> 展开输出，/stop 中止，/exit 退出）")
+RUNNING_HINT = (
+    "  （任务运行中：Enter=插话，Alt+Enter=排队下一条，Esc/Ctrl-C 中止；"
+    "/thinking 展开思考，/tool-output <编号> 展开输出，/stop 中止，/exit 退出）"
+)
 STOPPED_NOTE = "  ⎿ 已中止（历史已修复，可继续对话）"
 
 IDLE_PROMPT = "❯ "
 RUNNING_PROMPT = "↳ "
 MENU_ROWS = 8
+
+
+class ReplControl(str, Enum):
+    """终端控制键产生的非文本动作。"""
+
+    INTERRUPT = "interrupt"
+
+
+@dataclass(frozen=True)
+class TerminalSubmission:
+    """带投递语义的一次文本提交。"""
+
+    text: str
+    queue_next: bool = False
 
 _BUILTIN_COMMANDS = builtin_command_registry()
 SLASH_COMMANDS = tuple(
@@ -299,7 +325,9 @@ class TerminalLineEditor:
     def available(self) -> bool:
         return bool(termios and tty and sys.stdin.isatty())
 
-    def readline(self, prompt_text: Callable[[], str]) -> str:
+    def readline(
+        self, prompt_text: Callable[[], str],
+    ) -> str | TerminalSubmission | ReplControl:
         if not self.available:
             return input("")
         fd = sys.stdin.fileno()
@@ -319,6 +347,9 @@ class TerminalLineEditor:
                     raise EOFError
                 if data == b"\x1b":
                     sequence = self._read_escape_sequence(fd)
+                    escaped = self._apply_escape_sequence(sequence, buffer)
+                    if escaped is not None:
+                        return escaped
                     self._navigate_history(sequence, buffer)
                     self._refresh(prompt_text(), buffer)
                     continue
@@ -326,14 +357,14 @@ class TerminalLineEditor:
                 if not char:
                     continue
                 if char in ("\r", "\n"):
-                    return "".join(buffer)
+                    return TerminalSubmission("".join(buffer))
                 if char in ("\x7f", "\x08"):
                     if buffer:
                         buffer.pop()
                 elif char == "\x04":             # Ctrl-D
                     raise EOFError
                 elif char == "\x03":             # Ctrl-C（通常由 ISIG 先行处理）
-                    raise KeyboardInterrupt
+                    return ReplControl.INTERRUPT
                 elif char == "\t":
                     self._complete(buffer)
                 elif char >= " " and char != "\x7f":
@@ -349,6 +380,18 @@ class TerminalLineEditor:
         while len(sequence) < 8 and select.select([fd], [], [], 0.01)[0]:
             sequence.append(os.read(fd, 1))
         return b"".join(sequence)
+
+    @staticmethod
+    def _apply_escape_sequence(
+        sequence: bytes,
+        buffer: list[str],
+    ) -> Optional[TerminalSubmission | ReplControl]:
+        """处理无参数终端控制键；None 表示继续按方向键处理。"""
+        if not sequence:
+            return ReplControl.INTERRUPT       # 单独 ESC
+        if sequence in (b"\r", b"\n"):
+            return TerminalSubmission("".join(buffer), queue_next=True)  # Alt+Enter
+        return None
 
     def _navigate_history(self, sequence: bytes, buffer: list[str]) -> bool:
         """应用 ↑/↓；返回是否识别为历史导航键。"""
@@ -449,6 +492,7 @@ async def run_repl(
     redactor=None,
     runtime: Optional[AgentRuntime] = None,
     input_processor: Optional[InputProcessor] = None,
+    approval_broker: Optional[ApprovalBroker] = None,
 ) -> int:
     runtime = runtime or AgentRuntime(
         loop,
@@ -489,6 +533,9 @@ async def run_repl(
 
     query: Optional[QuerySession] = None
     render_task: Optional[asyncio.Task] = None
+    approval_task: Optional[asyncio.Task] = None
+    pending_approval: Optional[ApprovalRequest] = None
+    queued_prompts: deque[InputAction] = deque()
     state = SessionViewState()
     raw_inbox: asyncio.Queue = asyncio.Queue()
     action_queue: asyncio.Queue = asyncio.Queue()
@@ -514,7 +561,10 @@ async def run_repl(
         while True:
             try:
                 line = await input_fn("")
-            except (EOFError, KeyboardInterrupt):
+            except KeyboardInterrupt:
+                await raw_inbox.put(ReplControl.INTERRUPT)
+                continue
+            except EOFError:
                 await raw_inbox.put(None)
                 return
             except asyncio.CancelledError:
@@ -537,7 +587,9 @@ async def run_repl(
                 try:
                     state.raw_input = editor.available
                     line = editor.readline(current_prompt)
-                except (EOFError, KeyboardInterrupt, OSError):
+                except KeyboardInterrupt:
+                    line = ReplControl.INTERRUPT
+                except (EOFError, OSError):
                     line = None
                 input_ready.clear()
                 push(line)
@@ -555,12 +607,21 @@ async def run_repl(
             if raw is None:
                 await action_queue.put(None)
                 return
+            if isinstance(raw, ReplControl):
+                await action_queue.put(raw)
+                continue
+            queue_next = False
+            if isinstance(raw, TerminalSubmission):
+                queue_next = raw.queue_next
+                raw = raw.text
             try:
                 action = await processor.process(InputEnvelope(raw))
             except Exception as exc:
                 print(f"  （输入处理失败: {type(exc).__name__}: {exc}）")
                 action = InputAction(
                     kind=InputKind.EMPTY, raw_text=str(raw), source="terminal")
+            if queue_next:
+                action = replace(action, delivery=InputDelivery.QUEUE)
             await action_queue.put(action)
 
     def show_attachment_notes(action: InputAction) -> None:
@@ -584,16 +645,126 @@ async def run_repl(
         )
         state.begin_turn(turn_id=session.turn_id)
         if prompt.enabled:
-            status = "  ⋯ 工作中 · 输入文字可插话 · /stop 中止"
+            status = "  ⋯ 工作中 · Enter=插话 · Alt+Enter=下一条 · Esc/Ctrl-C 中止"
             print(f"{DIM}{status}{RESET}" if use_color else status)
         consumer = asyncio.create_task(consume_query_events(session))
         return session, consumer
+
+    def watch_approval() -> Optional[asyncio.Task]:
+        """只在没有 pending 请求时等待 broker 的下一个审批项。"""
+        if approval_broker is None or pending_approval is not None:
+            return None
+        if approval_task is not None:
+            return approval_task
+        return asyncio.create_task(approval_broker.next_request())
+
+    def redact_value(value) -> str:
+        text = str(value)
+        return redactor.redact(text) if redactor is not None else text
+
+    def show_approval(request: ApprovalRequest) -> None:
+        tool_call = request.tool_call
+        command = tool_call.arguments.get("command")
+        detail = command if command is not None else tool_call.arguments
+        print(f"  [审批] {tool_call.name}: {redact_value(detail)}")
+        print(f"  原因: {redact_value(request.reason)}")
+        print("  允许执行? [y]是 / [n]否 / [a]始终允许（直接 Enter=否）")
+
+    def resolve_approval(raw: str) -> bool:
+        nonlocal pending_approval, approval_task
+        if approval_broker is None or pending_approval is None:
+            return False
+        answer = approval_broker.resolve(raw)
+        if answer is None:
+            # 发起审批的后台任务可能已被取消，Future 已失效。
+            pending_approval = None
+            print("  ⎿ 审批请求已取消或过期")
+            approval_task = watch_approval()
+            return True
+        pending_approval = None
+        allowed = answer in (YES, ALWAYS)
+        print(f"  ⎿ 审批结果: {'已允许' if allowed else '已拒绝'}")
+        approval_task = watch_approval()
+        return True
+
+    def reject_pending_approval() -> None:
+        nonlocal pending_approval, approval_task
+        if approval_broker is not None:
+            approval_broker.cancel_all()
+        pending_approval = None
+        if approval_task is not None and not approval_task.done():
+            approval_task.cancel()
+        approval_task = None
 
     def drain_steering_notes() -> None:
         """任务结束后丢弃未送达的插话（可见地），避免悄悄留到下一轮。"""
         for leftover in controller.drain_steering():
             text = getattr(leftover, "text", leftover)
             print(f"  ⎿ 任务已结束，未送达的插话已丢弃: {str(text)[:60]}")
+
+    def start_queued_prompt() -> None:
+        """当前 turn 收尾后自动启动 Alt+Enter 排队的下一条消息。"""
+        nonlocal query, render_task, approval_task
+        if query is not None or not queued_prompts:
+            return
+        action = queued_prompts.popleft()
+        query, render_task = launch_prompt(action)
+        approval_task = watch_approval()
+
+    async def finish_current(
+        *,
+        interrupt: bool = False,
+        run_queued: bool = True,
+        show_stopped_note: bool = True,
+    ) -> None:
+        """统一收尾当前 query：可选中止、等待事件 drain，再启动下一条。"""
+        nonlocal query, render_task, approval_task, pending_approval
+        if query is None:
+            return
+        prompt.hide()
+        current = query
+        consumer = render_task
+        watcher = approval_task
+        if interrupt and not current.task.done():
+            state.request_stop()
+            reject_pending_approval()
+            await controller.stop()
+        elif interrupt:
+            reject_pending_approval()
+        if interrupt:
+            if watcher is not None and not watcher.done():
+                watcher.cancel()
+            if watcher is not None:
+                await asyncio.gather(watcher, return_exceptions=True)
+        if consumer is not None:
+            await asyncio.gather(consumer, return_exceptions=True)
+
+        cancelled = current.task.cancelled()
+        error: Optional[BaseException] = None
+        if not cancelled:
+            try:
+                current.task.result()
+            except BaseException as exc:  # noqa: BLE001 - UI 必须展示所有终态
+                error = exc
+        if cancelled or error is not None:
+            renderer.end_stream()
+        if cancelled and show_stopped_note:
+            print(STOPPED_NOTE)
+        elif error is not None:
+            print(f"错误：{type(error).__name__}: {error}")
+
+        state.finish_turn()
+        query = None
+        render_task = None
+        if interrupt:
+            approval_task = None
+        pending_approval = None
+        drain_steering_notes()
+        if run_queued:
+            start_queued_prompt()
+        if approval_task is None:
+            approval_task = watch_approval()
+        restore_prompt()
 
     async def handle_command(action: InputAction):
         return await _handle_command(
@@ -613,49 +784,99 @@ async def run_repl(
         start_stdin_reader()
     processor_task = asyncio.create_task(process_inputs())
     action_get = asyncio.create_task(action_queue.get())
+    approval_task = watch_approval()
     try:
         while True:
+            if (pending_approval is not None and approval_broker is not None
+                    and approval_broker.pending is None):
+                pending_approval = None
+                print("  ⎿ 审批请求已取消或过期")
+                approval_task = watch_approval()
             wait_set = {action_get}
+            if approval_task is not None:
+                wait_set.add(approval_task)
             if query is not None:
                 wait_set.add(query.task)
+                if render_task is not None:
+                    wait_set.add(render_task)
             done, _ = await asyncio.wait(wait_set, return_when=asyncio.FIRST_COMPLETED)
 
-            # 1) 运行中的任务结束（自然完成/异常/被取消）
-            if query is not None and query.task in done:
-                prompt.hide()
+            # 1) 安全策略请求审批：由当前前台输入循环接管，避免与 stdin reader 竞争。
+            if approval_task is not None and approval_task in done:
                 try:
-                    query.task.result()
+                    request = approval_task.result()
                 except asyncio.CancelledError:
-                    renderer.end_stream()
-                    print(STOPPED_NOTE)
-                except Exception as e:
-                    renderer.end_stream()
-                    print(f"错误：{type(e).__name__}: {e}")
-                if render_task is not None:
-                    await asyncio.gather(render_task, return_exceptions=True)
-                state.finish_turn()
-                query = None
-                render_task = None
-                drain_steering_notes()
-                restore_prompt()
+                    request = None
+                approval_task = None
+                if request is not None:
+                    pending_approval = request
+                    prompt.hide()
+                    show_approval(request)
+                    restore_prompt()
+
+            # 2) 查询结束或事件消费者异常退出。先 drain 全部 QueryEvent，
+            # 再允许进入下一条输入。
+            consumer_done = render_task is not None and render_task in done
+            if query is not None and (query.task in done or consumer_done):
+                await finish_current()
 
             if action_get not in done:
                 continue
-            action = action_get.result()
-            prompt.submitted(raw=state.raw_input)
+            raw_action = action_get.result()
             action_get = asyncio.create_task(action_queue.get())
 
-            # 2) EOF：停掉运行中任务并退出
+            # 3) Esc/Ctrl-C：运行中中止；空闲时只清空当前输入。reader 会产生
+            # 非文本控制动作，因此这里不能把它当作用户消息处理。
+            if isinstance(raw_action, ReplControl):
+                prompt.hide()
+                if query is not None:
+                    await finish_current(interrupt=True)
+                else:
+                    restore_prompt()
+                continue
+
+            action = raw_action
+
+            # 4) EOF：停掉运行中任务并退出；不启动已排队消息。
             if action is None:
                 prompt.hide()
                 if query is not None:
-                    state.request_stop()
-                    await controller.stop()
-                    if render_task is not None:
-                        await asyncio.gather(render_task, return_exceptions=True)
-                    state.finish_turn()
-                    renderer.end_stream()
+                    await finish_current(
+                        interrupt=True,
+                        run_queued=False,
+                        show_stopped_note=False,
+                    )
                 return 0
+
+            prompt.submitted(raw=state.raw_input)
+
+            # 5) 审批优先消费 y/n/a；/thinking、/tool-output 仍可在审批期间使用。
+            if pending_approval is not None:
+                if action.kind is InputKind.UI_COMMAND:
+                    prompt.hide()
+                    await handle_command(action)
+                    restore_prompt()
+                    continue
+                if action.kind is InputKind.CONTROL:
+                    reject_pending_approval()
+                    if action.command == "/stop" and query is not None:
+                        await finish_current(interrupt=True)
+                    elif action.command == "/exit":
+                        if query is not None:
+                            await finish_current(
+                                interrupt=True,
+                                run_queued=False,
+                                show_stopped_note=False,
+                            )
+                        return 0
+                    else:
+                        print("  （审批输入必须是 y / n / a）")
+                        restore_prompt()
+                    continue
+                prompt.hide()
+                resolve_approval(action.raw_text)
+                restore_prompt()
+                continue
 
             input_history.add(action.raw_text)
 
@@ -663,30 +884,19 @@ async def run_repl(
                 restore_prompt()
                 continue
 
-            # 3) RUNNING：控制命令、展示命令、steering
+            # 6) RUNNING：控制命令、展示命令、steering 或下一条排队。
             if query is not None:
                 prompt.hide()
                 if action.kind is InputKind.CONTROL:
                     if action.command == "/stop":
-                        state.request_stop()
-                        await controller.stop()
-                        if render_task is not None:
-                            await asyncio.gather(render_task, return_exceptions=True)
-                        state.finish_turn()
-                        query = None
-                        render_task = None
-                        renderer.end_stream()
-                        print(STOPPED_NOTE)
-                        drain_steering_notes()
-                        restore_prompt()
+                        await finish_current(interrupt=True)
                         continue
                     if action.command == "/exit":
-                        state.request_stop()
-                        await controller.stop()
-                        if render_task is not None:
-                            await asyncio.gather(render_task, return_exceptions=True)
-                        state.finish_turn()
-                        renderer.end_stream()
+                        await finish_current(
+                            interrupt=True,
+                            run_queued=False,
+                            show_stopped_note=False,
+                        )
                         return 0
                 if action.kind is InputKind.UI_COMMAND:
                     await handle_command(action)
@@ -698,13 +908,18 @@ async def run_repl(
                     continue
                 if action.kind is InputKind.PROMPT:
                     show_attachment_notes(action)
-                    preview = controller.steer(
-                        action.text, images=action.images or None)
-                    print(f"  ⎿ 插话已排队（模型下一步看到）: {preview}")
+                    if action.delivery is InputDelivery.QUEUE:
+                        queued_prompts.append(action)
+                        print(f"  ⎿ 下一条已排队（当前任务完成后自动发送）: "
+                              f"{action.text[:60]}")
+                    else:
+                        preview = controller.steer(
+                            action.text, images=action.images or None)
+                        print(f"  ⎿ 插话已排队（模型下一步看到）: {preview}")
                 restore_prompt()
                 continue
 
-            # 4) IDLE：控制命令、普通消息、业务/展示命令
+            # 7) IDLE：控制命令、普通消息、业务/展示命令。
             if action.kind is InputKind.CONTROL:
                 prompt.hide()
                 if action.command == "/exit":
@@ -716,6 +931,7 @@ async def run_repl(
             if action.kind is InputKind.PROMPT:
                 prompt.hide()
                 query, render_task = launch_prompt(action)
+                approval_task = watch_approval()
                 restore_prompt()
                 continue
 
@@ -736,12 +952,18 @@ async def run_repl(
                         if handled.tool_allowlist is not None else None
                     ),
                 )
+                approval_task = watch_approval()
             restore_prompt()
     finally:
         if reader_task is not None:
             reader_task.cancel()
         processor_task.cancel()
         action_get.cancel()
+        if approval_task is not None:
+            approval_task.cancel()
+            await asyncio.gather(approval_task, return_exceptions=True)
+        if approval_broker is not None:
+            approval_broker.cancel_all()
         if query is not None:
             await query.cancel()
         if render_task is not None:
