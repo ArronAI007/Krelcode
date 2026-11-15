@@ -33,6 +33,7 @@ except ImportError:  # pragma: no cover - Windows
 
 from .. import __version__
 from ..agent.loop import AgentLoop
+from ..agent.runtime import AgentRuntime
 from ..session.controller import HELP_TEXT, SessionController
 from ..session.manager import resolve_resume_target
 from .atfiles import expand_at_files
@@ -460,7 +461,15 @@ async def run_repl(
     skills_reload=None,
     input_fn=None,
     redactor=None,
+    runtime: Optional[AgentRuntime] = None,
 ) -> int:
+    runtime = runtime or AgentRuntime(
+        loop,
+        subagents=subagents,
+        mcp_supervisor=mcp_supervisor,
+        mcp_reload=mcp_reload,
+    )
+    loop = runtime.loop
     use_color = auto_color()
     prompt = PromptWriter(color=use_color)
 
@@ -474,7 +483,7 @@ async def run_repl(
     unsubscribe = loop.bus.subscribe(renderer)
     workspace_root = loop.tool_context.workspace_root
     controller = SessionController(
-        loop,
+        runtime,
         session_path=session_path,
         sessions_dir=sessions_dir,
         mcp_supervisor=mcp_supervisor,

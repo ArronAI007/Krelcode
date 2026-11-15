@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 from ..agent.context import build_workspace_context
 from ..agent.loop import AgentLoop
+from ..agent.runtime import AgentRuntime
 from ..agent.prompts import build_system_prompt
 from ..agent.tokens import estimate_history_tokens
 from .export import export_session
@@ -70,7 +71,7 @@ class SessionController:
 
     def __init__(
         self,
-        loop: AgentLoop,
+        runtime: AgentRuntime | AgentLoop,
         *,
         session_path: Optional[str] = None,
         sessions_dir: Optional[Path] = None,
@@ -84,63 +85,50 @@ class SessionController:
         skills_reload=None,
         workspace_root: Optional[Path] = None,
     ) -> None:
-        self.loop = loop
+        self.runtime = (runtime if isinstance(runtime, AgentRuntime)
+                        else AgentRuntime(runtime))
+        self.loop = self.runtime.loop
         self.session_path = session_path
         self.sessions_dir = sessions_dir
-        self.mcp_supervisor = mcp_supervisor
-        self.mcp_reload = mcp_reload
-        self.subagents = subagents
+        self.mcp_supervisor = (mcp_supervisor
+                               if mcp_supervisor is not None
+                               else self.runtime.mcp_supervisor)
+        self.mcp_reload = (mcp_reload
+                           if mcp_reload is not None
+                           else self.runtime.mcp_reload)
+        self.subagents = (subagents
+                          if subagents is not None
+                          else self.runtime.subagents)
         self.checkpoints = checkpoints
         self.usage = usage
         self.model_switch = model_switch
         self.skills = skills
         self.skills_reload = skills_reload
-        self.workspace_root = workspace_root or loop.tool_context.workspace_root
-        self._task: Optional[asyncio.Task] = None
+        self.workspace_root = workspace_root or self.runtime.workspace_root
 
     @property
     def active_task(self) -> Optional[asyncio.Task]:
-        return self._task
+        return self.runtime.active_task
 
     @property
     def is_running(self) -> bool:
-        return self._task is not None and not self._task.done()
+        return self.runtime.is_running
 
     def start_run(self, message: str, *, images=None) -> asyncio.Task:
-        """启动一轮 Agent 执行并返回 task；同一控制器不允许并发两轮。"""
-        if self.is_running:
-            raise RuntimeError("已有任务正在运行")
-        self._task = asyncio.create_task(self.loop.run(message, images=images))
-        return self._task
+        """启动一轮 Agent 执行并返回 task。"""
+        return self.runtime.start_turn(message, images=images)
 
     def steer(self, message: str) -> str:
-        """把运行中插话放入 Agent steering 队列，返回可见摘要。"""
-        text = message.strip()
-        if not text:
-            return ""
-        self.loop.steering_queue.put_nowait(text)
-        return text if len(text) <= 40 else text[:40] + "…"
+        """把运行中插话放入 runtime steering 队列，返回可见摘要。"""
+        return self.runtime.steer(message)
 
     def drain_steering(self) -> list[Any]:
         """任务结束后取出未送达插话，避免污染下一轮。"""
-        pending: list[Any] = []
-        while not self.loop.steering_queue.empty():
-            try:
-                pending.append(self.loop.steering_queue.get_nowait())
-            except asyncio.QueueEmpty:
-                break
-        return pending
+        return self.runtime.drain_steering()
 
     async def stop(self) -> bool:
         """取消当前任务；没有活动任务时返回 False。"""
-        task = self._task
-        if task is None or task.done():
-            self._task = None
-            return False
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        self._task = None
-        return True
+        return await self.runtime.stop()
 
     async def execute_command(self, user_input: str) -> CommandResult:
         """执行会话级斜杠命令；普通消息返回 unhandled。"""

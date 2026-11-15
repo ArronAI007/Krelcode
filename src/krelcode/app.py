@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -21,9 +20,10 @@ from .agent.pricing import default_budget_for
 from .agent.context import build_workspace_context
 from .agent.loop import DEFAULT_MAX_STEPS, AgentLoop
 from .agent.prompts import build_system_prompt
+from .agent.runtime import AgentRuntime
 from .agent.usage import UsageTracker
 from .config import load_config
-from .core.events import EventBus, PermissionDenied, ToolCallCompleted
+from .core.events import EventBus
 from .core.redact import SecretRedactor
 from .hooks import HookRunner, parse_hooks
 from .core.messages import Message, ToolCall
@@ -36,8 +36,8 @@ from .safety.policy import AllowAllPolicy, SandboxPolicy
 from .safety.sandbox import ExecutionSandbox, SandboxError
 from .session.autocommit import AutoCommitter
 from .session.checkpoint import CheckpointManager
-from .session.recorder import SessionRecorder, latest_session, new_session_path
 from .session.restore import refresh_skill_system_prompt, restore_session
+from .session.runner import run_session
 from .skills import SkillManager, build_skill_tools
 from .subagent.manager import SUBAGENT_SYSTEM_PROMPT, SubagentManager
 from .tools.base import Tool, ToolContext
@@ -259,42 +259,6 @@ async def build_loop(
     return loop, manager
 
 
-def setup_session(args: argparse.Namespace, loop: AgentLoop, log=print, redactor=None):
-    """恢复历史（--resume）并挂载 JSONL 录制器；返回会话文件路径或 None。"""
-    sessions_dir = loop.tool_context.workspace_root / ".krelcode" / "sessions"
-
-    if args.resume:
-        if args.resume == "latest":
-            path = latest_session(sessions_dir)
-            if path is None:
-                log(f"（{sessions_dir} 下没有可恢复的会话，从空白开始）")
-            else:
-                restore_session(loop, path, log=log)
-        else:
-            restore_session(loop, Path(args.resume), log=log)
-
-    if args.no_session:
-        return None
-    session_path = new_session_path(sessions_dir)
-    recorder = SessionRecorder(session_path, lambda: loop.history, redactor=redactor)
-    recorder.attach(loop.bus)
-    return session_path
-
-
-class _RunSummary:
-    """JSON 输出模式的事件收集器（旁路订阅）。"""
-
-    def __init__(self) -> None:
-        self.tools_used: List[str] = []
-        self.denied = 0
-
-    def on_event(self, event) -> None:
-        if isinstance(event, ToolCallCompleted):
-            self.tools_used.append(event.tool_call.name)
-        elif isinstance(event, PermissionDenied):
-            self.denied += 1
-
-
 def build_model_switcher(args: argparse.Namespace, config: Dict[str, Any],
                          loop: AgentLoop, usage: UsageTracker, subagents=None,
                          redactor: Optional[SecretRedactor] = None):
@@ -390,6 +354,12 @@ async def async_main(args: argparse.Namespace) -> int:
         await supervisor.sync(new_config.get("mcp_servers") or {})
         return await supervisor.check_and_restart()
 
+    runtime = AgentRuntime(
+        loop,
+        subagents=subagents,
+        mcp_supervisor=supervisor,
+        mcp_reload=reload_mcp,
+    )
     checkpoints = None
     if not args.no_checkpoint:
         checkpoints = CheckpointManager(loop.tool_context.workspace_root)
@@ -418,60 +388,20 @@ async def async_main(args: argparse.Namespace) -> int:
         else:
             note("[git] 工作区不是 git 仓库，--auto-commit 未生效")
     try:
-        session_path = setup_session(args, loop, log=note, redactor=redactor)
-        sessions_dir = loop.tool_context.workspace_root / ".krelcode" / "sessions"
-        if args.message:
-            if args.output_format == "json":
-                summary = _RunSummary()
-                loop.bus.subscribe(summary.on_event)
-                try:
-                    reply = redactor.redact(await loop.run(args.message))
-                    payload = {
-                        "ok": True,
-                        "reply": reply,
-                        "usage": {
-                            "calls": usage.session.calls,
-                            "input": usage.session.input,
-                            "output": usage.session.output,
-                            "total": usage.session.total,
-                        },
-                        "tools_used": summary.tools_used,
-                        "denied": summary.denied,
-                        "cost_usd": usage.cost_usd,
-                        "session": str(session_path) if session_path else None,
-                    }
-                    code = 0
-                except Exception as e:
-                    payload = {"ok": False, "error": f"{type(e).__name__}: {e}"}
-                    code = 1
-                print(json.dumps(payload, ensure_ascii=False))
-                return code
-            try:
-                print(redactor.redact(await loop.run(args.message)))
-            except Exception as e:
-                print(f"错误：{type(e).__name__}: {e}")
-                return 1
-            if usage.session.calls:
-                print(f"[usage] {usage.session.text()}{usage.cost_note()}")
-            return 0
-        return await run_repl(
-            loop,
-            tool_names=loop.registry.names(),
-            session_path=str(session_path) if session_path else None,
-            sessions_dir=sessions_dir,
-            mcp_supervisor=supervisor,
-            mcp_reload=reload_mcp,
-            subagents=subagents,
+        return await run_session(
+            args,
+            runtime,
+            supervisor=supervisor,
             checkpoints=checkpoints,
             usage=usage,
             model_switch=model_switch,
-            redactor=redactor,
-            skills=loop.skill_manager,
             skills_reload=reload_skills,
+            redactor=redactor,
+            log=note,
+            repl_runner=run_repl,
         )
     finally:
-        await subagents.shutdown()
-        await supervisor.close_all()
+        await runtime.close()
 
 
 def main(argv=None) -> int:
