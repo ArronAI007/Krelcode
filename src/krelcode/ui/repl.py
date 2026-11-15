@@ -37,6 +37,7 @@ from ..agent.runtime import AgentRuntime
 from ..session.controller import HELP_TEXT, SessionController
 from ..session.input import InputAction, InputEnvelope, InputKind, InputProcessor
 from ..session.manager import resolve_resume_target
+from ..session.state import SessionViewState
 from .render import CYAN, DIM, RESET, StreamRenderer, auto_color
 
 RUNNING_HINT = ("  （任务运行中：直接输入=插话，/thinking 展开思考，"
@@ -501,18 +502,18 @@ async def run_repl(
     print_banner(loop, tool_names, session_path=session_path)
 
     running: Optional[asyncio.Task] = None
-    state = {"running": False, "raw_input": False}
+    state = SessionViewState()
     raw_inbox: asyncio.Queue = asyncio.Queue()
     action_queue: asyncio.Queue = asyncio.Queue()
     input_ready = threading.Event()
     processor = input_processor or InputProcessor(workspace_root)
 
     def current_prompt() -> str:
-        text = RUNNING_PROMPT if state["running"] else IDLE_PROMPT
+        text = RUNNING_PROMPT if state.is_running else IDLE_PROMPT
         return f"{CYAN}{text}{RESET}" if use_color else text
 
     def suggest(text: str) -> list[tuple[str, str]]:
-        return match_slash_commands(text, running=state["running"])
+        return match_slash_commands(text, running=state.is_running)
 
     editor = TerminalLineEditor(
         prompt, suggest, color=use_color, history=input_history)
@@ -547,7 +548,7 @@ async def run_repl(
             while True:
                 input_ready.wait()
                 try:
-                    state["raw_input"] = editor.available
+                    state.raw_input = editor.available
                     line = editor.readline(current_prompt)
                 except (EOFError, KeyboardInterrupt, OSError):
                     line = None
@@ -581,12 +582,16 @@ async def run_repl(
 
     def launch_prompt(action: InputAction) -> asyncio.Task:
         show_attachment_notes(action)
-        state["running"] = True
+        state.begin_turn()
         if prompt.enabled:
             status = "  ⋯ 工作中 · 输入文字可插话 · /stop 中止"
             print(f"{DIM}{status}{RESET}" if use_color else status)
-        return controller.start_run(
-            action.text, images=list(action.images) or None)
+        try:
+            return controller.start_run(
+                action.text, images=list(action.images) or None)
+        except Exception:
+            state.finish_turn()
+            raise
 
     def drain_steering_notes() -> None:
         """任务结束后丢弃未送达的插话（可见地），避免悄悄留到下一轮。"""
@@ -621,7 +626,7 @@ async def run_repl(
             # 1) 运行中的任务结束（自然完成/异常/被取消）
             if running is not None and running in done:
                 prompt.hide()
-                state["running"] = False
+                state.finish_turn()
                 try:
                     running.result()
                 except asyncio.CancelledError:
@@ -637,14 +642,16 @@ async def run_repl(
             if action_get not in done:
                 continue
             action = action_get.result()
-            prompt.submitted(raw=state["raw_input"])
+            prompt.submitted(raw=state.raw_input)
             action_get = asyncio.create_task(action_queue.get())
 
             # 2) EOF：停掉运行中任务并退出
             if action is None:
                 prompt.hide()
                 if running is not None:
+                    state.request_stop()
                     await controller.stop()
+                    state.finish_turn()
                     renderer.end_stream()
                 return 0
 
@@ -659,8 +666,9 @@ async def run_repl(
                 prompt.hide()
                 if action.kind is InputKind.CONTROL:
                     if action.command == "/stop":
+                        state.request_stop()
                         await controller.stop()
-                        state["running"] = False
+                        state.finish_turn()
                         running = None
                         renderer.end_stream()
                         print(STOPPED_NOTE)
@@ -668,7 +676,9 @@ async def run_repl(
                         restore_prompt()
                         continue
                     if action.command == "/exit":
+                        state.request_stop()
                         await controller.stop()
+                        state.finish_turn()
                         renderer.end_stream()
                         return 0
                 if action.kind is InputKind.UI_COMMAND:
@@ -719,6 +729,7 @@ async def run_repl(
             reader_task.cancel()
         processor_task.cancel()
         action_get.cancel()
+        state.finish_turn()
         prompt.finish()
         unsubscribe()
 
