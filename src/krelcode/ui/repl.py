@@ -21,7 +21,6 @@ import shutil
 import sys
 import threading
 import unicodedata
-from collections import deque
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
@@ -54,11 +53,19 @@ from ..session.input import (
 from ..session.manager import resolve_resume_target
 from ..session.state import SessionViewState
 from .approval import ApprovalBroker, ApprovalRequest, ALWAYS, YES
+from .editor import (
+    EditBuffer,
+    HistorySearch,
+    InputHistory,
+    sanitize_pasted_text,
+)
+from .queue import PromptQueue
 from .render import CYAN, DIM, RESET, StreamRenderer, auto_color
 
 RUNNING_HINT = (
     "  （任务运行中：Enter=插话，Alt+Enter=排队下一条，Esc/Ctrl-C 中止；"
-    "/thinking 展开思考，/tool-output <编号> 展开输出，/stop 中止，/exit 退出）"
+    "/thinking 展开思考，/tool-output <编号> 展开输出，/queue 管理队列，"
+    "/stop 中止，/exit 退出）"
 )
 STOPPED_NOTE = "  ⎿ 已中止（历史已修复，可继续对话）"
 
@@ -98,6 +105,59 @@ def match_slash_commands(text: str, *, running: bool = False,
     catalog = registry or _BUILTIN_COMMANDS
     return [(spec.invocation, spec.description)
             for spec in catalog.list(query=text, running=running)[:limit]]
+
+
+QUEUE_USAGE = "用法：/queue | /queue delete <n> | /queue move <n> <m> | /queue clear"
+
+
+def _queue_label(action: InputAction, limit: int = 100) -> str:
+    text = " ".join(action.raw_text.split()) or action.text
+    return _truncate_display(text, limit)
+
+
+def _format_prompt_queue(queue: PromptQueue[InputAction]) -> list[str]:
+    if not queue:
+        return ["下一条消息队列为空"]
+    lines = [f"下一条消息队列（{len(queue)}）:"]
+    for index, action in enumerate(queue.entries, 1):
+        lines.append(f"  #{index} {_queue_label(action)}")
+    return lines
+
+
+def manage_prompt_queue(
+    arguments: str,
+    queue: PromptQueue[InputAction],
+    *,
+    write: Callable[[str], None] = print,
+) -> None:
+    """执行 /queue 的纯 UI 管理动作，不进入 SessionController。"""
+    parts = arguments.split()
+    if not parts:
+        for line in _format_prompt_queue(queue):
+            write(line)
+        return
+    operation = parts[0].lower()
+    try:
+        if operation == "clear" and len(parts) == 1:
+            count = len(queue)
+            queue.clear()
+            write(f"已清空下一条消息队列（{count} 条）")
+            return
+        if operation == "delete" and len(parts) == 2:
+            action = queue.delete(int(parts[1]))
+            write(f"已从队列删除: {_queue_label(action)}")
+            return
+        if operation == "move" and len(parts) == 3:
+            source = int(parts[1])
+            target = int(parts[2])
+            queue.move(source, target)
+            write(f"已把队列 #{source} 移动到 #{target}")
+            return
+    except (ValueError, IndexError) as exc:
+        message = str(exc) if str(exc) else "序号必须是整数"
+        write(f"队列操作失败: {message}")
+        return
+    write(QUEUE_USAGE)
 
 
 def _stdout_write(s: str) -> None:
@@ -143,9 +203,10 @@ def _input_rule(color: bool = False) -> str:
 
 
 class PromptWriter:
-    """上下边界包住输入行；TTY 用 ANSI 移动光标，非 TTY 不输出。"""
+    """多行输入框渲染器；每次从顶边界整体重绘，保证光标和菜单一致。"""
 
     CLEAR_LINE = "\r\x1b[2K"
+    CLEAR_BELOW = "\x1b[0J"
     CURSOR_UP = "\x1b[1A"
     CURSOR_DOWN = "\x1b[1B"
 
@@ -159,158 +220,141 @@ class PromptWriter:
         self._last = ""
         self._prompt_width = 0
         self._suggestions: tuple[str, ...] = ()
-        self._rule = ""
-        self._submitted_raw: Optional[bool] = None
+        self._input_rows = 1
+        self._rendered_rows = 0
+        self._cursor_row = 0
+        self._submitted = False
+
+    @property
+    def _rule(self) -> str:
+        """当前终端宽度下的输入区边界，供渲染诊断与测试使用。"""
+        return _input_rule(self._color)
 
     def show(self, text: str) -> None:
         if not self.enabled:
             return
-        rule = _input_rule(self._color)
-        # 输入框下方固定预留候选区；后续菜单只原地覆盖，不向历史追加行。
-        block = f"{rule}\n{text}\n{rule}"
-        for _ in range(MENU_ROWS):
-            block += "\n" + self.CLEAR_LINE
-        block += (self.CURSOR_UP * (MENU_ROWS + 1) + "\r"
-                  + f"\x1b[{_display_width(text)}C")
-        if self._visible and block == self._last:
-            return
         if self._visible:
+            if self._last and self._last[0] == text and not self._last[1]:
+                self._submitted = False
+                return
             self.hide()
-        self._write(block)
-        self._visible = True
-        self._last = block
-        self._prompt_width = _display_width(text)
-        self._suggestions = ()
-        self._rule = rule
-        self._submitted_raw = None
+        row, column = self._end_position(text)
+        self._render(text, [], cursor_row=row, cursor_column=column)
+        self._submitted = False
 
-    def update(self, text: str, suggestions: Optional[list[str]] = None) -> None:
-        """重绘输入行及其下方候选菜单，光标最终回到输入行末尾。"""
+    def update(
+        self,
+        text: str,
+        suggestions: Optional[list[str]] = None,
+        *,
+        cursor_row: Optional[int] = None,
+        cursor_column: Optional[int] = None,
+    ) -> None:
+        """重绘任意多行输入；cursor_row 以输入正文第一行为 0。"""
         if not self.enabled or not self._visible:
             return
-        self._clear_suggestions()
-        self._write(self.CLEAR_LINE + text)
-        self._prompt_width = _display_width(text)
-        # 同时重绘下边界，防止终端残留上一版输入行形成“第二行提示符”。
-        self._write(self.CURSOR_DOWN + "\r" + self.CLEAR_LINE + self._rule)
-        self._write(self.CURSOR_UP + "\r" + f"\x1b[{self._prompt_width}C")
-        self._render_suggestions(suggestions or [])
-
-    def _render_suggestions(self, suggestions: list[str]) -> None:
-        items = tuple(suggestions)
-        self._suggestions = items
-        if not items:
+        lines = text.split("\n")
+        row = len(lines) - 1 if cursor_row is None else max(0, min(cursor_row, len(lines) - 1))
+        column = (_display_width(lines[row]) if cursor_column is None
+                  else max(0, cursor_column))
+        signature = (text, tuple(suggestions or ()), row, column)
+        if signature == self._last:
             return
-        # 候选菜单在固定区域内原地覆盖，行数始终不变。
-        self._write(self.CURSOR_DOWN * 2 + "\r")
-        for i in range(MENU_ROWS):
-            self._write(self.CLEAR_LINE)
-            if i < len(items):
-                self._write(items[i])
-            if i + 1 < MENU_ROWS:
-                self._write("\n")
-        self._write(self.CURSOR_UP * (MENU_ROWS + 1) + "\r")
-        self._write(f"\x1b[{self._prompt_width}C")
+        self._render(text, suggestions or [], row, column)
 
-    def _clear_suggestions(self) -> None:
-        if not self._suggestions:
-            return
-        self._write(self.CURSOR_DOWN * 2 + "\r")
-        for i in range(MENU_ROWS):
-            self._write(self.CLEAR_LINE)
-            if i + 1 < MENU_ROWS:
-                self._write("\n")
-        self._write(self.CURSOR_UP * (MENU_ROWS + 1) + "\r")
-        self._write(f"\x1b[{self._prompt_width}C")
-        self._suggestions = ()
+    @staticmethod
+    def _end_position(text: str) -> tuple[int, int]:
+        lines = text.split("\n")
+        return len(lines) - 1, _display_width(lines[-1])
+
+    def _block(self, text: str, suggestions: list[str]) -> list[str]:
+        rule = _input_rule(self._color)
+        input_lines = text.split("\n")
+        menu = list(suggestions[:MENU_ROWS])
+        menu.extend([""] * (MENU_ROWS - len(menu)))
+        self._input_rows = len(input_lines)
+        return [rule, *input_lines, rule, *menu]
+
+    def _move_to_top(self) -> None:
+        if self._cursor_row > 0:
+            self._write("\r" + self.CURSOR_UP * self._cursor_row)
+        else:
+            self._write("\r")
+
+    def _render(
+        self,
+        text: str,
+        suggestions: list[str],
+        cursor_row: int,
+        cursor_column: int,
+    ) -> None:
+        if self._visible:
+            self._move_to_top()
+            self._write(self.CLEAR_BELOW)
+        rows = self._block(text, suggestions)
+        self._write("\n".join(rows))
+        self._rendered_rows = len(rows)
+        target_row = 1 + cursor_row
+        moves_up = self._rendered_rows - 1 - target_row
+        self._write("\r")
+        if moves_up > 0:
+            self._write(self.CURSOR_UP * moves_up)
+        if cursor_column > 0:
+            self._write(f"\x1b[{cursor_column}C")
+        self._visible = True
+        self._cursor_row = target_row
+        self._prompt_width = cursor_column
+        self._suggestions = tuple(suggestions[:MENU_ROWS])
+        self._last = (text, tuple(suggestions), cursor_row, cursor_column)
 
     def submitted(self, *, raw: bool = True) -> None:
-        # Enter 后越过下边界，后续输出不覆盖它。
+        """保留输入框，清掉菜单区，把输出光标放到下边界之后。"""
         was_visible = self.enabled and self._visible
         if was_visible:
-            self._clear_suggestions()
-            # 下移到输出区后必须回到第 0 列；否则命令输出的首行会从输入
-            # 末尾所在列开始，表现为第一个工具/结果缩进异常。
-            self._write(self.CURSOR_DOWN * (2 if raw else 1) + "\r")
+            self._move_to_top()
+            output_row = 2 + self._input_rows
+            self._write("\r")
+            if output_row > 0:
+                self._write(self.CURSOR_DOWN * output_row)
+            self._write(self.CLEAR_BELOW)
         self._visible = False
         self._last = ""
-        self._submitted_raw = raw if was_visible else None
+        self._submitted = was_visible
 
     def hide(self) -> None:
         if not self.enabled or not self._visible:
             return
-        self._clear_suggestions()
-        # 当前光标位于中间输入行；清掉输入行与下边界，再回到输入行落笔。
-        self._write(self.CLEAR_LINE)
-        self._write(self.CURSOR_DOWN)
-        self._write(self.CLEAR_LINE)
-        self._write(self.CURSOR_UP + "\r")
+        self._move_to_top()
+        self._write(self.CLEAR_BELOW)
         self._visible = False
         self._last = ""
+        self._cursor_row = 0
 
     def finish(self) -> None:
-        """退出前把光标移到下边界之后并补换行，避免 shell 显示 PROMPT_EOL_MARK。"""
+        """退出前结束当前终端行，不在 shell 留下孤立空行。"""
         if not self.enabled:
             return
         if self._visible:
             self.hide()
-        elif self._submitted_raw:
-            # 原生编辑器提交时下移 2 行；回到下边界再换行，避免留下空行。
-            self._write(self.CURSOR_UP)
-        self._write("\r\n")
-        self._submitted_raw = None
-
-
-class InputHistory:
-    """当前 REPL 会话的用户问题历史；只记录普通输入，不记录斜杠命令。"""
-
-    def __init__(self, limit: int = 200) -> None:
-        self._entries: list[str] = []
-        self._limit = max(1, limit)
-        self._index: Optional[int] = None
-        self._draft = ""
-
-    def __len__(self) -> int:
-        return len(self._entries)
-
-    def add(self, text: str) -> None:
-        text = text.strip()
-        if not text or text.startswith("/"):
-            return
-        if self._entries and self._entries[-1] == text:
-            return
-        self._entries.append(text)
-        if len(self._entries) > self._limit:
-            del self._entries[:len(self._entries) - self._limit]
-        self.reset_navigation()
-
-    def reset_navigation(self) -> None:
-        self._index = None
-        self._draft = ""
-
-    def previous(self, current: str) -> str:
-        if not self._entries:
-            return current
-        if self._index is None:
-            self._draft = current
-            self._index = len(self._entries) - 1
-        elif self._index > 0:
-            self._index -= 1
-        return self._entries[self._index]
-
-    def next(self, current: str) -> str:
-        if self._index is None:
-            return current
-        if self._index + 1 < len(self._entries):
-            self._index += 1
-            return self._entries[self._index]
-        draft = self._draft
-        self.reset_navigation()
-        return draft
+        if not self._submitted:
+            self._write("\r\n")
+        self._submitted = False
 
 
 class TerminalLineEditor:
-    """零依赖字符级编辑器：回显、slash 候选和上下键历史导航。"""
+    """零依赖字符级编辑器：多行编辑、历史搜索、粘贴和 slash 候选。"""
+
+    BRACKETED_PASTE_ON = "\x1b[?2004h"
+    BRACKETED_PASTE_OFF = "\x1b[?2004l"
+    PASTE_END = b"\x1b[201~"
+    PASTE_LIMIT = 1_000_000
+    COMPLETE_ESCAPE_SEQUENCES = frozenset({
+        b"[A", b"OA", b"[B", b"OB", b"[D", b"OD", b"[C", b"OC",
+        b"[H", b"OH", b"[1~", b"[7~", b"[F", b"OF", b"[4~", b"[8~",
+        b"[3~", b"[3;5~", b"[200~", b"[13;2u", b"[13;3u",
+        b"[27;2;13~", b"[27;3;13~",
+        b"b", b"B", b"f", b"F", b"\x7f", b"\r", b"\n",
+    })
 
     def __init__(self, prompt: PromptWriter,
                  suggest: Callable[[str], list[tuple[str, str]]],
@@ -320,6 +364,7 @@ class TerminalLineEditor:
         self._suggest = suggest
         self._color = color
         self._history = history if history is not None else InputHistory()
+        self._pending_input = bytearray()
 
     @property
     def available(self) -> bool:
@@ -335,18 +380,45 @@ class TerminalLineEditor:
         tty.setcbreak(fd)
         # 保留输出处理（\n 正常换行），但不让 Ctrl-C 绕过 finally 恢复终端。
         editor_settings = termios.tcgetattr(fd)
+        # Enter 保持 CR，Ctrl-J 才是 LF；否则终端 ICRNL 后两者无法区分，
+        # 会把普通 Enter 错当成多行插入。
+        editor_settings[0] &= ~getattr(termios, "ICRNL", 0)
         editor_settings[3] &= ~termios.ISIG
         termios.tcsetattr(fd, termios.TCSADRAIN, editor_settings)
-        buffer: list[str] = []
+        self._set_bracketed_paste(fd, True)
+        buffer = EditBuffer()
+        search: Optional[HistorySearch] = None
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self._history.reset_navigation()
         try:
             while True:
-                data = os.read(fd, 1)
+                data = self._read_one(fd)
                 if not data:
                     raise EOFError
                 if data == b"\x1b":
                     sequence = self._read_escape_sequence(fd)
+                    if sequence == b"[200~":
+                        pasted = self._read_bracketed_paste(fd)
+                        if search is not None:
+                            search.query += pasted.replace("\n", " ")
+                            self._run_history_search(search, buffer)
+                        else:
+                            buffer.insert(pasted)
+                        self._refresh(prompt_text(), buffer, search=search)
+                        continue
+                    if search is not None:
+                        if sequence in (b"", b"G"):
+                            search.cancel(buffer)
+                            search = None
+                        elif sequence in (b"\r", b"\n"):
+                            search = None
+                        else:
+                            escaped = self._apply_escape_sequence(sequence, buffer)
+                            if escaped is not None:
+                                return escaped
+                            search = None
+                        self._refresh(prompt_text(), buffer)
+                        continue
                     escaped = self._apply_escape_sequence(sequence, buffer)
                     if escaped is not None:
                         return escaped
@@ -356,72 +428,257 @@ class TerminalLineEditor:
                 char = decoder.decode(data)
                 if not char:
                     continue
-                if char in ("\r", "\n"):
-                    return TerminalSubmission("".join(buffer))
+                if search is not None:
+                    if char == "\x12":            # Ctrl-R：继续向更旧匹配
+                        search.cycle(self._history)
+                        if search.matched:
+                            buffer.set_text(search.match_text)
+                    elif char in ("\x07", "\x03"):
+                        if char == "\x03":
+                            return ReplControl.INTERRUPT
+                        search.cancel(buffer)
+                        search = None
+                    elif char in ("\x7f", "\x08"):
+                        if search.query:
+                            search.query = search.query[:-1]
+                            self._run_history_search(search, buffer)
+                    elif char == "\r":
+                        search = None          # Enter 只接受匹配，不立刻提交
+                    elif char >= " " and char != "\x7f":
+                        search.query += char
+                        self._run_history_search(search, buffer)
+                    self._refresh(prompt_text(), buffer, search=search)
+                    continue
+                if char == "\r":
+                    return TerminalSubmission(buffer.text)
+                if char == "\n":               # Ctrl-J：插入换行
+                    buffer.insert("\n")
                 if char in ("\x7f", "\x08"):
-                    if buffer:
-                        buffer.pop()
+                    buffer.backspace()
                 elif char == "\x04":             # Ctrl-D
-                    raise EOFError
+                    if not buffer.text:
+                        raise EOFError
+                    buffer.delete()
                 elif char == "\x03":             # Ctrl-C（通常由 ISIG 先行处理）
                     return ReplControl.INTERRUPT
+                elif char == "\x01":             # Ctrl-A
+                    buffer.move_home()
+                elif char == "\x05":             # Ctrl-E
+                    buffer.move_end()
+                elif char == "\x02":             # Ctrl-B
+                    buffer.move_left()
+                elif char == "\x06":             # Ctrl-F
+                    buffer.move_right()
+                elif char == "\x0b":             # Ctrl-K
+                    buffer.delete_to_end()
+                elif char == "\x15":             # Ctrl-U
+                    buffer.delete_to_start()
+                elif char == "\x17":             # Ctrl-W
+                    buffer.delete_word_before()
+                elif char == "\x10":             # Ctrl-P
+                    self._navigate_history(b"[A", buffer)
+                elif char == "\x0e":             # Ctrl-N
+                    self._navigate_history(b"[B", buffer)
+                elif char == "\x12":             # Ctrl-R
+                    search = HistorySearch.begin(buffer)
+                    self._run_history_search(search, buffer)
                 elif char == "\t":
                     self._complete(buffer)
                 elif char >= " " and char != "\x7f":
-                    buffer.append(char)
-                self._refresh(prompt_text(), buffer)
+                    buffer.insert(char)
+                self._refresh(prompt_text(), buffer, search=search)
         finally:
+            self._set_bracketed_paste(fd, False)
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
+    def _read_one(self, fd: int) -> bytes:
+        if self._pending_input:
+            data = bytes(self._pending_input[:1])
+            del self._pending_input[:1]
+            return data
+        return os.read(fd, 1)
+
+    def _read_escape_sequence(self, fd: int) -> bytes:
+        """读取 ESC 后紧跟的控制序列；其他终端转义自然忽略。"""
+        sequence = bytearray()
+        while len(sequence) < 16:
+            if not self._pending_input and not select.select(
+                [fd], [], [], 0.01
+            )[0]:
+                break
+            sequence.extend(self._read_one(fd))
+            if bytes(sequence) in TerminalLineEditor.COMPLETE_ESCAPE_SEQUENCES:
+                break
+        return bytes(sequence)
+
+    def _read_bracketed_paste(self, fd: int) -> str:
+        """读取到 Bracketed paste 结束标记，并返回净化后的文本。"""
+        payload = bytearray()
+        carry = b""
+        limit_reached = False
+
+        def append_limited(segment: bytes) -> None:
+            nonlocal limit_reached
+            remaining = self.PASTE_LIMIT - len(payload)
+            if remaining > 0:
+                payload.extend(segment[:remaining])
+            if len(segment) > max(0, remaining):
+                limit_reached = True
+
+        while True:
+            if self._pending_input:
+                chunk = bytes(self._pending_input)
+                self._pending_input.clear()
+            else:
+                ready = select.select([fd], [], [], 10.0)[0]
+                if not ready:
+                    append_limited(carry)
+                    break
+                chunk = os.read(fd, 4096)
+            if not chunk:
+                append_limited(carry)
+                break
+
+            data = carry + chunk
+            marker_index = data.find(self.PASTE_END)
+            if marker_index >= 0:
+                self._pending_input = bytearray(
+                    data[marker_index + len(self.PASTE_END):])
+                append_limited(data[:marker_index])
+                break
+            safe_length = max(0, len(data) - len(self.PASTE_END) + 1)
+            append_limited(data[:safe_length])
+            carry = data[safe_length:]
+        text = payload.decode("utf-8", errors="replace")
+        text = sanitize_pasted_text(text)
+        if limit_reached:
+            text += "\n[粘贴内容过大，已截断]"
+        return text
+
     @staticmethod
-    def _read_escape_sequence(fd: int) -> bytes:
-        """读取 ESC 后紧跟的方向键序列；其他终端转义自然忽略。"""
-        sequence = []
-        while len(sequence) < 8 and select.select([fd], [], [], 0.01)[0]:
-            sequence.append(os.read(fd, 1))
-        return b"".join(sequence)
+    def _set_bracketed_paste(fd: int, enabled: bool) -> None:
+        sequence = (TerminalLineEditor.BRACKETED_PASTE_ON if enabled
+                    else TerminalLineEditor.BRACKETED_PASTE_OFF)
+        try:
+            os.write(fd, sequence.encode("ascii"))
+        except OSError:
+            pass
+
+    def _run_history_search(
+        self,
+        search: HistorySearch,
+        buffer: EditBuffer,
+    ) -> bool:
+        search.match_index = None
+        matched = search.find(self._history)
+        if matched:
+            buffer.set_text(search.match_text)
+        return matched
 
     @staticmethod
     def _apply_escape_sequence(
         sequence: bytes,
-        buffer: list[str],
+        buffer: EditBuffer | list[str],
     ) -> Optional[TerminalSubmission | ReplControl]:
-        """处理无参数终端控制键；None 表示继续按方向键处理。"""
+        """应用光标/删除类转义键；特殊提交动作直接返回。"""
+        legacy_list = isinstance(buffer, list)
+        state = EditBuffer("".join(buffer)) if legacy_list else buffer
+
+        def finish() -> None:
+            if legacy_list:
+                buffer[:] = list(state.text)
+
         if not sequence:
             return ReplControl.INTERRUPT       # 单独 ESC
-        if sequence in (b"\r", b"\n"):
-            return TerminalSubmission("".join(buffer), queue_next=True)  # Alt+Enter
+        if sequence in (b"\r", b"\n", b"[13;3u", b"[27;3;13~"):
+            return TerminalSubmission(state.text, queue_next=True)  # Alt+Enter
+        if sequence in (b"[13;2u", b"[27;2;13~"):  # Shift+Enter
+            state.insert("\n")
+        elif sequence in (b"[D", b"OD"):       # Left
+            state.move_left()
+        elif sequence in (b"[C", b"OC"):       # Right
+            state.move_right()
+        elif sequence in (b"[H", b"OH", b"[1~", b"[7~"):  # Home
+            state.move_home()
+        elif sequence in (b"[F", b"OF", b"[4~", b"[8~"):  # End
+            state.move_end()
+        elif sequence == b"[3~":               # Delete
+            state.delete()
+        elif sequence == b"[3;5~":             # Ctrl-Delete
+            state.delete_word_after()
+        elif sequence in (b"b", b"B"):         # Alt-B
+            state.move_word_left()
+        elif sequence in (b"f", b"F"):         # Alt-F
+            state.move_word_right()
+        elif sequence == b"\x7f":              # Alt-Backspace
+            state.delete_word_before()
+        finish()
         return None
 
-    def _navigate_history(self, sequence: bytes, buffer: list[str]) -> bool:
-        """应用 ↑/↓；返回是否识别为历史导航键。"""
+    def _navigate_history(
+        self, sequence: bytes, buffer: EditBuffer | list[str]
+    ) -> bool:
+        """应用 ↑/↓；多行文本内优先移动光标行。"""
+        legacy_list = isinstance(buffer, list)
+        state = EditBuffer("".join(buffer)) if legacy_list else buffer
+
+        def finish() -> None:
+            if legacy_list:
+                buffer[:] = list(state.text)
+
         if sequence in (b"[A", b"OA"):
-            buffer[:] = list(self._history.previous("".join(buffer)))
+            if "\n" in state.text and state.move_line_up():
+                finish()
+                return True
+            state.set_text(self._history.previous(state.text))
+            finish()
             return True
         if sequence in (b"[B", b"OB"):
-            buffer[:] = list(self._history.next("".join(buffer)))
+            if "\n" in state.text and state.move_line_down():
+                finish()
+                return True
+            state.set_text(self._history.next(state.text))
+            finish()
             return True
         return False
 
-    def _complete(self, buffer: list[str]) -> None:
-        matches = [name for name, _ in self._suggest("".join(buffer))]
+    def _complete(self, buffer: EditBuffer | list[str]) -> None:
+        legacy_list = isinstance(buffer, list)
+        state = EditBuffer("".join(buffer)) if legacy_list else buffer
+        matches = [name for name, _ in self._suggest(state.text)]
         if not matches:
             return
         if len(matches) == 1:
-            buffer[:] = list(matches[0] + " ")
-            return
-        common = os.path.commonprefix(matches)
-        if len(common) > len(buffer):
-            buffer[:] = list(common)
+            state.set_text(matches[0] + " ")
+        else:
+            common = os.path.commonprefix(matches)
+            if len(common) > len(state.text):
+                state.set_text(common)
+        if legacy_list:
+            buffer[:] = list(state.text)
 
-    def _refresh(self, prompt_text: str, buffer: list[str]) -> None:
-        text = prompt_text + "".join(buffer)
-        matches = self._suggest("".join(buffer))
-        columns = shutil.get_terminal_size((80, 24)).columns
-        # 候选命令从输入正文的起始列开始，而不是依赖固定的两空格。
-        # 这样首项与后续项、以及输入行里的 `/` 始终共享同一条左对齐线。
+    def _refresh(
+        self,
+        prompt_text: str,
+        buffer: EditBuffer | list[str],
+        *,
+        search: Optional[HistorySearch] = None,
+    ) -> None:
+        state = EditBuffer("".join(buffer)) if isinstance(buffer, list) else buffer
+        source_lines = state.text.split("\n")
         indent = " " * _display_width(prompt_text)
-        lines = []
+        rendered_lines = [prompt_text + source_lines[0]]
+        rendered_lines.extend(indent + line for line in source_lines[1:])
+
+        matches = [] if "\n" in state.text else self._suggest(state.text)
+        columns = shutil.get_terminal_size((80, 24)).columns
+        lines: list[str] = []
+        if search is not None:
+            match = search.match_text if search.matched else "无匹配"
+            status = f"  (reverse-i-search) `{search.query}`: {match}"
+            if self._color:
+                status = f"{DIM}{status}{RESET}"
+            lines.append(_truncate_display(status, max(1, columns - 1)))
         for name, description in matches:
             label = f"{name:<11}"
             line = _truncate_display(
@@ -430,7 +687,18 @@ class TerminalLineEditor:
                 prefix = f"{indent}{CYAN}{name:<11}{RESET}"
                 line = prefix + line[len(f"{indent}{label}"):]
             lines.append(line)
-        self._prompt.update(text, lines)
+        cursor_line, _ = state.cursor_line_column()
+        line_start = state.text.rfind("\n", 0, state.cursor) + 1
+        cursor_text = state.text[line_start:state.cursor]
+        cursor_column = _display_width(cursor_text)
+        if cursor_line == 0:
+            cursor_column += _display_width(prompt_text)
+        self._prompt.update(
+            "\n".join(rendered_lines),
+            lines,
+            cursor_row=cursor_line,
+            cursor_column=cursor_column,
+        )
 
 
 def print_banner(loop: AgentLoop, tool_names: Optional[list],
@@ -470,7 +738,7 @@ def print_banner(loop: AgentLoop, tool_names: Optional[list],
 
     accent = (lambda s: f"{CYAN}{s}{RESET}") if color else (lambda s: s)
     write("")
-    write(f"  {accent('/help')} 查看命令 · ↑/↓ 历史问题 · "
+    write(f"  {accent('/help')} 查看命令 · ↑/↓ 历史 · Ctrl-R 搜索 · "
           f"{accent('@路径')} 引用文件 · {accent('/exit')} 退出")
     write("")
 
@@ -493,6 +761,8 @@ async def run_repl(
     runtime: Optional[AgentRuntime] = None,
     input_processor: Optional[InputProcessor] = None,
     approval_broker: Optional[ApprovalBroker] = None,
+    history_path: Optional[Path] = None,
+    persist_history: Optional[bool] = None,
 ) -> int:
     runtime = runtime or AgentRuntime(
         loop,
@@ -510,7 +780,21 @@ async def run_repl(
         _stdout_write(s)
 
     renderer = StreamRenderer(write=_prompt_write, redactor=redactor)
-    input_history = InputHistory()
+    explicit_history_path = history_path is not None
+    persistent_history = (
+        (input_fn is None or explicit_history_path)
+        if persist_history is None else persist_history
+    )
+    if history_path is None:
+        configured_history = os.environ.get("KRELCODE_HISTORY_FILE")
+        history_path = (Path(configured_history).expanduser()
+                        if configured_history
+                        else Path.home() / ".krelcode" / "history.jsonl")
+    history_redactor = getattr(redactor, "redact", None)
+    input_history = InputHistory(
+        path=history_path if persistent_history else None,
+        redact=history_redactor,
+    )
     workspace_root = loop.tool_context.workspace_root
     processor = input_processor or InputProcessor(workspace_root)
     controller = SessionController(
@@ -535,7 +819,7 @@ async def run_repl(
     render_task: Optional[asyncio.Task] = None
     approval_task: Optional[asyncio.Task] = None
     pending_approval: Optional[ApprovalRequest] = None
-    queued_prompts: deque[InputAction] = deque()
+    queued_prompts: PromptQueue[InputAction] = PromptQueue()
     state = SessionViewState()
     raw_inbox: asyncio.Queue = asyncio.Queue()
     action_queue: asyncio.Queue = asyncio.Queue()
@@ -708,6 +992,8 @@ async def run_repl(
         if query is not None or not queued_prompts:
             return
         action = queued_prompts.popleft()
+        if queued_prompts:
+            print(f"  ⎿ 启动下一条消息；队列还剩 {len(queued_prompts)} 条")
         query, render_task = launch_prompt(action)
         approval_task = watch_approval()
 
@@ -850,6 +1136,13 @@ async def run_repl(
 
             prompt.submitted(raw=state.raw_input)
 
+            # 队列属于当前终端前台状态，必须在审批和会话命令之前截获。
+            if action.kind is InputKind.UI_COMMAND and action.command == "/queue":
+                prompt.hide()
+                manage_prompt_queue(action.arguments, queued_prompts, write=print)
+                restore_prompt()
+                continue
+
             # 5) 审批优先消费 y/n/a；/thinking、/tool-output 仍可在审批期间使用。
             if pending_approval is not None:
                 if action.kind is InputKind.UI_COMMAND:
@@ -909,9 +1202,10 @@ async def run_repl(
                 if action.kind is InputKind.PROMPT:
                     show_attachment_notes(action)
                     if action.delivery is InputDelivery.QUEUE:
-                        queued_prompts.append(action)
-                        print(f"  ⎿ 下一条已排队（当前任务完成后自动发送）: "
-                              f"{action.text[:60]}")
+                        position = queued_prompts.append(action)
+                        print(f"  ⎿ 下一条已排队（队列 #{position}，"
+                              f"当前任务完成后自动发送）: "
+                              f"{_queue_label(action, 60)}")
                     else:
                         preview = controller.steer(
                             action.text, images=action.images or None)

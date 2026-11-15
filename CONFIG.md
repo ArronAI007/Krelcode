@@ -58,6 +58,7 @@ krelcode [子命令] [选项]
 | `/history` | 当前对话历史 |
 | `/thinking` | 展开最近一次思考（正文默认折叠） |
 | `/tool-output [编号\|last]` | 列出工具输出（默认折叠）；按编号或 `last` 在灰色背景面板中展开 |
+| `/queue [delete <n>\|move <n> <m>\|clear]` | 查看或管理 `Alt+Enter` 排队的下一条消息 |
 | `/tools` | 已注册工具（含 MCP 远程与子代理工具） |
 | `/model [provider/]model` | 查看/热切换模型（预算联动，失败不破坏现状） |
 | `/cost` | token 用量（本轮+累计）与估算成本 $ |
@@ -159,6 +160,7 @@ timeout = 30
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` | OpenAI 兼容 |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | Anthropic |
 | `GEMINI_API_KEY`（`GOOGLE_API_KEY` 兜底）/ `GEMINI_BASE_URL` | Gemini |
+| `KRELCODE_HISTORY_FILE` | REPL 输入历史 JSONL 路径（默认 `~/.krelcode/history.jsonl`） |
 | `NO_COLOR` | 设置后禁用全部 ANSI 颜色 |
 
 ## 5. 工作区状态目录（`.krelcode/`，对 LLM 写保护）

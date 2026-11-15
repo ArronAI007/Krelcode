@@ -25,6 +25,12 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             argument_hint="[编号|last]", available_during_run=True,
             help="列出工具输出；/tool-output <编号|last> 展开灰色面板"),
         CommandSpec(
+            "queue", "查看或管理下一条消息队列", kind=ui,
+            argument_hint="[delete|move|clear ...]",
+            available_during_run=True,
+            help=("查看下一条消息队列；/queue delete <n> 删除、\n"
+                  "/queue move <n> <m> 调整顺序、/queue clear 清空")),
+        CommandSpec(
             "tools", "列出已注册工具",
             help="列出已注册工具"),
         CommandSpec(
@@ -101,7 +107,8 @@ def render_help(registry: CommandRegistry) -> str:
     lines.extend((
         "任务运行中：直接输入文字 = 插话（steering）；/thinking 展开思考；",
         "/tool-output <编号> 展开工具输出；/stop 中止。",
-        "输入 / 会实时显示匹配命令，Tab 可补全唯一匹配；↑/↓ 调取本次会话的历史问题。",
+        "输入 / 会实时显示匹配命令，Tab 可补全唯一匹配；↑/↓ 调取历史，Ctrl-R 增量搜索。",
+        "Alt+Enter 排队下一条消息；/queue 可查看、删除、移动或清空队列。",
         "其他任何输入都会作为消息发给 agent；消息里可用 @路径 引用文件。",
     ))
     return "\n".join(lines)

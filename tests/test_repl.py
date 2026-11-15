@@ -76,6 +76,32 @@ def test_help_and_tools(tmp_path, capsys):
     assert "get_time:" in out
 
 
+def test_queue_command_shows_empty_queue_when_idle(tmp_path, capsys):
+    loop = make_loop(tmp_path)
+    drive(loop, ["/queue", "/exit"])
+    out = capsys.readouterr().out
+    assert "下一条消息队列为空" in out
+
+
+def test_repl_persists_redacted_input_history(tmp_path):
+    from krelcode.ui.editor import InputHistory
+
+    class Redactor:
+        def redact(self, text):
+            return text.replace("secret-token", "***")
+
+    path = tmp_path / "history.jsonl"
+    loop = make_loop(tmp_path, scripted=["收到"])
+    drive(
+        loop,
+        ["请检查 secret-token", "/exit"],
+        history_path=path,
+        persist_history=True,
+        redactor=Redactor(),
+    )
+    assert InputHistory(path=path).entries == ("请检查 ***",)
+
+
 def test_plain_message_streamed_reply(tmp_path, capsys):
     loop = make_loop(tmp_path, scripted=["你好回复"])
     drive(loop, ["hi", "/exit"])

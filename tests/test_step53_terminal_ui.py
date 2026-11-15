@@ -1,15 +1,20 @@
 """Step 53 测试：终端 UI（启动横幅、提示符、助手侧标记、无多余换行）。"""
 
 import os
+import pty
+import threading
 from types import SimpleNamespace
 
 from krelcode.core.events import (
     LLMStreamDelta, LLMThinkingDelta, RunFinished, RunStarted,
 )
 from krelcode.ui import repl
+from krelcode.session.input import InputAction, InputKind
+from krelcode.ui.editor import EditBuffer, HistorySearch
+from krelcode.ui.queue import PromptQueue
 from krelcode.ui.repl import (
     IDLE_PROMPT, RUNNING_PROMPT, InputHistory, PromptWriter, ReplControl,
-    TerminalLineEditor, TerminalSubmission, print_banner,
+    TerminalLineEditor, TerminalSubmission, manage_prompt_queue, print_banner,
 )
 from krelcode.ui.repl import match_slash_commands
 from krelcode.ui.render import (
@@ -52,7 +57,9 @@ def test_prompt_writer_show_hide_submitted():
 
     before = buf.text
     p.submitted(raw=True)                   # 原生编辑器：光标越过下边界
-    assert buf.text == before + p.CURSOR_DOWN * 2 + "\r"
+    submitted = buf.text[len(before):]
+    assert submitted.startswith("\r" + p.CURSOR_UP)
+    assert submitted.endswith(p.CURSOR_DOWN * 3 + p.CLEAR_BELOW)
     assert not p._visible
     before = buf.text
     p.hide()                                # 提交后无需再清行
@@ -63,8 +70,8 @@ def test_prompt_writer_show_hide_submitted():
 
     before = buf.text
     p.hide()                                # 未提交时清输入行与下边界，并回到输入行
-    assert buf.text == (before + p.CLEAR_LINE + p.CURSOR_DOWN
-                        + p.CLEAR_LINE + p.CURSOR_UP + "\r")
+    assert buf.text.startswith(before)
+    assert buf.text.endswith("\r" + p.CURSOR_UP + p.CLEAR_BELOW)
 
 
 def test_prompt_writer_disabled_is_silent():
@@ -108,6 +115,7 @@ def test_running_suggests_thinking_stop_and_exit():
     assert match_slash_commands("/", running=True) == [
         ("/thinking", "展开最近一次思考"),
         ("/tool-output", "查看或展开工具输出"),
+        ("/queue", "查看或管理下一条消息队列"),
         ("/stop", "中止正在运行的任务"),
         ("/exit", "退出 Krelcode"),
     ]
@@ -122,8 +130,8 @@ def test_prompt_writer_renders_slash_menu_below_input():
                                   "  /history    查看当前对话历史"])
     update_output = "".join(buf.parts[before:])
     assert update_output.count(f"{IDLE_PROMPT}/") == 1  # 不产生第二行重复提示符
-    assert update_output.count(p._rule) == 1            # 下边界随输入行同步重绘
-    assert p.CURSOR_DOWN * 2 in update_output            # 固定候选区原地覆盖
+    assert update_output.count(p._rule) == 2            # 上下边界随输入同步重绘
+    assert p.CURSOR_UP in update_output                  # 光标移回输入行
     assert "  /help       显示本帮助" in buf.text
     assert "  /history    查看当前对话历史" in buf.text
     assert len(p._suggestions) == 2
@@ -146,14 +154,13 @@ def test_prompt_writer_finish_leaves_clean_shell_line():
     p.submitted(raw=True)
     before = buf.text
     p.finish()
-    assert buf.text == before + p.CURSOR_UP + "\r\n"
-    assert buf.text.endswith("\n")                # zsh 不再显示 PROMPT_EOL_MARK `%`
+    assert buf.text == before                    # 已提交后光标位于下边界之后
 
     p.show(IDLE_PROMPT)
-    p.submitted(raw=False)
     before = buf.text
     p.finish()
-    assert buf.text == before + "\r\n"
+    assert buf.text.startswith(before)
+    assert buf.text.endswith(p.CLEAR_BELOW + "\r\n")
 
 
 def test_input_history_navigation_restores_draft():
@@ -210,6 +217,118 @@ def test_line_editor_escape_and_alt_enter_controls():
     assert TerminalLineEditor._apply_escape_sequence(b"[A", buffer) is None
 
 
+def test_line_editor_cursor_edit_and_multiline_escape_sequences():
+    buffer = EditBuffer("abc def", cursor=0)
+    assert TerminalLineEditor._apply_escape_sequence(b"[C", buffer) is None
+    assert TerminalLineEditor._apply_escape_sequence(b"[C", buffer) is None
+    assert buffer.cursor == 2
+    TerminalLineEditor._apply_escape_sequence(b"[D", buffer)
+    assert buffer.cursor == 1
+    TerminalLineEditor._apply_escape_sequence(b"[3~", buffer)
+    assert buffer.text == "ac def"
+    TerminalLineEditor._apply_escape_sequence(b"[F", buffer)
+    assert buffer.cursor == len(buffer.text)
+    TerminalLineEditor._apply_escape_sequence(b"b", buffer)
+    assert buffer.cursor == len("ac ")
+    TerminalLineEditor._apply_escape_sequence(b"[H", buffer)
+    assert buffer.cursor == 0
+    TerminalLineEditor._apply_escape_sequence(b"[13;2u", buffer)
+    assert buffer.text.startswith("\nac def")
+
+
+def test_bracketed_paste_reads_once_and_removes_terminal_controls():
+    editor = TerminalLineEditor(PromptWriter(enabled=False), match_slash_commands)
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, "第一行\r\n\x1b[31mred\x00".encode() + b"\x1b[201~")
+        os.close(write_fd)
+        paste = editor._read_bracketed_paste(read_fd)
+    finally:
+        os.close(read_fd)
+    assert paste == "第一行\n[31mred"
+
+
+def test_line_editor_readline_handles_keys_and_bracketed_paste(monkeypatch):
+    master_fd, slave_fd = pty.openpty()
+    stream = os.fdopen(slave_fd, "r", encoding="utf-8", buffering=1)
+    monkeypatch.setattr(repl.sys, "stdin", stream)
+    monkeypatch.setattr(
+        TerminalLineEditor, "available", property(lambda _self: True))
+
+    def drain_terminal_output():
+        try:
+            while os.read(master_fd, 4096):
+                pass
+        except OSError:
+            pass
+
+    drainer = threading.Thread(target=drain_terminal_output, daemon=True)
+    drainer.start()
+    writer = threading.Timer(
+        0.05,
+        os.write,
+        args=(master_fd, b"ab\x1b[DZ\x1b[200~x\r\ny\x1b[201~\x1b[DX\r"),
+    )
+    writer.start()
+    try:
+        prompt = PromptWriter(enabled=False)
+        editor = TerminalLineEditor(prompt, match_slash_commands, color=False)
+        assert editor.readline(lambda: IDLE_PROMPT) == TerminalSubmission("aZx\nXyb")
+    finally:
+        writer.cancel()
+        stream.close()
+        os.close(master_fd)
+
+
+def test_multiline_refresh_tracks_cursor_row_and_cjk_column():
+    buf = Buf()
+    p = PromptWriter(write=buf.write, enabled=True, color=False)
+    p.show(IDLE_PROMPT)
+    editor = TerminalLineEditor(p, match_slash_commands, color=False)
+    buffer = EditBuffer("first\n中文x", cursor=len("first\n中"))
+    editor._refresh(IDLE_PROMPT, buffer)
+    assert "❯ first\n  中文x" in buf.text
+    assert p._last[-2:] == (1, 2)
+    assert p._suggestions == ()
+
+
+def test_history_search_updates_buffer_and_renders_status():
+    buf = Buf()
+    p = PromptWriter(write=buf.write, enabled=True, color=False)
+    p.show(IDLE_PROMPT)
+    history = InputHistory()
+    history.add("fix parser bug")
+    history.add("fix cursor bug")
+    editor = TerminalLineEditor(
+        p, match_slash_commands, color=False, history=history)
+    buffer = EditBuffer("draft", cursor=5)
+    search = HistorySearch.begin(buffer)
+    search.query = "fix"
+    assert editor._run_history_search(search, buffer) is True
+    assert buffer.text == "fix cursor bug"
+    editor._refresh(IDLE_PROMPT, buffer, search=search)
+    assert "(reverse-i-search) `fix`: fix cursor bug" in buf.text
+
+
+def test_prompt_queue_command_views_deletes_moves_and_clears():
+    queue = PromptQueue[InputAction]()
+    for text in ("one", "two", "three"):
+        queue.append(InputAction(kind=InputKind.PROMPT, text=text, raw_text=text))
+    output = []
+    manage_prompt_queue("", queue, write=output.append)
+    assert output == [
+        "下一条消息队列（3）:",
+        "  #1 one",
+        "  #2 two",
+        "  #3 three",
+    ]
+    manage_prompt_queue("delete 2", queue, write=output.append)
+    manage_prompt_queue("move 2 1", queue, write=output.append)
+    assert [entry.text for entry in queue.entries] == ["three", "one"]
+    manage_prompt_queue("clear", queue, write=output.append)
+    assert not queue
+
+
 def test_line_editor_filters_menu_and_tab_completes():
     buf = Buf()
     p = PromptWriter(write=buf.write, enabled=True, color=False)
@@ -248,7 +367,8 @@ def test_prompt_submission_resets_output_column_to_zero():
     before = len(buf.parts)
     p.submitted(raw=True)
     submitted_output = "".join(buf.parts[before:])
-    assert submitted_output == p.CURSOR_DOWN * 2 + "\r"
+    assert submitted_output.startswith("\r" + p.CURSOR_UP)
+    assert submitted_output.endswith(p.CURSOR_DOWN * 3 + p.CLEAR_BELOW)
 
 
 # -- 启动横幅 ---------------------------------------------------------------------------------
