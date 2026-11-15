@@ -16,7 +16,8 @@ from ...core.messages import (
 )
 from ..base import (
     FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, ProviderCapabilities,
-    StreamFinished, TextDelta, ThinkingDelta, ToolSpec, normalize_usage,
+    StreamFinished, TextDelta, ThinkingDelta, ToolCallArgumentsDelta,
+    ToolCallReady, ToolCallStartedDelta, ToolSpec, normalize_usage,
 )
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
@@ -85,6 +86,17 @@ def _parse_arguments(raw: str) -> Dict[str, Any]:
         return args
     except (json.JSONDecodeError, ValueError):
         return {INVALID_ARGUMENTS_KEY: raw}
+
+
+def _complete_arguments(raw: str) -> Optional[Dict[str, Any]]:
+    """仅在原始参数已是完整 JSON 对象时返回，用于流中提前 Ready。"""
+    if not raw.strip():
+        return None
+    try:
+        args = json.loads(raw)
+        return args if isinstance(args, dict) else None
+    except json.JSONDecodeError:
+        return None
 
 
 _FINISH_MAP = {"stop": FINISH_STOP, "tool_calls": FINISH_TOOLS, "length": FINISH_LENGTH}
@@ -166,6 +178,8 @@ class OpenAIProvider:
 
             content_parts: List[str] = []
             tool_acc: Dict[int, Dict[str, str]] = {}  # index -> {id,name,args}
+            started: set[int] = set()
+            ready: set[int] = set()
             finish_reason: Optional[str] = None
             usage: Dict[str, int] = {}
 
@@ -185,28 +199,62 @@ class OpenAIProvider:
                         content_parts.append(text)
                         yield TextDelta(text)
                     for tc in delta.get("tool_calls") or []:
+                        index = int(tc.get("index", 0))
                         slot = tool_acc.setdefault(
-                            tc.get("index", 0), {"id": "", "name": "", "args": ""}
-                        )
+                            index, {"id": "", "name": "", "args": ""})
                         if tc.get("id"):
                             slot["id"] = tc["id"]
                         fn = tc.get("function") or {}
                         if fn.get("name"):
                             slot["name"] = fn["name"]
-                        slot["args"] += fn.get("arguments") or ""
+                        if index not in started and slot["name"]:
+                            started.add(index)
+                            yield ToolCallStartedDelta(
+                                index=index,
+                                id=slot["id"],
+                                name=slot["name"],
+                            )
+                        partial_json = fn.get("arguments") or ""
+                        if partial_json:
+                            slot["args"] += partial_json
+                            yield ToolCallArgumentsDelta(
+                                index=index, partial_json=partial_json)
+                            args = _complete_arguments(slot["args"])
+                            if (
+                                index not in ready
+                                and args is not None
+                                and slot["name"]
+                            ):
+                                ready.add(index)
+                                yield ToolCallReady(
+                                    index=index,
+                                    tool_call=ToolCall(
+                                        id=slot["id"],
+                                        name=slot["name"],
+                                        arguments=args,
+                                    ),
+                                )
                     if choice.get("finish_reason"):
                         finish_reason = choice["finish_reason"]
 
             tool_calls: Optional[List[ToolCall]] = None
             if tool_acc:
-                tool_calls = [
-                    ToolCall(
-                        id=tool_acc[i]["id"],
-                        name=tool_acc[i]["name"],
-                        arguments=_parse_arguments(tool_acc[i]["args"]),
+                tool_calls = []
+                for index in sorted(tool_acc):
+                    slot = tool_acc[index]
+                    if index not in started:
+                        started.add(index)
+                        yield ToolCallStartedDelta(
+                            index=index, id=slot["id"], name=slot["name"])
+                    tool_call = ToolCall(
+                        id=slot["id"],
+                        name=slot["name"],
+                        arguments=_parse_arguments(slot["args"]),
                     )
-                    for i in sorted(tool_acc)
-                ]
+                    tool_calls.append(tool_call)
+                    if index not in ready:
+                        ready.add(index)
+                        yield ToolCallReady(index=index, tool_call=tool_call)
             message = Message.assistant(
                 "".join(content_parts) or None, tool_calls=tool_calls
             )

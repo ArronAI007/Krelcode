@@ -9,6 +9,9 @@ from .base import (
     ProviderCapabilities,
     StreamFinished,
     TextDelta,
+    ToolCallArgumentsDelta,
+    ToolCallReady,
+    ToolCallStartedDelta,
     ToolSpec,
     collect,
     normalize_usage,
@@ -24,6 +27,7 @@ from .transport import Transport, TransportResponse, UrllibTransport
 
 __all__ = [
     "LLMProvider", "LLMEvent", "TextDelta", "StreamFinished", "ToolSpec",
+    "ToolCallStartedDelta", "ToolCallArgumentsDelta", "ToolCallReady",
     "ProviderCapabilities", "collect", "normalize_usage",
     "FINISH_STOP", "FINISH_TOOLS", "FINISH_LENGTH",
     "OpenAIProvider", "AnthropicProvider", "GeminiProvider", "MockProvider",

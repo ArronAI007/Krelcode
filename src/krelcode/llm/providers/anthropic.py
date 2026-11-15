@@ -26,7 +26,8 @@ from ...core.messages import (
 )
 from ..base import (
     FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, ProviderCapabilities,
-    StreamFinished, TextDelta, ThinkingDelta, ToolSpec, normalize_usage,
+    StreamFinished, TextDelta, ThinkingDelta, ToolCallArgumentsDelta,
+    ToolCallReady, ToolCallStartedDelta, ToolSpec, normalize_usage,
 )
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
@@ -236,6 +237,7 @@ class AnthropicProvider:
 
             content_parts: List[str] = []
             tool_blocks: Dict[int, Dict[str, str]] = {}  # block index -> {id,name,json}
+            ready_tools: set[int] = set()
             thinking_blocks: Dict[int, Dict[str, Any]] = {}  # index -> thinking/redacted 块
             stop_reason: Optional[str] = None
             usage: Dict[str, int] = {}
@@ -251,11 +253,17 @@ class AnthropicProvider:
                     block = event.get("content_block") or {}
                     btype = block.get("type")
                     if btype == "tool_use":
-                        tool_blocks[event.get("index", 0)] = {
+                        index = int(event.get("index", 0))
+                        tool_blocks[index] = {
                             "id": block.get("id", ""),
                             "name": block.get("name", ""),
                             "json": "",
                         }
+                        yield ToolCallStartedDelta(
+                            index=index,
+                            id=tool_blocks[index]["id"],
+                            name=tool_blocks[index]["name"],
+                        )
                     elif btype == "thinking":
                         thinking_blocks[event.get("index", 0)] = {
                             "type": "thinking", "thinking": "", "signature": None,
@@ -284,9 +292,27 @@ class AnthropicProvider:
                         if slot is not None:
                             slot["signature"] = delta.get("signature")
                     elif dtype == "input_json_delta":
-                        slot = tool_blocks.get(event.get("index", 0))
+                        index = int(event.get("index", 0))
+                        slot = tool_blocks.get(index)
                         if slot is not None:
-                            slot["json"] += delta.get("partial_json") or ""
+                            partial_json = delta.get("partial_json") or ""
+                            if partial_json:
+                                slot["json"] += partial_json
+                                yield ToolCallArgumentsDelta(
+                                    index=index, partial_json=partial_json)
+                elif etype == "content_block_stop":
+                    index = int(event.get("index", 0))
+                    slot = tool_blocks.get(index)
+                    if slot is not None and index not in ready_tools:
+                        ready_tools.add(index)
+                        yield ToolCallReady(
+                            index=index,
+                            tool_call=ToolCall(
+                                id=slot["id"],
+                                name=slot["name"],
+                                arguments=_parse_input(slot["json"]),
+                            ),
+                        )
                 elif etype == "message_delta":
                     delta = event.get("delta") or {}
                     if delta.get("stop_reason"):
@@ -303,9 +329,12 @@ class AnthropicProvider:
                 tool_calls = []
                 for i in sorted(tool_blocks):
                     slot = tool_blocks[i]
-                    tool_calls.append(
-                        ToolCall(slot["id"], slot["name"], _parse_input(slot["json"]))
-                    )
+                    tool_call = ToolCall(
+                        slot["id"], slot["name"], _parse_input(slot["json"]))
+                    tool_calls.append(tool_call)
+                    if i not in ready_tools:
+                        ready_tools.add(i)
+                        yield ToolCallReady(index=i, tool_call=tool_call)
             message = Message.assistant(
                 "".join(content_parts) or None, tool_calls=tool_calls
             )

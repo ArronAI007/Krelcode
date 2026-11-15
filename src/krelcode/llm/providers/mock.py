@@ -9,11 +9,14 @@ tools 参数记录在 self.tools_seen，便于断言。
 
 from __future__ import annotations
 
+import json
 from typing import AsyncIterator, List, Optional, Sequence, Union
 
 from ...core.messages import Message
 from ..base import (
-    FINISH_STOP, LLMEvent, ProviderCapabilities, StreamFinished, TextDelta, ToolSpec,
+    FINISH_STOP, FINISH_TOOLS, LLMEvent, ProviderCapabilities, StreamFinished,
+    TextDelta, ToolCallArgumentsDelta, ToolCallReady, ToolCallStartedDelta,
+    ToolSpec,
 )
 
 ScriptItem = Union[str, Message]
@@ -58,4 +61,15 @@ class MockProvider:
                     yield TextDelta(text[i:i + self._chunk_size])
             else:
                 yield TextDelta(text)
-        yield StreamFinished(message=message, finish_reason=FINISH_STOP, usage=dict(self._usage))
+        for index, tool_call in enumerate(message.tool_calls or []):
+            yield ToolCallStartedDelta(
+                index=index, id=tool_call.id, name=tool_call.name)
+            raw_arguments = json.dumps(tool_call.arguments, ensure_ascii=False)
+            if raw_arguments:
+                yield ToolCallArgumentsDelta(index=index, partial_json=raw_arguments)
+            yield ToolCallReady(index=index, tool_call=tool_call)
+        yield StreamFinished(
+            message=message,
+            finish_reason=FINISH_TOOLS if message.tool_calls else FINISH_STOP,
+            usage=dict(self._usage),
+        )

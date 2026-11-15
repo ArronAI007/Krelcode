@@ -25,7 +25,8 @@ from ...core.messages import (
 )
 from ..base import (
     FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, ProviderCapabilities,
-    StreamFinished, TextDelta, ToolSpec, normalize_usage,
+    StreamFinished, TextDelta, ToolCallArgumentsDelta, ToolCallReady,
+    ToolCallStartedDelta, ToolSpec, normalize_usage,
 )
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
@@ -215,14 +216,27 @@ class GeminiProvider:
                         fn_call = part.get("functionCall")
                         if fn_call:
                             call_counter += 1
-                            args = fn_call.get("args")
+                            raw_args = fn_call.get("args")
+                            args = raw_args
                             if not isinstance(args, dict):
                                 args = {INVALID_ARGUMENTS_KEY: json.dumps(args)}
-                            tool_calls.append(ToolCall(
+                            tool_call = ToolCall(
                                 id=f"gem-{call_counter}",
                                 name=str(fn_call.get("name", "")),
                                 arguments=args,
-                            ))
+                            )
+                            tool_calls.append(tool_call)
+                            index = call_counter - 1
+                            yield ToolCallStartedDelta(
+                                index=index,
+                                id=tool_call.id,
+                                name=tool_call.name,
+                            )
+                            yield ToolCallArgumentsDelta(
+                                index=index,
+                                partial_json=json.dumps(raw_args, ensure_ascii=False),
+                            )
+                            yield ToolCallReady(index=index, tool_call=tool_call)
                     if candidate.get("finishReason"):
                         finish_reason = candidate["finishReason"]
 

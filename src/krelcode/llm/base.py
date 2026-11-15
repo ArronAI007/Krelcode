@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, Optional, Protocol, Sequence, Union
 
-from ..core.messages import Message
+from ..core.messages import Message, ToolCall
 
 # 规范化 finish_reason
 FINISH_STOP = "stop"
@@ -56,6 +56,37 @@ class ThinkingDelta:
 
 
 @dataclass(frozen=True)
+class ToolCallStartedDelta:
+    """一个工具调用开始形成；后续 arguments 以同一 index 增量到达。"""
+
+    index: int
+    id: str
+    name: str
+
+
+@dataclass(frozen=True)
+class ToolCallArgumentsDelta:
+    """工具参数 JSON 的原始增量片段。不要在 provider 层提前解析对象。"""
+
+    index: int
+    partial_json: str
+
+
+@dataclass(frozen=True)
+class ToolCallReady:
+    """一个工具调用的 id/name/arguments 已完整，可在流结束前执行。
+
+    对 SSE 原生带 ``content_block_stop`` 的协议，Ready 在该停点产生；对
+    OpenAI 兼容协议则在累计 JSON 第一次可解析时产生。同一个 index 至多发出
+    一次 Ready。``StreamFinished.message`` 仍是最终权威快照，兼容未发送增量
+    事件的旧 provider。
+    """
+
+    index: int
+    tool_call: ToolCall
+
+
+@dataclass(frozen=True)
 class StreamFinished:
     """一次 LLM 响应结束：完整 assistant 消息 + 规范化 finish_reason + usage。"""
 
@@ -64,7 +95,14 @@ class StreamFinished:
     usage: Dict[str, int] = field(default_factory=dict)
 
 
-LLMEvent = Union[TextDelta, ThinkingDelta, StreamFinished]
+LLMEvent = Union[
+    TextDelta,
+    ThinkingDelta,
+    ToolCallStartedDelta,
+    ToolCallArgumentsDelta,
+    ToolCallReady,
+    StreamFinished,
+]
 
 
 @dataclass(frozen=True)
