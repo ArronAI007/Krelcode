@@ -24,6 +24,7 @@ from ..core.events import (
     LLMStreamDelta,
     LLMThinkingDelta,
     PermissionDenied,
+    RunCancelled,
     RunFinished,
     RunStarted,
     StepStarted,
@@ -146,6 +147,7 @@ class AgentLoop:
                     return text
         except asyncio.CancelledError:
             self._repair_after_cancel()
+            await self._emit(RunCancelled())
             raise
 
         text = max_steps_reached_text(self.max_steps)

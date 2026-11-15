@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from ..core.messages import SteeringInput
 from .loop import AgentLoop
+from .query import QueryEngine, QuerySession
 
 
 class AgentRuntime:
@@ -31,7 +32,9 @@ class AgentRuntime:
         self.mcp_supervisor = mcp_supervisor
         self.mcp_reload = mcp_reload
         self._task: Optional[asyncio.Task] = None
+        self._query: Optional[QuerySession] = None
         self._closed = False
+        self.query_engine = QueryEngine(loop)
 
     @property
     def bus(self):
@@ -57,12 +60,17 @@ class AgentRuntime:
         """执行一次完整 turn；供 headless/API 复用。"""
         return await self.loop.run(message, images=images)
 
-    def start_turn(self, message: str, *, images=None) -> asyncio.Task:
-        """启动一个后台 turn；同一 Runtime 不允许并发两轮。"""
+    def start_query(self, message: str, *, images=None) -> QuerySession:
+        """启动一条可消费 QueryEvent 流；同一 Runtime 不允许并发两轮。"""
         if self.is_running:
             raise RuntimeError("已有任务正在运行")
-        self._task = asyncio.create_task(self.loop.run(message, images=images))
-        return self._task
+        self._query = self.query_engine.start(message, images=images)
+        self._task = self._query.task
+        return self._query
+
+    def start_turn(self, message: str, *, images=None) -> asyncio.Task:
+        """兼容入口：启动后台 turn 并返回底层 task。"""
+        return self.start_query(message, images=images).task
 
     def steer(self, message: str, *, images=None) -> str:
         """向运行中的 turn 注入用户补充要求及可选附件。"""
@@ -89,8 +97,12 @@ class AgentRuntime:
         if task is None or task.done():
             self._task = None
             return False
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        if self._query is not None:
+            await self._query.cancel()
+        else:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self._query = None
         self._task = None
         return True
 

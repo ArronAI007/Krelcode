@@ -33,6 +33,7 @@ except ImportError:  # pragma: no cover - Windows
 
 from .. import __version__
 from ..agent.loop import AgentLoop
+from ..agent.query import QuerySession
 from ..agent.runtime import AgentRuntime
 from ..session.commands import CommandRegistry, builtin_command_registry
 from ..session.controller import SessionController
@@ -462,7 +463,6 @@ async def run_repl(
 
     renderer = StreamRenderer(write=_prompt_write, redactor=redactor)
     input_history = InputHistory()
-    unsubscribe = loop.bus.subscribe(renderer)
     workspace_root = loop.tool_context.workspace_root
     processor = input_processor or InputProcessor(workspace_root)
     controller = SessionController(
@@ -483,7 +483,8 @@ async def run_repl(
 
     print_banner(loop, tool_names, session_path=session_path)
 
-    running: Optional[asyncio.Task] = None
+    query: Optional[QuerySession] = None
+    render_task: Optional[asyncio.Task] = None
     state = SessionViewState()
     raw_inbox: asyncio.Queue = asyncio.Queue()
     action_queue: asyncio.Queue = asyncio.Queue()
@@ -562,18 +563,20 @@ async def run_repl(
         for note_text in action.notes:
             print(f"  [@] {note_text}")
 
-    def launch_prompt(action: InputAction) -> asyncio.Task:
+    async def consume_query_events(session: QuerySession) -> None:
+        async for item in session.events:
+            renderer(item.event)
+
+    def launch_prompt(action: InputAction) -> tuple[QuerySession, asyncio.Task]:
         show_attachment_notes(action)
-        state.begin_turn()
+        session = controller.start_query(
+            action.text, images=list(action.images) or None)
+        state.begin_turn(turn_id=session.turn_id)
         if prompt.enabled:
             status = "  ⋯ 工作中 · 输入文字可插话 · /stop 中止"
             print(f"{DIM}{status}{RESET}" if use_color else status)
-        try:
-            return controller.start_run(
-                action.text, images=list(action.images) or None)
-        except Exception:
-            state.finish_turn()
-            raise
+        consumer = asyncio.create_task(consume_query_events(session))
+        return session, consumer
 
     def drain_steering_notes() -> None:
         """任务结束后丢弃未送达的插话（可见地），避免悄悄留到下一轮。"""
@@ -602,23 +605,26 @@ async def run_repl(
     try:
         while True:
             wait_set = {action_get}
-            if running is not None:
-                wait_set.add(running)
+            if query is not None:
+                wait_set.add(query.task)
             done, _ = await asyncio.wait(wait_set, return_when=asyncio.FIRST_COMPLETED)
 
             # 1) 运行中的任务结束（自然完成/异常/被取消）
-            if running is not None and running in done:
+            if query is not None and query.task in done:
                 prompt.hide()
-                state.finish_turn()
                 try:
-                    running.result()
+                    query.task.result()
                 except asyncio.CancelledError:
                     renderer.end_stream()
                     print(STOPPED_NOTE)
                 except Exception as e:
                     renderer.end_stream()
                     print(f"错误：{type(e).__name__}: {e}")
-                running = None
+                if render_task is not None:
+                    await asyncio.gather(render_task, return_exceptions=True)
+                state.finish_turn()
+                query = None
+                render_task = None
                 drain_steering_notes()
                 restore_prompt()
 
@@ -631,9 +637,11 @@ async def run_repl(
             # 2) EOF：停掉运行中任务并退出
             if action is None:
                 prompt.hide()
-                if running is not None:
+                if query is not None:
                     state.request_stop()
                     await controller.stop()
+                    if render_task is not None:
+                        await asyncio.gather(render_task, return_exceptions=True)
                     state.finish_turn()
                     renderer.end_stream()
                 return 0
@@ -645,14 +653,17 @@ async def run_repl(
                 continue
 
             # 3) RUNNING：控制命令、展示命令、steering
-            if running is not None:
+            if query is not None:
                 prompt.hide()
                 if action.kind is InputKind.CONTROL:
                     if action.command == "/stop":
                         state.request_stop()
                         await controller.stop()
+                        if render_task is not None:
+                            await asyncio.gather(render_task, return_exceptions=True)
                         state.finish_turn()
-                        running = None
+                        query = None
+                        render_task = None
                         renderer.end_stream()
                         print(STOPPED_NOTE)
                         drain_steering_notes()
@@ -661,6 +672,8 @@ async def run_repl(
                     if action.command == "/exit":
                         state.request_stop()
                         await controller.stop()
+                        if render_task is not None:
+                            await asyncio.gather(render_task, return_exceptions=True)
                         state.finish_turn()
                         renderer.end_stream()
                         return 0
@@ -691,7 +704,7 @@ async def run_repl(
 
             if action.kind is InputKind.PROMPT:
                 prompt.hide()
-                running = launch_prompt(action)
+                query, render_task = launch_prompt(action)
                 restore_prompt()
                 continue
 
@@ -705,16 +718,19 @@ async def run_repl(
                     raw_text=action.raw_text,
                     source=action.source,
                 )
-                running = launch_prompt(skill_prompt)
+                query, render_task = launch_prompt(skill_prompt)
             restore_prompt()
     finally:
         if reader_task is not None:
             reader_task.cancel()
         processor_task.cancel()
         action_get.cancel()
+        if query is not None:
+            await query.cancel()
+        if render_task is not None:
+            await asyncio.gather(render_task, return_exceptions=True)
         state.finish_turn()
         prompt.finish()
-        unsubscribe()
 
 
 async def _handle_command(

@@ -36,12 +36,14 @@ class SessionViewState:
     def is_stopping(self) -> bool:
         return self.phase is SessionPhase.STOPPING
 
-    def begin_turn(self, progress: str = "等待模型响应") -> str:
+    def begin_turn(
+        self, progress: str = "等待模型响应", *, turn_id: Optional[str] = None,
+    ) -> str:
         """记录新一轮开始，返回供日志/UI 关联的稳定 turn id。"""
         if self.is_running:
             raise RuntimeError("已有任务正在运行")
         self._turn_sequence += 1
-        self.current_turn_id = f"turn-{self._turn_sequence}"
+        self.current_turn_id = turn_id or f"turn-{self._turn_sequence}"
         self.phase = SessionPhase.RUNNING
         self.progress = progress
         return self.current_turn_id

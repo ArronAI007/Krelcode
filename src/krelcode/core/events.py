@@ -108,6 +108,11 @@ class RunFinished(AgentEvent):
 
 
 @dataclass(frozen=True)
+class RunCancelled(AgentEvent):
+    reason: str = "用户中止"
+
+
+@dataclass(frozen=True)
 class ErrorOccurred(AgentEvent):
     error: str
     context: str = ""

@@ -82,8 +82,12 @@ class SessionController:
     def is_running(self) -> bool:
         return self.runtime.is_running
 
+    def start_query(self, message: str, *, images=None):
+        """启动一轮查询并返回可消费事件的 QuerySession。"""
+        return self.runtime.start_query(message, images=images)
+
     def start_run(self, message: str, *, images=None) -> asyncio.Task:
-        """启动一轮 Agent 执行并返回 task。"""
+        """兼容入口：启动一轮 Agent 执行并返回 task。"""
         return self.runtime.start_turn(message, images=images)
 
     def steer(self, message: str, *, images=None) -> str:
