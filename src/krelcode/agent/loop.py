@@ -32,7 +32,7 @@ from ..core.events import (
 )
 from ..core.textutil import truncate_middle
 from ..core.messages import (
-    INVALID_ARGUMENTS_KEY, Message, ToolCall, sanitize_history,
+    INVALID_ARGUMENTS_KEY, Message, SteeringInput, ToolCall, sanitize_history,
 )
 from ..llm.base import LLMProvider, StreamFinished, TextDelta, ThinkingDelta
 from .compression import ContextManager
@@ -155,17 +155,26 @@ class AgentLoop:
         """
         while not self.steering_queue.empty():
             try:
-                text = self.steering_queue.get_nowait()
+                item = self.steering_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-            text = str(text).strip()
+            if isinstance(item, SteeringInput):
+                text = item.text.strip()
+                images = list(item.images)
+            else:
+                text = str(item).strip()
+                images = []
             if not text:
                 continue
             if self.history and self.history[-1].role == "user":
-                self.history[-1].content = (
-                    (self.history[-1].content or "") + "\n" + STEERING_PREFIX + text)
+                last = self.history[-1]
+                last.content = (
+                    (last.content or "") + "\n" + STEERING_PREFIX + text)
+                if images:
+                    last.images = list(last.images or []) + images
             else:
-                self.history.append(Message.user(STEERING_PREFIX + text))
+                self.history.append(
+                    Message.user(STEERING_PREFIX + text, images=images or None))
             await self._emit(UserSteered(text))
 
     def _repair_after_cancel(self) -> None:

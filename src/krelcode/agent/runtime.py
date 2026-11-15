@@ -11,6 +11,7 @@ import asyncio
 from pathlib import Path
 from typing import Any, Optional
 
+from ..core.messages import SteeringInput
 from .loop import AgentLoop
 
 
@@ -63,12 +64,13 @@ class AgentRuntime:
         self._task = asyncio.create_task(self.loop.run(message, images=images))
         return self._task
 
-    def steer(self, message: str) -> str:
-        """向运行中的 turn 注入用户补充要求。"""
+    def steer(self, message: str, *, images=None) -> str:
+        """向运行中的 turn 注入用户补充要求及可选附件。"""
         text = message.strip()
         if not text:
             return ""
-        self.loop.steering_queue.put_nowait(text)
+        item = SteeringInput(text, tuple(images or ())) if images else text
+        self.loop.steering_queue.put_nowait(item)
         return text if len(text) <= 40 else text[:40] + "…"
 
     def drain_steering(self) -> list[Any]:

@@ -34,6 +34,14 @@ class ImageRef:
 
 
 @dataclass(frozen=True)
+class SteeringInput:
+    """运行中插话；可同时携带多模态附件。"""
+
+    text: str
+    images: tuple[ImageRef, ...] = ()
+
+
+@dataclass(frozen=True)
 class ToolCall:
     """assistant 消息里的一次工具调用请求。arguments 已解析为 dict。"""
 

@@ -13,9 +13,11 @@ from krelcode.core.messages import Message, ToolCall
 from krelcode.hooks import HookRunner, HookSpec, parse_hooks
 from krelcode.llm.providers.mock import MockProvider
 from krelcode.safety.policy import AllowAllPolicy
+from krelcode.session.input import InputProcessor
 from krelcode.tools.base import ToolContext
 from krelcode.tools.builtin.write_file import WriteFileTool
 from krelcode.tools.registry import ToolRegistry
+from krelcode.ui.repl import run_repl
 
 
 # -- 配置解析 ------------------------------------------------------------------------------
@@ -167,3 +169,59 @@ def test_e2e_agent_loop_triggers_hook(tmp_path):
 
     assert (tmp_path / "gen.txt").exists()
     assert (tmp_path / "edited.log").read_text().splitlines() == ["gen.txt", "done"]
+
+
+def test_user_input_hook_collects_context_and_failure_is_nonblocking(tmp_path):
+    from krelcode.hooks import HookRunner, HookSpec
+
+    runner = HookRunner(tmp_path, [
+        HookSpec("user_input", "printf 'CTX:%s' {prompt}", timeout=2),
+        HookSpec("user_input", "exit 7", timeout=2),
+    ])
+    contexts = asyncio.run(runner.collect_input_context("解释 @a.py"))
+    assert contexts == ("CTX:解释 @a.py",)
+    assert [r["trigger"] for r in runner.executions] == ["user_input", "user_input"]
+
+
+def test_user_input_hook_parse_is_supported(tmp_path):
+    from krelcode.hooks import parse_hooks
+
+    specs = parse_hooks({"hooks": [{"on": "user_input", "command": "cat"}]})
+    assert len(specs) == 1
+    assert specs[0].on == "user_input"
+
+
+def test_repl_input_hook_context_reaches_model_history(tmp_path):
+    runner = HookRunner(tmp_path, [
+        HookSpec("user_input", "printf '项目规则：先读 AGENTS.md'"),
+    ])
+    processor = InputProcessor(
+        tmp_path,
+        hook_context_provider=runner.collect_input_context,
+    )
+    loop = AgentLoop(
+        llm=MockProvider(scripted=["收到"]),
+        registry=ToolRegistry(),
+        tool_context=ToolContext(workspace_root=tmp_path),
+        policy=AllowAllPolicy(),
+        system_prompt="SYS",
+    )
+    lines = ["解释这个仓库", "/exit"]
+
+    async def scripted_input(_prompt):
+        if not lines:
+            raise EOFError
+        await asyncio.sleep(0.01)
+        return lines.pop(0)
+
+    rc = asyncio.run(run_repl(
+        loop,
+        input_fn=scripted_input,
+        input_processor=processor,
+    ))
+
+    assert rc == 0
+    user_message = next(m for m in loop.history if m.role == "user")
+    assert "解释这个仓库" in user_message.content
+    assert "<hook_context>\n项目规则：先读 AGENTS.md\n</hook_context>" in user_message.content
+    assert runner.executions[0]["trigger"] == "user_input"

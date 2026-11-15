@@ -36,6 +36,7 @@ from .safety.policy import AllowAllPolicy, SandboxPolicy
 from .safety.sandbox import ExecutionSandbox, SandboxError
 from .session.autocommit import AutoCommitter
 from .session.checkpoint import CheckpointManager
+from .session.input import InputProcessor
 from .session.restore import refresh_skill_system_prompt, restore_session
 from .session.runner import run_session
 from .skills import SkillManager, build_skill_tools
@@ -374,11 +375,18 @@ async def async_main(args: argparse.Namespace) -> int:
         refresh_skill_system_prompt(loop)
         return report
     hook_specs = parse_hooks(config)
+    hooks = None
     if hook_specs:
         hooks = HookRunner(loop.tool_context.workspace_root, hook_specs, log=note)
         hooks.attach(loop.bus)
         note(f"[hooks] 已加载 {len(hook_specs)} 个钩子: "
              + ", ".join(sorted({h.on for h in hook_specs})))
+    input_processor = InputProcessor(
+        loop.tool_context.workspace_root,
+        hook_context_provider=(
+            hooks.collect_input_context if hooks is not None else None
+        ),
+    )
     if args.auto_commit:
         committer = AutoCommitter(loop.tool_context.workspace_root)
         if await committer.is_git_repo():
@@ -397,6 +405,7 @@ async def async_main(args: argparse.Namespace) -> int:
             model_switch=model_switch,
             skills_reload=reload_skills,
             redactor=redactor,
+            input_processor=input_processor,
             log=note,
             repl_runner=run_repl,
         )

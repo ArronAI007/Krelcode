@@ -39,6 +39,7 @@ async def run_session(
     model_switch,
     skills_reload,
     redactor,
+    input_processor=None,
     log=print,
     repl_runner=None,
 ) -> int:
@@ -99,4 +100,5 @@ async def run_session(
         redactor=redactor,
         skills=loop.skill_manager,
         skills_reload=skills_reload,
+        input_processor=input_processor,
     )

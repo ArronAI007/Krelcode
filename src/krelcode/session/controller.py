@@ -118,9 +118,9 @@ class SessionController:
         """启动一轮 Agent 执行并返回 task。"""
         return self.runtime.start_turn(message, images=images)
 
-    def steer(self, message: str) -> str:
+    def steer(self, message: str, *, images=None) -> str:
         """把运行中插话放入 runtime steering 队列，返回可见摘要。"""
-        return self.runtime.steer(message)
+        return self.runtime.steer(message, images=images)
 
     def drain_steering(self) -> list[Any]:
         """任务结束后取出未送达插话，避免污染下一轮。"""

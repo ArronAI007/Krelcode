@@ -76,15 +76,9 @@ def test_agent_does_not_import_outer_or_concrete_adapter_layers():
     assert not violations
 
 
-def test_session_control_and_runner_do_not_import_ui_or_composition_root():
-    paths = [
-        ROOT / "session" / "controller.py",
-        ROOT / "session" / "runner.py",
-        ROOT / "session" / "bootstrap.py",
-        ROOT / "session" / "restore.py",
-    ]
+def test_session_modules_do_not_import_ui_or_composition_root():
     violations = {}
-    for path in paths:
+    for path in modules_under("session"):
         imports = imported_modules(path)
         bad = [name for name in imports
                if depends_on({name}, "krelcode.ui")
@@ -92,6 +86,21 @@ def test_session_control_and_runner_do_not_import_ui_or_composition_root():
                or depends_on({name}, "krelcode.entrypoints")]
         if bad:
             violations[str(path.relative_to(ROOT))] = sorted(bad)
+    assert not violations
+
+
+def test_input_pipeline_is_independent_of_agent_and_concrete_adapters():
+    allowed_prefixes = ("krelcode.core", "krelcode.session")
+    violations = {}
+    for filename in ("input.py", "attachments.py"):
+        path = ROOT / "session" / filename
+        imports = imported_modules(path)
+        bad = [name for name in imports
+               if name.startswith("krelcode.")
+               and not any(depends_on({name}, prefix)
+                           for prefix in allowed_prefixes)]
+        if bad:
+            violations[filename] = sorted(bad)
     assert not violations
 
 

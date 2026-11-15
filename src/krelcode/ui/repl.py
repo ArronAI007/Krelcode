@@ -35,8 +35,8 @@ from .. import __version__
 from ..agent.loop import AgentLoop
 from ..agent.runtime import AgentRuntime
 from ..session.controller import HELP_TEXT, SessionController
+from ..session.input import InputAction, InputEnvelope, InputKind, InputProcessor
 from ..session.manager import resolve_resume_target
-from .atfiles import expand_at_files
 from .render import CYAN, DIM, RESET, StreamRenderer, auto_color
 
 RUNNING_HINT = ("  （任务运行中：直接输入=插话，/thinking 展开思考，"
@@ -462,6 +462,7 @@ async def run_repl(
     input_fn=None,
     redactor=None,
     runtime: Optional[AgentRuntime] = None,
+    input_processor: Optional[InputProcessor] = None,
 ) -> int:
     runtime = runtime or AgentRuntime(
         loop,
@@ -501,8 +502,10 @@ async def run_repl(
 
     running: Optional[asyncio.Task] = None
     state = {"running": False, "raw_input": False}
-    inbox: asyncio.Queue = asyncio.Queue()
+    raw_inbox: asyncio.Queue = asyncio.Queue()
+    action_queue: asyncio.Queue = asyncio.Queue()
     input_ready = threading.Event()
+    processor = input_processor or InputProcessor(workspace_root)
 
     def current_prompt() -> str:
         text = RUNNING_PROMPT if state["running"] else IDLE_PROMPT
@@ -524,11 +527,11 @@ async def run_repl(
             try:
                 line = await input_fn("")
             except (EOFError, KeyboardInterrupt):
-                await inbox.put(None)
+                await raw_inbox.put(None)
                 return
             except asyncio.CancelledError:
                 raise
-            await inbox.put(line)
+            await raw_inbox.put(line)
 
     def start_stdin_reader() -> None:
         """真实终端使用 daemon 线程，避免退出时被阻塞的 input() 拖住。"""
@@ -536,7 +539,7 @@ async def run_repl(
 
         def push(line) -> None:
             try:
-                event_loop.call_soon_threadsafe(inbox.put_nowait, line)
+                event_loop.call_soon_threadsafe(raw_inbox.put_nowait, line)
             except RuntimeError:
                 pass  # 事件循环已经结束，daemon 线程可自行退出
 
@@ -557,19 +560,60 @@ async def run_repl(
             target=read_stdin, name="krelcode-stdin", daemon=True,
         ).start()
 
+    async def process_inputs() -> None:
+        """后台把原始输入转换为 InputAction，前台只消费标准动作。"""
+        while True:
+            raw = await raw_inbox.get()
+            if raw is None:
+                await action_queue.put(None)
+                return
+            try:
+                action = await processor.process(InputEnvelope(raw))
+            except Exception as exc:
+                print(f"  （输入处理失败: {type(exc).__name__}: {exc}）")
+                action = InputAction(
+                    kind=InputKind.EMPTY, raw_text=str(raw), source="terminal")
+            await action_queue.put(action)
+
+    def show_attachment_notes(action: InputAction) -> None:
+        for note_text in action.notes:
+            print(f"  [@] {note_text}")
+
+    def launch_prompt(action: InputAction) -> asyncio.Task:
+        show_attachment_notes(action)
+        state["running"] = True
+        if prompt.enabled:
+            status = "  ⋯ 工作中 · 输入文字可插话 · /stop 中止"
+            print(f"{DIM}{status}{RESET}" if use_color else status)
+        return controller.start_run(
+            action.text, images=list(action.images) or None)
+
     def drain_steering_notes() -> None:
         """任务结束后丢弃未送达的插话（可见地），避免悄悄留到下一轮。"""
         for leftover in controller.drain_steering():
-            print(f"  ⎿ 任务已结束，未送达的插话已丢弃: {str(leftover)[:60]}")
+            text = getattr(leftover, "text", leftover)
+            print(f"  ⎿ 任务已结束，未送达的插话已丢弃: {str(text)[:60]}")
+
+    async def handle_command(action: InputAction):
+        return await _handle_command(
+            action.text, loop, renderer,
+            session_path=session_path, sessions_dir=sessions_dir,
+            mcp_supervisor=mcp_supervisor, mcp_reload=mcp_reload,
+            subagents=subagents, checkpoints=checkpoints, usage=usage,
+            restore_session=None, workspace_root=workspace_root,
+            model_switch=model_switch, skills=skills,
+            skills_reload=skills_reload, controller=controller,
+        )
 
     restore_prompt()
     reader_task = asyncio.create_task(reader()) if input_fn is not None else None
     if reader_task is None:
         start_stdin_reader()
-    inbox_get = asyncio.create_task(inbox.get())
+    processor_task = asyncio.create_task(process_inputs())
+    action_get = asyncio.create_task(action_queue.get())
     try:
         while True:
-            wait_set = {inbox_get}
+            wait_set = {action_get}
             if running is not None:
                 wait_set.add(running)
             done, _ = await asyncio.wait(wait_set, return_when=asyncio.FIRST_COMPLETED)
@@ -590,108 +634,91 @@ async def run_repl(
                 drain_steering_notes()
                 restore_prompt()
 
-            if inbox_get not in done:
+            if action_get not in done:
                 continue
-            item = inbox_get.result()
+            action = action_get.result()
             prompt.submitted(raw=state["raw_input"])
-            inbox_get = asyncio.create_task(inbox.get())
+            action_get = asyncio.create_task(action_queue.get())
 
             # 2) EOF：停掉运行中任务并退出
-            if item is None:
+            if action is None:
                 prompt.hide()
                 if running is not None:
                     await controller.stop()
                     renderer.end_stream()
                 return 0
 
-            user_input = item.strip()
-            input_history.add(user_input)
+            input_history.add(action.raw_text)
 
-            # 3) RUNNING 状态：steering / /thinking / /stop / /exit
+            if action.kind is InputKind.EMPTY:
+                restore_prompt()
+                continue
+
+            # 3) RUNNING：控制命令、展示命令、steering
             if running is not None:
                 prompt.hide()
-                if user_input == "/stop":
-                    await controller.stop()
-                    state["running"] = False
-                    running = None
-                    renderer.end_stream()
-                    print(STOPPED_NOTE)
-                    drain_steering_notes()
+                if action.kind is InputKind.CONTROL:
+                    if action.command == "/stop":
+                        await controller.stop()
+                        state["running"] = False
+                        running = None
+                        renderer.end_stream()
+                        print(STOPPED_NOTE)
+                        drain_steering_notes()
+                        restore_prompt()
+                        continue
+                    if action.command == "/exit":
+                        await controller.stop()
+                        renderer.end_stream()
+                        return 0
+                if action.kind is InputKind.UI_COMMAND:
+                    await handle_command(action)
                     restore_prompt()
                     continue
-                if user_input == "/exit":
-                    await controller.stop()
-                    renderer.end_stream()
-                    return 0
-                if user_input == "/thinking":
-                    if not renderer.expand_thinking():
-                        print("  （思考内容尚未生成）")
-                    restore_prompt()
-                    continue
-                if user_input == "/tool-output" or user_input.startswith("/tool-output "):
-                    parts = user_input.split(maxsplit=1)
-                    if len(parts) == 1:
-                        if not renderer.list_tool_outputs():
-                            print("  （暂无可展开的工具输出）")
-                    elif not renderer.expand_tool_output(parts[1].strip()):
-                        print("  （未找到工具输出；输入 /tool-output 查看编号）")
-                    restore_prompt()
-                    continue
-                if user_input.startswith("/"):
+                if action.kind is InputKind.COMMAND:
                     print(RUNNING_HINT)
                     restore_prompt()
                     continue
-                if user_input:
-                    preview = controller.steer(user_input)
+                if action.kind is InputKind.PROMPT:
+                    show_attachment_notes(action)
+                    preview = controller.steer(
+                        action.text, images=action.images or None)
                     print(f"  ⎿ 插话已排队（模型下一步看到）: {preview}")
                 restore_prompt()
                 continue
 
-            # 4) IDLE 状态：命令与消息
-            if not user_input:
-                restore_prompt()
-                continue
-            if user_input == "/exit":
+            # 4) IDLE：控制命令、普通消息、业务/展示命令
+            if action.kind is InputKind.CONTROL:
                 prompt.hide()
-                return 0
-            if user_input == "/stop":
-                prompt.hide()
+                if action.command == "/exit":
+                    return 0
                 print("  （当前没有运行中的任务）")
                 restore_prompt()
                 continue
-            prompt.hide()
-            handled = await _handle_command(
-                user_input, loop, renderer,
-                session_path=session_path, sessions_dir=sessions_dir,
-                mcp_supervisor=mcp_supervisor, mcp_reload=mcp_reload,
-                subagents=subagents, checkpoints=checkpoints, usage=usage,
-                restore_session=None, workspace_root=workspace_root,
-                model_switch=model_switch, skills=skills,
-                skills_reload=skills_reload, controller=controller,
-            )
-            if handled is not None and not isinstance(handled, str):
+
+            if action.kind is InputKind.PROMPT:
+                prompt.hide()
+                running = launch_prompt(action)
                 restore_prompt()
                 continue
-            run_input = handled if isinstance(handled, str) else user_input
-            # /skill 已加载完整指令，不能再把正文里的 @作用域 误当文件引用；
-            # 普通消息仍执行 @ 文本/图片展开。
+
+            prompt.hide()
+            handled = await handle_command(action)
             if isinstance(handled, str):
-                expanded, at_notes, at_images = run_input, [], []
-            else:
-                expanded, at_notes, at_images = expand_at_files(
-                    run_input, workspace_root)
-            for note_text in at_notes:
-                print(f"  [@] {note_text}")
-            state["running"] = True
-            if prompt.enabled:
-                status = "  ⋯ 工作中 · 输入文字可插话 · /stop 中止"
-                print(f"{DIM}{status}{RESET}" if use_color else status)
-            running = controller.start_run(expanded, images=at_images or None)
+                # /skill 已加载完整指令，不再把 Skill 正文中的 @ 当文件引用。
+                skill_prompt = InputAction(
+                    kind=InputKind.PROMPT,
+                    text=handled,
+                    raw_text=action.raw_text,
+                    source=action.source,
+                )
+                running = launch_prompt(skill_prompt)
             restore_prompt()
     finally:
         if reader_task is not None:
             reader_task.cancel()
-        inbox_get.cancel()
+        processor_task.cancel()
+        action_get.cancel()
         prompt.finish()
         unsubscribe()
 

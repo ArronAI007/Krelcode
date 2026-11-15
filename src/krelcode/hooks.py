@@ -25,10 +25,14 @@ from .core.events import (
     AgentEvent, EventBus, RunFinished, ToolCallCompleted,
 )
 
-SUPPORTED_TRIGGERS = ("file_edited", "tool_completed", "tool_failed", "run_finished")
+SUPPORTED_TRIGGERS = (
+    "user_input", "file_edited", "tool_completed", "tool_failed", "run_finished",
+)
 FILE_EDIT_TOOLS = {"write_file", "edit_file"}
 OUTPUT_PREVIEW = 400
 DEFAULT_TIMEOUT = 60.0
+MAX_INPUT_HOOK_PROMPT = 12_000
+MAX_INPUT_HOOK_CONTEXT = 4_000
 
 
 @dataclass(frozen=True)
@@ -106,6 +110,53 @@ class HookRunner:
         for key, value in variables.items():
             rendered = rendered.replace("{" + key + "}", shlex.quote(str(value)))
         return rendered
+
+    async def collect_input_context(self, prompt: str) -> tuple[str, ...]:
+        """运行 user_input Hook，把成功 stdout 作为一条输入上下文返回。
+
+        Hook 失败、超时或输出为空都不会阻断用户输入。命令配置由用户显式
+        信任；prompt 经 shlex.quote 后替换模板变量，避免命令注入。
+        """
+        contexts: list[str] = []
+        variables = {
+            "workspace": str(self.root),
+            "prompt": prompt[:MAX_INPUT_HOOK_PROMPT],
+        }
+        for spec in self.specs:
+            if spec.on != "user_input":
+                continue
+            command = self.render(spec.command, variables)
+            started = time.monotonic()
+            record: Dict[str, Any] = {"trigger": "user_input", "command": command}
+            try:
+                proc = await asyncio.create_subprocess_shell(
+                    command,
+                    cwd=str(self.root),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    start_new_session=True,
+                )
+                try:
+                    out, _ = await asyncio.wait_for(
+                        proc.communicate(), timeout=spec.timeout)
+                    record["rc"] = proc.returncode
+                    record["output"] = out.decode(
+                        "utf-8", "replace")[:MAX_INPUT_HOOK_CONTEXT]
+                except asyncio.TimeoutError:
+                    _terminate(proc)
+                    record["rc"] = None
+                    record["output"] = f"超时（>{spec.timeout:g}s），已终止"
+            except OSError as exc:
+                record["rc"] = None
+                record["output"] = f"无法启动: {exc}"
+            record["ms"] = int((time.monotonic() - started) * 1000)
+            self.executions.append(record)
+            self._log(
+                f"  [hook:user_input] rc={record['rc']} ({record['ms']}ms) "
+                f"{record['output'].strip()[:120]}")
+            if record["rc"] == 0 and record["output"].strip():
+                contexts.append(record["output"].strip())
+        return tuple(contexts)
 
     async def run_hook(self, spec: HookSpec, trigger: str,
                        variables: Dict[str, str]) -> None:

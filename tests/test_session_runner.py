@@ -61,6 +61,7 @@ def test_headless_mode_runs_through_runtime(tmp_path, capsys):
 def test_interactive_mode_delegates_without_importing_terminal_ui(tmp_path):
     runtime = make_runtime(tmp_path)
     received = {}
+    processor = object()
 
     async def fake_repl(loop, **kwargs):
         received["loop"] = loop
@@ -76,8 +77,10 @@ def test_interactive_mode_delegates_without_importing_terminal_ui(tmp_path):
         model_switch=None,
         skills_reload=None,
         redactor=SecretRedactor(),
+        input_processor=processor,
         repl_runner=fake_repl,
     ))
     assert rc == 7
     assert received["loop"] is runtime.loop
     assert received["runtime"] is runtime
+    assert received["input_processor"] is processor
