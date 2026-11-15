@@ -7,6 +7,7 @@ from krelcode.agent.tool_pool import TurnToolPool
 from krelcode.tools.base import ToolDescriptor, ToolResult, ToolSource
 from krelcode.tools.builtin.read_file import ReadFileTool
 from krelcode.tools.builtin.time_tool import GetTimeTool
+from krelcode.tools.builtin.write_file import WriteFileTool
 from krelcode.tools.registry import ToolRegistry
 
 
@@ -38,9 +39,10 @@ def test_registry_preserves_and_clears_tool_provenance():
 
 def test_turn_pool_filters_tools_and_keeps_registry_source():
     registry = ToolRegistry([GetTimeTool()])
+    read_tool = ReadFileTool()
     registry.register(
-        ReadFileTool(),
-        ToolDescriptor(source=ToolSource.SKILL),
+        read_tool,
+        ToolDescriptor.from_tool(read_tool, source=ToolSource.SKILL),
     )
     intent = TurnIntent(
         mode=MODE_EXPLAIN_FILES,
@@ -70,3 +72,15 @@ def test_new_turn_pool_excludes_unregistered_mcp_tools():
 
     assert pool.names() == []
     assert pool.get("srv__echo") is None
+
+
+def test_tool_descriptor_and_system_hint_expose_side_effect_class():
+    registry = ToolRegistry([ReadFileTool(), WriteFileTool()])
+    pool = TurnToolPool(registry)
+
+    assert pool.descriptor("read_file").read_only is True
+    assert pool.descriptor("write_file").read_only is False
+    hint = pool.system_hint()
+    assert "read_file [read-only]" in hint
+    assert "write_file [mutating]" in hint
+    assert "calls may run in parallel" in hint

@@ -2,7 +2,7 @@
 
 只依赖四个端口：LLMProvider / ToolRegistry / ApprovalPolicy / EventBus。
 语义见 DESIGN.md「主循环语义」。Step 5 版本：
-- 同一批 tool_calls 并行执行（asyncio.gather），结果按原序回填
+- 同批只读 tool_calls 并行、写操作串行，结果按原序回填
 - 卡死检测：同一签名（工具名+参数）连续失败达阈值 → 中止本轮
 - 最大步数守卫
 """
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from typing import Dict, List, Optional
 
 from ..core.redact import SecretRedactor
@@ -229,8 +230,12 @@ class AgentLoop:
         return self._active_tool_pool
 
     def _messages_for_turn(self) -> List[Message]:
-        """把本轮意图作为临时 system context 注入，不污染持久历史。"""
-        hint = self._turn_intent.system_hint(self.tool_context.workspace_root)
+        """临时注入本轮工具目录与意图，不污染持久历史。"""
+        hints = [
+            self._current_tool_pool().system_hint(),
+            self._turn_intent.system_hint(self.tool_context.workspace_root),
+        ]
+        hint = "\n\n".join(part for part in hints if part)
         if not hint:
             return self.history
         if self.history and self.history[0].role == "system":
@@ -242,23 +247,14 @@ class AgentLoop:
     # -- 内部：执行一批工具调用 -------------------------------------------------
 
     async def _execute_tool_calls(self, tool_calls: List[ToolCall]) -> Optional[str]:
-        """并行执行一批工具调用，结果按原序回填历史。
+        """按只读并发/写操作串行执行一批工具调用，结果按原序回填历史。
 
         返回 None 表示继续；返回字符串表示触发卡死检测，应中止本轮。
         """
-        for tool_call in tool_calls:
-            await self._emit(ToolCallStarted(tool_call))
-        results = await asyncio.gather(
-            *(self._execute_one(tc) for tc in tool_calls)
-        )
+        results = await self._run_tool_calls(tool_calls)
         for tool_call, result in zip(tool_calls, results):
-            content = self.redactor.redact(result.content) if self.redactor else result.content
-            inline_content = self._persist_large_output(tool_call, content)
-            await self._emit(
-                ToolCallCompleted(tool_call, inline_content, result.is_error)
-            )
             self.history.append(
-                Message.tool_result(tool_call.id, inline_content)
+                Message.tool_result(tool_call.id, result.content)
             )
             signature = _call_signature(tool_call)
             if result.is_error:
@@ -271,6 +267,67 @@ class AgentLoop:
             else:
                 self._failure_counts.pop(signature, None)
         return None
+
+    async def _run_tool_calls(self, tool_calls: List[ToolCall]) -> List[ToolResult]:
+        """按副作用调度工具，并保持最终结果顺序。
+
+        连续只读调用可并发；每个 mutating 调用独占一个执行窗口。这样既保留
+        查询性能，又保证 write_file/edit_file/run_command 之间不会越过模型给出
+        的顺序。未知或被过滤的工具也按 barrier 单独处理。
+        """
+        pool = self._current_tool_pool()
+        results: List[Optional[ToolResult]] = [None] * len(tool_calls)
+        index = 0
+        while index < len(tool_calls):
+            descriptor = pool.descriptor(tool_calls[index].name)
+            if descriptor is not None and descriptor.read_only:
+                end = index + 1
+                while end < len(tool_calls):
+                    next_descriptor = pool.descriptor(tool_calls[end].name)
+                    if next_descriptor is None or not next_descriptor.read_only:
+                        break
+                    end += 1
+                group = tool_calls[index:end]
+                for tool_call in group:
+                    await self._emit(ToolCallStarted(tool_call))
+                group_results: List[Optional[ToolResult]] = [None] * len(group)
+
+                async def run_and_publish(
+                    offset: int, tool_call: ToolCall,
+                ) -> tuple[int, ToolResult]:
+                    result = await self._execute_one(tool_call)
+                    await self._publish_tool_result(tool_call, result)
+                    return offset, result
+
+                for future in asyncio.as_completed([
+                    run_and_publish(offset, tool_call)
+                    for offset, tool_call in enumerate(group)
+                ]):
+                    offset, result = await future
+                    group_results[offset] = result
+                results[index:end] = group_results
+                index = end
+                continue
+
+            tool_call = tool_calls[index]
+            await self._emit(ToolCallStarted(tool_call))
+            result = await self._execute_one(tool_call)
+            results[index] = result
+            await self._publish_tool_result(tool_call, result)
+            index += 1
+
+        return [result for result in results if result is not None]
+
+    async def _publish_tool_result(
+        self, tool_call: ToolCall, result: ToolResult,
+    ) -> None:
+        """工具一完成就脱敏、持久化并推送 UI 事件。"""
+        content = self.redactor.redact(result.content) if self.redactor else result.content
+        inline_content = self._persist_large_output(tool_call, content)
+        result.content = inline_content
+        await self._emit(
+            ToolCallCompleted(tool_call, inline_content, result.is_error)
+        )
 
     def _persist_large_output(self, tool_call: ToolCall, content: str) -> str:
         """超长工具输出全文落盘，历史里只留截断版 + 文件引用。"""
@@ -317,10 +374,15 @@ class AgentLoop:
                 is_error=True,
             )
 
+        execution_ctx = replace(
+            self.tool_context,
+            tool_descriptor=pool.descriptor(tool_call.name),
+        )
+
         # 2) 审批
         if self.policy is not None:
             try:
-                decision = await self.policy.check(tool_call, self.tool_context)
+                decision = await self.policy.check(tool_call, execution_ctx)
             except Exception as e:  # 审批器自身出错 → 保守拒绝
                 await self._emit(ErrorOccurred(str(e), "policy.check"))
                 await self._emit(PermissionDenied(tool_call, str(e)))
@@ -341,7 +403,7 @@ class AgentLoop:
 
         # 4) 执行（异常 → is_error 结果回填，错误恢复原则）
         try:
-            return await tool.execute(args, self.tool_context)
+            return await tool.execute(args, execution_ctx)
         except Exception as e:
             await self._emit(ErrorOccurred(f"{type(e).__name__}: {e}", tool_call.name))
             return ToolResult(content=f"工具执行出错: {type(e).__name__}: {e}", is_error=True)

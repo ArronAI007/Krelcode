@@ -62,6 +62,7 @@ class SpawnAgentTool:
 
 
 class WaitAgentTool:
+    read_only = True
     name = "wait_agent"
     description = (
         "等待子代理完成任务并返回其报告。agent_id 支持逗号分隔多个 id"
@@ -181,6 +182,7 @@ class SendToAgentTool:
 
 
 class ListAgentsTool:
+    read_only = True
     name = "list_agents"
     description = "列出全部子代理的状态（id/状态/轮数/任务与结果预览）。"
     parameters: Dict[str, Any] = {"type": "object", "properties": {}}

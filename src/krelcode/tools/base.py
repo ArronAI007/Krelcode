@@ -26,11 +26,16 @@ class ToolResult:
 
 @dataclass
 class ToolContext:
-    """工具执行环境；默认自动创建运行时 Sandbox（fail-safe）。"""
+    """工具执行环境；默认自动创建运行时 Sandbox（fail-safe）。
+
+    ``tool_descriptor`` 是 AgentLoop 为单次调用派生的上下文快照。工具和审批
+    策略看到同一份来源/副作用信息，不共享可变的全局 AppState。
+    """
 
     workspace_root: Path
     sandbox: Optional[ExecutionSandbox] = None
     sandbox_enabled: bool = True
+    tool_descriptor: Optional["ToolDescriptor"] = None
 
     def __post_init__(self) -> None:
         if not self.sandbox_enabled:
@@ -64,6 +69,25 @@ class ToolDescriptor:
 
     source: ToolSource = ToolSource.BUILTIN
     mcp_server: Optional[str] = None
+    read_only: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "source", ToolSource(self.source))
+
+    @classmethod
+    def from_tool(
+        cls,
+        tool: "Tool",
+        *,
+        source: ToolSource = ToolSource.BUILTIN,
+        mcp_server: Optional[str] = None,
+    ) -> "ToolDescriptor":
+        """从 Tool 的可选能力标注构建描述符。
+
+    未声明 ``read_only`` 的工具按 mutating 处理，这是调度器的保守默认值。
+        """
+        return cls(
+            source=source,
+            mcp_server=mcp_server,
+            read_only=bool(getattr(tool, "read_only", False)),
+        )

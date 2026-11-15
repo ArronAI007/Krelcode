@@ -17,8 +17,9 @@ CTX = ToolContext(workspace_root=Path("."))
 
 
 class SleepTool:
-    """记录执行时间窗，用于验证并行。"""
+    """记录执行时间窗，用于验证只读工具并行。"""
     name = "sleepy"
+    read_only = True
     description = "sleep for the given seconds"
     parameters: Dict[str, Any] = {"type": "object", "properties": {"s": {"type": "number"}}, "required": ["s"]}
 
@@ -164,3 +165,122 @@ def test_different_args_do_not_share_counter():
     loop, _ = build(script, [tool], repeat_failure_limit=3)
     reply = asyncio.run(loop.run("x"))
     assert reply == "完成"  # 每个签名只连败 2 次，未到阈值 3
+
+
+class MutatingSleepTool(SleepTool):
+    """模拟有副作用的工具；同批调用必须串行。"""
+    name = "mutator"
+    read_only = False
+
+
+def test_mutating_tool_calls_run_serially():
+    tool = MutatingSleepTool()
+    script = [
+        multi_tc(
+            ("a", "mutator", {"s": 0.1}),
+            ("b", "mutator", {"s": 0.1}),
+            ("c", "mutator", {"s": 0.1}),
+        ),
+        "完成",
+    ]
+    loop, _ = build(script, [tool])
+    start = time.monotonic()
+    assert asyncio.run(loop.run("串行写入")) == "完成"
+    elapsed = time.monotonic() - start
+
+    assert elapsed >= 0.28, f"写操作不应并发，实际耗时 {elapsed:.2f}s"
+    for i in range(len(tool.windows)):
+        for j in range(i + 1, len(tool.windows)):
+            s1, e1 = tool.windows[i]
+            s2, e2 = tool.windows[j]
+            assert e1 <= s2 or e2 <= s1, "写操作执行窗口发生重叠"
+
+
+class ScheduledTool:
+    def __init__(self, name, read_only, windows):
+        self.name = name
+        self.read_only = read_only
+        self.description = name
+        self.parameters = {"type": "object", "properties": {}}
+        self.windows = windows
+
+    async def execute(self, args, ctx):
+        label = args["label"]
+        start = time.monotonic()
+        await asyncio.sleep(float(args["s"]))
+        end = time.monotonic()
+        self.windows[label] = (start, end)
+        return ToolResult(content=label)
+
+
+def test_write_acts_as_barrier_between_read_only_groups():
+    windows = {}
+    reader = ScheduledTool("reader", True, windows)
+    writer = ScheduledTool("writer", False, windows)
+    script = [
+        multi_tc(
+            ("r1", "reader", {"label": "read-before", "s": 0.12}),
+            ("w1", "writer", {"label": "write", "s": 0.12}),
+            ("r2", "reader", {"label": "read-after", "s": 0.12}),
+        ),
+        "完成",
+    ]
+    loop, _ = build(script, [reader, writer])
+
+    assert asyncio.run(loop.run("保持顺序")) == "完成"
+    before_end = windows["read-before"][1]
+    write_start, write_end = windows["write"]
+    after_start = windows["read-after"][0]
+    assert before_end <= write_start
+    assert write_end <= after_start
+
+
+class GateReadTool:
+    """快的只读调用完成后，必须立即发事件来放行慢调用。"""
+    name = "gate_read"
+    read_only = True
+    description = "gate"
+    parameters = {"type": "object", "properties": {}}
+
+    def __init__(self):
+        self.release = asyncio.Event()
+        self.slow_timed_out = False
+
+    async def execute(self, args, ctx):
+        if args["label"] == "slow":
+            try:
+                await asyncio.wait_for(self.release.wait(), timeout=0.5)
+            except asyncio.TimeoutError:
+                self.slow_timed_out = True
+                return ToolResult(content="completion event was delayed", is_error=True)
+        return ToolResult(content=args["label"])
+
+
+def test_readonly_completion_event_is_emitted_immediately():
+    tool = GateReadTool()
+    bus = EventBus()
+
+    def release_slow(event):
+        if (isinstance(event, ToolCallCompleted)
+                and event.tool_call.id == "quick"):
+            tool.release.set()
+
+    bus.subscribe(release_slow)
+    provider = MockProvider(scripted=[
+        multi_tc(
+            ("slow", "gate_read", {"label": "slow"}),
+            ("quick", "gate_read", {"label": "quick"}),
+        ),
+        "完成",
+    ])
+    loop = AgentLoop(
+        llm=provider,
+        registry=ToolRegistry([tool]),
+        tool_context=CTX,
+        policy=AllowAllPolicy(),
+        bus=bus,
+        system_prompt="SYS",
+    )
+
+    assert asyncio.run(loop.run("立即推送完成事件")) == "完成"
+    assert tool.slow_timed_out is False

@@ -10,7 +10,7 @@ from krelcode.core.events import ApprovalRequested, EventBus
 from krelcode.core.messages import ToolCall
 from krelcode.safety.policy import ALLOW, AllowAllPolicy, SandboxPolicy
 from krelcode.safety.rules import AllowRules, command_program
-from krelcode.tools.base import ToolContext
+from krelcode.tools.base import ToolContext, ToolDescriptor, ToolSource
 
 
 @pytest.fixture
@@ -144,3 +144,22 @@ def test_approval_requested_event_emitted(ctx):
 def test_allow_all_policy_still_available(ctx):
     d = run(AllowAllPolicy().check(tc(command="rm -rf /"), ctx))
     assert d.allowed  # --no-sandbox 的语义：全放行（用户自担风险）
+
+
+def test_remote_readonly_hint_does_not_bypass_approval(tmp_path):
+    ctx = ToolContext(
+        workspace_root=tmp_path,
+        tool_descriptor=ToolDescriptor(
+            source=ToolSource.MCP,
+            mcp_server="catalog",
+            read_only=True,
+        ),
+    )
+    policy = SandboxPolicy(approver=None)
+
+    decision = run(policy.check(
+        ToolCall("c", "catalog__search", {}), ctx))
+
+    # readOnlyHint 只用于调度/展示，不能作为远端服务器的免审批凭证。
+    assert not decision.allowed
+    assert "非交互" in decision.reason

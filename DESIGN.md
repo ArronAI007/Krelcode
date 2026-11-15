@@ -33,6 +33,7 @@ src/krelcode/
 ├── agent/       # 执行推进层：只 import core/端口，不认识具体 UI/Provider
 │   ├── runtime.py    # AgentRuntime：turn/steering/cancel/close 统一门面
 │   ├── loop.py       # AgentLoop：单轮模型-工具循环
+│   ├── tool_pool.py  # TurnToolPool：每轮工具快照与动态目录
 │   └── prompts.py    # 系统提示词组装
 ├── tools/       # 工具层（实现 Tool 端口）
 │   ├── base.py       # Tool 协议 + ToolResult + ToolContext
@@ -93,6 +94,7 @@ class LLMProvider(Protocol):
 # tools/base.py —— 工具端口
 class Tool(Protocol):
     name: str; description: str; parameters: dict   # JSON Schema
+    read_only: bool = False                         # 调度/审批能力标注
     async def execute(self, args: dict, ctx: ToolContext) -> ToolResult: ...
 
 # safety/policy.py —— 审批端口
@@ -142,17 +144,33 @@ ToolCallStarted · ToolCallCompleted · PermissionDenied · RunFinished · Error
 ```
 run(user_input):
     history += user 消息; 失败计数清零
+    intent, turn_pool = infer_intent() + snapshot(ToolRegistry)
     for step in 1..max_steps:
-        assistant = 消费 llm.stream(history, registry.tool_specs())
+        system_hint = turn_pool.system_hint()  # 仅本轮，不写入持久历史
+        assistant = llm.stream(history + system_hint, turn_pool.tool_specs())
         history += assistant
-        if 无 tool_calls: return 文本        # 结束
-        results = asyncio.gather(           # 同批 tool_calls 并行执行
-            审批(policy.check) → 查找 → execute → 异常转 is_error
-            for tc in tool_calls)
-        按原序 history += role=tool 消息     # 并行完成，保序回填
+        if 无 tool_calls: return 文本             # 结束
+        for 连续只读调用组:
+            并发 execute；每个完成即 emit ToolCallCompleted
+        for mutating 调用:
+            单独串行 execute；完成即 emit ToolCallCompleted
+        按原序 history += role=tool 消息          # 执行随机完成，回填永远保序
         if 某签名连续失败 ≥ repeat_failure_limit: return "判定为循环" 中止
     return "达到最大步数" 提示
 ```
+
+- **单轮工具池**：`TurnToolPool` 在一轮开始时固化 Registry 快照；provider schema、
+  执行查找、动态工具目录和审批描述符共用同一份 pool，避免“隐藏 schema 但仍可执行”。
+- **执行调度**：连续只读工具并发；mutating 工具和未知/被过滤工具作为 barrier 串行。
+  因此 read/grep/glob/repo_map 等可提速，同时 write/edit/shell 不越过模型给出的顺序。
+- **实时事件**：只读组用 `asyncio.as_completed` 在每个工具完成时立即推送 UI，历史仍
+  等整组完成后按 tool_call 原序回填。
+- **ToolUseContext**：每次调用从基础 `ToolContext` 派生上下文快照，携带当前
+  `ToolDescriptor`（来源、MCP server、readOnly）；审批和工具执行共享同一视图。
+  readOnly 只用于并发调度/展示，MCP 自报的 `readOnlyHint` 不会自动绕过审批。
+- **当前边界**：Provider 契约在 `StreamFinished.message.tool_calls` 才提供完整参数，
+  因此 Krelcode 暂不在 SSE 参数增量阶段提前执行工具；并行/串行调度发生在完整
+  assistant 响应结束之后。
 
 卡死检测签名 = 工具名 + sort_keys 序列化的参数；成功即清零该签名计数。
 
@@ -231,7 +249,9 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   （助手文本用 `⏺`，工具结果用 `⎿`）；工具活动/审批/压缩事件打断流式行后续接；
   RunFinished 兜底打印未经流式的系统消息（max_steps/卡死中止），并避免模型自带
   尾部换行时产生空行。write/color 可注入，测试无需终端
-- **REPL**（ui/repl.py）：启动信息卡片展示 provider/模型/工作区/工具/会话；输入区
+- **REPL**（ui/repl.py）：输入先经 InputProcessor 分类，业务/UI/Control 命令同步分流，
+  自然语言启动后台 turn；EventBus 将 LLM 文本、thinking、工具开始/完成等事件实时
+  推给 StreamRenderer，REPL 本身不阻塞等待最终字符串。启动信息卡片展示 provider/模型/工作区/工具/会话；输入区
   用横跨终端的上下两条 `─` 边界包住提示符（pi 风格），空闲提示符 `❯`、运行中
   提示符 `↳`；输出前用 ANSI 清除输入行与下边界，提交后光标越过下边界，避免正文
   覆盖边框。POSIX TTY 使用零依赖字符级行编辑器（cbreak + `os.read`）：输入 `/`

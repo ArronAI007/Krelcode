@@ -23,6 +23,7 @@ MAX_ERRORS = 50
 
 
 class CheckSyntaxTool:
+    read_only = True
     name = "check_syntax"
     description = (
         "检查工作区内 Python 文件的语法错误（ast 解析，不执行代码）。"

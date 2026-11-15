@@ -15,6 +15,7 @@ MAX_TOTAL_CHARS = 50_000  # 总输出字符上限（防止撑爆上下文；Step
 
 
 class ReadFileTool:
+    read_only = True
     name = "read_file"
     description = (
         "读取工作区内的文本文件，输出带行号（格式: '行号→内容'）。"

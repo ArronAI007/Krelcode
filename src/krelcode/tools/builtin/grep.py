@@ -26,6 +26,7 @@ MAX_LINE_CHARS = 300
 
 
 class GrepTool:
+    read_only = True
     name = "grep"
     description = (
         "在工作区内按正则搜索文件内容，输出 '路径:行号: 行内容'。"

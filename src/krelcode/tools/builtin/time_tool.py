@@ -13,6 +13,7 @@ from ..base import ToolContext, ToolResult
 
 
 class GetTimeTool:
+    read_only = True
     name = "get_time"
     description = "获取当前时间。可选参数 timezone（IANA 时区名，如 Asia/Shanghai）。"
     parameters: Dict[str, Any] = {

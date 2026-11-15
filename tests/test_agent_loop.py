@@ -101,6 +101,9 @@ def test_full_tool_call_cycle():
     # 第二次 LLM 调用应看到工具结果
     second_call = provider.calls[1]
     assert second_call[-1].role == "tool" and second_call[-1].content == "echo: hi"
+    # 动态系统上下文只列出本轮工具目录，不替代完整 ToolSpec。
+    assert "<available_tools>" in provider.calls[0][0].content
+    assert "echo [mutating]" in provider.calls[0][0].content
     # provider 收到的是统一 ToolSpec（非 OpenAI 包装格式）
     assert provider.tools_seen[0] == [
         {"name": "echo", "description": EchoTool.description, "parameters": EchoTool.parameters}
@@ -172,3 +175,41 @@ def test_reset_keeps_system_prompt():
     asyncio.run(loop.run("q"))
     loop.reset()
     assert len(loop.history) == 1 and loop.history[0].role == "system"
+
+
+class ContextAwareTool:
+    name = "context_aware"
+    description = "captures per-call context"
+    parameters = {"type": "object", "properties": {}}
+    read_only = True
+
+    def __init__(self):
+        self.descriptor = None
+
+    async def execute(self, args, ctx):
+        self.descriptor = ctx.tool_descriptor
+        return ToolResult(content="ok")
+
+
+class CapturePolicy:
+    def __init__(self):
+        self.descriptors = []
+
+    async def check(self, tool_call, ctx):
+        self.descriptors.append(ctx.tool_descriptor)
+        return Decision(True)
+
+
+def test_policy_and_tool_share_per_call_descriptor_snapshot():
+    tool = ContextAwareTool()
+    policy = CapturePolicy()
+    loop, _, _ = make_loop(
+        [tool_call_msg(name=tool.name, args={}), "完成"],
+        tools=[tool],
+        policy=policy,
+    )
+
+    assert asyncio.run(loop.run("执行上下文工具")) == "完成"
+    assert policy.descriptors == [tool.descriptor]
+    assert tool.descriptor is not None
+    assert tool.descriptor.read_only is True

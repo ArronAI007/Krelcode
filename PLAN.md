@@ -113,7 +113,10 @@
 | 67 | 统一输入管线与会话现场 | 对齐 Claude Code 的 `processUserInput → REPL` 分工：新增 `InputEnvelope/InputAction/InputKind/InputProcessor`，把空输入规范化、命令四分类、`@` 文本/图片展开、来源保留、可选 `user_input` Hook 与结构化动作队列从 REPL 前移；附件实现下沉到 `session/attachments`，旧 `ui/atfiles` 仅兼容包装；steering 支持多模态附件；app 组装根把 HookRunner 上下文注入 InputProcessor；新增 `SessionViewState` 显式管理 idle/running/stopping、raw input、turn id 与 progress，替换 REPL 字典状态；架构测试扩展到全部 session 模块并约束 input 只依赖 core/session | 17 个新增/扩展测试：空输入/命令分类/参数/来源、真实文本与图片附件/Hook 失败隔离、REPL→模型历史 Hook e2e、runner 注入、图片 steering、状态机转换、session 反向依赖守护；全量 674 通过（2 个本地端口测试 skip） | ✅ |
 | 68 | 统一命令系统 | 对齐 Claude Code `commands.ts` 的 catalog/registry 模式：`CommandSpec/CommandRegistry` 统一 22 个内置命令的名称、描述、别名、参数提示、来源、hidden/enabled 与运行态可用性，菜单、Tab、`/help`、InputProcessor 和 dispatcher 共用同一 catalog；SessionController 巨型 if/elif 拆为 18 个独立业务 handler，UI/CONTROL 命令仍留前台，PROMPT 命令返回 run_prompt；`user-invocable` Skill 自动注册为 `/skill-name` 并在 `/skills reload` 后原子刷新；MCP Supervisor 缓存 `prompts/list`，注册 `/mcp__server__prompt`，支持单参数、`key=value` 和位置参数，`/mcp reload` 重新发现并刷新；来源优先级 builtin > skill > MCP，冲突可观测 | 22 个新增测试：registry 解析/别名/过滤/来源替换/冲突/动态 help、handler 覆盖与 alias dispatch、UI/Control 边界、Skill 注册/执行/热重载/冲突/REPL e2e、MCP Prompt 发现/命名空间/参数映射/热刷新/REPL e2e；全量 696 通过（2 个本地端口测试 skip） | ✅ |
 
-| 测试总数：698（696 离线通过 + 2 个本地端口集成，沙箱内自动 skip） |
+| 69 | 单轮工具池与来源边界 | 新增 `ToolSource/ToolDescriptor/TurnToolPool`：Registry 保留内置/Skill/子代理/MCP/插件来源与 readOnly 元数据；每轮开始固化工具快照，provider schema、执行查找、动态工具目录与执行拒绝共用同一 pool，修复“只过滤 schema、执行仍可调用未暴露工具”的边界漏洞；MCP readOnlyHint 与工具注销同步清理描述符 | 5 个新测试：来源保留/清理、意图过滤、未暴露工具执行拒绝、MCP 来源、工具池目录；全量 700 通过（2 个本地端口测试 skip） | ✅ |
+| 70 | REPL/查询引擎流程对齐 | 对齐 Claude Code 的 query-event-tool 循环：系统上下文动态注入本轮工具名、描述与 read-only/mutating 类别；同一 assistant tool_calls 批次中连续只读工具用 asyncio 并发，写工具作为 barrier 严格串行；每个工具完成立即推送 ToolCallCompleted，但历史始终按模型原序回填；每次调用派生带 ToolDescriptor 的 ToolContext 快照；readOnly 仅用于并发调度/展示，MCP 自报 readOnlyHint 不获得审批豁免 | 7 个新增测试：只读并发（调整既有用例）、写操作串行、读写 barrier 保序、完成事件实时性、动态工具目录、调用上下文描述符贯通、MCP readOnlyHint/不提权；全量 707 通过（2 个本地端口测试 skip） | ✅ |
+
+| 测试总数：709（707 离线通过 + 2 个本地端口集成，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

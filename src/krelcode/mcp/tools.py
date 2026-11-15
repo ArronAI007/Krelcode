@@ -68,6 +68,11 @@ class MCPTool:
         schema = spec.get("inputSchema")
         self.parameters: Dict[str, Any] = schema if isinstance(schema, dict) else {
             "type": "object", "properties": {}}
+        annotations = spec.get("annotations")
+        self.read_only = bool(
+            annotations.get("readOnlyHint", False)
+            if isinstance(annotations, dict) else False
+        )
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
         try:
@@ -82,6 +87,7 @@ class MCPTool:
 
 
 class MCPListResourcesTool:
+    read_only = True
     def __init__(self, client: MCPClient) -> None:
         self.client = client
         self.name = sanitize_tool_name(client.name, "list_resources")
@@ -105,6 +111,7 @@ class MCPListResourcesTool:
 
 
 class MCPReadResourceTool:
+    read_only = True
     def __init__(self, client: MCPClient) -> None:
         self.client = client
         self.name = sanitize_tool_name(client.name, "read_resource")
@@ -135,6 +142,7 @@ class MCPReadResourceTool:
 
 
 class MCPListPromptsTool:
+    read_only = True
     def __init__(self, client: MCPClient) -> None:
         self.client = client
         self.name = sanitize_tool_name(client.name, "list_prompts")
@@ -158,6 +166,7 @@ class MCPListPromptsTool:
 
 
 class MCPGetPromptTool:
+    read_only = True
     def __init__(self, client: MCPClient) -> None:
         self.client = client
         self.name = sanitize_tool_name(client.name, "get_prompt")

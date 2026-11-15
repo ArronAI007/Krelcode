@@ -134,6 +134,7 @@ def test_check_and_restart_recovers_crashed_server():
         assert len(registry.names()) == 11
         echo = registry.get("stub__echo")
         from krelcode.tools.base import ToolContext
+        assert registry.descriptor("stub__echo").mcp_server == "stub"
         result = await echo.execute({"text": "复活"}, ToolContext(workspace_root=Path(".")))
         assert result.content == "复活"
         await sup.close_all()
@@ -170,3 +171,19 @@ def test_registry_unregister_and_prefix():
     assert registry.unregister("local") is True
     assert registry.unregister("ghost") is False
     assert registry.names() == []
+
+
+def test_mcp_tool_honors_read_only_annotation():
+    from krelcode.mcp.tools import MCPTool
+
+    class DummyClient:
+        name = "srv"
+
+    readonly = MCPTool(DummyClient(), {
+        "name": "lookup",
+        "annotations": {"readOnlyHint": True},
+    })
+    mutating = MCPTool(DummyClient(), {"name": "create"})
+
+    assert readonly.read_only is True
+    assert mutating.read_only is False

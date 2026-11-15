@@ -24,6 +24,7 @@ MAX_ARGS = 64
 
 
 class ListSkillsTool:
+    read_only = True
     name = "list_skills"
     description = (
         "列出当前可用的 Agent Skills（名称、描述、来源、参数提示）。"
@@ -58,6 +59,7 @@ class ListSkillsTool:
 
 
 class LoadSkillTool:
+    read_only = True
     name = "load_skill"
     description = (
         "读取指定 Skill 的完整 SKILL.md 指令，并返回 skill 目录、可用资源和允许工具提示。"
@@ -87,6 +89,7 @@ class LoadSkillTool:
 
 
 class ListSkillResourcesTool:
+    read_only = True
     name = "list_skill_resources"
     description = (
         "列出 Skill 目录内的参考文档、模板、资产和脚本。path 可限定子目录；"
@@ -126,6 +129,7 @@ class ListSkillResourcesTool:
 
 
 class ReadSkillResourceTool:
+    read_only = True
     name = "read_skill_resource"
     description = (
         "读取 Skill 目录内的 UTF-8 文本资源，返回带行号内容。"

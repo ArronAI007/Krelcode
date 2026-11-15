@@ -22,7 +22,7 @@ class ToolRegistry:
         if tool.name in self._tools:
             raise ValueError(f"工具重复注册: {tool.name}")
         self._tools[tool.name] = tool
-        self._descriptors[tool.name] = descriptor or ToolDescriptor()
+        self._descriptors[tool.name] = descriptor or ToolDescriptor.from_tool(tool)
 
     def entries(self) -> List[Tuple[Tool, ToolDescriptor]]:
         """返回一致的工具/描述符快照，供单轮工具池构建。"""

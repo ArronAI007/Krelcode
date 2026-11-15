@@ -228,10 +228,10 @@ async def build_loop(
     registry = ToolRegistry(default_tools())
     for tool in skill_tools:
         registry.register(
-            tool, ToolDescriptor(source=ToolSource.SKILL))
+            tool, ToolDescriptor.from_tool(tool, source=ToolSource.SKILL))
     for tool in extra_tools or []:
         registry.register(
-            tool, ToolDescriptor(source=ToolSource.PLUGIN))
+            tool, ToolDescriptor.from_tool(tool, source=ToolSource.PLUGIN))
     manager = SubagentManager(
         llm=llm,
         tool_factory=tool_factory,
@@ -245,7 +245,7 @@ async def build_loop(
     )
     for tool in manager.build_tools():
         registry.register(
-            tool, ToolDescriptor(source=ToolSource.SUBAGENT))
+            tool, ToolDescriptor.from_tool(tool, source=ToolSource.SUBAGENT))
     skill_base_prompt = build_system_prompt(context)
     loop = AgentLoop(
         llm=llm,

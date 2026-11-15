@@ -7,6 +7,7 @@ Registry 是进程内能力目录；TurnToolPool 是某一轮的授权快照。p
 from __future__ import annotations
 
 from dataclasses import dataclass
+from html import escape
 from typing import Dict, List, Optional
 
 from ..tools.base import Tool, ToolDescriptor
@@ -61,3 +62,26 @@ class TurnToolPool:
 
     def excluded_reason(self, name: str) -> Optional[str]:
         return self._excluded.get(name)
+
+    def system_hint(self, *, description_limit: int = 180) -> str:
+        """生成当前轮工具目录，注入临时 system context。
+
+        完整参数 schema 仍由 provider ``tools`` 参数传递；这里只补充高层目录，
+        让模型明确本轮哪些能力可用，以及哪些调用具有写副作用。
+        """
+        if not self._entries:
+            return ""
+        lines = [
+            "<available_tools>",
+            "Tools enabled for this turn. `read-only` calls may run in parallel; "
+            "`mutating` calls run one at a time in model order.",
+        ]
+        for entry in self._entries.values():
+            description = " ".join((entry.tool.description or "").split())
+            if len(description) > description_limit:
+                description = description[:description_limit].rstrip() + "…"
+            category = "read-only" if entry.descriptor.read_only else "mutating"
+            lines.append(
+                f"- {escape(entry.name)} [{category}]: {escape(description)}")
+        lines.append("</available_tools>")
+        return "\n".join(lines)

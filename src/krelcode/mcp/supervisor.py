@@ -98,10 +98,12 @@ class MCPSupervisor:
         self.clients[name] = client
         self.configs[name] = cfg
         self.prompts[name] = prompts
-        descriptor = ToolDescriptor(
-            source=ToolSource.MCP, mcp_server=name)
         for tool in tools:
-            self.registry.register(tool, descriptor)
+            self.registry.register(
+                tool,
+                ToolDescriptor.from_tool(
+                    tool, source=ToolSource.MCP, mcp_server=name),
+            )
         transport_kind = getattr(client._transport, "kind", "?")
         info = client.server_info.get("name", name)
         self._log(f"[mcp] {name}（{info}，{transport_kind}）已连接，{len(tools)} 个远程工具")

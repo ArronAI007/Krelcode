@@ -34,6 +34,7 @@ JS_PATTERNS = [
 
 
 class RepoMapTool:
+    read_only = True
     name = "repo_map"
     description = (
         "生成工作区代码地图：逐文件列出类/函数/方法符号及行号"

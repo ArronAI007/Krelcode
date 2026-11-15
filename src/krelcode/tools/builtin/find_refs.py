@@ -67,6 +67,7 @@ class _RefVisitor(ast.NodeVisitor):
 
 
 class FindRefsTool:
+    read_only = True
     name = "find_refs"
     description = (
         "在工作区的 Python 文件中按 ast 语法查找符号引用（类/函数/变量/方法），"

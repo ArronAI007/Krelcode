@@ -15,6 +15,7 @@ MAX_RESULTS = 200
 
 
 class GlobTool:
+    read_only = True
     name = "glob"
     description = (
         "按 glob 模式匹配工作区内文件，返回相对路径，按修改时间新→旧排序。"
