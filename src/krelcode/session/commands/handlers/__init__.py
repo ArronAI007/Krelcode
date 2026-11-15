@@ -13,6 +13,7 @@ from .runtime_ops import (
     handle_context,
     handle_cost,
     handle_mcp,
+    handle_mcp_prompt_command,
     handle_model,
     handle_skill,
     handle_skill_command,
@@ -58,6 +59,8 @@ async def execute_prompt_command(ctx: CommandContext) -> CommandResult:
     spec = ctx.command_registry.resolve(ctx.request.name)
     if spec is not None and spec.source is CommandSource.SKILL:
         return await handle_skill_command(ctx)
+    if spec is not None and spec.source is CommandSource.MCP:
+        return await handle_mcp_prompt_command(ctx)
     return CommandResult(
         handled=True,
         output=(f"  （未知 prompt 命令: /{ctx.request.name}）",),

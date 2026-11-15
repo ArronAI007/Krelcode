@@ -353,7 +353,9 @@ async def async_main(args: argparse.Namespace) -> int:
         """REPL /mcp reload：重读配置 → diff 同步 → 重启已断开的服务器。"""
         new_config = load_config(config_path)
         await supervisor.sync(new_config.get("mcp_servers") or {})
-        return await supervisor.check_and_restart()
+        restarted = await supervisor.check_and_restart()
+        await supervisor.refresh_prompts()
+        return restarted
 
     runtime = AgentRuntime(
         loop,

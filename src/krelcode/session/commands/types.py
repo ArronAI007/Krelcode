@@ -6,9 +6,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 
 class CommandKind(str, Enum):
@@ -64,6 +64,7 @@ class CommandSpec:
     is_enabled: bool = True
     is_hidden: bool = False
     available_during_run: bool = False
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def invocation(self) -> str:

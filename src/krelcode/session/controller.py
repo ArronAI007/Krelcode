@@ -22,6 +22,7 @@ from .commands import (
     builtin_command_registry,
     normalize_token,
     render_help,
+    sync_mcp_prompt_commands,
     sync_skill_commands,
 )
 from .commands.handlers import BUILTIN_HANDLERS, execute_prompt_command
@@ -71,6 +72,7 @@ class SessionController:
         self.workspace_root = workspace_root or self.runtime.workspace_root
         self.command_registry = command_registry or builtin_command_registry()
         sync_skill_commands(self.command_registry, self.skills)
+        sync_mcp_prompt_commands(self.command_registry, self.mcp_supervisor)
 
     @property
     def active_task(self) -> Optional[asyncio.Task]:

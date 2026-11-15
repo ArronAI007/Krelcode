@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ..tools.registry import ToolRegistry
 from .client import MCPClient, MCPServerConfig
-from .tools import discover_tools, server_prefix
+from .tools import discover_tools, sanitize, server_prefix
 
 
 def config_from_spec(name: str, spec: Any) -> Optional[MCPServerConfig]:
@@ -56,6 +56,7 @@ class MCPSupervisor:
         self._roots = list(roots or [])
         self.clients: Dict[str, MCPClient] = {}
         self.configs: Dict[str, MCPServerConfig] = {}
+        self.prompts: Dict[str, tuple[Dict[str, Any], ...]] = {}
 
     # -- 配置同步 -------------------------------------------------------------------
 
@@ -88,12 +89,14 @@ class MCPSupervisor:
         try:
             await client.start()
             tools = await discover_tools(client)
+            prompts = await self._load_prompts(name, client)
         except Exception as e:
             self._log(f"[mcp] 服务器 {name} 启动失败，已跳过: {type(e).__name__}: {e}")
             await client.close()
             return False
         self.clients[name] = client
         self.configs[name] = cfg
+        self.prompts[name] = prompts
         for tool in tools:
             self.registry.register(tool)
         transport_kind = getattr(client._transport, "kind", "?")
@@ -104,6 +107,7 @@ class MCPSupervisor:
     async def _stop(self, name: str) -> None:
         client = self.clients.pop(name, None)
         self.configs.pop(name, None)
+        self.prompts.pop(name, None)
         removed = self.registry.unregister_prefix(server_prefix(name))
         if client is not None:
             await client.close()
@@ -125,6 +129,56 @@ class MCPSupervisor:
                 restarted.append(name)
         return restarted
 
+    async def refresh_prompts(self) -> None:
+        """配置未变时也重新拉取 prompts/list（供 /mcp reload）。"""
+        for name, client in list(self.clients.items()):
+            if client.alive:
+                self.prompts[name] = await self._load_prompts(name, client)
+
+    async def _load_prompts(
+        self, name: str, client: MCPClient,
+    ) -> tuple[Dict[str, Any], ...]:
+        if not client.supports("prompts"):
+            return ()
+        try:
+            return tuple(await client.list_prompts())
+        except Exception as exc:
+            self._log(
+                f"[mcp] {name} prompts/list 失败，继续使用其他能力: "
+                f"{type(exc).__name__}: {exc}")
+            return ()
+
+    def prompt_records(self) -> List[Dict[str, Any]]:
+        """命令层可消费的 Prompt 元数据快照。"""
+        records: List[Dict[str, Any]] = []
+        for server, prompts in self.prompts.items():
+            for prompt in prompts:
+                remote_name = str(prompt.get("name", "")).strip()
+                if not remote_name:
+                    continue
+                arguments = prompt.get("arguments") or []
+                argument_names = tuple(
+                    str(item.get("name"))
+                    for item in arguments
+                    if isinstance(item, dict) and item.get("name")
+                )
+                records.append({
+                    "command_name": f"mcp__{sanitize(server)}__{sanitize(remote_name)}",
+                    "server": server,
+                    "prompt_name": remote_name,
+                    "description": str(prompt.get("description") or ""),
+                    "argument_names": argument_names,
+                })
+        return records
+
+    async def get_prompt(
+        self, server: str, name: str, arguments: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        client = self.clients.get(server)
+        if client is None:
+            raise RuntimeError(f"MCP 服务器 {server!r} 未连接")
+        return await client.get_prompt(name, arguments)
+
     # -- 观测 -----------------------------------------------------------------------
 
     def status(self) -> List[Dict[str, Any]]:
@@ -137,6 +191,7 @@ class MCPSupervisor:
                 "transport": getattr(client._transport, "kind", "?"),
                 "alive": client.alive,
                 "tools": tool_count,
+                "prompts": len(self.prompts.get(name, ())),
                 "server": client.server_info.get("name", ""),
             })
         return out
@@ -145,6 +200,7 @@ class MCPSupervisor:
         for name in list(self.clients):
             client = self.clients.pop(name, None)
             self.configs.pop(name, None)
+            self.prompts.pop(name, None)
             if client is not None:
                 try:
                     await client.close()

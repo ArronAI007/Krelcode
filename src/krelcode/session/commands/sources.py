@@ -28,3 +28,35 @@ def skill_command_specs(skills: Any) -> tuple[CommandSpec, ...]:
 
 def sync_skill_commands(registry: CommandRegistry, skills: Any) -> None:
     registry.replace_source(CommandSource.SKILL, skill_command_specs(skills))
+
+
+def mcp_prompt_command_specs(supervisor: Any) -> tuple[CommandSpec, ...]:
+    if supervisor is None or not hasattr(supervisor, "prompt_records"):
+        return ()
+    specs: list[CommandSpec] = []
+    for record in supervisor.prompt_records():
+        names = tuple(record.get("argument_names") or ())
+        hint = " ".join(f"<{name}>" for name in names)
+        description = " ".join(str(
+            record.get("description") or f"MCP Prompt：{record['prompt_name']}"
+        ).split())[:320]
+        specs.append(CommandSpec(
+            name=str(record["command_name"]),
+            description=description,
+            kind=CommandKind.PROMPT,
+            source=CommandSource.MCP,
+            argument_hint=hint,
+            help=f"[{record['server']}] {description}",
+            metadata={
+                "server": record["server"],
+                "prompt_name": record["prompt_name"],
+                "argument_names": names,
+            },
+        ))
+    return tuple(specs)
+
+
+def sync_mcp_prompt_commands(
+    registry: CommandRegistry, supervisor: Any,
+) -> None:
+    registry.replace_source(CommandSource.MCP, mcp_prompt_command_specs(supervisor))
