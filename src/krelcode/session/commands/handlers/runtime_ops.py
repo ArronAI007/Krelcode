@@ -6,6 +6,7 @@ from ....agent.context import build_workspace_context
 from ....agent.prompts import build_system_prompt
 from ....agent.tokens import estimate_history_tokens
 from ..context import CommandContext
+from ..sources import sync_skill_commands
 from ..types import CommandResult
 
 
@@ -66,6 +67,7 @@ async def handle_skills(ctx: CommandContext) -> CommandResult:
     sub = parts[0].strip() if parts else ""
     if sub == "reload":
         report = (ctx.skills_reload() if ctx.skills_reload else ctx.skills.reload())
+        sync_skill_commands(ctx.command_registry, ctx.skills)
         output.append(f"  [skills] 已重载 {report.count} 个 Skill")
         for issue in report.issues:
             output.append(f"  [skills] 跳过无效 Skill: {issue.path}: {issue.message}")
@@ -107,6 +109,22 @@ async def handle_skill(ctx: CommandContext) -> CommandResult:
     arguments = parts[1] if len(parts) > 1 else ""
     try:
         prompt = ctx.skills.user_prompt(name, arguments)
+    except Exception as exc:
+        return _ok(f"  [skill] {exc}")
+    return CommandResult(
+        handled=True,
+        output=(f"  [skill] 已加载并执行: {name}",),
+        run_prompt=prompt,
+    )
+
+
+async def handle_skill_command(ctx: CommandContext) -> CommandResult:
+    """执行由 Skill 自动注册的 `/skill-name [args]`。"""
+    if _skills_disabled(ctx):
+        return _ok(_disabled_message())
+    name = ctx.request.name
+    try:
+        prompt = ctx.skills.user_prompt(name, ctx.request.arguments)
     except Exception as exc:
         return _ok(f"  [skill] {exc}")
     return CommandResult(

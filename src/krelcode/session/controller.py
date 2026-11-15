@@ -22,8 +22,9 @@ from .commands import (
     builtin_command_registry,
     normalize_token,
     render_help,
+    sync_skill_commands,
 )
-from .commands.handlers import BUILTIN_HANDLERS
+from .commands.handlers import BUILTIN_HANDLERS, execute_prompt_command
 
 HELP_TEXT = render_help(builtin_command_registry())
 
@@ -69,6 +70,7 @@ class SessionController:
         self.skills_reload = skills_reload
         self.workspace_root = workspace_root or self.runtime.workspace_root
         self.command_registry = command_registry or builtin_command_registry()
+        sync_skill_commands(self.command_registry, self.skills)
 
     @property
     def active_task(self) -> Optional[asyncio.Task]:
@@ -109,13 +111,16 @@ class SessionController:
             arguments=arguments.strip(),
             raw_text=user_input,
         )
+        context = self._command_context(request)
+        if spec is not None and spec.kind is CommandKind.PROMPT:
+            return await execute_prompt_command(context)
         handler = BUILTIN_HANDLERS.get(name)
         if handler is None:
             return CommandResult(
                 handled=True,
                 output=(f"  （未知命令: /{name}，/help 查看可用命令）",),
             )
-        return await handler(self._command_context(request))
+        return await handler(context)
 
     def _command_context(self, request: CommandRequest) -> CommandContext:
         return CommandContext(

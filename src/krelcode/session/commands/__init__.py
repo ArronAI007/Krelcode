@@ -7,6 +7,7 @@ from .builtin import (
 )
 from .context import CommandContext
 from .registry import CommandConflict, CommandRegistry, normalize_token
+from .sources import skill_command_specs, sync_skill_commands
 from .types import (
     CommandKind,
     CommandRequest,
@@ -28,4 +29,6 @@ __all__ = [
     "builtin_command_specs",
     "normalize_token",
     "render_help",
+    "skill_command_specs",
+    "sync_skill_commands",
 ]

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Awaitable, Callable
 
 from ..context import CommandContext
-from ..types import CommandResult
+from ..types import CommandResult, CommandSource
 from .runtime_ops import (
     handle_agents,
     handle_allow,
@@ -15,6 +15,7 @@ from .runtime_ops import (
     handle_mcp,
     handle_model,
     handle_skill,
+    handle_skill_command,
     handle_skills,
     handle_tools,
     handle_undo,
@@ -52,4 +53,15 @@ BUILTIN_HANDLERS: dict[str, CommandHandler] = {
     "reset": handle_reset,
 }
 
-__all__ = ["BUILTIN_HANDLERS", "CommandHandler"]
+async def execute_prompt_command(ctx: CommandContext) -> CommandResult:
+    """按 command source 选择动态 prompt handler。"""
+    spec = ctx.command_registry.resolve(ctx.request.name)
+    if spec is not None and spec.source is CommandSource.SKILL:
+        return await handle_skill_command(ctx)
+    return CommandResult(
+        handled=True,
+        output=(f"  （未知 prompt 命令: /{ctx.request.name}）",),
+    )
+
+
+__all__ = ["BUILTIN_HANDLERS", "CommandHandler", "execute_prompt_command"]
