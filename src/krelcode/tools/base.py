@@ -12,6 +12,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, Optional, Protocol, Tuple
 
+from ..core.messages import (
+    ImageBlock,
+    ResourceBlock,
+    StructuredBlock,
+    TextBlock,
+    ToolResultBlock,
+)
 from ..safety.sandbox import ExecutionSandbox
 
 
@@ -23,6 +30,39 @@ class ToolResult:
     content: str
     is_error: bool = False
     data: Dict[str, Any] = field(default_factory=dict)  # 给 UI/测试用的结构化附加信息
+    blocks: Tuple[ToolResultBlock, ...] = ()             # 富结果；content 为文本降级
+
+    @classmethod
+    def from_blocks(
+        cls,
+        blocks: Tuple[ToolResultBlock, ...] | list[ToolResultBlock],
+        *,
+        is_error: bool = False,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> "ToolResult":
+        normalized = tuple(blocks)
+        text_parts = []
+        for block in normalized:
+            if isinstance(block, TextBlock):
+                text_parts.append(block.text)
+            elif isinstance(block, ImageBlock):
+                text_parts.append(block.alt or f"[图片 {block.media_type}]")
+            elif isinstance(block, ResourceBlock):
+                label = block.name or block.uri
+                detail = block.text or (
+                    f"[二进制资源 {block.mime_type or 'application/octet-stream'}]"
+                    if block.blob else "")
+                text_parts.append(f"{label}\n{detail}".strip())
+            elif isinstance(block, StructuredBlock):
+                import json
+                text_parts.append(json.dumps(
+                    block.data, ensure_ascii=False, sort_keys=True))
+        return cls(
+            content="\n".join(part for part in text_parts if part),
+            is_error=is_error,
+            data=dict(data or {}),
+            blocks=normalized,
+        )
 
 
 class RunMode(str, Enum):

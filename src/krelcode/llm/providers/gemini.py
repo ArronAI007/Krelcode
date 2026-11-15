@@ -20,8 +20,17 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Tuple
 
 from ...core.errors import ConfigError, LLMHTTPError
 from ...core.messages import (
-    INVALID_ARGUMENTS_KEY, ROLE_ASSISTANT, ROLE_SYSTEM, ROLE_TOOL, ROLE_USER,
-    Message, ToolCall,
+    INVALID_ARGUMENTS_KEY,
+    ImageBlock,
+    Message,
+    ResourceBlock,
+    ROLE_ASSISTANT,
+    ROLE_SYSTEM,
+    ROLE_TOOL,
+    ROLE_USER,
+    StructuredBlock,
+    TextBlock,
+    ToolCall,
 )
 from ..base import (
     FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, ProviderCapabilities,
@@ -67,7 +76,7 @@ def to_gemini_contents(
             pending.append({
                 "functionResponse": {
                     "name": id_to_name.get(m.tool_call_id or "", "unknown_function"),
-                    "response": {"content": m.content or ""},
+                    "response": _tool_response(m),
                 }
             })
             continue
@@ -97,6 +106,38 @@ def to_gemini_contents(
         {"parts": [{"text": "\n\n".join(system_parts)}]} if system_parts else None
     )
     return system_instruction, contents
+
+
+def _tool_response(message: Message) -> Dict[str, Any]:
+    response: Dict[str, Any] = {"content": message.content or ""}
+    if message.tool_blocks:
+        response["blocks"] = [_tool_response_block(block)
+                              for block in message.tool_blocks]
+    return response
+
+
+def _tool_response_block(block) -> Dict[str, Any]:
+    if isinstance(block, TextBlock):
+        return {"type": "text", "text": block.text}
+    if isinstance(block, ImageBlock):
+        return {
+            "type": "image",
+            "media_type": block.media_type,
+            "data": block.data_b64,
+            "alt": block.alt,
+        }
+    if isinstance(block, ResourceBlock):
+        return {
+            "type": "resource",
+            "uri": block.uri,
+            "name": block.name,
+            "mime_type": block.mime_type,
+            "text": block.text,
+            "blob": block.blob,
+        }
+    if isinstance(block, StructuredBlock):
+        return {"type": "structured", "data": block.data}
+    return {"type": "text", "text": str(block)}
 
 
 def tool_specs_to_gemini(tools: Sequence[ToolSpec]) -> List[Dict[str, Any]]:

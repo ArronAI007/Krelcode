@@ -6,7 +6,15 @@ import base64
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..core.messages import ImageRef, Message, ToolCall
+from ..core.messages import (
+    ImageBlock,
+    ImageRef,
+    Message,
+    ResourceBlock,
+    StructuredBlock,
+    TextBlock,
+    ToolCall,
+)
 
 
 def message_to_dict(m: Message) -> Dict[str, Any]:
@@ -27,6 +35,8 @@ def message_to_dict(m: Message) -> Dict[str, Any]:
             {"media_type": i.media_type, "source_path": i.source_path}
             for i in m.images
         ]
+    if m.tool_blocks:
+        d["tool_blocks"] = [_block_to_dict(block) for block in m.tool_blocks]
     return d
 
 
@@ -49,6 +59,7 @@ def message_from_dict(d: Dict[str, Any]) -> Message:
         tool_call_id=d.get("tool_call_id"),
         provider_meta=meta if isinstance(meta, dict) else None,
         images=_reload_images(d.get("images")),
+        tool_blocks=_blocks_from_dict(d.get("tool_blocks")),
     )
 
 
@@ -84,3 +95,56 @@ def history_to_dicts(history: List[Message]) -> List[Dict[str, Any]]:
 
 def history_from_dicts(raw: List[Dict[str, Any]]) -> List[Message]:
     return [message_from_dict(d) for d in raw]
+
+
+def _block_to_dict(block) -> Dict[str, Any]:
+    if isinstance(block, TextBlock):
+        return {"type": "text", "text": block.text}
+    if isinstance(block, ImageBlock):
+        return {
+            "type": "image",
+            "media_type": block.media_type,
+            "data": block.data_b64,
+            "alt": block.alt,
+        }
+    if isinstance(block, ResourceBlock):
+        return {
+            "type": "resource",
+            "uri": block.uri,
+            "name": block.name,
+            "mime_type": block.mime_type,
+            "text": block.text,
+            "blob": block.blob,
+        }
+    if isinstance(block, StructuredBlock):
+        return {"type": "structured", "data": block.data}
+    return {"type": "text", "text": str(block)}
+
+
+def _blocks_from_dict(raw: Any):
+    if not isinstance(raw, list):
+        return None
+    blocks = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        btype = item.get("type")
+        if btype == "text":
+            blocks.append(TextBlock(str(item.get("text", ""))))
+        elif btype == "image":
+            blocks.append(ImageBlock(
+                media_type=str(item.get("media_type") or "application/octet-stream"),
+                data_b64=str(item.get("data", "")),
+                alt=str(item.get("alt", "")),
+            ))
+        elif btype == "resource":
+            blocks.append(ResourceBlock(
+                uri=str(item.get("uri", "")),
+                name=item.get("name"),
+                mime_type=item.get("mime_type"),
+                text=item.get("text"),
+                blob=item.get("blob"),
+            ))
+        elif btype == "structured" and isinstance(item.get("data"), dict):
+            blocks.append(StructuredBlock(dict(item["data"])))
+    return blocks or None

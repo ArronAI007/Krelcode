@@ -10,7 +10,7 @@ import inspect
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, List, Union
 
-from .messages import Message, ToolCall
+from .messages import Message, ToolCall, ToolResultBlock
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +59,8 @@ class ToolCallCompleted(AgentEvent):
     tool_call: ToolCall
     content: str
     is_error: bool
+    blocks: tuple[ToolResultBlock, ...] = ()
+    data: Dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

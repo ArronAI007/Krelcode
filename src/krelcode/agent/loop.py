@@ -35,9 +35,19 @@ from ..core.events import (
 )
 from ..core.textutil import truncate_middle
 from ..core.messages import (
-    INVALID_ARGUMENTS_KEY, Message, SteeringInput, ToolCall, sanitize_history,
+    INVALID_ARGUMENTS_KEY,
+    ImageBlock,
+    Message,
+    ResourceBlock,
+    SteeringInput,
+    StructuredBlock,
+    TextBlock,
+    ToolCall,
+    sanitize_history,
 )
 from ..llm.base import (
+    FINISH_LENGTH,
+    FINISH_TOOLS,
     LLMProvider,
     StreamFinished,
     TextDelta,
@@ -52,6 +62,7 @@ from .tool_pool import TurnToolPool
 from ..safety.policy import ApprovalPolicy
 from ..tools.base import RuntimeSnapshot, ToolContext, ToolResult, TurnAbortSignal
 from ..tools.registry import ToolRegistry
+from ..tools.schema import validate_tool_arguments
 
 DEFAULT_MAX_STEPS = 64
 
@@ -74,6 +85,24 @@ class LLMTurnResult:
 
     message: Message
     tool_results: List[ToolResult]
+    finish_reason: Optional[str] = None
+
+
+def finish_reason_failure(
+    finish_reason: Optional[str], *, has_tool_calls: bool,
+) -> Optional[str]:
+    """把异常/不兼容 finish_reason 转成可见终态错误；None 表示可继续。"""
+    if finish_reason == FINISH_LENGTH:
+        return (
+            "模型响应达到输出长度上限，回答或工具参数可能不完整，本轮已中止。"
+            "请缩小请求范围或提高模型 max_tokens 后重试。")
+    if finish_reason == FINISH_TOOLS and not has_tool_calls:
+        return "Provider 返回 finish_reason=tool_calls 但没有工具调用，协议不一致。"
+    if finish_reason not in (None, "stop", FINISH_TOOLS, FINISH_LENGTH):
+        return (
+            f"Provider 以非正常原因结束响应: {finish_reason}。"
+            "本轮结果可能被安全策略、内容过滤或上游服务截断。")
+    return None
 
 
 class AgentLoop:
@@ -188,6 +217,16 @@ class AgentLoop:
                 await self._emit(StepStarted(step))
                 llm_turn = await self._llm_turn()
                 assistant = llm_turn.message
+                finish_failure = finish_reason_failure(
+                    llm_turn.finish_reason,
+                    has_tool_calls=bool(assistant.tool_calls),
+                )
+                if finish_failure is not None:
+                    if assistant.tool_calls:
+                        await self._apply_tool_results(
+                            assistant.tool_calls, llm_turn.tool_results)
+                    return await self._finish_protocol_failure(
+                        assistant, finish_failure, llm_turn.finish_reason)
                 if not assistant.tool_calls:
                     final_text = assistant.content or ""
                     await self._emit(RunFinished(final_text))
@@ -325,10 +364,31 @@ class AgentLoop:
                 await executor.wait_results(len(final_calls))
                 if final_calls else []
             )
-            return LLMTurnResult(message=finished.message, tool_results=results)
+            return LLMTurnResult(
+                message=finished.message,
+                tool_results=results,
+                finish_reason=finished.finish_reason,
+            )
         except BaseException:
             await executor.abort()
             raise
+
+    async def _finish_protocol_failure(
+        self,
+        assistant: Message,
+        failure: str,
+        finish_reason: Optional[str],
+    ) -> str:
+        partial = (assistant.content or "").strip()
+        assistant.content = (
+            f"{partial}\n\n[krelcode] {failure}" if partial
+            else f"[krelcode] {failure}"
+        )
+        final_text = assistant.content
+        await self._emit(ErrorOccurred(
+            failure, f"finish_reason={finish_reason or 'unknown'}"))
+        await self._emit(RunFinished(final_text))
+        return final_text
 
     def _current_tool_pool(self) -> TurnToolPool:
         if self._active_tool_pool is None:
@@ -367,7 +427,11 @@ class AgentLoop:
         """
         for tool_call, result in zip(tool_calls, results):
             self.history.append(
-                Message.tool_result(tool_call.id, result.content)
+                Message.tool_result(
+                    tool_call.id,
+                    result.content,
+                    blocks=list(result.blocks) or None,
+                )
             )
             signature = _call_signature(tool_call)
             if result.is_error:
@@ -395,9 +459,36 @@ class AgentLoop:
         content = self.redactor.redact(result.content) if self.redactor else result.content
         inline_content = self._persist_large_output(tool_call, content)
         result.content = inline_content
+        if self.redactor is not None:
+            result.blocks = tuple(
+                self._redact_tool_block(block) for block in result.blocks)
         await self._emit(
-            ToolCallCompleted(tool_call, inline_content, result.is_error)
+            ToolCallCompleted(
+                tool_call,
+                inline_content,
+                result.is_error,
+                result.blocks,
+                dict(result.data),
+            )
         )
+
+    def _redact_tool_block(self, block):
+        redact = self.redactor.redact
+        if isinstance(block, TextBlock):
+            return TextBlock(redact(block.text))
+        if isinstance(block, ImageBlock):
+            return ImageBlock(block.media_type, block.data_b64, redact(block.alt))
+        if isinstance(block, ResourceBlock):
+            return ResourceBlock(
+                uri=redact(block.uri),
+                name=redact(block.name) if block.name else None,
+                mime_type=block.mime_type,
+                text=redact(block.text) if block.text else None,
+                blob=block.blob,
+            )
+        if isinstance(block, StructuredBlock):
+            return StructuredBlock(_redact_json(block.data, redact))
+        return block
 
     def _persist_large_output(self, tool_call: ToolCall, content: str) -> str:
         """超长工具输出全文落盘，历史里只留截断版 + 文件引用。"""
@@ -449,7 +540,31 @@ class AgentLoop:
             tool_descriptor=pool.descriptor(tool_call.name),
         )
 
-        # 2) 审批
+        # 2) 参数格式与 JSON Schema：坏参数不进入审批或工具实现。
+        if tool_call.has_invalid_arguments:
+            return ToolResult(
+                content=(
+                    "工具参数不是合法 JSON: "
+                    f"{tool_call.arguments[INVALID_ARGUMENTS_KEY]!r}"
+                ),
+                is_error=True,
+            )
+        validation_errors = validate_tool_arguments(
+            tool.parameters, tool_call.arguments)
+        if validation_errors:
+            rendered = [error.render() for error in validation_errors[:20]]
+            if len(validation_errors) > 20:
+                rendered.append(f"…另有 {len(validation_errors) - 20} 个错误")
+            return ToolResult(
+                content=(
+                    f"工具参数校验失败: {tool_call.name}\n- "
+                    + "\n- ".join(rendered)
+                ),
+                is_error=True,
+            )
+        args = dict(tool_call.arguments)
+
+        # 3) 审批（策略看到的是已通过 schema 校验的参数）
         if self.policy is not None:
             try:
                 decision = await self.policy.check(tool_call, execution_ctx)
@@ -462,14 +577,6 @@ class AgentLoop:
                 return ToolResult(
                     content=f"操作被安全策略拒绝: {decision.reason}", is_error=True
                 )
-
-        # 3) 参数校验（Step 2 只做最低限度：非法 JSON 透传标记）
-        if tool_call.has_invalid_arguments:
-            return ToolResult(
-                content=f"工具参数不是合法 JSON: {tool_call.arguments[INVALID_ARGUMENTS_KEY]!r}",
-                is_error=True,
-            )
-        args = dict(tool_call.arguments)
 
         # 4) 执行（异常 → is_error 结果回填，错误恢复原则）
         try:
@@ -488,3 +595,17 @@ def _call_signature(tool_call: ToolCall) -> str:
     if len(args) > 200:
         args = args[:200] + "…"
     return f"{tool_call.name}({args})"
+
+
+def _redact_json(value, redact):
+    """递归脱敏结构化工具结果中的字符串值。"""
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, list):
+        return [_redact_json(item, redact) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(redact(str(key))): _redact_json(item, redact)
+            for key, item in value.items()
+        }
+    return value

@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List
 
+from ..core.messages import ImageBlock, ResourceBlock, TextBlock
 from ..tools.base import ToolContext, ToolResult
 from .client import MCPClient, MCPError
 
@@ -51,6 +52,45 @@ def _render_content(content: Any) -> str:
     return "\n".join(parts)
 
 
+def _content_blocks(content: Any) -> tuple:
+    """MCP content blocks → provider-neutral 富 ToolResult blocks。"""
+    if content is None:
+        return ()
+    if isinstance(content, str):
+        return (TextBlock(content),)
+    if isinstance(content, dict):
+        content = [content]
+    if not isinstance(content, list):
+        return (TextBlock(str(content)),)
+    blocks = []
+    for block in content:
+        if not isinstance(block, dict):
+            blocks.append(TextBlock(str(block)))
+            continue
+        btype = block.get("type")
+        if btype == "text":
+            blocks.append(TextBlock(str(block.get("text", ""))))
+        elif btype == "image" and block.get("data"):
+            blocks.append(ImageBlock(
+                media_type=str(block.get("mimeType") or "image/png"),
+                data_b64=str(block["data"]),
+                alt=str(block.get("description") or ""),
+            ))
+        elif btype == "resource" and isinstance(block.get("resource"), dict):
+            resource = block["resource"]
+            blocks.append(ResourceBlock(
+                uri=str(resource.get("uri", "")),
+                name=resource.get("name"),
+                mime_type=resource.get("mimeType"),
+                text=resource.get("text"),
+                blob=resource.get("blob"),
+            ))
+        else:
+            blocks.append(TextBlock(
+                f"[{btype or 'unknown'} 内容块，暂不支持渲染]"))
+    return tuple(blocks)
+
+
 def _error(e: MCPError) -> ToolResult:
     return ToolResult(content=str(e), is_error=True)
 
@@ -83,6 +123,7 @@ class MCPTool:
             content=_render_content(result.get("content")),
             is_error=bool(result.get("isError", False)),
             data={"mcp": self.client.name},
+            blocks=_content_blocks(result.get("content")),
         )
 
 
@@ -131,14 +172,28 @@ class MCPReadResourceTool:
         except MCPError as e:
             return _error(e)
         parts = []
+        blocks = []
         for c in result.get("contents") or []:
             if not isinstance(c, dict):
                 continue
             if "text" in c:
                 parts.append(str(c["text"]))
+                blocks.append(ResourceBlock(
+                    uri=str(c.get("uri", uri)),
+                    mime_type=c.get("mimeType"),
+                    text=str(c["text"]),
+                ))
             elif "blob" in c:
                 parts.append(f"[二进制资源 {c.get('mimeType', '?')}，{len(str(c['blob']))} 字符 base64]")
-        return ToolResult(content="\n".join(parts) if parts else "（空资源）")
+                blocks.append(ResourceBlock(
+                    uri=str(c.get("uri", uri)),
+                    mime_type=c.get("mimeType"),
+                    blob=str(c["blob"]),
+                ))
+        return ToolResult(
+            content="\n".join(parts) if parts else "（空资源）",
+            blocks=tuple(blocks),
+        )
 
 
 class MCPListPromptsTool:

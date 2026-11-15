@@ -21,8 +21,17 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Tuple
 
 from ...core.errors import ConfigError, LLMHTTPError
 from ...core.messages import (
-    INVALID_ARGUMENTS_KEY, ROLE_ASSISTANT, ROLE_SYSTEM, ROLE_TOOL, ROLE_USER,
-    Message, ToolCall,
+    INVALID_ARGUMENTS_KEY,
+    ImageBlock,
+    Message,
+    ResourceBlock,
+    ROLE_ASSISTANT,
+    ROLE_SYSTEM,
+    ROLE_TOOL,
+    ROLE_USER,
+    StructuredBlock,
+    TextBlock,
+    ToolCall,
 )
 from ..base import (
     FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, ProviderCapabilities,
@@ -74,7 +83,10 @@ def to_anthropic_request_messages(
                 {
                     "type": "tool_result",
                     "tool_use_id": m.tool_call_id or "",
-                    "content": m.content or "",
+                    "content": (
+                        [_tool_result_block(block) for block in m.tool_blocks]
+                        if m.tool_blocks else m.content or ""
+                    ),
                 }
             )
             continue
@@ -115,6 +127,34 @@ def to_anthropic_request_messages(
 
     system = "\n\n".join(system_parts) if system_parts else None
     return system, wire
+
+
+def _tool_result_block(block: Dict[str, Any]) -> Dict[str, Any]:
+    if isinstance(block, TextBlock):
+        return {"type": "text", "text": block.text}
+    if isinstance(block, ImageBlock):
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": block.media_type,
+                "data": block.data_b64,
+            },
+        }
+    if isinstance(block, ResourceBlock):
+        detail = block.text or (
+            f"[二进制资源 {block.mime_type or 'application/octet-stream'}]"
+            if block.blob else "")
+        return {
+            "type": "text",
+            "text": f"{block.name or block.uri}\n{detail}".strip(),
+        }
+    if isinstance(block, StructuredBlock):
+        return {
+            "type": "text",
+            "text": json.dumps(block.data, ensure_ascii=False, sort_keys=True),
+        }
+    return {"type": "text", "text": str(block)}
 
 
 def tool_specs_to_anthropic(tools: Sequence[ToolSpec]) -> List[Dict[str, Any]]:

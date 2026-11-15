@@ -12,7 +12,13 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Sequence
 
 from ...core.errors import ConfigError, LLMHTTPError
 from ...core.messages import (
-    INVALID_ARGUMENTS_KEY, Message, ToolCall,
+    INVALID_ARGUMENTS_KEY,
+    ImageBlock,
+    Message,
+    ResourceBlock,
+    StructuredBlock,
+    TextBlock,
+    ToolCall,
 )
 from ..base import (
     FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, ProviderCapabilities,
@@ -45,6 +51,8 @@ def to_openai_messages(messages: Sequence[Message]) -> List[Dict[str, Any]]:
                     },
                 })
             content = blocks
+        if m.role == "tool" and m.tool_blocks:
+            content = [_tool_block(block) for block in m.tool_blocks]
         msg: Dict[str, Any] = {"role": m.role, "content": content}
         if m.tool_calls:
             msg["tool_calls"] = [
@@ -62,6 +70,34 @@ def to_openai_messages(messages: Sequence[Message]) -> List[Dict[str, Any]]:
             msg["tool_call_id"] = m.tool_call_id
         wire.append(msg)
     return wire
+
+
+def _tool_block(block) -> Dict[str, Any]:
+    if isinstance(block, TextBlock):
+        return {"type": "text", "text": block.text}
+    if isinstance(block, ImageBlock):
+        return {
+            "type": "text",
+            "text": (
+                block.alt
+                or f"[工具返回图片 {block.media_type}，"
+                   f"{len(block.data_b64)} 字符 base64]"
+            ),
+        }
+    if isinstance(block, ResourceBlock):
+        detail = block.text or (
+            f"[二进制资源 {block.mime_type or 'application/octet-stream'}]"
+            if block.blob else "")
+        return {
+            "type": "text",
+            "text": f"{block.name or block.uri}\n{detail}".strip(),
+        }
+    if isinstance(block, StructuredBlock):
+        return {
+            "type": "text",
+            "text": json.dumps(block.data, ensure_ascii=False, sort_keys=True),
+        }
+    return {"type": "text", "text": str(block)}
 
 
 def tool_specs_to_openai(tools: Sequence[ToolSpec]) -> List[Dict[str, Any]]:

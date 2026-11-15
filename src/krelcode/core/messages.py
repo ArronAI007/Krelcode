@@ -7,7 +7,7 @@ core 只定义与任何 provider 无关的规范格式；
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 ROLE_SYSTEM = "system"
 ROLE_USER = "user"
@@ -31,6 +31,35 @@ class ImageRef:
     media_type: str            # image/png | image/jpeg | image/webp | image/gif
     data_b64: str
     source_path: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class TextBlock:
+    text: str
+
+
+@dataclass(frozen=True)
+class ImageBlock:
+    media_type: str
+    data_b64: str
+    alt: str = ""
+
+
+@dataclass(frozen=True)
+class ResourceBlock:
+    uri: str
+    name: Optional[str] = None
+    mime_type: Optional[str] = None
+    text: Optional[str] = None
+    blob: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class StructuredBlock:
+    data: Dict[str, Any]
+
+
+ToolResultBlock = Union[TextBlock, ImageBlock, ResourceBlock, StructuredBlock]
 
 
 @dataclass(frozen=True)
@@ -70,6 +99,7 @@ class Message:
     tool_call_id: Optional[str] = None           # 仅 tool（结果回填）
     provider_meta: Optional[Dict[str, Any]] = None
     images: Optional[List[ImageRef]] = None      # 仅 user（多模态输入）
+    tool_blocks: Optional[List[ToolResultBlock]] = None  # 仅 tool（富结果）
 
     # -- 便捷构造 -------------------------------------------------------------
 
@@ -91,8 +121,18 @@ class Message:
         return cls(role=ROLE_ASSISTANT, content=content, tool_calls=tool_calls)
 
     @classmethod
-    def tool_result(cls, tool_call_id: str, content: str) -> "Message":
-        return cls(role=ROLE_TOOL, content=content, tool_call_id=tool_call_id)
+    def tool_result(
+        cls,
+        tool_call_id: str,
+        content: str,
+        blocks: Optional[List[ToolResultBlock]] = None,
+    ) -> "Message":
+        return cls(
+            role=ROLE_TOOL,
+            content=content,
+            tool_call_id=tool_call_id,
+            tool_blocks=blocks,
+        )
 
 
 def sanitize_history(history: List[Message]) -> None:
