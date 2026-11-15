@@ -57,7 +57,7 @@ class ThinkingDelta:
 
 @dataclass(frozen=True)
 class ToolCallStartedDelta:
-    """一个工具调用开始形成；后续 arguments 以同一 index 增量到达。"""
+    """一个工具调用开始形成；index 是工具序号，不是 wire block index。"""
 
     index: int
     id: str
@@ -66,7 +66,7 @@ class ToolCallStartedDelta:
 
 @dataclass(frozen=True)
 class ToolCallArgumentsDelta:
-    """工具参数 JSON 的原始增量片段。不要在 provider 层提前解析对象。"""
+    """工具参数 JSON 的原始增量片段；index 与 StartedDelta 相同。"""
 
     index: int
     partial_json: str

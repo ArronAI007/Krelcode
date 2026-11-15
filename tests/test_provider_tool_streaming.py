@@ -87,6 +87,29 @@ def test_anthropic_ready_on_content_block_stop():
     assert_tool_stream(stream, tool_call=call)
 
 
+def test_anthropic_normalizes_wire_block_index_to_tool_ordinal():
+    body = sse(
+        {"type": "message_start", "message": {"usage": {"input_tokens": 1}}},
+        {"type": "content_block_start", "index": 0,
+         "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 7, "content_block": {
+            "type": "tool_use", "id": "toolu-7", "name": "read_file", "input": {},
+        }},
+        {"type": "content_block_delta", "index": 7, "delta": {
+            "type": "input_json_delta", "partial_json": '{"path": "README.md"}',
+        }},
+        {"type": "content_block_stop", "index": 7},
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use"}},
+    )
+    provider = AnthropicProvider(
+        model="m", api_key="k", transport=FakeTransport(body))
+
+    stream = events(provider)
+    call = ToolCall("toolu-7", "read_file", {"path": "README.md"})
+    assert_tool_stream(stream, index=0, tool_call=call)
+
+
 def test_gemini_complete_function_call_emits_ready_immediately():
     body = sse({"candidates": [{
         "content": {"parts": [{"functionCall": {

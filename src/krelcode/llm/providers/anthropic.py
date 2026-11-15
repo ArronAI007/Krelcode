@@ -236,7 +236,8 @@ class AnthropicProvider:
                                    headers=dict(getattr(resp, "headers", {}) or {}))
 
             content_parts: List[str] = []
-            tool_blocks: Dict[int, Dict[str, str]] = {}  # block index -> {id,name,json}
+            tool_blocks: Dict[int, Dict[str, str]] = {}  # tool ordinal -> {id,name,json}
+            tool_ordinals: Dict[int, int] = {}  # wire block index -> tool ordinal
             ready_tools: set[int] = set()
             thinking_blocks: Dict[int, Dict[str, Any]] = {}  # index -> thinking/redacted 块
             stop_reason: Optional[str] = None
@@ -253,7 +254,9 @@ class AnthropicProvider:
                     block = event.get("content_block") or {}
                     btype = block.get("type")
                     if btype == "tool_use":
-                        index = int(event.get("index", 0))
+                        wire_index = int(event.get("index", 0))
+                        index = len(tool_blocks)
+                        tool_ordinals[wire_index] = index
                         tool_blocks[index] = {
                             "id": block.get("id", ""),
                             "name": block.get("name", ""),
@@ -292,7 +295,10 @@ class AnthropicProvider:
                         if slot is not None:
                             slot["signature"] = delta.get("signature")
                     elif dtype == "input_json_delta":
-                        index = int(event.get("index", 0))
+                        wire_index = int(event.get("index", 0))
+                        index = tool_ordinals.get(wire_index)
+                        if index is None:
+                            continue
                         slot = tool_blocks.get(index)
                         if slot is not None:
                             partial_json = delta.get("partial_json") or ""
@@ -301,7 +307,10 @@ class AnthropicProvider:
                                 yield ToolCallArgumentsDelta(
                                     index=index, partial_json=partial_json)
                 elif etype == "content_block_stop":
-                    index = int(event.get("index", 0))
+                    wire_index = int(event.get("index", 0))
+                    index = tool_ordinals.get(wire_index)
+                    if index is None:
+                        continue
                     slot = tool_blocks.get(index)
                     if slot is not None and index not in ready_tools:
                         ready_tools.add(index)

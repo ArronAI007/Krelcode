@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional
 
 from ..core.redact import SecretRedactor
@@ -36,9 +36,16 @@ from ..core.textutil import truncate_middle
 from ..core.messages import (
     INVALID_ARGUMENTS_KEY, Message, SteeringInput, ToolCall, sanitize_history,
 )
-from ..llm.base import LLMProvider, StreamFinished, TextDelta, ThinkingDelta
+from ..llm.base import (
+    LLMProvider,
+    StreamFinished,
+    TextDelta,
+    ThinkingDelta,
+    ToolCallReady,
+)
 from .compression import ContextManager
 from .intent import TurnIntent, infer_turn_intent
+from .streaming_tools import StreamingToolExecutor
 from .tokens import estimate_history_tokens
 from .tool_pool import TurnToolPool
 from ..safety.policy import ApprovalPolicy
@@ -58,6 +65,14 @@ def max_steps_reached_text(max_steps: int) -> str:
 
 INTERRUPTED_NOTE = "[已被用户中止]"
 STEERING_PREFIX = "[用户插话] "
+
+
+@dataclass(frozen=True)
+class LLMTurnResult:
+    """一次模型响应及其已完成的工具结果（结果尚未写入历史）。"""
+
+    message: Message
+    tool_results: List[ToolResult]
 
 
 class AgentLoop:
@@ -134,12 +149,14 @@ class AgentLoop:
                     await self._emit(RunFinished(text))
                     return text
                 await self._emit(StepStarted(step))
-                assistant = await self._llm_turn()
+                llm_turn = await self._llm_turn()
+                assistant = llm_turn.message
                 if not assistant.tool_calls:
                     final_text = assistant.content or ""
                     await self._emit(RunFinished(final_text))
                     return final_text
-                abort_reason = await self._execute_tool_calls(assistant.tool_calls)
+                abort_reason = await self._apply_tool_results(
+                    assistant.tool_calls, llm_turn.tool_results)
                 if abort_reason:
                     text = f"[krelcode] {abort_reason}，判定为循环，已中止本轮。"
                     self.history.append(Message.assistant(text))
@@ -192,7 +209,7 @@ class AgentLoop:
 
     # -- 内部：一次 LLM 调用 ---------------------------------------------------
 
-    async def _llm_turn(self) -> Message:
+    async def _llm_turn(self) -> LLMTurnResult:
         if self.context_manager is not None:
             before = estimate_history_tokens(self.history)
             if await self.context_manager.maybe_compress(self.history):
@@ -209,21 +226,42 @@ class AgentLoop:
             tools = specs or None
         messages = self._messages_for_turn()
         finished: Optional[StreamFinished] = None
-        async for event in self.llm.stream(messages, tools):
-            if isinstance(event, TextDelta):
-                await self._emit(LLMStreamDelta(event.text))
-            elif isinstance(event, ThinkingDelta):
-                await self._emit(LLMThinkingDelta(event.text))
-            elif isinstance(event, StreamFinished):
-                finished = event
-        if finished is None:  # provider 违反契约
-            raise RuntimeError("LLMProvider 未产出 StreamFinished")
-        self.history.append(finished.message)
-        usage = dict(finished.usage)
-        self._token_total += usage.get("total_tokens") or (
-            usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
-        await self._emit(LLMResponseReceived(finished.message, usage))
-        return finished.message
+        executor = StreamingToolExecutor(
+            self._current_tool_pool(), self._run_stream_tool)
+        try:
+            async for event in self.llm.stream(messages, tools):
+                if isinstance(event, TextDelta):
+                    await self._emit(LLMStreamDelta(event.text))
+                elif isinstance(event, ThinkingDelta):
+                    await self._emit(LLMThinkingDelta(event.text))
+                elif isinstance(event, ToolCallReady):
+                    # 参数已完整：无需等后续文本/其他工具参数，立刻进入调度。
+                    executor.register(event.index, event.tool_call)
+                elif isinstance(event, StreamFinished):
+                    finished = event
+            if finished is None:  # provider 违反契约
+                raise RuntimeError("LLMProvider 未产出 StreamFinished")
+
+            # 旧 Provider 可能只在最终消息里给出 tool_calls；统一补齐。
+            final_calls = list(finished.message.tool_calls or [])
+            executor.register_final(final_calls)
+
+            # 必须先提交 assistant(tool_use) 再追加 tool_result，否则 wire
+            # 历史会出现无来源的结果。工具可在此前已执行完并推送 UI 事件。
+            self.history.append(finished.message)
+            usage = dict(finished.usage)
+            self._token_total += usage.get("total_tokens") or (
+                usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
+            await self._emit(LLMResponseReceived(finished.message, usage))
+
+            results = (
+                await executor.wait_results(len(final_calls))
+                if final_calls else []
+            )
+            return LLMTurnResult(message=finished.message, tool_results=results)
+        except BaseException:
+            await executor.abort()
+            raise
 
     def _current_tool_pool(self) -> TurnToolPool:
         if self._active_tool_pool is None:
@@ -248,12 +286,15 @@ class AgentLoop:
 
     # -- 内部：执行一批工具调用 -------------------------------------------------
 
-    async def _execute_tool_calls(self, tool_calls: List[ToolCall]) -> Optional[str]:
+    async def _apply_tool_results(
+        self,
+        tool_calls: List[ToolCall],
+        results: List[ToolResult],
+    ) -> Optional[str]:
         """按只读并发/写操作串行执行一批工具调用，结果按原序回填历史。
 
         返回 None 表示继续；返回字符串表示触发卡死检测，应中止本轮。
         """
-        results = await self._run_tool_calls(tool_calls)
         for tool_call, result in zip(tool_calls, results):
             self.history.append(
                 Message.tool_result(tool_call.id, result.content)
@@ -270,55 +311,12 @@ class AgentLoop:
                 self._failure_counts.pop(signature, None)
         return None
 
-    async def _run_tool_calls(self, tool_calls: List[ToolCall]) -> List[ToolResult]:
-        """按副作用调度工具，并保持最终结果顺序。
-
-        连续只读调用可并发；每个 mutating 调用独占一个执行窗口。这样既保留
-        查询性能，又保证 write_file/edit_file/run_command 之间不会越过模型给出
-        的顺序。未知或被过滤的工具也按 barrier 单独处理。
-        """
-        pool = self._current_tool_pool()
-        results: List[Optional[ToolResult]] = [None] * len(tool_calls)
-        index = 0
-        while index < len(tool_calls):
-            descriptor = pool.descriptor(tool_calls[index].name)
-            if descriptor is not None and descriptor.read_only:
-                end = index + 1
-                while end < len(tool_calls):
-                    next_descriptor = pool.descriptor(tool_calls[end].name)
-                    if next_descriptor is None or not next_descriptor.read_only:
-                        break
-                    end += 1
-                group = tool_calls[index:end]
-                for tool_call in group:
-                    await self._emit(ToolCallStarted(tool_call))
-                group_results: List[Optional[ToolResult]] = [None] * len(group)
-
-                async def run_and_publish(
-                    offset: int, tool_call: ToolCall,
-                ) -> tuple[int, ToolResult]:
-                    result = await self._execute_one(tool_call)
-                    await self._publish_tool_result(tool_call, result)
-                    return offset, result
-
-                for future in asyncio.as_completed([
-                    run_and_publish(offset, tool_call)
-                    for offset, tool_call in enumerate(group)
-                ]):
-                    offset, result = await future
-                    group_results[offset] = result
-                results[index:end] = group_results
-                index = end
-                continue
-
-            tool_call = tool_calls[index]
-            await self._emit(ToolCallStarted(tool_call))
-            result = await self._execute_one(tool_call)
-            results[index] = result
-            await self._publish_tool_result(tool_call, result)
-            index += 1
-
-        return [result for result in results if result is not None]
+    async def _run_stream_tool(self, tool_call: ToolCall) -> ToolResult:
+        """流式调度器的 runner：执行一个调用并立即发布完成事件。"""
+        await self._emit(ToolCallStarted(tool_call))
+        result = await self._execute_one(tool_call)
+        await self._publish_tool_result(tool_call, result)
+        return result
 
     async def _publish_tool_result(
         self, tool_call: ToolCall, result: ToolResult,
