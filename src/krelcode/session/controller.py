@@ -8,35 +8,24 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from ..agent.context import build_workspace_context
 from ..agent.loop import AgentLoop
 from ..agent.runtime import AgentRuntime
-from ..agent.prompts import build_system_prompt
-from ..agent.tokens import estimate_history_tokens
-from .commands import CommandRegistry, builtin_command_registry, render_help
-from .export import export_session
-from .manager import format_sessions, list_sessions, resolve_resume_target
-from .restore import restore_session
+from .commands import (
+    CommandContext,
+    CommandKind,
+    CommandRegistry,
+    CommandRequest,
+    CommandResult,
+    builtin_command_registry,
+    normalize_token,
+    render_help,
+)
+from .commands.handlers import BUILTIN_HANDLERS
 
 HELP_TEXT = render_help(builtin_command_registry())
-
-
-@dataclass(frozen=True)
-class CommandResult:
-    """会话命令的可渲染结果；业务层不直接操作终端。"""
-
-    handled: bool
-    output: tuple[str, ...] = ()
-    run_prompt: Optional[str] = None
-    clear_tool_outputs: bool = False
-
-    @classmethod
-    def unhandled(cls) -> "CommandResult":
-        return cls(handled=False)
 
 
 class SessionController:
@@ -106,272 +95,42 @@ class SessionController:
         return await self.runtime.stop()
 
     async def execute_command(self, user_input: str) -> CommandResult:
-        """执行会话级斜杠命令；普通消息返回 unhandled。"""
+        """解析并分发内置业务命令；UI/Control 命令由前台处理。"""
         if not user_input.startswith("/"):
             return CommandResult.unhandled()
-
-        output: list[str] = []
-
-        def emit(text: str) -> None:
-            output.append(str(text))
-
-        run_prompt: Optional[str] = None
-        clear_tool_outputs = False
-
-        if user_input == "/help":
-            emit(render_help(self.command_registry))
-        elif user_input == "/tools":
-            for name in self.loop.registry.names():
-                tool = self.loop.registry.get(name)
-                emit(f"  {name}: {tool.description}")
-        elif user_input == "/session":
-            emit(f"  当前会话文件: {self.session_path or '（未启用，--no-session）'}")
-        elif user_input == "/sessions":
-            if self.sessions_dir is None:
-                emit("  （会话目录未知）")
-            else:
-                emit(format_sessions(list_sessions(self.sessions_dir)))
-        elif user_input.startswith("/resume"):
-            parts = user_input.split(maxsplit=1)
-            target = parts[1].strip() if len(parts) > 1 else "latest"
-            path = resolve_resume_target(target, self.sessions_dir)
-            if path is None:
-                emit(f"  （找不到会话: {target}；用 /sessions 查看列表）")
-            elif restore_session(self.loop, path, log=emit):
-                clear_tool_outputs = True
-        elif user_input == "/mcp" or user_input.startswith("/mcp "):
-            if self.mcp_supervisor is None:
-                emit("  （MCP 未启用）")
-            else:
-                parts = user_input.split(maxsplit=1)
-                sub = parts[1].strip() if len(parts) > 1 else ""
-                if sub == "reload":
-                    restarted = await self.mcp_reload() if self.mcp_reload else []
-                    note = f"，重启: {', '.join(restarted)}" if restarted else ""
-                    emit(f"  [mcp] 配置已同步{note}")
-                status = self.mcp_supervisor.status()
-                for item in status:
-                    state = "在线" if item["alive"] else "已断开"
-                    emit(f"  {item['name']}（{item['server']}，{item['transport']}）"
-                         f"{state}，{item['tools']} 个工具")
-                if not status:
-                    emit("  （没有配置 MCP 服务器；在 krelcode.toml 的 "
-                         "[mcp_servers.*] 里声明）")
-        elif user_input == "/agents":
-            if self.subagents is None:
-                emit("  （子代理未启用）")
-            else:
-                lines = self.subagents.status_lines()
-                emit("\n".join(f"  {line}" for line in lines)
-                     if lines else "  （暂无子代理）")
-        elif user_input == "/skills" or user_input.startswith("/skills "):
-            if self.skills is None or not getattr(self.skills, "enabled", False):
-                emit("  （Skills 未启用：移除 --no-skills 或在配置中设置 "
-                     "skills.enabled=true）")
-            else:
-                parts = user_input.split(maxsplit=2)
-                sub = parts[1].strip() if len(parts) > 1 else ""
-                if sub == "reload":
-                    report = (self.skills_reload() if self.skills_reload
-                              else self.skills.reload())
-                    emit(f"  [skills] 已重载 {report.count} 个 Skill")
-                    for issue in report.issues:
-                        emit(f"  [skills] 跳过无效 Skill: {issue.path}: {issue.message}")
-                elif sub == "show":
-                    if len(parts) < 3 or not parts[2].strip():
-                        emit("  用法: /skills show <name>")
-                    else:
-                        emit(_format_skill_details(self.skills, parts[2].strip()))
-                else:
-                    query = sub
-                    items = self.skills.list(query=query)
-                    if not items:
-                        emit("  （没有匹配的 Skill）" if query else "  （未发现 Skill）")
-                    for skill in items:
-                        flags = []
-                        if not skill.user_invocable:
-                            flags.append("仅模型")
-                        if skill.disable_model_invocation:
-                            flags.append("仅用户")
-                        flag_text = f" [{', '.join(flags)}]" if flags else ""
-                        hint = f" · {skill.argument_hint}" if skill.argument_hint else ""
-                        emit(f"  {skill.name}: {skill.description}{hint}{flag_text}")
-                    if items:
-                        emit("  使用 /skills show <name> 查看详情，"
-                             "/skill <name> [参数] 调用")
-                    for issue in self.skills.issues:
-                        emit(f"  [skills] 跳过无效 Skill: {issue.path}: {issue.message}")
-        elif user_input.startswith("/skill "):
-            if self.skills is None or not getattr(self.skills, "enabled", False):
-                emit("  （Skills 未启用：移除 --no-skills 或在配置中设置 "
-                     "skills.enabled=true）")
-            else:
-                parts = user_input.split(maxsplit=2)
-                if len(parts) < 2 or not parts[1].strip():
-                    emit("  用法: /skill <name> [参数]")
-                else:
-                    name = parts[1].strip()
-                    arguments = parts[2] if len(parts) > 2 else ""
-                    try:
-                        run_prompt = self.skills.user_prompt(name, arguments)
-                    except Exception as exc:
-                        emit(f"  [skill] {exc}")
-                    else:
-                        emit(f"  [skill] 已加载并执行: {name}")
-        elif user_input == "/undo" or user_input.startswith("/undo "):
-            if self.checkpoints is None:
-                emit("  （检查点未启用：--no-checkpoint）")
-            else:
-                parts = user_input.split(maxsplit=1)
-                arg = parts[1].strip() if len(parts) > 1 else ""
-                if arg == "list":
-                    lines = self.checkpoints.list_groups()
-                    emit("\n".join(f"  {line}" for line in lines)
-                         if lines else "  （无可回滚的检查点）")
-                else:
-                    result = self.checkpoints.undo_last()
-                    if result is None:
-                        emit("  （无可回滚的检查点）")
-                    else:
-                        parts_desc = []
-                        if result.restored:
-                            parts_desc.append(
-                                f"还原 {len(result.restored)} 个: "
-                                f"{', '.join(result.restored)}")
-                        if result.deleted:
-                            parts_desc.append(
-                                f"删除新建 {len(result.deleted)} 个: "
-                                f"{', '.join(result.deleted)}")
-                        label = f"（{result.label}）" if result.label else ""
-                        detail = "；".join(parts_desc) if parts_desc else "无文件变化"
-                        emit(f"  [undo] 已回滚上一轮{label}: {detail}")
-        elif user_input == "/model" or user_input.startswith("/model "):
-            if self.model_switch is None:
-                emit("  （模型切换不可用）")
-            else:
-                parts = user_input.split(maxsplit=1)
-                target = parts[1].strip() if len(parts) > 1 else None
-                emit(f"  [model] {self.model_switch(target)}")
-        elif user_input == "/allow" or user_input.startswith("/allow "):
-            rules = getattr(self.loop.policy, "rules", None)
-            if rules is None:
-                emit("  （安全策略未启用（--no-sandbox），无审批白名单）")
-            else:
-                parts = user_input.split()
-                if len(parts) == 1:
-                    listed = rules.as_list()
-                    emit("  已允许的程序: " + (", ".join(listed) if listed else "（空）"))
-                    emit(f"  规则文件: {rules.path or '（仅内存）'}")
-                elif len(parts) == 3 and parts[1] == "add":
-                    added = rules.add_program(parts[2])
-                    emit(f"  [allow] {'已添加' if added else '已存在，无需重复添加'}: "
-                         f"{parts[2]}")
-                elif len(parts) == 3 and parts[1] == "remove":
-                    removed = rules.remove_program(parts[2])
-                    emit(f"  [allow] {'已移除' if removed else '规则不存在'}: {parts[2]}")
-                else:
-                    emit("  用法: /allow | /allow add <程序名> | "
-                         "/allow remove <程序名>")
-        elif user_input == "/cost":
-            emit(f"  [cost] {self.usage.summary()}" if self.usage
-                 else "  （用量统计不可用）")
-        elif user_input == "/context" or user_input.startswith("/context "):
-            parts = user_input.split(maxsplit=1)
-            sub = parts[1].strip() if len(parts) > 1 else ""
-            if sub == "refresh":
-                context = await build_workspace_context(self.workspace_root)
-                if self.loop.history and self.loop.history[0].role == "system":
-                    base_prompt = build_system_prompt(context)
-                    self.loop.skill_base_prompt = base_prompt
-                    self.loop.history[0].content = (
-                        self.skills.apply_to_prompt(base_prompt)
-                        if self.skills else base_prompt)
-                    emit("  [context] 工作区上下文已刷新（目录树/git/规则文件）")
-                else:
-                    emit("  [context] 历史中无 system 消息，未刷新")
-            else:
-                total = estimate_history_tokens(self.loop.history)
-                budget = (self.loop.context_manager.max_tokens
-                          if self.loop.context_manager else "未启用压缩")
-                tool_messages = sum(
-                    1 for message in self.loop.history if message.role == "tool")
-                emit(f"  [context] 历史 {len(self.loop.history)} 条消息"
-                     f"（含 {tool_messages} 条工具结果） · 估算 {total} tokens"
-                     f" · 预算 {budget}")
-        elif user_input == "/compact":
-            if self.loop.context_manager is None:
-                emit("  （上下文压缩未启用：--no-compress）")
-            else:
-                before = estimate_history_tokens(self.loop.history)
-                done = await self.loop.context_manager.maybe_compress(
-                    self.loop.history, force=True)
-                after = estimate_history_tokens(self.loop.history)
-                if done:
-                    emit(f"  [compact] 已压缩: {before} → {after} tokens")
-                else:
-                    emit(f"  [compact] 历史太短，无需压缩（当前约 {before} tokens）")
-        elif user_input == "/export" or user_input.startswith("/export "):
-            parts = user_input.split(maxsplit=1)
-            try:
-                if len(parts) > 1:
-                    out = export_session(self.loop.history, Path(parts[1].strip()))
-                else:
-                    out = export_session(
-                        self.loop.history,
-                        export_dir=self.workspace_root / ".krelcode" / "exports")
-                emit(f"  [export] 已导出: {out}")
-            except OSError as exc:
-                emit(f"  [export] 导出失败: {exc}")
-        elif user_input == "/history":
-            for message in self.loop.history:
-                content = message.content or ""
-                extra = (f" tool_calls={[tc.name for tc in message.tool_calls]}"
-                         if message.tool_calls else "")
-                emit(f"  [{message.role}]{extra} {content}")
-        elif user_input == "/reset":
-            self.loop.reset()
-            clear_tool_outputs = True
-            emit("（历史已清空）")
-        else:
-            emit(f"  （未知命令: {user_input.split()[0]}，/help 查看可用命令）")
-
-        return CommandResult(
-            handled=True,
-            output=tuple(output),
-            run_prompt=run_prompt,
-            clear_tool_outputs=clear_tool_outputs,
+        token, _, arguments = user_input.partition(" ")
+        spec = self.command_registry.resolve(token)
+        if spec is not None and spec.kind not in (
+                CommandKind.COMMAND, CommandKind.PROMPT):
+            return CommandResult.unhandled()
+        name = spec.name if spec is not None else normalize_token(token)
+        request = CommandRequest(
+            name=name,
+            arguments=arguments.strip(),
+            raw_text=user_input,
         )
+        handler = BUILTIN_HANDLERS.get(name)
+        if handler is None:
+            return CommandResult(
+                handled=True,
+                output=(f"  （未知命令: /{name}，/help 查看可用命令）",),
+            )
+        return await handler(self._command_context(request))
 
-
-def _format_skill_details(skills, name: str) -> str:
-    """格式化 Skill 元数据、资源和完整说明。"""
-    try:
-        skill = skills.get(name)
-        if skill is None:
-            raise ValueError(f"未知 Skill: {name}")
-        lines = [
-            f"  [skill] {skill.name}",
-            f"  描述: {skill.description}",
-            f"  来源: {skill.source}",
-            f"  位置: {skill.location}",
-        ]
-        if skill.argument_hint:
-            lines.append(f"  参数: {skill.argument_hint}")
-        if skill.allowed_tools:
-            lines.append(f"  建议工具: {', '.join(skill.allowed_tools)}")
-        if skill.version:
-            lines.append(f"  版本: {skill.version}")
-        if skill.license:
-            lines.append(f"  许可证: {skill.license}")
-        resources = skills.list_resources(name)
-        if resources:
-            lines.append("  资源:")
-            for resource in resources[:50]:
-                lines.append(
-                    f"    {resource.kind:4s} {resource.size:>8d}  {resource.path}")
-            if len(resources) > 50:
-                lines.append(f"    … 另有 {len(resources) - 50} 个资源")
-        lines.append("\n" + skills.load(name, for_model=False))
-        return "\n".join(lines)
-    except Exception as exc:
-        return f"  [skill] {exc}"
+    def _command_context(self, request: CommandRequest) -> CommandContext:
+        return CommandContext(
+            request=request,
+            loop=self.loop,
+            command_registry=self.command_registry,
+            workspace_root=self.workspace_root,
+            session_path=self.session_path,
+            sessions_dir=self.sessions_dir,
+            mcp_supervisor=self.mcp_supervisor,
+            mcp_reload=self.mcp_reload,
+            subagents=self.subagents,
+            checkpoints=self.checkpoints,
+            usage=self.usage,
+            model_switch=self.model_switch,
+            skills=self.skills,
+            skills_reload=self.skills_reload,
+        )

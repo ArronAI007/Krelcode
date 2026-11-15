@@ -5,13 +5,23 @@ from .builtin import (
     builtin_command_specs,
     render_help,
 )
+from .context import CommandContext
 from .registry import CommandConflict, CommandRegistry, normalize_token
-from .types import CommandKind, CommandSource, CommandSpec
+from .types import (
+    CommandKind,
+    CommandRequest,
+    CommandResult,
+    CommandSource,
+    CommandSpec,
+)
 
 __all__ = [
     "CommandConflict",
+    "CommandContext",
     "CommandKind",
+    "CommandRequest",
     "CommandRegistry",
+    "CommandResult",
     "CommandSource",
     "CommandSpec",
     "builtin_command_registry",

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Optional
 
 
 class CommandKind(str, Enum):
@@ -21,6 +22,32 @@ class CommandSource(str, Enum):
     BUILTIN = "builtin"
     SKILL = "skill"
     MCP = "mcp"
+
+
+@dataclass(frozen=True)
+class CommandRequest:
+    """完成 registry 解析后的单次命令调用。"""
+
+    name: str
+    arguments: str = ""
+    raw_text: str = ""
+
+    def split(self, maxsplit: int = -1) -> list[str]:
+        return self.arguments.split(maxsplit=maxsplit)
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    """命令层的可渲染结果；不直接操作终端。"""
+
+    handled: bool
+    output: tuple[str, ...] = ()
+    run_prompt: Optional[str] = None
+    clear_tool_outputs: bool = False
+
+    @classmethod
+    def unhandled(cls) -> "CommandResult":
+        return cls(handled=False)
 
 
 @dataclass(frozen=True)
