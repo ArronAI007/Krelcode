@@ -18,7 +18,12 @@ from typing import Awaitable, Callable, Optional, Protocol, Union
 
 from ..core.events import ApprovalRequested, EventBus
 from ..core.messages import ToolCall
-from ..tools.base import ToolContext
+from ..tools.base import (
+    PermissionMode,
+    RunMode,
+    ToolContext,
+    ToolSource,
+)
 from .commands import RISK_ALLOW, RISK_DENY, classify_command
 from .rules import AllowRules
 
@@ -51,6 +56,7 @@ class AllowAllPolicy:
 # 工具风险分类（与 tools/builtin 对应；文件写工具的路径约束在 tools/paths.py 兜底）
 READONLY_TOOLS = {
     "get_time", "read_file", "grep", "glob",
+    "find_refs", "repo_map", "check_syntax",
     "list_skills", "load_skill", "list_skill_resources", "read_skill_resource",
 }
 WORKSPACE_WRITE_TOOLS = {"write_file", "edit_file"}
@@ -77,22 +83,42 @@ class SandboxPolicy:
 
     async def check(self, tool_call: ToolCall, ctx: ToolContext) -> Decision:
         name = tool_call.name
-        if name in READONLY_TOOLS:
+        descriptor = ctx.tool_descriptor
+        local_read_only = bool(
+            descriptor is not None
+            and descriptor.read_only
+            and descriptor.source is not ToolSource.MCP
+        )
+        restricted = (
+            ctx.runtime.permission_mode in {
+                PermissionMode.READ_ONLY,
+                PermissionMode.PLAN,
+            }
+            or ctx.runtime.run_mode is RunMode.REVIEW
+        )
+        if restricted and not (local_read_only or name in READONLY_TOOLS):
+            return deny(
+                "当前 read-only/plan/review 权限模式禁止有副作用的工具: "
+                f"{name}"
+            )
+        if local_read_only or name in READONLY_TOOLS:
             return ALLOW
         if name in WORKSPACE_WRITE_TOOLS:
-            # 工作区约束由 tools/paths.py 兜底；这里额外保护敏感文件
             protected = classify_protected_path(
                 str(tool_call.arguments.get("path", "")), ctx.workspace_root)
             if protected:
                 return await self._ask(
-                    tool_call, f"写入受保护路径（{protected}）")
+                    tool_call, f"写入受保护路径（{protected}）", ctx=ctx)
             return ALLOW
         if name in SHELL_TOOLS:
-            return await self._check_command(tool_call)
+            return await self._check_command(tool_call, ctx)
         # 未知/未来新工具：保守 ASK
-        return await self._ask(tool_call, f"未分级工具 {name}，保守请求审批")
+        return await self._ask(
+            tool_call, f"未分级工具 {name}，保守请求审批", ctx=ctx)
 
-    async def _check_command(self, tool_call: ToolCall) -> Decision:
+    async def _check_command(
+        self, tool_call: ToolCall, ctx: ToolContext,
+    ) -> Decision:
         if tool_call.name == "run_skill_script":
             script = str(tool_call.arguments.get("script", ""))
             raw_args = tool_call.arguments.get("args") or []
@@ -105,15 +131,27 @@ class SandboxPolicy:
             return deny(reason)
         if risk == RISK_ALLOW:
             return ALLOW
-        return await self._ask(tool_call, reason, command=command)
+        return await self._ask(tool_call, reason, command=command, ctx=ctx)
 
-    async def _ask(self, tool_call: ToolCall, reason: str, command: Optional[str] = None) -> Decision:
+    async def _ask(
+        self,
+        tool_call: ToolCall,
+        reason: str,
+        command: Optional[str] = None,
+        *,
+        ctx: Optional[ToolContext] = None,
+    ) -> Decision:
         # 1) 持久化规则命中
         if command is not None and self.rules.matches(command):
             return Decision(True, f"命中已存 allow 规则: {reason}")
         # 2) 全自动批准模式
-        if self.auto_approve:
-            return Decision(True, f"--auto-approve 自动批准: {reason}")
+        runtime_auto = bool(
+            ctx is not None
+            and ctx.runtime.permission_mode is PermissionMode.AUTO_APPROVE
+        )
+        if self.auto_approve or runtime_auto:
+            source = "运行时权限模式" if runtime_auto else "--auto-approve"
+            return Decision(True, f"{source}自动批准: {reason}")
         # 3) 交互审批
         if self.bus is not None:
             await self.bus.emit(ApprovalRequested(tool_call, reason))

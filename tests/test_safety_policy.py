@@ -10,7 +10,14 @@ from krelcode.core.events import ApprovalRequested, EventBus
 from krelcode.core.messages import ToolCall
 from krelcode.safety.policy import ALLOW, AllowAllPolicy, SandboxPolicy
 from krelcode.safety.rules import AllowRules, command_program
-from krelcode.tools.base import ToolContext, ToolDescriptor, ToolSource
+from krelcode.tools.base import (
+    PermissionMode,
+    RunMode,
+    RuntimeSnapshot,
+    ToolContext,
+    ToolDescriptor,
+    ToolSource,
+)
 
 
 @pytest.fixture
@@ -38,7 +45,10 @@ class ScriptedApprover:
 
 # -- 工具分级 --------------------------------------------------------------------
 
-@pytest.mark.parametrize("name", ["get_time", "read_file", "grep", "glob"])
+@pytest.mark.parametrize("name", [
+    "get_time", "read_file", "grep", "glob", "find_refs", "repo_map",
+    "check_syntax",
+])
 def test_readonly_tools_always_allowed(ctx, name):
     policy = SandboxPolicy(approver=ScriptedApprover())
     d = run(policy.check(ToolCall("c", name, {}), ctx))
@@ -163,3 +173,57 @@ def test_remote_readonly_hint_does_not_bypass_approval(tmp_path):
     # readOnlyHint 只用于调度/展示，不能作为远端服务器的免审批凭证。
     assert not decision.allowed
     assert "非交互" in decision.reason
+
+
+def test_read_only_and_plan_modes_deny_side_effects_at_policy_layer(tmp_path):
+    for mode in (PermissionMode.READ_ONLY, PermissionMode.PLAN):
+        approver = ScriptedApprover("yes")
+        ctx = ToolContext(
+            workspace_root=tmp_path,
+            runtime=RuntimeSnapshot(permission_mode=mode),
+            tool_descriptor=ToolDescriptor(read_only=False),
+        )
+        decision = run(SandboxPolicy(approver=approver).check(
+            ToolCall("w", "write_file", {"path": "safe.txt", "content": "x"}), ctx))
+        assert not decision.allowed
+        assert "禁止有副作用" in decision.reason
+        assert approver.calls == []          # 权限模式不能靠审批越权
+
+
+def test_review_run_mode_denies_mutating_tool_at_policy_layer(tmp_path):
+    ctx = ToolContext(
+        workspace_root=tmp_path,
+        runtime=RuntimeSnapshot(run_mode=RunMode.REVIEW),
+        tool_descriptor=ToolDescriptor(read_only=False),
+    )
+    decision = run(SandboxPolicy().check(
+        ToolCall("e", "edit_file", {"path": "a.py", "old_string": "a", "new_string": "b"}),
+        ctx,
+    ))
+    assert not decision.allowed and "review" in decision.reason
+
+
+def test_local_readonly_descriptor_allows_new_readonly_tool_in_restricted_mode(tmp_path):
+    ctx = ToolContext(
+        workspace_root=tmp_path,
+        runtime=RuntimeSnapshot(permission_mode=PermissionMode.READ_ONLY),
+        tool_descriptor=ToolDescriptor(read_only=True),
+    )
+    decision = run(SandboxPolicy().check(
+        ToolCall("c", "future_readonly_tool", {}), ctx))
+    assert decision.allowed
+
+
+def test_runtime_auto_approve_handles_ask_but_still_respects_deny(tmp_path):
+    ctx = ToolContext(
+        workspace_root=tmp_path,
+        runtime=RuntimeSnapshot(permission_mode=PermissionMode.AUTO_APPROVE),
+        tool_descriptor=ToolDescriptor(
+            source=ToolSource.MCP, mcp_server="catalog", read_only=True),
+    )
+    policy = SandboxPolicy(approver=None)
+    assert run(policy.check(ToolCall("m", "catalog__search", {}), ctx)).allowed
+
+    denied = run(policy.check(
+        ToolCall("d", "run_command", {"command": "dd if=/dev/zero of=x"}), ctx))
+    assert not denied.allowed
