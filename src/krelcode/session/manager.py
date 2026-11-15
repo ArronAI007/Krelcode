@@ -78,3 +78,21 @@ def format_sessions(infos: List[SessionInfo]) -> str:
         )
         lines.append(f"      {info.path}")
     return "\n".join(lines)
+
+
+
+def resolve_resume_target(target: str, sessions_dir: Optional[Path]) -> Optional[Path]:
+    """把 latest / 序号 / 文件路径解析为会话文件。"""
+    if sessions_dir is None:
+        return Path(target) if Path(target).is_file() else None
+    if target == "latest":
+        infos = list_sessions(sessions_dir)
+        return infos[0].path if infos else None
+    if target.isdigit():
+        infos = list_sessions(sessions_dir)
+        idx = int(target)
+        if 1 <= idx <= len(infos):
+            return infos[idx - 1].path
+        return None
+    path = Path(target)
+    return path if path.is_file() else None

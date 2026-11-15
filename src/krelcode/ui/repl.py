@@ -4,7 +4,7 @@
 - 真实 TTY 由 daemon reader 线程持续读输入 → inbox 队列；测试经 input_fn 注入，零终端
 - 主循环用 asyncio.wait 同时盯 inbox 与运行中的 agent 任务：
   · IDLE：处理 /命令；普通消息（含 @文件展开）→ 启动 loop.run 后台任务
-  · RUNNING：普通文本 → loop.steering_queue（模型在下一 step 看到）；
+  · RUNNING：普通文本 → SessionController.steer（模型在下一 step 看到）；
     /stop 取消并消毒历史；/exit 停止并退出；其他斜杠命令给提示
 - 任务自然结束后，队列里未送达的插话会被丢弃并提示（语义可见，不静默吞）
 - 最终回复由 StreamRenderer 流式打印（订阅事件总线）
@@ -33,40 +33,10 @@ except ImportError:  # pragma: no cover - Windows
 
 from .. import __version__
 from ..agent.loop import AgentLoop
-from ..session.export import export_session
-from ..session.manager import format_sessions, list_sessions
+from ..session.controller import HELP_TEXT, SessionController
+from ..session.manager import resolve_resume_target
 from .atfiles import expand_at_files
 from .render import CYAN, DIM, RESET, StreamRenderer, auto_color
-
-HELP_TEXT = """可用命令：
-  /help          显示本帮助
-  /history       查看当前对话历史
-  /thinking      展开最近一次思考（保留 Markdown 多行）
-  /tool-output   列出工具输出；/tool-output <编号|last> 展开灰色面板
-  /tools         列出已注册工具
-  /session       显示当前会话文件路径
-  /sessions      列出工作区的全部会话
-  /resume <n>    切换到第 n 个会话（/sessions 里的序号；latest=最新）
-  /mcp           查看 MCP 服务器状态；/mcp reload 重读配置并热重启
-  /agents        列出子代理（后台任务）状态
-  /skills        列出 Skill；/skills reload 热重载；/skills show <name> 查看详情
-  /skill <name> [参数]  用户主动加载并执行一个 Skill
-  /undo          回滚上一轮对话的文件改动（检查点恢复；/undo list 查看栈）
-  /cost          显示 token 用量（本轮 + 会话累计 + 估算成本）
-  /model [p/m]   查看/热切换模型（"gpt-4o" 沿用当前 provider，
-                 "anthropic/claude-sonnet-4-5" 跨 provider）
-  /allow         查看命令审批白名单；/allow add <程序名> 添加、
-                 /allow remove <程序名> 移除（持久化到工作区）
-  /context       显示上下文统计；/context refresh 重新采集工作区上下文
-  /export [路径] 把当前会话导出为 Markdown（缺省存 .krelcode/exports/）
-  /compact       立即压缩对话历史（LLM 摘要，不必等预算超限）
-  /stop          中止正在运行的任务（历史自动修复）
-  /reset         清空对话历史
-  /exit          退出（Ctrl-D / Ctrl-C 同样有效）
-任务运行中：直接输入文字 = 插话（steering）；/thinking 展开思考；
-/tool-output <编号> 展开工具输出；/stop 中止。
-输入 / 会实时显示匹配命令，Tab 可补全唯一匹配；↑/↓ 调取本次会话的历史问题。
-其他任何输入都会作为消息发给 agent；消息里可用 @路径 引用文件。"""
 
 RUNNING_HINT = ("  （任务运行中：直接输入=插话，/thinking 展开思考，"
                 "/tool-output <编号> 展开输出，/stop 中止，/exit 退出）")
@@ -491,8 +461,6 @@ async def run_repl(
     input_fn=None,
     redactor=None,
 ) -> int:
-    from ..app import restore_session  # 延迟导入避免 ui→app 循环依赖
-
     use_color = auto_color()
     prompt = PromptWriter(color=use_color)
 
@@ -505,6 +473,20 @@ async def run_repl(
     input_history = InputHistory()
     unsubscribe = loop.bus.subscribe(renderer)
     workspace_root = loop.tool_context.workspace_root
+    controller = SessionController(
+        loop,
+        session_path=session_path,
+        sessions_dir=sessions_dir,
+        mcp_supervisor=mcp_supervisor,
+        mcp_reload=mcp_reload,
+        subagents=subagents,
+        checkpoints=checkpoints,
+        usage=usage,
+        model_switch=model_switch,
+        skills=skills,
+        skills_reload=skills_reload,
+        workspace_root=workspace_root,
+    )
 
     print_banner(loop, tool_names, session_path=session_path)
 
@@ -568,11 +550,7 @@ async def run_repl(
 
     def drain_steering_notes() -> None:
         """任务结束后丢弃未送达的插话（可见地），避免悄悄留到下一轮。"""
-        while not loop.steering_queue.empty():
-            try:
-                leftover = loop.steering_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
+        for leftover in controller.drain_steering():
             print(f"  ⎿ 任务已结束，未送达的插话已丢弃: {str(leftover)[:60]}")
 
     restore_prompt()
@@ -613,8 +591,7 @@ async def run_repl(
             if item is None:
                 prompt.hide()
                 if running is not None:
-                    running.cancel()
-                    await asyncio.gather(running, return_exceptions=True)
+                    await controller.stop()
                     renderer.end_stream()
                 return 0
 
@@ -625,8 +602,7 @@ async def run_repl(
             if running is not None:
                 prompt.hide()
                 if user_input == "/stop":
-                    running.cancel()
-                    await asyncio.gather(running, return_exceptions=True)
+                    await controller.stop()
                     state["running"] = False
                     running = None
                     renderer.end_stream()
@@ -635,8 +611,7 @@ async def run_repl(
                     restore_prompt()
                     continue
                 if user_input == "/exit":
-                    running.cancel()
-                    await asyncio.gather(running, return_exceptions=True)
+                    await controller.stop()
                     renderer.end_stream()
                     return 0
                 if user_input == "/thinking":
@@ -658,8 +633,7 @@ async def run_repl(
                     restore_prompt()
                     continue
                 if user_input:
-                    loop.steering_queue.put_nowait(user_input)
-                    preview = user_input if len(user_input) <= 40 else user_input[:40] + "…"
+                    preview = controller.steer(user_input)
                     print(f"  ⎿ 插话已排队（模型下一步看到）: {preview}")
                 restore_prompt()
                 continue
@@ -682,9 +656,9 @@ async def run_repl(
                 session_path=session_path, sessions_dir=sessions_dir,
                 mcp_supervisor=mcp_supervisor, mcp_reload=mcp_reload,
                 subagents=subagents, checkpoints=checkpoints, usage=usage,
-                restore_session=restore_session, workspace_root=workspace_root,
+                restore_session=None, workspace_root=workspace_root,
                 model_switch=model_switch, skills=skills,
-                skills_reload=skills_reload,
+                skills_reload=skills_reload, controller=controller,
             )
             if handled is not None and not isinstance(handled, str):
                 restore_prompt()
@@ -703,7 +677,7 @@ async def run_repl(
             if prompt.enabled:
                 status = "  ⋯ 工作中 · 输入文字可插话 · /stop 中止"
                 print(f"{DIM}{status}{RESET}" if use_color else status)
-            running = asyncio.create_task(loop.run(expanded, images=at_images or None))
+            running = controller.start_run(expanded, images=at_images or None)
             restore_prompt()
     finally:
         if reader_task is not None:
@@ -713,270 +687,68 @@ async def run_repl(
         unsubscribe()
 
 
-async def _handle_command(user_input, loop, renderer, *, session_path, sessions_dir,
-                          mcp_supervisor, mcp_reload, subagents, checkpoints,
-                          usage, restore_session, workspace_root, model_switch=None,
-                          skills=None, skills_reload=None):
-    """处理 IDLE 态斜杠命令；非命令返回 None，待运行 prompt 返回字符串。"""
+async def _handle_command(
+    user_input,
+    loop,
+    renderer,
+    *,
+    session_path,
+    sessions_dir,
+    mcp_supervisor,
+    mcp_reload,
+    subagents,
+    checkpoints,
+    usage,
+    restore_session,
+    workspace_root,
+    model_switch=None,
+    skills=None,
+    skills_reload=None,
+    controller: Optional[SessionController] = None,
+):
+    """兼容入口：终端展示命令留在 UI，业务命令委托 SessionController。"""
     if not user_input.startswith("/"):
         return None
 
-    if user_input == "/help":
-        print(HELP_TEXT)
-    elif user_input == "/tools":
-        for name in loop.registry.names():
-            tool = loop.registry.get(name)
-            print(f"  {name}: {tool.description}")
-    elif user_input == "/session":
-        print(f"  当前会话文件: {session_path or '（未启用，--no-session）'}")
-    elif user_input == "/sessions":
-        if sessions_dir is None:
-            print("  （会话目录未知）")
-        else:
-            print(format_sessions(list_sessions(sessions_dir)))
-    elif user_input.startswith("/resume"):
-        parts = user_input.split(maxsplit=1)
-        target = parts[1].strip() if len(parts) > 1 else "latest"
-        path = _resolve_resume_target(target, sessions_dir)
-        if path is None:
-            print(f"  （找不到会话: {target}；用 /sessions 查看列表）")
-        else:
-            restore_session(loop, path)
-            renderer.clear_tool_outputs()
-    elif user_input == "/mcp" or user_input.startswith("/mcp "):
-        if mcp_supervisor is None:
-            print("  （MCP 未启用）")
-        else:
-            parts = user_input.split(maxsplit=1)
-            sub = parts[1].strip() if len(parts) > 1 else ""
-            if sub == "reload":
-                restarted = await mcp_reload() if mcp_reload else []
-                note = f"，重启: {', '.join(restarted)}" if restarted else ""
-                print(f"  [mcp] 配置已同步{note}")
-            for item in mcp_supervisor.status():
-                state = "在线" if item["alive"] else "已断开"
-                print(f"  {item['name']}（{item['server']}，{item['transport']}）"
-                      f"{state}，{item['tools']} 个工具")
-            if not mcp_supervisor.status():
-                print("  （没有配置 MCP 服务器；在 krelcode.toml 的 [mcp_servers.*] 里声明）")
-    elif user_input == "/agents":
-        if subagents is None:
-            print("  （子代理未启用）")
-        else:
-            lines = subagents.status_lines()
-            print("\n".join(f"  {l}" for l in lines) if lines else "  （暂无子代理）")
-    elif user_input == "/skills" or user_input.startswith("/skills "):
-        if skills is None or not getattr(skills, "enabled", False):
-            print("  （Skills 未启用：移除 --no-skills 或在配置中设置 skills.enabled=true）")
-        else:
-            parts = user_input.split(maxsplit=2)
-            sub = parts[1].strip() if len(parts) > 1 else ""
-            if sub == "reload":
-                report = skills_reload() if skills_reload else skills.reload()
-                print(f"  [skills] 已重载 {report.count} 个 Skill")
-                for issue in report.issues:
-                    print(f"  [skills] 跳过无效 Skill: {issue.path}: {issue.message}")
-            elif sub == "show":
-                if len(parts) < 3 or not parts[2].strip():
-                    print("  用法: /skills show <name>")
-                else:
-                    _print_skill_details(skills, parts[2].strip())
-            else:
-                query = sub
-                items = skills.list(query=query)
-                if not items:
-                    print("  （没有匹配的 Skill）" if query else "  （未发现 Skill）")
-                for skill in items:
-                    flags = []
-                    if not skill.user_invocable:
-                        flags.append("仅模型")
-                    if skill.disable_model_invocation:
-                        flags.append("仅用户")
-                    flag_text = f" [{', '.join(flags)}]" if flags else ""
-                    hint = f" · {skill.argument_hint}" if skill.argument_hint else ""
-                    print(f"  {skill.name}: {skill.description}{hint}{flag_text}")
-                if items:
-                    print("  使用 /skills show <name> 查看详情，/skill <name> [参数] 调用")
-                for issue in skills.issues:
-                    print(f"  [skills] 跳过无效 Skill: {issue.path}: {issue.message}")
-    elif user_input.startswith("/skill "):
-        if skills is None or not getattr(skills, "enabled", False):
-            print("  （Skills 未启用：移除 --no-skills 或在配置中设置 skills.enabled=true）")
-        else:
-            parts = user_input.split(maxsplit=2)
-            if len(parts) < 2 or not parts[1].strip():
-                print("  用法: /skill <name> [参数]")
-            else:
-                name = parts[1].strip()
-                arguments = parts[2] if len(parts) > 2 else ""
-                try:
-                    prompt = skills.user_prompt(name, arguments)
-                except Exception as e:
-                    print(f"  [skill] {e}")
-                else:
-                    print(f"  [skill] 已加载并执行: {name}")
-                    return prompt
-    elif user_input == "/undo" or user_input.startswith("/undo "):
-        if checkpoints is None:
-            print("  （检查点未启用：--no-checkpoint）")
-        else:
-            parts = user_input.split(maxsplit=1)
-            arg = parts[1].strip() if len(parts) > 1 else ""
-            if arg == "list":
-                lines = checkpoints.list_groups()
-                print("\n".join(f"  {l}" for l in lines) if lines else "  （无可回滚的检查点）")
-            else:
-                result = checkpoints.undo_last()
-                if result is None:
-                    print("  （无可回滚的检查点）")
-                else:
-                    parts_desc = []
-                    if result.restored:
-                        parts_desc.append(f"还原 {len(result.restored)} 个: {', '.join(result.restored)}")
-                    if result.deleted:
-                        parts_desc.append(f"删除新建 {len(result.deleted)} 个: {', '.join(result.deleted)}")
-                    label = f"（{result.label}）" if result.label else ""
-                    print(f"  [undo] 已回滚上一轮{label}: {'；'.join(parts_desc) if parts_desc else '无文件变化'}")
-    elif user_input == "/model" or user_input.startswith("/model "):
-        if model_switch is None:
-            print("  （模型切换不可用）")
-        else:
-            parts = user_input.split(maxsplit=1)
-            target = parts[1].strip() if len(parts) > 1 else None
-            print(f"  [model] {model_switch(target)}")
-    elif user_input == "/allow" or user_input.startswith("/allow "):
-        rules = getattr(loop.policy, "rules", None)
-        if rules is None:
-            print("  （安全策略未启用（--no-sandbox），无审批白名单）")
-        else:
-            parts = user_input.split()
-            if len(parts) == 1:
-                listed = rules.as_list()
-                print("  已允许的程序: " + (", ".join(listed) if listed else "（空）"))
-                print(f"  规则文件: {rules.path or '（仅内存）'}")
-            elif len(parts) == 3 and parts[1] == "add":
-                added = rules.add_program(parts[2])
-                print(f"  [allow] {'已添加' if added else '已存在，无需重复添加'}: {parts[2]}")
-            elif len(parts) == 3 and parts[1] == "remove":
-                removed = rules.remove_program(parts[2])
-                print(f"  [allow] {'已移除' if removed else '规则不存在'}: {parts[2]}")
-            else:
-                print("  用法: /allow | /allow add <程序名> | /allow remove <程序名>")
-    elif user_input == "/cost":
-        print(f"  [cost] {usage.summary()}" if usage else "  （用量统计不可用）")
-    elif user_input == "/context" or user_input.startswith("/context "):
-        from ..agent.tokens import estimate_history_tokens
-        parts = user_input.split(maxsplit=1)
-        sub = parts[1].strip() if len(parts) > 1 else ""
-        if sub == "refresh":
-            from ..agent.context import build_workspace_context
-            from ..agent.prompts import build_system_prompt
-            ctx_text = await build_workspace_context(workspace_root)
-            if loop.history and loop.history[0].role == "system":
-                base_prompt = build_system_prompt(ctx_text)
-                loop.skill_base_prompt = base_prompt
-                loop.history[0].content = (
-                    skills.apply_to_prompt(base_prompt) if skills else base_prompt)
-                print("  [context] 工作区上下文已刷新（目录树/git/规则文件）")
-            else:
-                print("  [context] 历史中无 system 消息，未刷新")
-        else:
-            total = estimate_history_tokens(loop.history)
-            budget = (loop.context_manager.max_tokens
-                      if loop.context_manager else "未启用压缩")
-            tool_msgs = sum(1 for m in loop.history if m.role == "tool")
-            print(f"  [context] 历史 {len(loop.history)} 条消息（含 {tool_msgs} 条工具结果）"
-                  f" · 估算 {total} tokens · 预算 {budget}")
-    elif user_input == "/compact":
-        if loop.context_manager is None:
-            print("  （上下文压缩未启用：--no-compress）")
-        else:
-            from ..agent.tokens import estimate_history_tokens
-            before = estimate_history_tokens(loop.history)
-            done = await loop.context_manager.maybe_compress(loop.history, force=True)
-            after = estimate_history_tokens(loop.history)
-            if done:
-                print(f"  [compact] 已压缩: {before} → {after} tokens")
-            else:
-                print(f"  [compact] 历史太短，无需压缩（当前约 {before} tokens）")
-    elif user_input == "/export" or user_input.startswith("/export "):
-        parts = user_input.split(maxsplit=1)
-        try:
-            if len(parts) > 1:
-                out = export_session(loop.history, Path(parts[1].strip()))
-            else:
-                out = export_session(
-                    loop.history,
-                    export_dir=workspace_root / ".krelcode" / "exports")
-            print(f"  [export] 已导出: {out}")
-        except OSError as e:
-            print(f"  [export] 导出失败: {e}")
-    elif user_input == "/thinking":
+    # 这两类命令操作的是当前终端 renderer 的展示缓存，不属于会话业务状态。
+    if user_input == "/thinking":
         if not renderer.expand_thinking():
             print("  （暂无思考内容）")
-    elif user_input == "/tool-output" or user_input.startswith("/tool-output "):
+        return False
+    if user_input == "/tool-output" or user_input.startswith("/tool-output "):
         parts = user_input.split(maxsplit=1)
         if len(parts) == 1:
             if not renderer.list_tool_outputs():
                 print("  （暂无可展开的工具输出）")
         elif not renderer.expand_tool_output(parts[1].strip()):
             print("  （未找到工具输出；输入 /tool-output 查看编号）")
-    elif user_input == "/history":
-        for m in loop.history:
-            content = m.content or ""
-            extra = f" tool_calls={[tc.name for tc in m.tool_calls]}" if m.tool_calls else ""
-            print(f"  [{m.role}]{extra} {content}")
-    elif user_input == "/reset":
-        loop.reset()
+        return False
+
+    if controller is None:
+        controller = SessionController(
+            loop,
+            session_path=session_path,
+            sessions_dir=sessions_dir,
+            mcp_supervisor=mcp_supervisor,
+            mcp_reload=mcp_reload,
+            subagents=subagents,
+            checkpoints=checkpoints,
+            usage=usage,
+            model_switch=model_switch,
+            skills=skills,
+            skills_reload=skills_reload,
+            workspace_root=workspace_root,
+        )
+    result = await controller.execute_command(user_input)
+    for line in result.output:
+        print(line)
+    if result.clear_tool_outputs:
         renderer.clear_tool_outputs()
-        print("（历史已清空）")
-    else:
-        print(f"  （未知命令: {user_input.split()[0]}，/help 查看可用命令）")
+    if result.run_prompt is not None:
+        return result.run_prompt
     return False
 
 
-def _print_skill_details(skills, name: str) -> None:
-    """在 REPL 中展示 Skill 元数据、资源和完整说明。"""
-    try:
-        skill = skills.get(name)
-        if skill is None:
-            raise ValueError(f"未知 Skill: {name}")
-        print(f"  [skill] {skill.name}")
-        print(f"  描述: {skill.description}")
-        print(f"  来源: {skill.source}")
-        print(f"  位置: {skill.location}")
-        if skill.argument_hint:
-            print(f"  参数: {skill.argument_hint}")
-        if skill.allowed_tools:
-            print(f"  建议工具: {', '.join(skill.allowed_tools)}")
-        if skill.version:
-            print(f"  版本: {skill.version}")
-        if skill.license:
-            print(f"  许可证: {skill.license}")
-        resources = skills.list_resources(name)
-        if resources:
-            print("  资源:")
-            for resource in resources[:50]:
-                print(f"    {resource.kind:4s} {resource.size:>8d}  {resource.path}")
-            if len(resources) > 50:
-                print(f"    … 另有 {len(resources) - 50} 个资源")
-        print("\n" + skills.load(name, for_model=False))
-    except Exception as e:
-        print(f"  [skill] {e}")
-
-
 def _resolve_resume_target(target: str, sessions_dir: Optional[Path]) -> Optional[Path]:
-    """latest / 序号 / 文件路径 → 会话文件。"""
-    if sessions_dir is None:
-        return Path(target) if Path(target).is_file() else None
-    if target == "latest":
-        infos = list_sessions(sessions_dir)
-        return infos[0].path if infos else None
-    if target.isdigit():
-        infos = list_sessions(sessions_dir)
-        idx = int(target)
-        if 1 <= idx <= len(infos):
-            return infos[idx - 1].path
-        return None
-    path = Path(target)
-    return path if path.is_file() else None
+    """兼容旧测试/嵌入方的导入路径。"""
+    return resolve_resume_target(target, sessions_dir)
