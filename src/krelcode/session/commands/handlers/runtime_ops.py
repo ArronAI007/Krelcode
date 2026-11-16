@@ -625,6 +625,35 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             *[f"  {line}" for line in bundle.summary_lines()],
         )
 
+    if operation == "sources":
+        assembler = getattr(ctx.loop, "context_assembler", None)
+        if assembler is None:
+            return _ok("  （ContextAssembler 未启用）")
+        names = tuple(getattr(assembler, "source_names", ()) or ())
+        lines = [
+            f"  [sources] 已注册 {len(names)} 个 ContextSource: "
+            f"{', '.join(names) if names else '(none)'}",
+        ]
+        assembly = getattr(ctx.loop, "last_context_assembly", None)
+        if assembly is not None:
+            lines.append(
+                f"  最近装配: {len(assembly.layers)} layers"
+                f" · {assembly.source_count} 个 source 有贡献"
+                f" · {assembly.fragment_count} fragments"
+                f" · cache {assembly.stable_prefix_chars} chars")
+            for layer in assembly.layers:
+                lines.append(
+                    f"  [{layer.priority}] {layer.id} · {layer.source}"
+                    f" · {layer.category} · {layer.tokens} tokens"
+                    f" · {'cache-prefix' if layer.cacheable else 'dynamic'}")
+            if assembly.issues:
+                for issue in assembly.issues:
+                    lines.append(
+                        f"  [warn] {issue.source}: {issue.error}")
+        else:
+            lines.append("  （尚未产生请求，暂无最近装配结果）")
+        return _ok(*lines)
+
     if operation == "fragments":
         if registry is None:
             return _ok("  （Prompt Fragment Registry 未启用）")
@@ -697,8 +726,8 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
     if operation != "stats" or parts:
         return _ok(
             "  用法: /context | /context fragments [source] | "
-            "/context enable|disable|toggle <id|source> | /context reset | "
-            "/context cache | /context refresh")
+            "/context sources | /context enable|disable|toggle <id|source> | "
+            "/context reset | /context cache | /context refresh")
 
     snapshot = getattr(ctx.loop, "last_context_snapshot", None)
     if snapshot is not None:
@@ -738,7 +767,8 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             f" · boundary {snapshot.cache_boundary_chars} chars",
             f"  stable hash: {snapshot.stable_hash or '(none)'}",
             f"  full hash: {snapshot.full_hash or '(none)'}",
-            f"  工具 {snapshot.tool_count} 个 · fragment {snapshot.fragment_count} 个",
+            f"  工具 {snapshot.tool_count} 个 · fragment {snapshot.fragment_count} 个"
+            f" · source {snapshot.source_count} 个",
             f"  来源: {sources}",
         ]
         tool_messages = sum(

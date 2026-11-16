@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from ..core.context_usage import ContextUsageSnapshot
 from ..core.messages import Message
+from .context_assembler import ContextAssembly
 from .fragments import GROUP_RUNTIME, GROUP_WORKSPACE, PromptSnapshot
 from .tokens import (
     estimate_history_tokens,
@@ -48,6 +49,7 @@ def build_context_usage_snapshot(
     prompt_snapshot: Optional[PromptSnapshot] = None,
     base_system_text: str = "",
     runtime_hints: Iterable[str] = (),
+    context_assembly: Optional[ContextAssembly] = None,
     budget_tokens: Optional[int] = None,
     model_context_window: Optional[int] = None,
     dropped_items: Sequence[str] = (),
@@ -64,19 +66,25 @@ def build_context_usage_snapshot(
     estimated = estimate_history_tokens(message_list) + schema_tokens
 
     contributions: List[Tuple[str, str, int]] = []
-    if prompt_snapshot is not None:
-        for fragment in prompt_snapshot.fragments:
-            category = _fragment_category(fragment)
-            contributions.append((fragment.source, category, fragment.tokens))
-    elif base_system_text:
-        contributions.append((
-            "system", "system", estimate_text_tokens(base_system_text)))
+    if context_assembly is not None:
+        contributions.extend(
+            (item.source, item.category, item.tokens)
+            for item in context_assembly.token_contributions
+        )
+    else:
+        if prompt_snapshot is not None:
+            for fragment in prompt_snapshot.fragments:
+                category = _fragment_category(fragment)
+                contributions.append((fragment.source, category, fragment.tokens))
+        elif base_system_text:
+            contributions.append((
+                "system", "system", estimate_text_tokens(base_system_text)))
 
-    hint_text = "\n\n".join(
-        str(item) for item in runtime_hints if str(item).strip())
-    if hint_text:
-        contributions.append((
-            "runtime:turn", "runtime", estimate_text_tokens(hint_text)))
+        hint_text = "\n\n".join(
+            str(item) for item in runtime_hints if str(item).strip())
+        if hint_text:
+            contributions.append((
+                "runtime:turn", "runtime", estimate_text_tokens(hint_text)))
 
     history = (
         message_list[1:]
@@ -99,10 +107,24 @@ def build_context_usage_snapshot(
         category_tokens[category] += tokens
         source_tokens[source] += tokens
 
-    cache = getattr(prompt_snapshot, "cache", None)
-    stable_tokens = int(getattr(cache, "stable_tokens", 0) or 0)
+    if context_assembly is not None:
+        stable_tokens = estimate_text_tokens(context_assembly.stable_prefix)
+        fragments = ()
+        fragment_count = context_assembly.fragment_count
+        cache_boundary_chars = context_assembly.stable_prefix_chars
+        stable_hash = context_assembly.stable_hash
+        full_hash = context_assembly.full_hash
+        source_count = context_assembly.source_count
+    else:
+        cache = getattr(prompt_snapshot, "cache", None)
+        stable_tokens = int(getattr(cache, "stable_tokens", 0) or 0)
+        fragments = tuple(getattr(prompt_snapshot, "fragments", ()) or ())
+        fragment_count = len(fragments)
+        cache_boundary_chars = int(getattr(cache, "offset", 0) or 0)
+        stable_hash = str(getattr(cache, "stable_hash", "") or "")
+        full_hash = str(getattr(cache, "full_hash", "") or "")
+        source_count = 0
     stable_tokens = min(stable_tokens, estimated)
-    fragments = tuple(getattr(prompt_snapshot, "fragments", ()) or ())
     window = model_context_window
     reserve = (
         max(0, int(window) - int(budget_tokens))
@@ -124,11 +146,12 @@ def build_context_usage_snapshot(
         overhead_tokens=category_tokens["overhead"],
         stable_tokens=stable_tokens,
         volatile_tokens=max(0, estimated - stable_tokens),
-        cache_boundary_chars=int(getattr(cache, "offset", 0) or 0),
-        stable_hash=str(getattr(cache, "stable_hash", "") or ""),
-        full_hash=str(getattr(cache, "full_hash", "") or ""),
+        cache_boundary_chars=cache_boundary_chars,
+        stable_hash=stable_hash,
+        full_hash=full_hash,
         tool_count=len(tool_specs),
-        fragment_count=len(fragments),
+        fragment_count=fragment_count,
+        source_count=source_count,
         source_tokens=dict(sorted(source_tokens.items())),
         dropped_items=tuple(str(item) for item in dropped_items),
     )

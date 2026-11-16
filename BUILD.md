@@ -5,12 +5,12 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（v0.74.0 / Step 84）
+## 1. 项目统计（v0.75.0 / Step 85）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 28,919 行（Python，**零第三方运行时依赖**） |
-| 测试 | 20,110 行 / 105 个文件 / 1,026 个用例（离线 1,024 + 本地端口集成 2，提权环境 1,026/1,026 全绿） |
+| 源码 | 29,461 行（Python，**零第三方运行时依赖**） |
+| 测试 | 20,204 行 / 104 个测试文件 / 1,032 个用例（离线 1,030 + 本地端口集成 2，提权环境 1,032/1,032 全绿） |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 16（含 ask_user/update_plan + 4 个后台 Job 工具）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
@@ -20,12 +20,12 @@
 源码按层分布：
 
 ```
-session 6353 · agent 3042 · ui 3615 · tools 2813 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2396
-safety 2287 · llm 1806 · subagent 1714 · mcp 1652 · skills 949 · core 643
+session 6459 · agent 3756 · ui 3666 · tools 2813 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2400
+safety 2287 · llm 1806 · subagent 1714 · mcp 1652 · skills 949 · core 748
 jobs 582 · plugins 435 · entrypoints 194
 ```
 
-core 只有 643 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
+core 只有 748 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
 测试代码量约为源码的 69%，覆盖协议、安全边界与端到端行为。
 
 ## 2. 关键架构决策时间线
@@ -61,6 +61,9 @@ core 只有 643 行——内核保持极小、能力在边缘，正是当初对�
 | v0.70 | 后台 Job 生命周期 | Job 刻意不绑定 turn abort，避免 dev server/watcher 被一轮结束误杀；由 runtime close 或显式 kill 回收。模型经 `job_output(after_sequence)` 游标轮询，UI/协议经事件实时观察，完整输出落有界脱敏日志而非塞回模型历史 |
 | v0.71 | 交互式子代理 | Feed、pause/resume、kill、Definition、sidechain 拆成独立组件；AgentLoop 只新增通用 step gate。Pause 不取消 Task，Kill 才取消；Definition 只能收缩工具集；sidechain 可审计但不自动注入父上下文或复活旧 Task |
 | v0.72 | Prompt Fragment Registry | system prompt 的唯一组装点从 `build_system_prompt` 迁移到来源化 Registry；cacheable 前缀、stable hash 与 provider cache offset 成为数据结构，而不是依赖拼接顺序。compact 同时拆成“只预览”和“唯一正式修改入口”，避免 UI 复制压缩逻辑 |
+| v0.73 | 结构化 Panel Dock | Tasks/Activity/Context/Memory 直接消费 reducer 与请求快照；输入框 `!shell` 与 `#memory` 成为窄入口，不混入模型 history |
+| v0.74 | 请求级 Context 观测 | token 分项、预算、cache 边界与 hash 从真实 provider-bound 请求派生；精简快照贯通 UI/JSONL/stream-json/SDK，且不包含 Prompt 正文 |
+| v0.75 | Context assembly 边界 | 临时 system context 不再由 AgentLoop 手拼，统一经 ContextSource/ContextAssembler；分类/priority/注册顺序确定结果，单个可选来源失败只留下异常类型诊断，不让整轮请求失效 |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -76,6 +79,7 @@ core 只有 643 行——内核保持极小、能力在边缘，正是当初对�
 | 压缩边界/预览与两道防线 | `agent/compression.py`（驱逐 + LLM 摘要） |
 | token 估算/价目/窗口 | `agent/tokens.py` `agent/pricing.py` |
 | 请求级 Context 可观测性 | `core/context_usage.py` `agent/context_usage.py` |
+| 可插拔上下文来源/确定性装配 | `agent/context_source.py` `agent/context_assembler.py` |
 | 工作区上下文注入 | `agent/context.py`（目录树/git/分层 AGENTS.md） |
 | 工具端口与注册表 | `tools/base.py` `tools/registry.py`；具体工具 `tools/builtin/`，交互工具 `tools/extension/` |
 | 命令风险分级/审批/写保护 | `safety/commands.py` `safety/policy.py` `safety/rules.py` |
@@ -107,7 +111,7 @@ core 只有 643 行——内核保持极小、能力在边缘，正是当初对�
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 1024 通过、2 skip，提权环境 1,026/1,026 全过。
+bind 探测自动 skip——沙箱内 1030 通过、2 skip，提权环境 1,032/1,032 全过。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /

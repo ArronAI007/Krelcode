@@ -36,6 +36,7 @@ class ContextUsageSnapshot:
     full_hash: str = ""
     tool_count: int = 0
     fragment_count: int = 0
+    source_count: int = 0
     source_tokens: Mapping[str, int] = field(default_factory=dict)
     dropped_items: Tuple[str, ...] = field(default_factory=tuple)
 
@@ -88,6 +89,7 @@ class ContextUsageSnapshot:
             "full_hash": self.full_hash,
             "tool_count": self.tool_count,
             "fragment_count": self.fragment_count,
+            "source_count": self.source_count,
             "source_tokens": dict(self.source_tokens),
             "dropped_items": list(self.dropped_items),
         }

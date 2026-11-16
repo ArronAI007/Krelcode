@@ -168,7 +168,8 @@ def build_panels(
             PanelItem(
                 "context-fragments",
                 f"fragments · {fragment_count}",
-                f"tools {snapshot.tool_count}"
+                f"sources {snapshot.source_count}"
+                f" · tools {snapshot.tool_count}"
                 f" · schema {snapshot.tool_schema_tokens}",
             ),
             PanelItem(

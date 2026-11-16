@@ -22,6 +22,8 @@ from .agent.context import (
     build_workspace_context_bundle,
 )
 from .agent.loop import DEFAULT_MAX_STEPS, AgentLoop
+from .agent.context_assembler import ContextAssembler
+from .agent.context_source import default_context_sources
 from .agent.fragments import (
     GROUP_WORKSPACE,
     PromptFragmentRegistry,
@@ -400,6 +402,7 @@ async def build_loop(
     if memory_fragment is not None:
         prompt_registry.register(memory_fragment)
     prompt_snapshot = prompt_registry.snapshot()
+    context_assembler = ContextAssembler(default_context_sources())
     loop = AgentLoop(
         llm=llm,
         registry=registry,
@@ -411,6 +414,7 @@ async def build_loop(
         repeat_failure_limit=args.repeat_failure_limit,
         context_manager=context_manager,
         token_budget=args.token_budget,
+        context_assembler=context_assembler,
         user_input_port=user_input_port,
     )
     # fork_context 数据源：getter 形式，/resume 重绑定 loop.history 后依然正确

@@ -65,6 +65,8 @@ from ..llm.base import (
     ToolCallReady,
 )
 from .compression import ContextManager
+from .context_assembler import ContextAssembler
+from .context_source import ContextRequest, default_context_sources
 from .context_usage import build_context_usage_snapshot
 from .intent import TurnIntent, infer_turn_intent
 from .pricing import match_context_window
@@ -131,6 +133,7 @@ class AgentLoop:
         context_manager: Optional[ContextManager] = None,
         tool_output_inline_limit: int = 12_000,
         token_budget: Optional[int] = None,
+        context_assembler: Optional[ContextAssembler] = None,
         redactor: Optional[SecretRedactor] = None,
         runtime_snapshot_provider: Optional[
             Callable[[RuntimeSnapshot], RuntimeSnapshot]
@@ -149,6 +152,9 @@ class AgentLoop:
         self.context_manager = context_manager
         self.tool_output_inline_limit = tool_output_inline_limit
         self.token_budget = token_budget
+        self.context_assembler = (
+            context_assembler or ContextAssembler(default_context_sources()))
+        self.last_context_assembly = None
         self.last_context_snapshot = None
         self.redactor = redactor
         self.runtime_snapshot_provider = runtime_snapshot_provider
@@ -180,6 +186,7 @@ class AgentLoop:
     def reset(self) -> None:
         """清空历史，只保留系统提示词。"""
         self.history = self.history[:1] if self.history and self.history[0].role == "system" else []
+        self.last_context_assembly = None
         self.last_context_snapshot = None
 
     def add_runtime_context(self, contents: Iterable[str], source: str = "hook") -> int:
@@ -278,6 +285,7 @@ class AgentLoop:
         """
         if not self._turn_prepared:
             self._begin_turn(turn_id, tool_allowlist=tool_allowlist)
+        self.last_context_assembly = None
         self.last_context_snapshot = None
         self.history.append(Message.user(user_input, images=images or None))
         self._failure_counts = {}
@@ -453,13 +461,26 @@ class AgentLoop:
         else:
             specs = self._current_tool_pool().tool_specs()
         tools = specs or None
-        hints = self._turn_system_hints()
-        messages = self._messages_for_turn(hints)
-        prompt_snapshot = getattr(self, "prompt_snapshot", None)
-        base_system_text = (
-            self.history[0].content or ""
-            if self.history and self.history[0].role == "system" else ""
+        base_message = (
+            self.history[0]
+            if self.history and self.history[0].role == "system" else None
         )
+        context_request = ContextRequest(
+            turn_id=self._current_turn_id,
+            step=step,
+            history=tuple(self.history),
+            workspace_root=self.tool_context.workspace_root,
+            system_prompt=(base_message.content or "") if base_message else "",
+            system_provider_meta=(
+                base_message.provider_meta if base_message else None),
+            prompt_snapshot=getattr(self, "prompt_snapshot", None),
+            tool_pool=self._current_tool_pool(),
+            intent=self._turn_intent,
+            runtime_context=tuple(self.runtime_context),
+        )
+        context_assembly = await self.context_assembler.assemble(context_request)
+        self.last_context_assembly = context_assembly
+        messages = context_assembly.messages_for(self.history)
         budget_tokens = (
             self.context_manager.max_tokens
             if self.context_manager is not None else None
@@ -469,9 +490,7 @@ class AgentLoop:
             turn_id=self._current_turn_id,
             step=step,
             tool_specs=specs,
-            prompt_snapshot=prompt_snapshot,
-            base_system_text=base_system_text,
-            runtime_hints=hints,
+            context_assembly=context_assembly,
             budget_tokens=budget_tokens,
             model_context_window=match_context_window(
                 getattr(self.llm, "model", None)),
@@ -546,35 +565,6 @@ class AgentLoop:
                 runtime=self._turn_tool_context.runtime,
             )
         return self._active_tool_pool
-
-    def _turn_system_hints(self) -> List[str]:
-        """本轮临时 system context；与最终请求和可观测快照共用。"""
-        hints = [
-            self._current_tool_pool().system_hint(),
-            self._turn_intent.system_hint(self.tool_context.workspace_root),
-        ]
-        hints.extend(
-            f"<runtime_context>\n{context}\n</runtime_context>"
-            for context in self.runtime_context
-        )
-        return [part for part in hints if part]
-
-    def _messages_for_turn(self, hints: Optional[List[str]] = None) -> List[Message]:
-        """临时注入本轮工具目录与意图，不污染持久历史。"""
-        parts = self._turn_system_hints() if hints is None else hints
-        hint = "\n\n".join(part for part in parts if part)
-        if not hint:
-            return self.history
-        if self.history and self.history[0].role == "system":
-            first = self.history[0]
-            base = first.content or ""
-            system = Message(
-                role="system",
-                content=base + "\n\n" + hint if base else hint,
-                provider_meta=first.provider_meta,
-            )
-            return [system, *self.history[1:]]
-        return [Message.system(hint), *self.history]
 
     # -- 内部：执行一批工具调用 -------------------------------------------------
 

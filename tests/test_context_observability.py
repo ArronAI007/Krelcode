@@ -186,6 +186,7 @@ def test_stream_json_and_reducer_expose_context_snapshot():
         full_hash="full",
         tool_count=2,
         fragment_count=3,
+        source_count=2,
         source_tokens={"history": 80, "system": 20, "tool_schema": 10,
                        "runtime:turn": 10, "overhead": 3},
     )
@@ -205,6 +206,7 @@ def test_stream_json_and_reducer_expose_context_snapshot():
     assert encoded["subtype"] == "assembled"
     assert encoded["snapshot"]["estimated_input_tokens"] == 123
     assert encoded["snapshot"]["source_tokens"]["history"] == 80
+    assert encoded["snapshot"]["source_count"] == 2
     assert encoded["sequence"] == 7
 
     chunks = []
@@ -276,6 +278,7 @@ def test_context_command_reports_last_real_request_snapshot(tmp_path):
         full_hash="full-hash",
         tool_count=4,
         fragment_count=6,
+        source_count=3,
         source_tokens={"history": 300, "runtime:turn": 50,
                        "workspace:rules": 40, "tool_schema": 30,
                        "system": 20, "overhead": 11, "memory": 5},
@@ -295,7 +298,7 @@ def test_context_command_reports_last_real_request_snapshot(tmp_path):
     assert "输入估算: 456 tokens" in output
     assert "tool schema 30" in output
     assert "stable 50 · volatile 406" in output
-    assert "工具 4 个 · fragment 6 个" in output
+    assert "工具 4 个 · fragment 6 个 · source 3 个" in output
 
 
 def test_tui_context_panel_prefers_request_snapshot():
@@ -318,6 +321,7 @@ def test_tui_context_panel_prefers_request_snapshot():
         cache_boundary_chars=64,
         tool_count=3,
         fragment_count=5,
+        source_count=4,
     )
 
     panels = build_panels(
@@ -339,4 +343,5 @@ def test_tui_context_panel_prefers_request_snapshot():
     assert "cache · 50/271" in labels
     assert "fragments · 5" in labels
     assert "workspace 40" in details
+    assert "sources 4" in details
     assert "tools 3" in details and "schema 12" in details

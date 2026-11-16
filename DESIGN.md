@@ -859,6 +859,55 @@ AgentLoop._llm_turn(step)
 - Step 84 只增加观测基线，不改变真实 Prompt 内容、工具 schema、预算判断或 compact
   行为；`/context` 在尚无快照时保持旧版估算输出兼容。
 
+## ContextSource 与 ContextAssembler（Step 85）
+
+临时 system context 的唯一组装边界从 AgentLoop 移到可注册来源集合：
+
+```
+AgentLoop._llm_turn(step)
+  ├─ ContextRequest
+  │    history + workspace_root + PromptSnapshot + TurnToolPool
+  │    + TurnIntent + runtime hook context
+  ├─ ContextAssembler.assemble()
+  │    ├─ 依次 collect；同步返回值或 awaitable 均可
+  │    ├─ 隔离 source exception / invalid layer / duplicate id
+  │    ├─ 分类 → priority → 注册顺序 → layer 顺序稳定排序
+  │    ├─ 拼接文本并重算 cache boundary + stable/full SHA-256
+  │    └─ ContextAssembly
+  ├─ messages_for(history)：只替换 provider-bound system message
+  └─ ContextUsageSnapshot → emit ContextAssembled → provider.stream
+```
+
+契约：
+
+- `ContextSource` 只声明 `name` 和 `collect(ContextRequest)`。来源可以读取当前
+  PromptSnapshot、工具目录、意图、历史与工作区根目录，但不能直接改 `AgentLoop.history`。
+- `ContextLayer` 是装配单位，携带稳定 `id/source/category/content/priority`、cache 属性与
+  token attribution。四个类别固定为 `system → workspace → memory → runtime`；同分类先按
+  priority，再按来源注册顺序和来源内 layer 顺序，结果不依赖集合遍历或异步完成时序。
+- `ContextAssembler` 是唯一把 layer 变成 system 文本的组件。空 layer 忽略；重复 ID、
+  非法 category/metadata/token attribution 被拒绝并记入有界 issue；可选来源抛出异常时只保留
+  异常类型，不保留可能含敏感值的 message，也不会中断其它来源。
+- `ContextAssembly` 包含最终文本、有序 layer、cache 边界/hash、token attribution、source/
+  fragment 计数、issue 和 provider metadata；`stable_prefix_chars` 必须位于所有动态 layer
+  之前，Anthropic block cache 与观测快照复用同一值。
+- `messages_for()` 返回浅拷贝消息列表并替换首个 system message；持久 history 中的原始
+  system message 不变。这样每 Step 的 tool directory、intent 和 Hook context 可以变化，
+  turn 历史仍保持可恢复、可 fork。
+
+默认来源与职责：
+
+| Source | 产生内容 | 分类 |
+|--------|----------|------|
+| `prompt` | PromptSnapshot 的完整文本，按 Fragment 保留 token attribution；无 snapshot 时回退 system message | system |
+| `tool_directory` | 本轮动态工具目录，不含完整 JSON Schema | runtime |
+| `turn_intent` | 高置信度“仅解释指定文件”等轮级约束 | runtime |
+| `runtime_hooks` | SessionStart/Compact 等 Hook 注入内容 | runtime |
+
+`/context sources` 展示注册来源、最近装配 layer、priority/category/cache 状态与 issue，不输出
+layer 正文。`ContextUsageSnapshot.source_count` 只统计实际贡献了非空 layer 的来源，token
+来源映射继续保留 Fragment/Hook 级别的细粒度归因。
+
 ## 统一输入处理管线（Step 67）
 
 借鉴 Claude Code 将 `processUserInput` 与 REPL 分开的思路，终端不再直接解释原始
