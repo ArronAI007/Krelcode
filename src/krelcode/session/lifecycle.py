@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from .memory import sync_memory_fragment
 from .manager import (
     SessionInfo,
     append_session_metadata,
@@ -54,6 +55,10 @@ class SessionLifecycle:
         self.runtime = runtime
         self.redactor = redactor
         self.on_switch: Optional[Callable[[], None]] = None
+        memory_store = getattr(loop, "memory_store", None)
+        if memory_store is not None and self.session_path is not None:
+            memory_store.bind_session(self.session_path.stem)
+            sync_memory_fragment(loop, memory_store)
 
     @property
     def metadata(self) -> dict[str, Any]:
@@ -110,6 +115,10 @@ class SessionLifecycle:
         self.session_path = path
         if self.runtime is not None:
             self.runtime.bind_session(path.stem)
+        memory_store = getattr(self.loop, "memory_store", None)
+        if memory_store is not None:
+            memory_store.bind_session(path.stem)
+            sync_memory_fragment(self.loop, memory_store)
         if self.on_switch is not None:
             self.on_switch()
 

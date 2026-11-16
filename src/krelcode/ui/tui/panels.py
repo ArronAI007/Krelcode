@@ -183,15 +183,18 @@ def build_panels(
     for index, entry in enumerate(memories):
         text = getattr(entry, "text", str(entry))
         created = getattr(entry, "created_at", "")
+        scope = getattr(entry, "scope", "project")
+        scope_value = getattr(scope, "value", str(scope))
         memory_items.append(PanelItem(
             id=f"memory-{getattr(entry, 'id', index)}",
             label=_compact(text, 100),
-            detail=_compact(created, 19),
+            detail=_compact(f"{scope_value} · {created}", 32),
             status="•",
         ))
     if not memory_items:
         memory_items.append(PanelItem(
-            "memory-empty", "暂无项目记忆", "输入 #内容 添加", "○"))
+            "memory-empty", "暂无记忆",
+            "#内容 / #user: / #project: / #session:", "○"))
 
     return (
         Panel("tasks", "Tasks", _task_items(state)),

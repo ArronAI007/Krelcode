@@ -110,6 +110,13 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
                   "/allow remove <程序名> 移除（持久化到工作区；审批中的\n"
                   "“始终允许此命令”只保存当前精确命令）")),
         CommandSpec(
+            "memory", "查看或管理分层记忆",
+            argument_hint="[list|scopes|add <scope> <text>|remove <id>]",
+            help=("查看 user/project/session 三层记忆；"
+                  "/memory scopes 查看作用域和存储位置；\n"
+                  "/memory add <scope> <text> 写入；"
+                  "/memory remove <id> 删除。scope 可为 user/project/session。")),
+        CommandSpec(
             "context", "查看、启停或刷新上下文槽位",
             argument_hint=("[sources|fragments|enable|disable|toggle|reset|"
                            "cache|refresh]"),

@@ -14,6 +14,7 @@ from krelcode.session.commands import (
 )
 from krelcode.session.commands.handlers import BUILTIN_HANDLERS
 from krelcode.session.controller import SessionController
+from krelcode.session.memory import MemoryStore
 from krelcode.tools.base import ToolContext
 from krelcode.tools.registry import ToolRegistry
 
@@ -76,3 +77,30 @@ def test_unknown_command_goes_through_dispatcher_error_path(tmp_path):
     result = asyncio.run(controller.execute_command("/does-not-exist"))
     assert result.handled is True
     assert "未知命令: /does-not-exist" in result.output[0]
+
+
+def test_memory_command_manages_scoped_records(tmp_path):
+    controller = make_controller(tmp_path)
+    controller.loop.memory_store = MemoryStore(
+        tmp_path, user_path=tmp_path / "global" / "entries.jsonl")
+
+    added = asyncio.run(controller.execute_command(
+        "/memory add user 全局偏好使用中文"))
+    assert added.handled
+    assert "已写入用户记忆 user-" in added.output[0]
+
+    listing = asyncio.run(controller.execute_command("/memory list"))
+    assert any("user/note" in line and "全局偏好使用中文" in line
+               for line in listing.output)
+
+    scopes = asyncio.run(controller.execute_command("/memory scopes"))
+    rendered = "\n".join(scopes.output)
+    assert "用户 (user) · 1 条" in rendered
+    assert "项目 (project) · 0 条" in rendered
+    assert "会话 (session) · 0 条" in rendered
+
+    entry_id = controller.loop.memory_store.list()[0].id
+    removed = asyncio.run(controller.execute_command(
+        f"/memory remove {entry_id}"))
+    assert "已删除" in removed.output[0]
+    assert controller.loop.memory_store.list() == ()

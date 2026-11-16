@@ -821,11 +821,11 @@ PromptWriter [Panel Dock] → 上分隔线 → 输入 → 下分隔线 → 状�
   TurnToolPool 和 ToolContext，执行 `run_command` 时仍经过参数 schema、Hooks、
   风险审批、路径规则、Sandbox 和 secret redaction。执行事件临时旁路给 renderer，
   但调用与结果都不进入 `loop.history`；运行中拒绝并发执行，Esc/Ctrl-C 可终止进程组。
-- **Memory 快捷模式**：`#text` 写 `<workspace>/.krelcode/memory/entries.jsonl`，
-  单条 2,000 字符、总量 200 条；常见 token/key 形态和当前 SecretRedactor 值都会
-  替换为 `***`。`#` 只打开面板。近期最多 12 条/4,000 字符作为 `memory:project`
-  动态 runtime Fragment 注入；它与 `AGENTS.md` 分离，不进入对话消息，也不会阻断
-  prompt cache 稳定前缀。
+- **Memory 快捷模式**：`#text` 默认写 project 作用域；Step 86 进一步增加
+  `#user:` / `#project:` / `#session:`。单条 2,000 字符、每作用域 200 条；常见
+  token/key 形态和当前 SecretRedactor 值都会替换为 `***`。`#` 只打开面板。近期最多
+  12 条/4,000 字符作为 `memory:scoped` 动态 runtime Fragment 注入；它与 `AGENTS.md`
+  分离，不进入对话消息，也不会阻断 prompt cache 稳定前缀。
 
 ## Context 可观测性与基线（Step 84）
 
@@ -907,6 +907,55 @@ AgentLoop._llm_turn(step)
 `/context sources` 展示注册来源、最近装配 layer、priority/category/cache 状态与 issue，不输出
 layer 正文。`ContextUsageSnapshot.source_count` 只统计实际贡献了非空 layer 的来源，token
 来源映射继续保留 Fragment/Hook 级别的细粒度归因。
+
+## Memory 数据模型与作用域（Step 86）
+
+Memory 从单一项目笔记升级为显式分层模型。记录和存储路径分离：记录只描述事实，
+`MemoryStore` 根据 scope 选择持久化边界。
+
+```text
+MemoryEntry
+├─ id / text
+├─ scope      user | project | session
+├─ kind       note | preference | fact | workflow
+├─ source     manual | legacy | future extractor
+├─ tags[]
+├─ created_at / updated_at
+└─ metadata{}
+```
+
+| Scope | 存储位置 | 生命周期 | 使用范围 |
+|-------|----------|----------|----------|
+| user | `~/.krelcode/memory/entries.jsonl` | 跨进程、跨工作区 | 当前 OS 用户私有 |
+| project | `<workspace>/.krelcode/memory/entries.jsonl` | 跟随工作区 | 当前仓库/目录 |
+| session | `<workspace>/.krelcode/memory/sessions/<session-id>.jsonl` | 跟随会话 | 当前逻辑会话 |
+
+作用域按 `user → project → session` 由宽到窄排列。Prompt 渲染顺序相同，使更具体的
+作用域靠后可见；12 条/4,000 字符的稀缺注入预算按 `session → project → user` 分配，
+避免大量全局偏好挤掉当前任务记忆。
+
+存储与兼容规则：
+
+- 每个 scope 是独立 JSONL 文件，追加写入；超过 200 条后按最近记录原子压缩。
+- 读取时以文件位置决定 scope，记录内伪造的 `scope` 字段不会让项目文件越权进入 user
+  或 session 层。旧项目行缺少 scope/kind/source/tags/timestamps 时，按
+  `project / note / manual` 原位读取，不需要批量迁移。
+- 单条文本、tags 和展示内容都经过内置密钥模式与当前 `SecretRedactor`；不把敏感值写入
+  新 JSONL、命令输出或 Prompt Fragment。
+- `remove(id)` 只重写命中的 scope 文件，使用同目录临时文件原子替换；不会改动其他层。
+- session scope 在 `--no-session` 或尚未绑定会话时驻留进程内存。正常启动、`/fork`、
+  `/resume` 切换 recorder 时同步重新绑定 session id；旧会话文件不会被继续写入。
+- `MemoryStore.fragment()` 生成 `memory:scoped` 动态 runtime Fragment，metadata 只包含
+  各 scope 条数。它仍由 Prompt/Context Fragment Registry 管理，可手动启停且不进入
+  prompt cache 稳定前缀。
+
+交互入口：
+
+- `#内容` = project；`#user: 内容` / `#project: 内容` / `#session: 内容` 显式选择 scope。
+- `/memory [list]` 查看 ID、scope、kind 和内容；`/memory scopes` 查看条数与路径；
+  `/memory add <scope> <text>` 写入；`/memory remove <id>` 删除。
+- TUI Memory 面板展示 scope 与创建时间；命令和快捷写入后统一调用
+  `sync_memory_fragment()`，下一次模型 Step 通过 ContextAssembler 看到新快照。
 
 ## 统一输入处理管线（Step 67）
 

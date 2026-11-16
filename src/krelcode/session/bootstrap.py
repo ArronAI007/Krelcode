@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from ..agent.loop import AgentLoop
+from .memory import sync_memory_fragment
 from .recorder import SessionRecorder, latest_session, new_session_path
 from .restore import restore_session
 
@@ -48,4 +49,8 @@ def setup_session(args, loop: AgentLoop, log=print, redactor=None):
     )
     recorder.attach(loop.bus)
     loop.session_recorder = recorder
+    memory_store = getattr(loop, "memory_store", None)
+    if memory_store is not None:
+        memory_store.bind_session(session_path.stem)
+        sync_memory_fragment(loop, memory_store)
     return session_path

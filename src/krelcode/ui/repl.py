@@ -54,7 +54,13 @@ from ..session.input import (
 )
 from ..session.interactions import UserInputBroker
 from ..session.manager import resolve_resume_target
-from ..session.memory import MemoryStore, memory_lines, sync_memory_fragment
+from ..session.memory import (
+    SCOPE_LABELS,
+    MemoryStore,
+    memory_lines,
+    parse_memory_note,
+    sync_memory_fragment,
+)
 from ..session.prompt_queue import PromptQueue
 from ..session.repl_session import ReplSessionRunner, SessionPrompt
 from ..session.state import SessionViewState
@@ -1571,14 +1577,16 @@ async def run_repl(
                     restore_prompt()
                     continue
                 try:
-                    entry = memory_store.add(action.text)
+                    scope, note_text = parse_memory_note(action.text)
+                    entry = memory_store.add(note_text, scope=scope)
                 except (OSError, ValueError) as exc:
-                    notice(f"⎿ 无法保存项目记忆: {exc}")
+                    notice(f"⎿ 无法保存记忆: {exc}")
                     restore_prompt()
                     continue
                 sync_memory_fragment(loop, memory_store)
                 panel_controller.focus("memory")
-                notice(f"⎿ 已保存项目记忆 #{entry.id}")
+                notice(
+                    f"⎿ 已保存{SCOPE_LABELS[scope]}记忆 #{entry.id}")
                 restore_prompt()
                 continue
 

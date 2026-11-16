@@ -133,6 +133,42 @@ def test_repl_memory_shortcut_persists_and_shows_panel(tmp_path, capsys):
     assert [message.role for message in loop.history] == ["system"]
 
 
+def test_repl_memory_shortcut_supports_user_and_session_scopes(
+    tmp_path, capsys, monkeypatch,
+):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    loop = make_loop(tmp_path)
+    calls = 0
+
+    async def inputs(_prompt):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return "#user: 全局使用中文"
+        if calls == 2:
+            return "#session: 当前任务使用 pytest"
+        if calls == 3:
+            return "#"
+        if calls == 4:
+            return "/exit"
+        raise EOFError
+
+    assert asyncio.run(run_repl(
+        loop, input_fn=inputs, persist_history=False)) == 0
+
+    user_path = home / ".krelcode" / "memory" / "entries.jsonl"
+    payload = json.loads(user_path.read_text(encoding="utf-8").strip())
+    assert payload["scope"] == "user"
+    assert payload["text"] == "全局使用中文"
+    assert not (tmp_path / ".krelcode" / "memory" / "entries.jsonl").exists()
+    out = capsys.readouterr().out
+    assert "已保存用户记忆" in out
+    assert "已保存会话记忆" in out
+    assert "[user/note]" in out
+    assert "[session/note]" in out
+
+
 def test_exit_during_shell_approval_cancels_direct_task(tmp_path):
     from krelcode.ui.approval import ApprovalBroker
 

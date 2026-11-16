@@ -6,6 +6,7 @@ from typing import Awaitable, Callable
 
 from ..context import CommandContext
 from ..types import CommandResult, CommandSource
+from .memory_ops import handle_memory
 from .runtime_ops import (
     handle_agents,
     handle_allow,
@@ -63,6 +64,7 @@ BUILTIN_HANDLERS: dict[str, CommandHandler] = {
     "allow": handle_allow,
     "permissions": handle_permissions,
     "context": handle_context,
+    "memory": handle_memory,
     "export": handle_export,
     "compact": handle_compact,
     "reset": handle_reset,

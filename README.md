@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/ArronAI007/Krelcode/main/install.sh
 ./install.sh --no-modify-path         # 不修改 shell PATH
 ./install.sh --python /path/to/python3.12
 ./install.sh --python-mirror https://your-mirror.example/python-build-standalone
-./install.sh --tag v0.75.0
+./install.sh --tag v0.76.0
 ```
 
 对应环境变量为 `KRELCODE_PYTHON`、`KRELCODE_PYTHON_VERSION`、`KRELCODE_PYTHON_MIRROR`、`KRELCODE_INSTALL_ROOT` 和 `KRELCODE_BIN_DIR`。这些选项只用于 CI、离线或特殊网络环境；普通用户直接执行默认的一键安装即可。开发调试仍可使用 `pip install -e .`。
@@ -71,7 +71,7 @@ krelcode               # 进入 REPL
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（沙箱内 1030 通过，2 个本地端口测试自动跳过）
+# 运行全部测试（沙箱内 1041 通过，2 个本地端口测试自动跳过）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -96,7 +96,7 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --mode
 #   api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp`（状态）、`/mcp reload`（热重载并重新发现 Prompt）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>]`（查看/热重载本地插件）、`/compact [preview [--auto]]`（立即压缩；先预览摘要边界且不改历史）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [fragments|enable|disable|toggle|reset|cache|refresh]`（最近请求 token 分项、Fragment 来源、启停、缓存边界与工作区重采）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp`（状态）、`/mcp reload`（热重载并重新发现 Prompt）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>]`（查看/热重载本地插件）、`/compact [preview [--auto]]`（立即压缩；先预览摘要边界且不改历史）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [sources|fragments|enable|disable|toggle|reset|cache|refresh]`（最近请求 token 分项、来源装配、Fragment 启停、缓存边界与工作区重采）、`/memory [list|scopes|add|remove]`（分层记忆管理）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
 
 所有命令由统一 `CommandRegistry` 发现：`/help`、slash 菜单、Tab 补全、运行态过滤和 InputProcessor 共用同一份 catalog。允许用户调用的 Skill 会自动显示为 `/<skill-name> [参数]`，MCP Prompt 会命名空间化为 `/mcp__<server>__<prompt> [参数]`；`/skills reload` 与 `/mcp reload` 会原地刷新对应来源，内置命令在命名冲突时保持最高优先级。
 
@@ -105,8 +105,9 @@ REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Mark
 **终端 TUI（Step 83/84）**：输入框上方增加结构化 Panel Dock，默认包含 `Tasks`、`Activity`、`Context`、`Memory` 四个面板；Context 优先展示 `ContextAssembled` 最近一次真实请求的 token 分项、tool schema 与 cache 边界。`Ctrl-O` 进入/切换面板；焦点在面板内时 `←/→` 换 tab、`↑/↓` 选择条目、`Enter` 或 `Esc` 返回输入框，方向键不会误改草稿。真实 TTY 同时启用 SGR 鼠标：可点击 tab 或面板条目。
 
 - `!命令`：Shell 快捷模式。直接执行命令，不发起模型调用，也不写入模型 history；仍完整经过 `run_command`、审批策略、权限规则和运行时 Sandbox，输出进入现有可折叠工具面板。
-- `#内容`：添加项目记忆，保存到 `<workspace>/.krelcode/memory/entries.jsonl`；敏感值在落盘与展示前脱敏。裸 `#` 打开 Memory 面板。近期记忆以有界、不可缓存的 runtime Fragment 注入，不会修改 `AGENTS.md` 或伪装成用户/助手消息。
-- `#` 记忆总量、单条长度、注入条数与字符数均有上限；任务运行中会要求等待当前任务结束，避免中途改变当前提示词快照。
+- `#内容`：添加 project 记忆，保存到 `<workspace>/.krelcode/memory/entries.jsonl`；`#user: 内容` 写入跨工作区的 `~/.krelcode/memory/entries.jsonl`，`#session: 内容` 写入当前会话专属存储。敏感值在落盘与展示前脱敏。裸 `#` 打开 Memory 面板；`/memory list|scopes|add|remove` 可查看路径、写入和删除。
+- 记忆模型包含 `id/scope/kind/source/tags/created_at/updated_at`，作用域为 `user → project → session`（由宽到窄）。三者以有界、不可缓存的 runtime Fragment 注入，更具体作用域在提示中靠后且优先获得注入预算；不会修改 `AGENTS.md` 或伪装成用户/助手消息。
+- 每作用域最多 200 条、单条 2,000 字符，总注入最多 12 条/4,000 字符；任务运行中会要求等待当前任务结束，避免中途改变当前提示词快照。旧 project JSONL 无需迁移即可读取。
 
 模型需要澄清时可调用 `ask_user`：前台显示问题与选项，输入序号、完整选项或自定义文本即可继续。回答只进入 `tool_result`，不会伪装成新的用户消息。`/plan <任务>` 会进入只读 Plan 模式，让模型先调查并通过 `update_plan` 提交计划；该轮结束后计划标为待确认，`/plan approve` 恢复进入 Plan 前的权限模式并自动发起执行轮，`/plan cancel` 放弃执行。
 

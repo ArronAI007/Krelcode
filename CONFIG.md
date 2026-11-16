@@ -78,6 +78,10 @@ krelcode [子命令] [选项]
 | `/context reset` | 清除当前会话的全部手动启停设置 |
 | `/context cache` | 显示稳定前缀字符/token 数、稳定/动态 Fragment 列表与 SHA-256 哈希 |
 | `/context refresh` | 重采目录树/git/规则文件，原子替换 workspace Fragment 并重建 system prompt |
+| `/memory` · `/memory list` | 列出 user/project/session 三层记忆及 ID、类型和内容 |
+| `/memory scopes` | 显示各作用域条数与存储路径 |
+| `/memory add <user\|project\|session> <text>` | 写入指定作用域；user 跨工作区，session 跟随当前会话 |
+| `/memory remove <id>` | 删除指定记忆并重建 memory Fragment |
 | `/compact` | 立即压缩历史（驱逐+LLM 摘要，不等预算），完成后显示实际策略与边界 |
 | `/compact preview [--auto]` | 预览 compact 的 head/compact/keep 边界、驱逐数、预计 tokens 与待摘要消息；不改 history。`--auto` 仅在超预算时预览 |
 | `/sessions` · `/sessions search <关键词>` | 列出/搜索会话标题与用户输入 |
@@ -126,8 +130,9 @@ Fragment 启停是**当前会话运行时状态**，不写入 TOML；重启后�
 空闲时 `Ctrl-C` 清空当前输入但**不退出**，`Ctrl-D` 或 `/exit` 退出。
 审批请求由 REPL 前台通过异步 broker 接管；`y`/`n`/`a` 不会被写入用户问题历史。
 **消息语法**：`@路径` 注入文本文件（8K/5 个预算）或附加图片（png/jpeg/webp/gif，5MB/4 张）。
-`!命令` 直接运行 Shell（不进入模型 history，但复用审批/Sandbox）；`#内容` 保存项目记忆，
-裸 `#` 打开 Memory 面板。`Ctrl-O` 聚焦面板，面板内用方向键切换/选择，Enter/Esc 返回。
+`!命令` 直接运行 Shell（不进入模型 history，但复用审批/Sandbox）；`#内容` 保存 project
+记忆，`#user: 内容` / `#session: 内容` 分别写入用户级和会话级作用域；裸 `#` 打开
+Memory 面板。`Ctrl-O` 聚焦面板，面板内用方向键切换/选择，Enter/Esc 返回。
 
 ## 3. TOML 配置
 
@@ -285,7 +290,7 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 │   └── .archive/      /delete 的可恢复归档
 ├── checkpoints/       文件快照（/undo、/rewind 数据源；meta 带 session/turn 身份）
 ├── tool_outputs/      超长工具输出全文（历史里留截断+路径引用）
-├── memory/            # 快捷记忆（entries.jsonl，脱敏、限长、限条数）
+├── memory/            # project 记忆 entries.jsonl + sessions/<session-id>.jsonl
 ├── jobs/              后台 Shell 任务脱敏日志（每任务 output.log，默认 10 MiB 上限）
 ├── sidechains/        子代理 JSONL（按 manager run-id 分目录；定义/feed/状态/history/结果）
 ├── exports/           /export 缺省输出目录
@@ -294,7 +299,13 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 ```
 
 全局：`~/.krelcode/config.toml`（配置）、`~/.krelcode/AGENTS.md`（全局规则，
-与项目级 `AGENTS.md`/`KRELCODE.md` 分层注入，项目规则在后=更具体者优先）。
+与项目级 `AGENTS.md`/`KRELCODE.md` 分层注入，项目规则在后=更具体者优先）、
+`~/.krelcode/memory/entries.jsonl`（跨工作区 user 记忆，权限与隐私由本机用户边界保护）。
+
+Memory 作用域：`user`（跨工作区）→ `project`（当前工作区 `.krelcode/memory/entries.jsonl`）
+→ `session`（`.krelcode/memory/sessions/<session-id>.jsonl`）。每层独立限长、限条数、
+脱敏与原子删除；读取时以文件所在目录决定 scope，旧 project 记录缺少新字段时自动按
+`note/manual` 兼容。fork/resume 会重新绑定当前会话，no-session 模式下的 session 记忆仅在进程内存在。
 
 Agent Definition 发现目录（后者覆盖前者同名项）：`~/.krelcode/agents/*.md`、
 `<workspace>/.krelcode/agents/*.md`、`<workspace>/.agents/agents/*.md`。格式：

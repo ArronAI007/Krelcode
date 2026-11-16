@@ -23,6 +23,7 @@ from krelcode.session.lifecycle import (
     SessionLifecycle,
     SessionLifecycleError,
 )
+from krelcode.session.memory import MemoryStore
 from krelcode.session.manager import (
     append_session_metadata,
     inspect_session,
@@ -104,6 +105,26 @@ def test_setup_session_writes_provider_model_and_workspace_metadata(tmp_path):
     assert start["model"] == loop.llm.model
     assert start["workspace"] == str(tmp_path)
     assert loop.session_recorder.path == path
+
+
+def test_lifecycle_fork_rebinds_session_memory_scope(tmp_path):
+    loop = make_loop(tmp_path)
+    sessions = tmp_path / ".krelcode" / "sessions"
+    sessions.mkdir(parents=True)
+    original = start_session(loop, sessions, session_id="memory-parent")
+    store = MemoryStore(
+        tmp_path, user_path=tmp_path / "global" / "entries.jsonl",
+        session_id="memory-parent")
+    loop.memory_store = store
+    lifecycle = SessionLifecycle(
+        loop, sessions, original, runtime=AgentRuntime(loop))
+
+    forked = lifecycle.fork("memory fork")
+
+    assert store.session_id == forked.stem
+    assert store.session_id != "memory-parent"
+    assert store.session_path == store.project_path.parent / "sessions" / (
+        forked.stem + ".jsonl")
 
 
 def test_lifecycle_fork_rename_and_recorder_rebinding(tmp_path):
@@ -225,3 +246,18 @@ def test_session_commands_fork_rename_search_and_export_native(tmp_path):
     assert "已导出" in "\n".join(exported.output)
     assert load_history(export_path)[-1].content == "searchable requirement"
     assert builtin_command_registry().resolve("/delete") is not None
+
+
+def test_setup_session_binds_session_scoped_memory(tmp_path):
+    loop = make_loop(tmp_path)
+    store = MemoryStore(
+        tmp_path, user_path=tmp_path / "global" / "entries.jsonl")
+    store.add("initial session note", scope="session")
+    loop.memory_store = store
+    args = SimpleNamespace(resume=None, no_session=False)
+
+    path = setup_session(args, loop)
+
+    assert store.session_id == path.stem
+    assert store.session_path.is_file()
+    assert store.list(scopes=("session",))[0].text == "initial session note"

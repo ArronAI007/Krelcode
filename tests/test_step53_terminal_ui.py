@@ -339,9 +339,10 @@ def test_line_editor_filters_menu_and_tab_completes():
     p.show(IDLE_PROMPT)
     editor = TerminalLineEditor(p, match_slash_commands, color=False)
     editor._refresh(IDLE_PROMPT, list("/m"))
-    assert len(p._suggestions) == 2
+    assert len(p._suggestions) == 3
     assert any("/mcp" in line for line in p._suggestions)
     assert any("/model" in line for line in p._suggestions)
+    assert any("/memory" in line for line in p._suggestions)
 
     chars = list("/mod")
     editor._complete(chars)

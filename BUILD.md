@@ -5,12 +5,12 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（v0.75.0 / Step 85）
+## 1. 项目统计（v0.76.0 / Step 86）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 29,461 行（Python，**零第三方运行时依赖**） |
-| 测试 | 20,204 行 / 104 个测试文件 / 1,032 个用例（离线 1,030 + 本地端口集成 2，提权环境 1,032/1,032 全绿） |
+| 源码 | 29,944 行（Python，**零第三方运行时依赖**） |
+| 测试 | 20,443 行 / 104 个测试文件 / 1,043 个用例（离线 1,041 + 本地端口集成 2，提权环境 1,043/1,043 全绿） |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 16（含 ask_user/update_plan + 4 个后台 Job 工具）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
@@ -20,13 +20,13 @@
 源码按层分布：
 
 ```
-session 6459 · agent 3756 · ui 3666 · tools 2813 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2400
+session 6928 · agent 3759 · ui 3677 · tools 2813 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2400
 safety 2287 · llm 1806 · subagent 1714 · mcp 1652 · skills 949 · core 748
 jobs 582 · plugins 435 · entrypoints 194
 ```
 
 core 只有 748 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
-测试代码量约为源码的 69%，覆盖协议、安全边界与端到端行为。
+测试代码量约为源码的 68%，覆盖协议、安全边界与端到端行为。
 
 ## 2. 关键架构决策时间线
 
@@ -64,6 +64,7 @@ core 只有 748 行——内核保持极小、能力在边缘，正是当初对�
 | v0.73 | 结构化 Panel Dock | Tasks/Activity/Context/Memory 直接消费 reducer 与请求快照；输入框 `!shell` 与 `#memory` 成为窄入口，不混入模型 history |
 | v0.74 | 请求级 Context 观测 | token 分项、预算、cache 边界与 hash 从真实 provider-bound 请求派生；精简快照贯通 UI/JSONL/stream-json/SDK，且不包含 Prompt 正文 |
 | v0.75 | Context assembly 边界 | 临时 system context 不再由 AgentLoop 手拼，统一经 ContextSource/ContextAssembler；分类/priority/注册顺序确定结果，单个可选来源失败只留下异常类型诊断，不让整轮请求失效 |
+| v0.76 | Memory 分层作用域 | 记忆从单文件项目笔记升级为 user/project/session 三作用域结构化记录；文件位置决定 scope，旧 JSONL 原位兼容，session 生命周期跟随 setup/fork/resume，注入预算优先更具体作用域 |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -91,6 +92,7 @@ core 只有 748 行——内核保持极小、能力在边缘，正是当初对�
 | 插件发现/隔离加载/热重载 | `plugins/{manifest,loader,manager}.py` |
 | 流式渲染/审批/用户输入/@引用 | `ui/render.py` `ui/approval.py` `session/interactions.py` `ui/atfiles.py` `ui/repl.py` |
 | 终端 Panel Dock / 键鼠导航 / Shell+Memory 快捷模式 | `ui/tui/{model,layout,controller,mouse,panels}.py` `session/memory.py` `agent/loop.py:execute_direct_tool` |
+| Memory 模型/作用域/存储与命令 | `session/memory.py` `session/commands/handlers/memory_ops.py` |
 | hooks / 用量 / 自动提交 | `hooks.py` `agent/usage.py` `session/autocommit.py` |
 | 诊断/脚手架 | `doctor.py` `scaffold.py` |
 | 组装根（唯一认识所有具体类的地方） | `app.py` |
@@ -111,7 +113,7 @@ core 只有 748 行——内核保持极小、能力在边缘，正是当初对�
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 1030 通过、2 skip，提权环境 1,032/1,032 全过。
+bind 探测自动 skip——沙箱内 1041 通过、2 skip，提权环境 1,043/1,043 全过。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /
