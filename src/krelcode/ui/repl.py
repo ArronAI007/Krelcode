@@ -37,6 +37,7 @@ except ImportError:  # pragma: no cover - Windows
 from .. import __version__
 from ..agent.loop import AgentLoop
 from ..agent.runtime import AgentRuntime
+from ..core.events import ShellJobFinished
 from ..session.commands import (
     CommandRegistry,
     CommandResult,
@@ -66,8 +67,8 @@ from .render import CYAN, DIM, RESET, StreamRenderer, auto_color
 
 RUNNING_HINT = (
     "  （任务运行中：Enter=插话，Alt+Enter=排队下一条，Esc/Ctrl-C 中止；"
-    "/thinking 展开思考，/plan 查看计划，/tool-output <编号> 展开输出，/queue 管理队列，"
-    "/stop 中止，/exit 退出）"
+    "/thinking 展开思考，/plan 查看计划，/tool-output <编号> 展开输出，"
+    "/jobs 管理后台任务，/queue 管理队列，/stop 中止，/exit 退出）"
 )
 
 IDLE_PROMPT = "❯ "
@@ -110,6 +111,21 @@ def match_slash_commands(text: str, *, running: bool = False,
 
 
 QUEUE_USAGE = "用法：/queue | /queue delete <n> | /queue move <n> <m> | /queue clear"
+
+
+def _format_job_notification(event: ShellJobFinished) -> str:
+    mark = {
+        "completed": "✓",
+        "failed": "✗",
+        "killed": "■",
+    }.get(event.status, "•")
+    exit_text = f" exit {event.exit_code}" if event.exit_code is not None else ""
+    preview = " ".join(event.preview.split())
+    if len(preview) > 120:
+        preview = preview[:119] + "…"
+    suffix = f": {preview}" if preview else ""
+    return (
+        f"{mark} 后台任务 {event.job_id} {event.status}{exit_text}{suffix}")
 
 
 def _queue_label(item: Any, limit: int = 100) -> str:
@@ -992,6 +1008,13 @@ async def run_repl(
     state = SessionViewState()
     raw_inbox: asyncio.Queue = asyncio.Queue()
     action_queue: asyncio.Queue = asyncio.Queue()
+    job_notifications: asyncio.Queue = asyncio.Queue()
+
+    def on_job_finished(event) -> None:
+        if isinstance(event, ShellJobFinished):
+            job_notifications.put_nowait(event)
+
+    unsubscribe_job_notifications = loop.bus.subscribe(on_job_finished)
     input_ready = threading.Event()
     status_cache = ""
     last_status_draw = 0.0
@@ -1211,15 +1234,22 @@ async def run_repl(
         start_stdin_reader()
     processor_task = asyncio.create_task(process_inputs())
     action_get = asyncio.create_task(action_queue.get())
+    job_notice_get = asyncio.create_task(job_notifications.get())
     status_task = asyncio.create_task(status_loop())
     runner.arm_approval_watcher()
     runner.arm_input_watcher()
     try:
         while True:
-            wait_set = {action_get, *runner.wait_tasks()}
+            wait_set = {action_get, job_notice_get, *runner.wait_tasks()}
             done, _ = await asyncio.wait(
                 wait_set, return_when=asyncio.FIRST_COMPLETED)
             handled = await runner.process_completed(done)
+
+            if job_notice_get in done:
+                job_event = job_notice_get.result()
+                job_notice_get = asyncio.create_task(job_notifications.get())
+                notice(_format_job_notification(job_event))
+                handled = True
 
             if action_get not in done:
                 if (handled or runner.pending is not None
@@ -1361,7 +1391,8 @@ async def run_repl(
                     restore_prompt()
                     continue
                 if action.kind is InputKind.COMMAND:
-                    if action.command == "/permissions":
+                    spec = processor.command_registry.resolve(action.command)
+                    if spec is not None and spec.available_during_run:
                         prompt.hide()
                         await handle_command(action)
                         restore_prompt()
@@ -1419,8 +1450,10 @@ async def run_repl(
             await asyncio.gather(reader_task, return_exceptions=True)
         processor_task.cancel()
         action_get.cancel()
+        job_notice_get.cancel()
+        unsubscribe_job_notifications()
         await asyncio.gather(
-            processor_task, action_get, return_exceptions=True)
+            processor_task, action_get, job_notice_get, return_exceptions=True)
         await runner.close()
         if approval_broker is not None:
             approval_broker.cancel_all()

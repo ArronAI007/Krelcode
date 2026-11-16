@@ -27,6 +27,8 @@ from ..core.events import (
     RunCancelled,
     RunFinished,
     RunStarted,
+    ShellJobFinished,
+    ShellJobStarted,
     SubagentFinished,
     SubagentSpawned,
     ToolCallCompleted,
@@ -144,6 +146,15 @@ class SessionRecorder:
                     "name": event.tool_call.name, "reason": event.reason}
         if isinstance(event, UserSteered):
             return {"type": "user_steered", "ts": ts, "content": event.text[:200]}
+        if isinstance(event, ShellJobStarted):
+            return {"type": "shell_job_started", "ts": ts,
+                    "job_id": event.job_id, "command": event.command,
+                    "pid": event.pid, "cwd": event.cwd}
+        if isinstance(event, ShellJobFinished):
+            return {"type": "shell_job_finished", "ts": ts,
+                    "job_id": event.job_id, "command": event.command,
+                    "status": event.status, "exit_code": event.exit_code,
+                    "preview": event.preview[:600]}
         if isinstance(event, SubagentSpawned):
             return {"type": "subagent_spawned", "ts": ts,
                     "agent_id": event.agent_id, "task": event.task[:200]}

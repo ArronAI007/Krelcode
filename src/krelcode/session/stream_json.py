@@ -25,6 +25,9 @@ from ..core.events import (
     RunCancelled,
     RunFinished,
     RunStarted,
+    ShellJobFinished,
+    ShellJobOutput,
+    ShellJobStarted,
     StepStarted,
     SubagentFinished,
     SubagentSpawned,
@@ -211,6 +214,8 @@ class StreamJsonEncoder:
                 "reason": event.reason,
                 "system_message": event.system_message,
             }
+        elif isinstance(event, (ShellJobStarted, ShellJobOutput, ShellJobFinished)):
+            payload = self._job_payload(event)
         elif isinstance(event, SubagentSpawned):
             payload = {
                 "type": "subagent",
@@ -298,6 +303,46 @@ class StreamJsonEncoder:
             "session_id": self.metadata.session_id,
         })
         return payload
+
+    def job_event_message(self, event: ShellJobStarted | ShellJobOutput | ShellJobFinished) -> Dict[str, Any]:
+        payload = self._job_payload(event)
+        if isinstance(event, ShellJobOutput):
+            # Job 自身 cursor 使用 sequence；QueryEvent envelope 中则保留 job_sequence
+            # 以免两者在 encoder.encode() 中互相覆盖。
+            payload["sequence"] = event.sequence
+        payload["session_id"] = self.metadata.session_id
+        return payload
+
+    @staticmethod
+    def _job_payload(
+        event: ShellJobStarted | ShellJobOutput | ShellJobFinished,
+    ) -> Dict[str, Any]:
+        if isinstance(event, ShellJobStarted):
+            return {
+                "type": "job",
+                "subtype": "started",
+                "job_id": event.job_id,
+                "command": event.command,
+                "pid": event.pid,
+                "cwd": event.cwd,
+            }
+        if isinstance(event, ShellJobOutput):
+            return {
+                "type": "job",
+                "subtype": "output_delta",
+                "job_id": event.job_id,
+                "job_sequence": event.sequence,
+                "text": event.text,
+            }
+        return {
+            "type": "job",
+            "subtype": "finished",
+            "job_id": event.job_id,
+            "command": event.command,
+            "status": event.status,
+            "exit_code": event.exit_code,
+            "preview": event.preview,
+        }
 
     def result_message(
         self,

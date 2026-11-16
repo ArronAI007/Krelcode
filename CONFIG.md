@@ -86,6 +86,9 @@ krelcode [子命令] [选项]
 | `/export [路径]` | 导出 Markdown；`.json` 路径输出可重新 `/resume` 的 native 快照 |
 | `/undo` · `/undo list` | 回滚上一轮文件改动 · 查看检查点栈 |
 | `/agents` | 子代理状态（含排队深度） |
+| `/jobs` · `/jobs list` | 列出当前进程管理的后台 Shell 任务、PID、状态、exit code、sequence 与日志 |
+| `/jobs output <id> [after] [--wait 秒]` | 按游标读取任务增量输出；wait 最多 30 秒 |
+| `/jobs kill <id>` | 终止任务及其整个进程组 |
 | `/skills [关键词]` | 列出或搜索 Skill |
 | `/skills reload` | 重读全部 Skill 目录并刷新 system prompt 索引 |
 | `/skills show <name>` | 查看元数据、资源与完整 `SKILL.md` |
@@ -194,6 +197,7 @@ enabled = true
 - 工具：`pre_tool_use`、`post_tool_use`、`tool_completed`、`tool_failed`、`file_edited`
 - 上下文：`pre_compact`、`post_compact`
 - 子代理：`subagent_started`、`subagent_finished`
+- 后台 Job：`shell_job_started`、`shell_job_finished`（实时 output 走事件/协议与 job 日志，不逐块无限写会话审计）
 - 轮次：`run_finished`
 
 `user_input` 在输入预处理层执行，保留给附件展开前的原始提示；
@@ -263,6 +267,7 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 │   └── .archive/      /delete 的可恢复归档
 ├── checkpoints/       文件快照（/undo、/rewind 数据源；meta 带 session/turn 身份）
 ├── tool_outputs/      超长工具输出全文（历史里留截断+路径引用）
+├── jobs/              后台 Shell 任务脱敏日志（每任务 output.log，默认 10 MiB 上限）
 ├── exports/           /export 缺省输出目录
 ├── sandbox/            隔离 HOME/TMP/cache（命令与 Skill 脚本使用）
 └── allow_rules.json   审批规则（旧版 allow_programs/allow_commands + rules[]，仅用户可改）
@@ -353,12 +358,24 @@ MCP stdio 子进程默认同样剥离宿主密钥，但 `[mcp_servers.*].env` �
 `LLMResponseReceived`(usage) · `ToolCallStarted` · `ToolProgress` · `ToolOutputDelta` ·
 `ToolCallCompleted`(is_error) · `PlanUpdated` · `UserInputRequested` ·
 `ApprovalRequested` · `PermissionDenied` · `ContextCompressed`(before/after) ·
-`HookTriggered` · `SubagentSpawned` · `SubagentFinished` · `UserSteered` ·
+`HookTriggered` · `SubagentSpawned` · `SubagentFinished` ·
+`ShellJobStarted` · `ShellJobOutput` · `ShellJobFinished` · `UserSteered` ·
 `RunFinished` · `ErrorOccurred`
 
 JSONL 审计记录类型：`user_input` `tool_call` `tool_result` `permission_denied`
-`hook_triggered` `context_compressed` `subagent_spawned` `subagent_finished` `user_steered`
+`hook_triggered` `context_compressed` `subagent_spawned` `subagent_finished`
+`shell_job_started` `shell_job_finished` `user_steered`
 `run_finished` `history`(快照)。
+
+## 7.1 后台 Shell Job 安全边界
+
+`job_start` 与 `run_command` 使用同一 Sandbox 审计、命令风险分级和审批规则；
+后台进程使用独立 session/process group、净化环境和 `stdin=DEVNULL`，不会抢占终端输入。
+`job_output`/`job_list` 是本地只读工具；`job_kill` 只能操作当前 manager 持有的 job id。
+read-only/plan 模式禁止 start/kill，但仍允许读取已有任务输出。命令、实时输出、日志和完成
+preview 全部经过 SecretRedactor；跨 read 边界的 secret 也会通过前缀尾巴暂存后统一脱敏。
+Job 不随 turn abort，进程退出时由 manager 回收进程组；应用退出由 `AgentRuntime.close()`
+统一 `shutdown()`。重启 Krelcode 不会接管旧 OS 进程，也不会静默恢复工作区文件。
 
 ## 8. JSON 输出模式（`-m --output-format json`）
 
@@ -406,9 +423,12 @@ stdin 支持两种 user 形式：
 `plan/updated`（含 `items/statuses/active_index/explanation`）、
 `input/requested|resolved`（含 `request_id/options/allow_free_text`；resolved 只表示是否已回答，
 不回传答案正文）、`permission/requested|denied`、`context/compressed`、
-`hook/triggered`、`subagent/started|finished`、`user/steered`、`error/occurred`；
-最后以 `system/session_end` 结束。所有事件都带 `turn_id`、单调 `sequence` 和
-`session_id`，user 对应的全部事件及 result 还带同一 `request_id`。
+`hook/triggered`、`subagent/started|finished`、`job/started|output_delta|finished`、
+`user/steered`、`error/occurred`；job 事件独立于 turn，因此不带 turn_id，但带
+`session_id`；`job/output_delta` 的 `sequence` 可直接作为 `after_sequence` 游标；
+最后以 `system/session_end` 结束。turn 内事件都带 `turn_id`、单调 `sequence` 和
+`session_id`，user 对应的全部事件及 result 还带同一 `request_id`；后台 job 是跨 turn
+长生命周期事件，使用自己的 `job_id` 与游标。
 
 Stream JSON 当前不接收远端 `input/response`；headless 查询中的 `ask_user` 会立即
 fail-closed。需要人工澄清的会话应使用 REPL，或由 SDK 拆成多次普通 user 请求。

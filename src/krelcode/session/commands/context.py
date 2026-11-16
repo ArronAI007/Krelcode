@@ -32,3 +32,4 @@ class CommandContext:
     permission_manager: Any = None
     plan_manager: Any = None
     rewind: Any = None
+    jobs: Any = None

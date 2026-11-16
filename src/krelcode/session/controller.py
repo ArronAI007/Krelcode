@@ -58,6 +58,7 @@ class SessionController:
         permission_manager: Optional[RuntimePermissionManager] = None,
         plan_manager: Optional[PlanApprovalCoordinator] = None,
         rewind=None,
+        jobs=None,
     ) -> None:
         self.runtime = (runtime if isinstance(runtime, AgentRuntime)
                         else AgentRuntime(runtime))
@@ -83,6 +84,7 @@ class SessionController:
         self.checkpoints = checkpoints
         self.usage = usage
         self.model_switch = model_switch
+        self.jobs = jobs if jobs is not None else self.runtime.shell_jobs
         self.skills = skills
         self.skills_reload = skills_reload
         self.plugins = (plugins if plugins is not None
@@ -247,4 +249,5 @@ class SessionController:
             permission_manager=self.permission_manager,
             plan_manager=self.plan_manager,
             rewind=self.rewind,
+            jobs=self.jobs,
         )

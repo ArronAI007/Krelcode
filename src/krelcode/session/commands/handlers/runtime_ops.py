@@ -56,6 +56,78 @@ async def handle_agents(ctx: CommandContext) -> CommandResult:
                if lines else "  （暂无子代理）")
 
 
+async def handle_jobs(ctx: CommandContext) -> CommandResult:
+    manager = ctx.jobs
+    if manager is None:
+        return _ok("  （后台任务管理器未启用）")
+    raw = ctx.request.arguments.strip()
+    try:
+        parts = shlex.split(raw) if raw else []
+    except ValueError as exc:
+        return _ok(f"  [jobs] 参数解析失败: {exc}")
+    operation = parts[0].lower() if parts else "list"
+
+    if operation == "list":
+        jobs = manager.list_jobs()
+        if not jobs:
+            return _ok("  （暂无后台任务）")
+        lines = [f"  后台任务（{len(jobs)}）:"]
+        for job in jobs:
+            exit_text = "-" if job.exit_code is None else str(job.exit_code)
+            command = " ".join(job.command.split())
+            if len(command) > 80:
+                command = command[:79] + "…"
+            lines.append(
+                f"  {job.job_id}  {job.status.value:<9} exit={exit_text:<4} "
+                f"pid={job.pid} seq={job.latest_sequence}  {command}")
+            lines.append(f"    log: {job.log_path}")
+        return _ok(*lines)
+
+    if operation == "output":
+        if len(parts) < 2:
+            return _ok("  用法: /jobs output <id> [after-sequence] [--wait 秒]")
+        job_id = parts[1]
+        after = 0
+        wait_seconds = 0.0
+        index = 2
+        try:
+            if index < len(parts) and not parts[index].startswith("--"):
+                after = int(parts[index])
+                index += 1
+            if index < len(parts):
+                token = parts[index]
+                if token == "--wait" and index + 1 < len(parts):
+                    wait_seconds = float(parts[index + 1])
+                    index += 2
+                elif token.startswith("--wait="):
+                    wait_seconds = float(token.split("=", 1)[1])
+                    index += 1
+                if index != len(parts):
+                    raise ValueError("多余参数")
+            page = await manager.output(
+                job_id, after_sequence=after, wait_seconds=wait_seconds)
+        except (ValueError, TypeError) as exc:
+            return _ok(f"  [jobs] 参数错误: {exc}")
+        except Exception as exc:
+            return _ok(f"  [jobs] {exc}")
+        return _ok("\n".join(f"  {line}" for line in page.render().splitlines()))
+
+    if operation == "kill":
+        if len(parts) != 2:
+            return _ok("  用法: /jobs kill <id>")
+        try:
+            job = await manager.kill(parts[1])
+        except Exception as exc:
+            return _ok(f"  [jobs] {exc}")
+        exit_text = "-" if job.exit_code is None else str(job.exit_code)
+        return _ok(
+            f"  [jobs] {job.job_id} {job.status.value}（exit {exit_text}）")
+
+    return _ok(
+        "  用法: /jobs | /jobs list | /jobs output <id> [after] [--wait 秒] "
+        "| /jobs kill <id>")
+
+
 def _skills_disabled(ctx: CommandContext) -> bool:
     return ctx.skills is None or not getattr(ctx.skills, "enabled", False)
 

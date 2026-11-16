@@ -20,6 +20,7 @@ from typing import Any, Optional, TextIO
 
 from ..agent.runtime import AgentRuntime
 from ..agent.usage import UsageTotals, UsageTracker
+from ..core.events import ShellJobFinished, ShellJobOutput, ShellJobStarted
 from ..core.redact import SecretRedactor
 from .input import InputEnvelope, InputKind, InputProcessor
 from .stream_json import (
@@ -84,6 +85,12 @@ async def run_stream_json_session(
     writer = _JsonlWriter(output_stream, redactor)
     writer.emit(encoder.init_message())
 
+    def on_job_event(event) -> None:
+        if isinstance(event, (ShellJobStarted, ShellJobOutput, ShellJobFinished)):
+            # 后台 job 独立于 turn；全局订阅保证 turn 结束后仍能实时输出。
+            writer.emit(encoder.job_event_message(event))
+
+    unsubscribe_jobs = loop.bus.subscribe(on_job_event)
     input_queue: asyncio.Queue[Any] = asyncio.Queue()
     if initial_prompt is not None:
         input_queue.put_nowait(StreamUserMessage(initial_prompt))
@@ -131,6 +138,7 @@ async def run_stream_json_session(
     except (BrokenPipeError, ConnectionResetError):
         exit_code = 1
     finally:
+        unsubscribe_jobs()
         reader_task.cancel()
         await asyncio.gather(reader_task, return_exceptions=True)
         try:
@@ -183,6 +191,10 @@ async def _run_turn(
     try:
         async for item in query.events:
             last_sequence = item.sequence
+            if isinstance(item.event, (
+                    ShellJobStarted, ShellJobOutput, ShellJobFinished)):
+                # 已由全局 job 订阅写出；跳过可避免 turn 内重复。
+                continue
             encoded = encoder.encode(
                 item,
                 result_extra=_result_extra(

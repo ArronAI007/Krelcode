@@ -28,11 +28,17 @@ class AgentRuntime:
         subagents=None,
         mcp_supervisor=None,
         mcp_reload=None,
+        shell_jobs=None,
     ) -> None:
         self.loop = loop
         self.subagents = subagents
         self.mcp_supervisor = mcp_supervisor
         self.mcp_reload = mcp_reload
+        self.shell_jobs = (
+            shell_jobs
+            if shell_jobs is not None
+            else getattr(loop.tool_context, "shell_jobs", None)
+        )
         self._task: Optional[asyncio.Task] = None
         self._query: Optional[QuerySession] = None
         self._closed = False
@@ -160,6 +166,8 @@ class AgentRuntime:
             return
         self._closed = True
         await self.stop()
+        if self.shell_jobs is not None:
+            await self.shell_jobs.shutdown()
         if self.subagents is not None:
             await self.subagents.shutdown()
         if self.mcp_supervisor is not None:

@@ -70,6 +70,12 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             "agents", "查看子代理状态",
             help="列出子代理（后台任务）状态"),
         CommandSpec(
+            "jobs", "查看或控制后台 Shell 任务",
+            argument_hint="[list|output <id> [after]|kill <id>]",
+            available_during_run=True,
+            help=("列出后台进程；/jobs output <id> [after] [--wait 秒] 读取增量；\n"
+                  "/jobs kill <id> 终止整个进程组")),
+        CommandSpec(
             "skills", "查看或重载 Skills", argument_hint="[reload|show <name>]",
             help="列出 Skill；/skills reload 热重载；/skills show <name> 查看详情"),
         CommandSpec(

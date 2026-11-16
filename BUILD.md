@@ -5,14 +5,14 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（v0.69.0 / Step 79）
+## 1. 项目统计（v0.70.0 / Step 80）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 24,035 行（Python，**零第三方运行时依赖**） |
-| 测试 | 18,029 行 / 98 个文件 / 959 个用例（离线 957 + 本地端口集成 2，提权环境 959/959 全绿） |
+| 源码 | 25,096 行（Python，**零第三方运行时依赖**） |
+| 测试 | 18,467 行 / 99 个文件 / 976 个用例（离线 974 + 本地端口集成 2，提权环境 976/976 全绿） |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
-| 工具 | 内置 12（含 ask_user/update_plan）+ 子代理 4 + MCP 远程动态注册 |
+| 工具 | 内置 16（含 ask_user/update_plan + 4 个后台 Job 工具）+ 子代理 4 + MCP 远程动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
 | CLI 入口 | REPL 对话 · -m 单次（text/json/stream-json）· stream-json 持久会话 · Python SDK · doctor · init · review |
 | 文档 | README（上手）· CONFIG（全量参考）· DESIGN（契约）· ARCHITECTURE（对标）· PLAN（路线）· BUILD（本文） |
@@ -20,9 +20,9 @@
 源码按层分布：
 
 ```
-session 5659 · ui 2592 · tools 2571 · agent 2403 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2332
-safety 2277 · llm 1762 · mcp 1652 · skills 949 · subagent 620 · core 589
-plugins 435 · entrypoints 194
+session 5810 · ui 2625 · tools 2813 · agent 2411 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2344
+safety 2287 · llm 1762 · mcp 1652 · skills 949 · subagent 621 · core 619
+jobs 574 · plugins 435 · entrypoints 194
 ```
 
 core 只有 589 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
@@ -58,6 +58,7 @@ core 只有 589 行——内核保持极小、能力在边缘，正是当初对�
 | v0.68 | Plan 执行确认 | 计划生成与执行授权分离：Plan 模式只读调查，批准后恢复进入 Plan 前模式并自动启动执行轮，避免“看到计划即视为授权” |
 | v0.69 | 对话级状态恢复 | rewind 不是简单截 history：稳定 turn/session 身份把 history 边界、文件 checkpoint、plan 审批/权限合成一个事务；预检失败不改会话，文件写入失败尝试回滚 |
 | v0.69 | 历史分叉语义 | fork 只复制选定边界的 history + plan，不静默改工作区；“恢复文件”和“从旧对话另开分支”明确拆成 `/rewind` 与 `/rewind fork` 两个动作 |
+| v0.70 | 后台 Job 生命周期 | Job 刻意不绑定 turn abort，避免 dev server/watcher 被一轮结束误杀；由 runtime close 或显式 kill 回收。模型经 `job_output(after_sequence)` 游标轮询，UI/协议经事件实时观察，完整输出落有界脱敏日志而非塞回模型历史 |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -77,6 +78,7 @@ core 只有 589 行——内核保持极小、能力在边缘，正是当初对�
 | 运行时权限/Plan 审批状态机 | `safety/runtime.py` |
 | MCP 客户端/传输/热重载 | `mcp/client.py` `mcp/{stdio,sse}_transport.py` `mcp/streamable.py` `mcp/supervisor.py` |
 | 子代理 | `subagent/manager.py`（队列/打断/wait_many）`subagent/tools.py` |
+| 后台 Shell 进程/实时输出/日志 | `jobs/shell.py`；模型工具 `tools/builtin/job_tools.py` |
 | 会话录制/恢复/分支/导出/检查点/回退 | `session/{recorder,manager,lifecycle,restore,export,checkpoint,rewind}.py` |
 | 插件发现/隔离加载/热重载 | `plugins/{manifest,loader,manager}.py` |
 | 流式渲染/审批/用户输入/@引用 | `ui/render.py` `ui/approval.py` `session/interactions.py` `ui/atfiles.py` `ui/repl.py` |
@@ -100,7 +102,7 @@ core 只有 589 行——内核保持极小、能力在边缘，正是当初对�
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 957 通过、2 skip，提权环境 959/959 全过。
+bind 探测自动 skip——沙箱内 974 通过、2 skip，提权环境 976/976 全过。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /
@@ -126,6 +128,7 @@ python scripts/real_acceptance.py --provider anthropic --keep
 
 - checkpoint 不追踪 run_command 造成的文件修改（命令内容不可静态分析）
 - Windows：进程终止退化为主进程 kill（无进程组）；未在真机验证
+- 后台 Job 是进程内管理器：进程重启后不会接管旧 OS 进程；已写日志仍保留，但 list/output/kill 只管理当前进程创建的任务
 - grep/repo_map 为纯 Python 实现，超大仓库性能弱于 ripgrep/tree-sitter
 - 价目表/上下文窗口是内置近似值，会过时（`agent/pricing.py` 一处可改）
 - 思考流的展示文本不进对话历史（设计如此）；但 Anthropic 扩展思考的

@@ -14,9 +14,10 @@ from krelcode.session.commands import (
 
 def test_builtin_catalog_has_expected_commands_and_run_subset():
     registry = builtin_command_registry()
-    assert len(registry.specs) == 30
+    assert len(registry.specs) == 31
     assert [spec.name for spec in registry.list(running=True)] == [
-        "thinking", "plan", "tool-output", "queue", "permissions", "stop", "exit",
+        "thinking", "plan", "tool-output", "queue", "jobs", "permissions",
+        "stop", "exit",
     ]
     assert registry.resolve("/thinking").kind is CommandKind.UI_COMMAND
     assert registry.resolve("/stop").kind is CommandKind.CONTROL

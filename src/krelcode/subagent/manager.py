@@ -166,6 +166,7 @@ class SubagentManager:
                 sandbox_enabled=parent_sandbox is not None,
                 runtime=child_runtime,
                 services=self.tool_context.services,
+                shell_jobs=getattr(self.tool_context, "shell_jobs", None),
             )
         child_bus = EventBus()
         child_hook_port = self.hook_port

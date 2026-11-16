@@ -13,10 +13,10 @@ from __future__ import annotations
 import asyncio
 import codecs
 import os
-import signal
 from typing import Any, Dict
 
 from ..base import ToolContext, ToolResult
+from ..process import terminate_process_tree
 from ..fsutils import truncate_middle
 from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
 from ...safety.environment import (
@@ -190,15 +190,5 @@ def _clamp_timeout(value: Any) -> float:
 
 
 def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:
-    """跨平台终止：POSIX 用进程组整组击杀；Windows（无 killpg/SIGKILL）
-    退化为杀主进程（start_new_session 在 Windows 上被 subprocess 忽略，无害）。"""
-    if os.name == "posix":
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            return
-        except (ProcessLookupError, PermissionError, OSError, AttributeError):
-            pass
-    try:
-        proc.kill()
-    except (ProcessLookupError, OSError):
-        pass
+    """兼容旧导入路径：终止整个进程树。"""
+    terminate_process_tree(proc)

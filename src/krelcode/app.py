@@ -29,6 +29,7 @@ from .config import load_config
 from .core.events import EventBus
 from .core.redact import SecretRedactor
 from .hooks import HookRunner, parse_hooks
+from .jobs import ShellJobManager
 from .core.messages import Message, ToolCall
 from .llm.base import LLMProvider
 from .llm.providers.mock import MockProvider
@@ -59,6 +60,12 @@ from .tools.builtin.check_syntax import CheckSyntaxTool
 from .tools.builtin.edit_file import EditFileTool
 from .tools.builtin.glob import GlobTool
 from .tools.builtin.grep import GrepTool
+from .tools.builtin.job_tools import (
+    JobKillTool,
+    JobListTool,
+    JobOutputTool,
+    JobStartTool,
+)
 from .tools.builtin.read_file import ReadFileTool
 from .tools.builtin.repo_map import RepoMapTool
 from .tools.builtin.run_command import RunCommandTool
@@ -73,12 +80,13 @@ from .ui.repl import run_repl
 
 
 def default_tools() -> List[Tool]:
-    """内置工具集（12 个 + 4 个子代理工具在 build_loop 注册）。
+    """内置工具集（16 个 + 4 个子代理工具在 build_loop 注册）。
     MCP 远程工具在运行时追加注册。"""
     return [
         GetTimeTool(), ReadFileTool(), WriteFileTool(), EditFileTool(),
         RunCommandTool(), GrepTool(), GlobTool(), RepoMapTool(),
         FindRefsTool(), CheckSyntaxTool(), AskUserTool(), UpdatePlanTool(),
+        JobStartTool(), JobOutputTool(), JobListTool(), JobKillTool(),
     ]
 
 
@@ -338,6 +346,8 @@ async def build_loop(
             disabled_tools=_disabled_tools(config),
         ),
     )
+    shell_jobs = ShellJobManager(bus, workspace_root=workspace_root)
+    tool_context.shell_jobs = shell_jobs
     policy = build_policy(args, workspace_root, bus, approver=approver)
     tool_factory = lambda: default_tools() + skill_tools + list(plugin_manager.tools)
     registry = ToolRegistry(default_tools())
@@ -520,6 +530,8 @@ async def async_main(args: argparse.Namespace) -> int:
     redactor.add(getattr(loop.llm, "api_key", None))
     loop.redactor = redactor
     subagents.redactor = redactor
+    if getattr(loop.tool_context, "shell_jobs", None) is not None:
+        loop.tool_context.shell_jobs.redactor = redactor
     supervisor = MCPSupervisor(
         loop.registry, log=note,
         sampler=build_mcp_sampler(loop.llm),

@@ -194,6 +194,7 @@ class ToolContext:
     output_emitter: Optional[OutputEmitter] = field(default=None, repr=False)
     input_requester: Optional[InputRequester] = field(default=None, repr=False)
     plan_emitter: Optional[PlanEmitter] = field(default=None, repr=False)
+    shell_jobs: Any = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not self.sandbox_enabled:

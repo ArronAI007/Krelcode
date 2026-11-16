@@ -648,6 +648,42 @@ JSONL 分支并切换 recorder/runtime id；它明确不恢复工作区文件，
 运行中的 rewind 一律拒绝；`/reset` 与 resume/fork 切换会清空旧时间线，防止把边界
 错配到另一份 history。
 
+## 后台 Shell Job Manager（Step 80）
+
+后台进程由独立 `jobs.ShellJobManager` 拥有，不进入 AgentLoop 的 turn 生命周期，
+也不依赖 Tool/REPL。`job_start` 只是 manager 的安全适配器：`ToolContext` 注入 manager，
+命令仍先经过与 `run_command` 相同的 Sandbox 审计、风险分级和审批。
+
+```
+job_start(command, cwd)
+  └─ SandboxPolicy → ExecutionSandbox.audit/prepare
+      └─ ShellJobManager.start()
+          ├─ create_subprocess_exec(start_new_session, stdin=DEVNULL,
+          │                          stdout=PIPE, stderr=STDOUT, scrub env)
+          ├─ reader task → SecretRedactor → EventBus ShellJobOutput
+          │                 ├─ bounded in-memory chunks + sequence cursor
+          │                 └─ .krelcode/jobs/<id>/output.log (bounded, redacted)
+          └─ reaper task → wait process group → ShellJobFinished
+```
+
+- Job **不属于某一 turn**：turn 取消或结束不会终止 dev server/watcher；只有显式
+  `job_kill`、进程自然退出或 `AgentRuntime.close()` 的 manager shutdown 才回收。
+- 实时输出按读取块立即发布，不等待换行；每块带单调 `sequence`。`job_output` 接收
+  `after_sequence`，只返回更新内容，并可用 `wait_seconds` 等待下一次输出（最多 30 秒）。
+- 内存只保留有界 tail（默认 200k 字符）；页面请求过旧 cursor 时返回 `truncated=true`。
+  完整输出写任务日志，默认 10 MiB 后停止继续写日志，但实时事件与进程执行不受影响。
+- `job_list` 和 `job_output` 是只读工具；`job_kill` 只能终止当前 manager 持有的 job id，
+  read-only/plan 模式仍禁止 start/kill。`cwd` 被限制在工作区内，后台 stdin 固定为 DEVNULL。
+- 输出在进入事件、缓冲区、日志和完成 preview 前统一脱敏。reader 会暂存可能构成 secret
+  前缀的尾部，避免 key 被拆分到两个 read 块后绕过字符串替换。
+- `ShellJobStarted/Output/Finished` 是旁路事件：recorder 只落 started/finished 有界审计，
+  不逐块膨胀会话；REPL 在空闲时也能显示完成通知；stream-json 输出跨 turn 的
+  `job/started`、`job/output_delta`、`job/finished`。模型历史不会被自动注入输出，模型需
+  主动调用 `job_output`，避免日志污染上下文。
+- 兼容边界：manager 是进程内的，重启后不接管旧 OS 进程；旧日志可人工查看，但新进程
+  不再 list/output/kill 它们。命令通过 `&` 自行派生的后台子进程若仍持有 pipe，主进程退出后
+  manager 会结束残留进程组，因此正确用法是让目标命令在前台运行并由 `job_start` 托管。
+
 ## 统一输入处理管线（Step 67）
 
 借鉴 Claude Code 将 `processUserInput` 与 REPL 分开的思路，终端不再直接解释原始

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Dict, List, Tuple, Union
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
 from .messages import Message, ToolCall, ToolResultBlock
 
@@ -166,6 +166,36 @@ class UserInputResolved(AgentEvent):
 
     request_id: str
     answered: bool = False
+
+
+@dataclass(frozen=True)
+class ShellJobStarted(AgentEvent):
+    """后台 Shell job 已启动；命令正文应已脱敏。"""
+
+    job_id: str
+    command: str
+    pid: int
+    cwd: str = ""
+
+
+@dataclass(frozen=True)
+class ShellJobOutput(AgentEvent):
+    """后台 Shell job 的实时输出片段（已脱敏）。"""
+
+    job_id: str
+    sequence: int
+    text: str
+
+
+@dataclass(frozen=True)
+class ShellJobFinished(AgentEvent):
+    """后台 Shell job 到达终态；preview 为输出尾部摘要。"""
+
+    job_id: str
+    command: str
+    status: str
+    exit_code: Optional[int] = None
+    preview: str = ""
 
 
 @dataclass(frozen=True)

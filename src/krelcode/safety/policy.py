@@ -58,11 +58,12 @@ class AllowAllPolicy:
 READONLY_TOOLS = {
     "get_time", "read_file", "grep", "glob",
     "find_refs", "repo_map", "check_syntax",
-    "ask_user", "update_plan",
+    "ask_user", "update_plan", "job_output", "job_list",
     "list_skills", "load_skill", "list_skill_resources", "read_skill_resource",
 }
 WORKSPACE_WRITE_TOOLS = {"write_file", "edit_file"}
-SHELL_TOOLS = {"run_command", "run_skill_script"}
+SHELL_TOOLS = {"run_command", "run_skill_script", "job_start"}
+JOB_CONTROL_TOOLS = {"job_kill"}
 
 # approver：async (tool_call, reason) -> "yes" | "no" | "always"
 Approver = Callable[[ToolCall, str], Union[str, Awaitable[str]]]
@@ -139,6 +140,13 @@ class SandboxPolicy:
         if name in SHELL_TOOLS:
             return await self._check_command(tool_call, ctx, rule_match)
 
+        if name in JOB_CONTROL_TOOLS:
+            if rule_match is not None and rule_match.decision is RuleDecision.ASK:
+                return await self._ask(
+                    tool_call, rule_match.reason, ctx=ctx,
+                    ignore_rules=True, force_approval=True)
+            return Decision(True, rule_match.reason if rule_match else "受管后台任务控制")
+
         # 未知/未来新工具：显式 allow 才能免审批，其他情况保守 ASK。
         if rule_match is not None and rule_match.decision is RuleDecision.ALLOW:
             return Decision(True, rule_match.reason)
@@ -168,6 +176,8 @@ class SandboxPolicy:
             command = f"skill-script {script} {suffix}".strip()
         else:
             command = str(tool_call.arguments.get("command", ""))
+        if tool_call.name == "job_start" and not command.strip():
+            return deny("job_start 缺少 command")
         command_match = _combine_rule_matches(
             rule_match, self.rules.evaluate_command(command))
         if command_match is not None and command_match.decision is RuleDecision.DENY:

@@ -117,6 +117,7 @@ def test_running_suggests_thinking_stop_and_exit():
         ("/plan", "查看当前执行计划"),
         ("/tool-output", "查看或展开工具输出"),
         ("/queue", "查看或管理下一条消息队列"),
+        ("/jobs", "查看或控制后台 Shell 任务"),
         ("/permissions", "切换权限模式并管理会话/工作区规则"),
         ("/stop", "中止正在运行的任务"),
         ("/exit", "退出 Krelcode"),
