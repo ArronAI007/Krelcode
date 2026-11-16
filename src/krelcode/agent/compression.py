@@ -115,8 +115,41 @@ class ContextManager:
         self.keep_recent_tools = max(1, keep_recent_tools)
         self.last_compact_preview: Optional[CompactPreview] = None
 
-    def over_budget(self, history: List[Message]) -> bool:
-        return estimate_history_tokens(history) > self.max_tokens
+    def over_budget(
+        self,
+        history: List[Message],
+        *,
+        extra_tokens: int = 0,
+        output_reserve_tokens: int = 0,
+        model_context_window: Optional[int] = None,
+    ) -> bool:
+        """Check the full request budget, not just serialized history.
+
+        ``extra_tokens`` covers assembled system context, tool schemas and
+        provider wire overhead. The model-window constraint additionally
+        reserves the provider's real output limit.
+        """
+        request_tokens = estimate_history_tokens(history) + max(0, extra_tokens)
+        return self._exceeds_constraints(
+            request_tokens,
+            output_reserve_tokens=output_reserve_tokens,
+            model_context_window=model_context_window,
+        )
+
+    def _exceeds_constraints(
+        self,
+        request_tokens: int,
+        *,
+        output_reserve_tokens: int = 0,
+        model_context_window: Optional[int] = None,
+    ) -> bool:
+        if request_tokens > self.max_tokens:
+            return True
+        return bool(
+            model_context_window is not None
+            and request_tokens + max(0, output_reserve_tokens)
+            > model_context_window
+        )
 
     def evict_old_tool_results(self, history: List[Message]) -> int:
         """第一道防线：驱逐旧工具输出（原地替换 content，保留消息本身）。
@@ -143,7 +176,13 @@ class ContextManager:
 
 
     def preview_compact(
-        self, history: List[Message], force: bool = True,
+        self,
+        history: List[Message],
+        force: bool = True,
+        *,
+        extra_tokens: int = 0,
+        output_reserve_tokens: int = 0,
+        model_context_window: Optional[int] = None,
     ) -> CompactPreview:
         """非破坏性 preview：展示驱逐/摘要边界和待压缩消息。"""
         before = estimate_history_tokens(history)
@@ -151,7 +190,11 @@ class ContextManager:
         evicted = self.evict_old_tool_results(work)
         after_eviction = estimate_history_tokens(work)
         head_count = 1 if work and work[0].role == "system" else 0
-        if not force and after_eviction <= self.max_tokens:
+        if not force and not self._exceeds_constraints(
+            after_eviction + max(0, extra_tokens),
+            output_reserve_tokens=output_reserve_tokens,
+            model_context_window=model_context_window,
+        ):
             preview = CompactPreview(
                 force=False, eligible=False,
                 reason="历史在预算内，无需 compact",
@@ -210,17 +253,36 @@ class ContextManager:
         self.last_compact_preview = preview
         return preview
 
-    async def maybe_compress(self, history: List[Message], force: bool = False) -> bool:
+    async def maybe_compress(
+        self,
+        history: List[Message],
+        force: bool = False,
+        *,
+        extra_tokens: int = 0,
+        output_reserve_tokens: int = 0,
+        model_context_window: Optional[int] = None,
+    ) -> bool:
         """超预算（或 force=True，即 REPL /compact）则原地压缩；返回是否压缩。
 
         顺序：先驱逐旧工具结果（免费），仍超预算（或 force）再 LLM 摘要。
         """
-        preview = self.preview_compact(history, force=force)
-        if not force and not self.over_budget(history):
+        preview = self.preview_compact(
+            history, force=force, extra_tokens=extra_tokens,
+            output_reserve_tokens=output_reserve_tokens,
+            model_context_window=model_context_window)
+        if not force and not self.over_budget(
+            history, extra_tokens=extra_tokens,
+            output_reserve_tokens=output_reserve_tokens,
+            model_context_window=model_context_window,
+        ):
             return False
 
         evicted = self.evict_old_tool_results(history)
-        if not force and not self.over_budget(history):
+        if not force and not self.over_budget(
+            history, extra_tokens=extra_tokens,
+            output_reserve_tokens=output_reserve_tokens,
+            model_context_window=model_context_window,
+        ):
             self.last_compact_preview = replace(
                 preview, after_tokens=estimate_history_tokens(history),
                 strategy="evict_tools" if evicted else preview.strategy,

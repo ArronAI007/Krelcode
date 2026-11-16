@@ -59,6 +59,7 @@ from ..llm.base import (
     FINISH_LENGTH,
     FINISH_TOOLS,
     LLMProvider,
+    PreparedLLMRequest,
     StreamFinished,
     TextDelta,
     ThinkingDelta,
@@ -66,6 +67,7 @@ from ..llm.base import (
 )
 from .compression import ContextManager
 from .context_assembler import ContextAssembler
+from .context_source import ContextAssembly
 from .context_source import ContextRequest, default_context_sources
 from .context_usage import build_context_usage_snapshot
 from .intent import TurnIntent, infer_turn_intent
@@ -423,20 +425,39 @@ class AgentLoop:
                     Message.user(STEERING_PREFIX + text, images=images or None))
             await self._emit(UserSteered(text))
 
-    async def compress_context(self, force: bool = False) -> bool:
-        """统一压缩入口：预算检查、Pre/PostCompact Hook 与事件。"""
+    async def compress_context(
+        self,
+        force: bool = False,
+        *,
+        request_tokens: Optional[int] = None,
+        output_reserve_tokens: int = 0,
+        model_context_window: Optional[int] = None,
+    ) -> bool:
+        """统一压缩入口：真实请求预算检查、Hook 与事件。"""
         if self.context_manager is None:
             return False
-        before = estimate_history_tokens(self.history)
-        needs_compression = force or self.context_manager.over_budget(self.history)
+        history_tokens = estimate_history_tokens(self.history)
+        before = max(history_tokens, int(request_tokens or 0))
+        extra_tokens = max(0, before - history_tokens)
+        needs_compression = force or self.context_manager.over_budget(
+            self.history,
+            extra_tokens=extra_tokens,
+            output_reserve_tokens=output_reserve_tokens,
+            model_context_window=model_context_window,
+        )
         if needs_compression:
             await self.run_lifecycle_hook(
                 "pre_compact", {"before_tokens": str(before)})
         changed = await self.context_manager.maybe_compress(
-            self.history, force=force)
+            self.history,
+            force=force,
+            extra_tokens=extra_tokens,
+            output_reserve_tokens=output_reserve_tokens,
+            model_context_window=model_context_window,
+        )
         if not changed:
             return False
-        after = estimate_history_tokens(self.history)
+        after = estimate_history_tokens(self.history) + extra_tokens
         await self.run_lifecycle_hook(
             "post_compact",
             {"before_tokens": str(before), "after_tokens": str(after)},
@@ -451,16 +472,13 @@ class AgentLoop:
 
     # -- 内部：一次 LLM 调用 ---------------------------------------------------
 
-    async def _llm_turn(self, step: int) -> LLMTurnResult:
-        await self.compress_context()
-        # 能力协商：provider 声明不支持 tools 时不 advertise，避免 400。
-        # 无 capabilities 属性的测试替身保持旧行为（照常传 tools）。
-        capabilities = getattr(self.llm, "capabilities", None)
-        if capabilities is not None and not capabilities.supports_tools:
-            specs = []
-        else:
-            specs = self._current_tool_pool().tool_specs()
-        tools = specs or None
+    async def _build_llm_request(
+        self,
+        *,
+        step: int,
+        specs: list,
+        tools,
+    ):
         base_message = (
             self.history[0]
             if self.history and self.history[0].role == "system" else None
@@ -479,13 +497,29 @@ class AgentLoop:
             runtime_context=tuple(self.runtime_context),
         )
         context_assembly = await self.context_assembler.assemble(context_request)
-        self.last_context_assembly = context_assembly
         messages = context_assembly.messages_for(self.history)
+        prepared: Optional[PreparedLLMRequest] = None
+        prepare = getattr(self.llm, "prepare_request", None)
+        stream_prepared = getattr(self.llm, "stream_prepared", None)
+        supported = getattr(self.llm, "supports_prepared_requests", True)
+        if supported and callable(prepare) and callable(stream_prepared):
+            prepared = prepare(messages, tools)
+        return messages, context_assembly, prepared
+
+    def _request_snapshot(
+        self,
+        *,
+        step: int,
+        specs: list,
+        messages: List[Message],
+        context_assembly: ContextAssembly,
+        prepared: Optional[PreparedLLMRequest],
+    ):
         budget_tokens = (
             self.context_manager.max_tokens
             if self.context_manager is not None else None
         )
-        context_snapshot = build_context_usage_snapshot(
+        return build_context_usage_snapshot(
             messages,
             turn_id=self._current_turn_id,
             step=step,
@@ -494,14 +528,53 @@ class AgentLoop:
             budget_tokens=budget_tokens,
             model_context_window=match_context_window(
                 getattr(self.llm, "model", None)),
+            prepared_request=prepared,
+            provider_name=str(getattr(self.llm, "name", "") or ""),
         )
+
+    async def _llm_turn(self, step: int) -> LLMTurnResult:
+        # 能力协商：provider 声明不支持 tools 时不 advertise，避免 400。
+        # 无 capabilities 属性的测试替身保持旧行为（照常传 tools）。
+        capabilities = getattr(self.llm, "capabilities", None)
+        if capabilities is not None and not capabilities.supports_tools:
+            specs = []
+        else:
+            specs = self._current_tool_pool().tool_specs()
+        tools = specs or None
+        messages, context_assembly, prepared = await self._build_llm_request(
+            step=step, specs=specs, tools=tools)
+        context_snapshot = self._request_snapshot(
+            step=step, specs=specs, messages=messages,
+            context_assembly=context_assembly, prepared=prepared)
+
+        # 真实请求（含 system/tools/wire 开销与 output reserve）超预算时，
+        # 先 compact，再重新装配一次；绝不循环探测，避免压缩死循环。
+        if self.context_manager is not None and not context_snapshot.input_fits:
+            changed = await self.compress_context(
+                request_tokens=context_snapshot.estimated_input_tokens,
+                output_reserve_tokens=context_snapshot.output_reserve_tokens,
+                model_context_window=context_snapshot.model_context_window,
+            )
+            if changed:
+                messages, context_assembly, prepared = await self._build_llm_request(
+                    step=step, specs=specs, tools=tools)
+                context_snapshot = self._request_snapshot(
+                    step=step, specs=specs, messages=messages,
+                    context_assembly=context_assembly, prepared=prepared)
+
+        self.last_context_assembly = context_assembly
         self.last_context_snapshot = context_snapshot
         await self._emit(ContextAssembled(context_snapshot))
         finished: Optional[StreamFinished] = None
         executor = StreamingToolExecutor(
             self._current_tool_pool(), self._run_stream_tool)
+        stream = (
+            self.llm.stream_prepared(prepared)
+            if prepared is not None
+            else self.llm.stream(messages, tools)
+        )
         try:
-            async for event in self.llm.stream(messages, tools):
+            async for event in stream:
                 if isinstance(event, TextDelta):
                     await self._emit(LLMStreamDelta(event.text))
                 elif isinstance(event, ThinkingDelta):

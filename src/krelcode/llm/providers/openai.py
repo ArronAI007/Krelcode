@@ -21,9 +21,10 @@ from ...core.messages import (
     ToolCall,
 )
 from ..base import (
-    FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, ProviderCapabilities,
-    StreamFinished, TextDelta, ThinkingDelta, ToolCallArgumentsDelta,
-    ToolCallReady, ToolCallStartedDelta, ToolSpec, normalize_usage,
+    FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, PreparedLLMRequest,
+    ProviderCapabilities, StreamFinished, TextDelta, ThinkingDelta,
+    ToolCallArgumentsDelta, ToolCallReady, ToolCallStartedDelta, ToolSpec,
+    cache_segment, normalize_usage, prepare_http_request, stable_system_prefix,
 )
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
@@ -197,14 +198,43 @@ class OpenAIProvider:
 
     # -- LLMProvider 端口实现 ---------------------------------------------------
 
+    def prepare_request(
+        self,
+        messages: Sequence[Message],
+        tools: Optional[Sequence[ToolSpec]] = None,
+    ) -> PreparedLLMRequest:
+        request = self.build_request(messages, tools)
+        payload = json.loads(request["body"].decode("utf-8"))
+        segments, stable_chars, stable_hash = _openai_cache_segments(payload, messages)
+        return prepare_http_request(
+            provider=self.name,
+            model=self.model,
+            request=request,
+            output_limit_tokens=int(
+                payload.get("max_completion_tokens")
+                or payload.get("max_tokens") or 0),
+            cache_mode="implicit" if segments else "none",
+            cache_segments=segments,
+            stable_cache_chars=stable_chars,
+            stable_cache_hash=stable_hash,
+        )
+
     async def stream(
         self,
         messages: Sequence[Message],
         tools: Optional[Sequence[ToolSpec]] = None,
     ) -> AsyncIterator[LLMEvent]:
-        req = self.build_request(messages, tools)
+        prepared = self.prepare_request(messages, tools)
+        async for event in self.stream_prepared(prepared):
+            yield event
+
+    async def stream_prepared(
+        self,
+        prepared: PreparedLLMRequest,
+    ) -> AsyncIterator[LLMEvent]:
         resp = await asend(
-            self._transport, "POST", req["url"], req["headers"], req["body"], self.timeout
+            self._transport, "POST", prepared.url, dict(prepared.headers),
+            prepared.body, self.timeout,
         )
         try:
             if resp.status != 200:
@@ -301,3 +331,27 @@ class OpenAIProvider:
             )
         finally:
             resp.close()
+
+
+
+def _openai_cache_segments(payload: Dict[str, Any], messages: Sequence[Message]):
+    """Describe OpenAI/DeepSeek implicit prefix-cache opportunities safely."""
+    segments = []
+    stable = stable_system_prefix(messages)
+    stable_chars = 0
+    stable_hash = ""
+    if stable:
+        segment = cache_segment("system", stable, cache_control=False)
+        segments.append(segment)
+        stable_chars = segment.chars
+        stable_hash = segment.digest
+    tools = payload.get("tools")
+    if isinstance(tools, list) and tools:
+        segments.append(cache_segment(
+            "tools", json.dumps(tools, ensure_ascii=False), cache_control=False))
+    wire_messages = payload.get("messages")
+    if isinstance(wire_messages, list) and wire_messages:
+        segments.append(cache_segment(
+            "messages", json.dumps(wire_messages, ensure_ascii=False),
+            cache_control=False))
+    return segments, stable_chars, stable_hash

@@ -160,7 +160,7 @@ generation = { temperature = 0.3 }   # 生成参数透传（三家通用）
 model = "claude-sonnet-4-5"
 api_key_env = "ANTHROPIC_API_KEY"
 max_tokens = 4096
-prompt_cache = true                  # 3 断点 ephemeral 缓存（默认开）
+prompt_cache = true                  # system/tools/messages 三段 ephemeral 缓存（默认开）
 thinking_budget = 10000              # 扩展思考（≥1024；缺省不启用）
 
 [providers.gemini]

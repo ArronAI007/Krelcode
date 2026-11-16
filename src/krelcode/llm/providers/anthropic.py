@@ -34,9 +34,10 @@ from ...core.messages import (
     ToolCall,
 )
 from ..base import (
-    FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, ProviderCapabilities,
-    StreamFinished, TextDelta, ThinkingDelta, ToolCallArgumentsDelta,
-    ToolCallReady, ToolCallStartedDelta, ToolSpec, normalize_usage,
+    FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, PreparedLLMRequest,
+    ProviderCapabilities, StreamFinished, TextDelta, ThinkingDelta,
+    ToolCallArgumentsDelta, ToolCallReady, ToolCallStartedDelta, ToolSpec,
+    cache_segment, normalize_usage, prepare_http_request,
 )
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
@@ -304,14 +305,42 @@ class AnthropicProvider:
 
     # -- LLMProvider 端口实现 ---------------------------------------------------
 
+    def prepare_request(
+        self,
+        messages: Sequence[Message],
+        tools: Optional[Sequence[ToolSpec]] = None,
+    ) -> PreparedLLMRequest:
+        """Build once, then expose safe accounting alongside the opaque wire body."""
+        request = self.build_request(messages, tools)
+        payload = json.loads(request["body"].decode("utf-8"))
+        segments, stable_chars, stable_hash = _anthropic_cache_segments(payload)
+        return prepare_http_request(
+            provider=self.name,
+            model=self.model,
+            request=request,
+            output_limit_tokens=int(payload.get("max_tokens", 0) or 0),
+            cache_mode="explicit" if segments else "none",
+            cache_segments=segments,
+            stable_cache_chars=stable_chars,
+            stable_cache_hash=stable_hash,
+        )
+
     async def stream(
         self,
         messages: Sequence[Message],
         tools: Optional[Sequence[ToolSpec]] = None,
     ) -> AsyncIterator[LLMEvent]:
-        req = self.build_request(messages, tools)
+        prepared = self.prepare_request(messages, tools)
+        async for event in self.stream_prepared(prepared):
+            yield event
+
+    async def stream_prepared(
+        self,
+        prepared: PreparedLLMRequest,
+    ) -> AsyncIterator[LLMEvent]:
         resp = await asend(
-            self._transport, "POST", req["url"], req["headers"], req["body"], self.timeout
+            self._transport, "POST", prepared.url, dict(prepared.headers),
+            prepared.body, self.timeout,
         )
         try:
             if resp.status != 200:
@@ -443,6 +472,47 @@ class AnthropicProvider:
             )
         finally:
             resp.close()
+
+
+def _anthropic_cache_segments(
+    payload: Dict[str, Any],
+) -> Tuple[List[Any], int, str]:
+    """Extract content-free cache attribution from the final system/tools/messages."""
+    segments: List[Any] = []
+    system = payload.get("system")
+    stable_chars = 0
+    stable_hash = ""
+    if isinstance(system, list):
+        for block in system:
+            if not isinstance(block, dict) or not block.get("cache_control"):
+                continue
+            text = str(block.get("text") or "")
+            segment = cache_segment("system", text, cache_control=True)
+            segments.append(segment)
+            if not stable_hash:
+                stable_chars = segment.chars
+                stable_hash = segment.digest
+    tools = payload.get("tools")
+    if isinstance(tools, list) and tools:
+        last = tools[-1]
+        if isinstance(last, dict) and last.get("cache_control"):
+            segments.append(cache_segment(
+                "tools", json.dumps(tools, ensure_ascii=False),
+                cache_control=True))
+    messages = payload.get("messages")
+    if isinstance(messages, list) and messages:
+        last_message = messages[-1]
+        content = last_message.get("content") if isinstance(last_message, dict) else None
+        marked = (
+            isinstance(content, list) and content
+            and isinstance(content[-1], dict)
+            and bool(content[-1].get("cache_control"))
+        )
+        if marked:
+            segments.append(cache_segment(
+                "messages", json.dumps(messages, ensure_ascii=False),
+                cache_control=True))
+    return segments, stable_chars, stable_hash
 
 
 def _mark_last_block_cacheable(wire_message: Dict[str, Any]) -> None:

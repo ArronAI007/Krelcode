@@ -13,6 +13,26 @@ from typing import Dict, Mapping, Optional, Tuple
 
 
 @dataclass(frozen=True)
+class CacheSegmentSnapshot:
+    """Content-free metadata for one cacheable request segment."""
+
+    kind: str
+    tokens: int
+    chars: int = 0
+    digest: str = ""
+    cache_control: bool = False
+
+    def as_record(self) -> Dict[str, object]:
+        return {
+            "kind": self.kind,
+            "tokens": self.tokens,
+            "chars": self.chars,
+            "digest": self.digest,
+            "cache_control": self.cache_control,
+        }
+
+
+@dataclass(frozen=True)
 class ContextUsageSnapshot:
     """Token accounting for one concrete model request."""
 
@@ -39,10 +59,26 @@ class ContextUsageSnapshot:
     source_count: int = 0
     source_tokens: Mapping[str, int] = field(default_factory=dict)
     dropped_items: Tuple[str, ...] = field(default_factory=tuple)
+    provider: str = ""
+    wire_fidelity: str = "estimated"
+    cache_mode: str = "estimated"
+    request_body_bytes: int = 0
+    request_body_tokens: int = 0
+    wire_overhead_tokens: int = 0
+    request_digest: str = ""
+    cache_segment_count: int = 0
+    cache_control_segment_count: int = 0
+    tool_cacheable_tokens: int = 0
+    message_cacheable_tokens: int = 0
+    output_limit_tokens: int = 0
+    input_fits: bool = True
+    cache_segments: Tuple[CacheSegmentSnapshot, ...] = field(
+        default_factory=tuple)
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "source_tokens", MappingProxyType(dict(self.source_tokens)))
+        object.__setattr__(self, "cache_segments", tuple(self.cache_segments))
 
     @property
     def total_tokens(self) -> int:
@@ -92,4 +128,19 @@ class ContextUsageSnapshot:
             "source_count": self.source_count,
             "source_tokens": dict(self.source_tokens),
             "dropped_items": list(self.dropped_items),
+            "provider": self.provider,
+            "wire_fidelity": self.wire_fidelity,
+            "cache_mode": self.cache_mode,
+            "request_body_bytes": self.request_body_bytes,
+            "request_body_tokens": self.request_body_tokens,
+            "wire_overhead_tokens": self.wire_overhead_tokens,
+            "request_digest": self.request_digest,
+            "cache_segment_count": self.cache_segment_count,
+            "cache_control_segment_count": self.cache_control_segment_count,
+            "tool_cacheable_tokens": self.tool_cacheable_tokens,
+            "message_cacheable_tokens": self.message_cacheable_tokens,
+            "output_limit_tokens": self.output_limit_tokens,
+            "input_fits": self.input_fits,
+            "cache_segments": [
+                segment.as_record() for segment in self.cache_segments],
         }

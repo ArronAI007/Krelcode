@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Awaitable, Callable, Optional, Sequence
 
 from ..core.errors import LLMError, LLMHTTPError
-from .base import LLMEvent, ProviderCapabilities, ToolSpec
+from .base import LLMEvent, PreparedLLMRequest, ProviderCapabilities, ToolSpec
 from ..core.messages import Message
 
 RETRYABLE_STATUSES = frozenset({408, 409, 425, 429})
@@ -78,6 +78,13 @@ class RetryingProvider:
         """透明暴露 inner 的 key：装饰器不应让脱敏层看不到真实凭据。"""
         return getattr(self._inner, "api_key", None)
 
+    @property
+    def supports_prepared_requests(self) -> bool:
+        return (
+            callable(getattr(self._inner, "prepare_request", None))
+            and callable(getattr(self._inner, "stream_prepared", None))
+        )
+
     def __getattr__(self, name: str):
         """透明代理其余 provider 属性（base_url/generation/max_tokens 等）。
 
@@ -88,16 +95,47 @@ class RetryingProvider:
             raise AttributeError(name)
         return getattr(self._inner, name)
 
+    def prepare_request(
+        self,
+        messages: Sequence[Message],
+        tools: Optional[Sequence[ToolSpec]] = None,
+    ) -> PreparedLLMRequest:
+        if not self.supports_prepared_requests:
+            raise TypeError(f"provider {self.name} 不支持 prepared requests")
+        return self._inner.prepare_request(messages, tools)
+
     async def stream(
         self,
         messages: Sequence[Message],
         tools: Optional[Sequence[ToolSpec]] = None,
     ) -> AsyncIterator[LLMEvent]:
+        if self.supports_prepared_requests:
+            prepared = self.prepare_request(messages, tools)
+            async for event in self.stream_prepared(prepared):
+                yield event
+            return
+        async for event in self._stream_with_retry(
+            lambda: self._inner.stream(messages, tools)
+        ):
+            yield event
+
+    async def stream_prepared(
+        self,
+        prepared: PreparedLLMRequest,
+    ) -> AsyncIterator[LLMEvent]:
+        if not self.supports_prepared_requests:
+            raise TypeError(f"provider {self.name} 不支持 prepared requests")
+        async for event in self._stream_with_retry(
+            lambda: self._inner.stream_prepared(prepared)
+        ):
+            yield event
+
+    async def _stream_with_retry(self, open_stream) -> AsyncIterator[LLMEvent]:
         attempt = 0
         emitted = False
         while True:
             try:
-                async for event in self._inner.stream(messages, tools):
+                async for event in open_stream():
                     emitted = True
                     yield event
                 return

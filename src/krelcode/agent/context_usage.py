@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from ..core.context_usage import ContextUsageSnapshot
 from ..core.messages import Message
+from ..llm.base import PreparedLLMRequest
 from .context_assembler import ContextAssembly
 from .fragments import GROUP_RUNTIME, GROUP_WORKSPACE, PromptSnapshot
 from .tokens import (
@@ -53,6 +54,9 @@ def build_context_usage_snapshot(
     budget_tokens: Optional[int] = None,
     model_context_window: Optional[int] = None,
     dropped_items: Sequence[str] = (),
+    prepared_request: Optional[PreparedLLMRequest] = None,
+    provider_name: str = "",
+    output_reserve_tokens: Optional[int] = None,
 ) -> ContextUsageSnapshot:
     """Build a compact snapshot for the messages about to be sent.
 
@@ -63,7 +67,11 @@ def build_context_usage_snapshot(
     """
     message_list = list(messages)
     schema_tokens = estimate_tool_schema_tokens(tool_specs)
-    estimated = estimate_history_tokens(message_list) + schema_tokens
+    heuristic_input = estimate_history_tokens(message_list) + schema_tokens
+    estimated = (
+        prepared_request.request_body_tokens
+        if prepared_request is not None else heuristic_input
+    )
 
     contributions: List[Tuple[str, str, int]] = []
     if context_assembly is not None:
@@ -124,12 +132,37 @@ def build_context_usage_snapshot(
         stable_hash = str(getattr(cache, "stable_hash", "") or "")
         full_hash = str(getattr(cache, "full_hash", "") or "")
         source_count = 0
+    prepared_segments = (
+        prepared_request.cache_segments if prepared_request is not None else ())
+    if prepared_request is not None:
+        if prepared_request.stable_cache_chars:
+            cache_boundary_chars = prepared_request.stable_cache_chars
+        if prepared_request.stable_cache_hash:
+            stable_hash = prepared_request.stable_cache_hash
+        if stable_tokens == 0:
+            stable_tokens = sum(
+                segment.tokens for segment in prepared_segments
+                if segment.kind == "system")
     stable_tokens = min(stable_tokens, estimated)
     window = model_context_window
-    reserve = (
-        max(0, int(window) - int(budget_tokens))
-        if window is not None and budget_tokens is not None else 0
+    if output_reserve_tokens is not None:
+        reserve = max(0, int(output_reserve_tokens))
+    elif prepared_request is not None and prepared_request.output_limit_tokens > 0:
+        reserve = prepared_request.output_limit_tokens
+    elif window is not None and budget_tokens is not None:
+        reserve = max(0, int(window) - int(budget_tokens))
+    else:
+        reserve = 0
+    input_fits = (
+        (budget_tokens is None or estimated <= int(budget_tokens))
+        and (window is None or estimated + reserve <= int(window))
     )
+    tool_cacheable_tokens = sum(
+        segment.tokens for segment in prepared_segments
+        if segment.kind == "tools")
+    message_cacheable_tokens = sum(
+        segment.tokens for segment in prepared_segments
+        if segment.kind == "messages")
     return ContextUsageSnapshot(
         turn_id=turn_id,
         step=step,
@@ -154,6 +187,33 @@ def build_context_usage_snapshot(
         source_count=source_count,
         source_tokens=dict(sorted(source_tokens.items())),
         dropped_items=tuple(str(item) for item in dropped_items),
+        provider=provider_name or (
+            prepared_request.provider if prepared_request is not None else ""),
+        wire_fidelity=(
+            prepared_request.wire_fidelity
+            if prepared_request is not None else "estimated"),
+        cache_mode=(
+            prepared_request.cache_mode
+            if prepared_request is not None else "estimated"),
+        request_body_bytes=(
+            prepared_request.body_bytes if prepared_request is not None else 0),
+        request_body_tokens=(
+            prepared_request.request_body_tokens
+            if prepared_request is not None else 0),
+        wire_overhead_tokens=max(0, estimated - heuristic_input),
+        request_digest=(
+            prepared_request.payload_digest
+            if prepared_request is not None else ""),
+        cache_segment_count=len(prepared_segments),
+        cache_control_segment_count=sum(
+            1 for segment in prepared_segments if segment.cache_control),
+        tool_cacheable_tokens=tool_cacheable_tokens,
+        message_cacheable_tokens=message_cacheable_tokens,
+        output_limit_tokens=(
+            prepared_request.output_limit_tokens
+            if prepared_request is not None else 0),
+        input_fits=input_fits,
+        cache_segments=tuple(prepared_segments),
     )
 
 

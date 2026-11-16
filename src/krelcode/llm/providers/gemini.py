@@ -33,9 +33,10 @@ from ...core.messages import (
     ToolCall,
 )
 from ..base import (
-    FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, ProviderCapabilities,
-    StreamFinished, TextDelta, ToolCallArgumentsDelta, ToolCallReady,
-    ToolCallStartedDelta, ToolSpec, normalize_usage,
+    FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, PreparedLLMRequest,
+    ProviderCapabilities, StreamFinished, TextDelta, ToolCallArgumentsDelta,
+    ToolCallReady, ToolCallStartedDelta, ToolSpec, normalize_usage,
+    prepare_http_request,
 )
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
@@ -217,14 +218,40 @@ class GeminiProvider:
 
     # -- LLMProvider 端口实现 -------------------------------------------------------------
 
+    def prepare_request(
+        self,
+        messages: Sequence[Message],
+        tools: Optional[Sequence[ToolSpec]] = None,
+    ) -> PreparedLLMRequest:
+        request = self.build_request(messages, tools)
+        payload = json.loads(request["body"].decode("utf-8"))
+        generation = payload.get("generationConfig") or {}
+        return prepare_http_request(
+            provider=self.name,
+            model=self.model,
+            request=request,
+            output_limit_tokens=int(
+                generation.get("maxOutputTokens")
+                or generation.get("max_output_tokens") or 0),
+            cache_mode="none",
+        )
+
     async def stream(
         self,
         messages: Sequence[Message],
         tools: Optional[Sequence[ToolSpec]] = None,
     ) -> AsyncIterator[LLMEvent]:
-        req = self.build_request(messages, tools)
+        prepared = self.prepare_request(messages, tools)
+        async for event in self.stream_prepared(prepared):
+            yield event
+
+    async def stream_prepared(
+        self,
+        prepared: PreparedLLMRequest,
+    ) -> AsyncIterator[LLMEvent]:
         resp = await asend(
-            self._transport, "POST", req["url"], req["headers"], req["body"], self.timeout
+            self._transport, "POST", prepared.url, dict(prepared.headers),
+            prepared.body, self.timeout,
         )
         try:
             if resp.status != 200:

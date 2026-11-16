@@ -741,19 +741,37 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         return _ok(*lines)
 
     if operation == "cache" and len(parts) == 1:
-        if registry is None:
-            return _ok("  （Prompt Fragment Registry 未启用）")
-        snapshot = registry.snapshot()
-        cache = snapshot.cache
-        lines = [
-            f"  [cache] stable prefix {cache.offset} chars"
-            f" · {cache.stable_tokens} tokens"
-            f" · generation {snapshot.generation}",
-            f"  stable fragments: {', '.join(cache.stable_fragments) or '(none)'}",
-            f"  volatile fragments: {', '.join(cache.volatile_fragments) or '(none)'}",
-            f"  stable hash: {cache.stable_hash}",
-            f"  full hash: {cache.full_hash}",
-        ]
+        lines = []
+        if registry is not None:
+            snapshot = registry.snapshot()
+            cache = snapshot.cache
+            lines.extend([
+                f"  [cache] stable prefix {cache.offset} chars"
+                f" · {cache.stable_tokens} tokens"
+                f" · generation {snapshot.generation}",
+                f"  stable fragments: {', '.join(cache.stable_fragments) or '(none)'}",
+                f"  volatile fragments: {', '.join(cache.volatile_fragments) or '(none)'}",
+                f"  stable hash: {cache.stable_hash}",
+                f"  full hash: {cache.full_hash}",
+            ])
+        else:
+            lines.append("  （Prompt Fragment Registry 未启用）")
+        request_snapshot = getattr(ctx.loop, "last_context_snapshot", None)
+        if request_snapshot is not None:
+            lines.extend([
+                f"  wire cache: {request_snapshot.cache_mode}"
+                f" · provider {request_snapshot.provider or '(unknown)'}"
+                f" · {request_snapshot.cache_segment_count} segments"
+                f" ({request_snapshot.cache_control_segment_count} explicit)",
+                f"  cacheable: tools {request_snapshot.tool_cacheable_tokens}"
+                f" · messages {request_snapshot.message_cacheable_tokens}",
+            ])
+            for segment in request_snapshot.cache_segments:
+                control = "cache_control" if segment.cache_control else "implicit"
+                lines.append(
+                    f"  [{segment.kind}] {segment.tokens} tokens"
+                    f" · {segment.chars} chars · {control}"
+                    f" · {segment.digest[:16] or '(none)'}")
         return _ok(*lines)
 
     if operation != "stats" or parts:
@@ -788,7 +806,13 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             f" · Step {snapshot.step}",
             f"  输入估算: {snapshot.estimated_input_tokens} tokens"
             f" · 压缩预算: {budget} · 使用率: {ratio}",
-            f"  模型窗口: {window} · 输出/安全保留: {reserve}",
+            f"  请求: {snapshot.provider or '(unknown)'}"
+            f" · wire {snapshot.wire_fidelity}"
+            f" · body {snapshot.request_body_bytes} bytes"
+            f" / {snapshot.request_body_tokens} tokens"
+            f" · {'fits' if snapshot.input_fits else 'over budget'}",
+            f"  模型窗口: {window} · 输出/安全保留: {reserve}"
+            f" · provider 输出上限: {snapshot.output_limit_tokens or '未知'}",
             f"  分项: system {snapshot.system_tokens}"
             f" · workspace {snapshot.workspace_tokens}"
             f" · memory {snapshot.memory_tokens}"
@@ -796,9 +820,11 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             f" · runtime {snapshot.runtime_tokens}"
             f" · tool schema {snapshot.tool_schema_tokens}"
             f" · overhead {snapshot.overhead_tokens}",
-            f"  缓存: stable {snapshot.stable_tokens}"
+            f"  缓存: {snapshot.cache_mode}"
+            f" · stable {snapshot.stable_tokens}"
             f" · volatile {snapshot.volatile_tokens}"
-            f" · boundary {snapshot.cache_boundary_chars} chars",
+            f" · boundary {snapshot.cache_boundary_chars} chars"
+            f" · segments {snapshot.cache_segment_count}",
             f"  stable hash: {snapshot.stable_hash or '(none)'}",
             f"  full hash: {snapshot.full_hash or '(none)'}",
             f"  工具 {snapshot.tool_count} 个 · fragment {snapshot.fragment_count} 个"

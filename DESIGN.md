@@ -24,7 +24,7 @@ src/krelcode/
 │   ├── hooks.py      # HookPort / HookResult：agent 只依赖的窄端口
 │   └── errors.py     # KrelcodeError / LLMError / ConfigError
 ├── llm/         # 统一 Provider 机制（模型适配层）
-│   ├── base.py       # 统一契约：LLMProvider 协议、LLMEvent、规范化 finish/usage、collect()
+│   ├── base.py       # LLMProvider/PreparedLLMRequest 契约、LLMEvent、finish/usage、collect()
 │   ├── transport.py  # HTTP 传输抽象(urllib→asyncio桥) + SSE 解析器
 │   ├── registry.py   # Provider 工厂：名字+配置 → 实例；resolve_settings 优先级解析
 │   └── providers/    # 每个 adapter 独占一种 wire format
@@ -226,6 +226,12 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
 - **装饰器透明性**：`RetryingProvider` 用 `__getattr__` 代理 inner 的 `api_key`/`base_url`
   等属性——否则脱敏层经包装链看不到真实 key，安全网会静默失效（Step 51 修复）
 - **能力协商**：`ProviderCapabilities.supports_tools` 为 False 时 AgentLoop 不传 tools
+- **可复用请求能力**（Step 88）：支持预算治理的 adapter 额外实现
+  `prepare_request() -> PreparedLLMRequest` 与 `stream_prepared()`。前者一次性完成
+  messages/tools → wire payload，后者只执行该不可变请求；URL/headers/body 不进入 repr
+  或快照，Agent 层只读取 body 字节数、token 估算、payload hash、输出上限和缓存段元数据。
+  `RetryingProvider` 对同一 prepared body 重试，未实现该能力的旧 Provider 自动回退到
+  `stream(messages, tools)`。
 - **非法工具参数约定**：arguments 非合法 JSON 时 adapter 填 `INVALID_ARGUMENTS_KEY` 保留原文，
   循环层转成 is_error 工具结果回填，让 LLM 自我修正
 
@@ -233,7 +239,7 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
 
 ## 上下文管理（Step 7）
 
-- **token 估算**（agent/tokens.py，零依赖）：CJK ≈ 1 token/字，其他 ≈ 4 字符/token，
+- **token 估算**（core/tokens.py，agent/tokens.py 兼容转发）：CJK ≈ 1 token/字，其他 ≈ 4 字符/token，
   精度足够做预算决策；消息含 tool_calls 参数序列化
 - **两道防线**（Step 25）：超预算先做**工具结果驱逐**——只保留最近
   keep_recent_tools（默认 6）条工具输出，更早的 content 替换为占位标记
@@ -250,6 +256,38 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   落盘失败退回纯截断
 - 压缩发生会 emit `ContextCompressed(before_tokens, after_tokens)`，UI 可提示用户；REPL `/compact` 经 `maybe_compress(force=True)` 手动触发（不必等预算超限）
 - 跨平台：run_command 超时终止在 POSIX 走进程组 killpg(SIGKILL)，Windows 退化为杀主进程（os.killpg/SIGKILL 不存在时不触碰）
+
+### 真实请求装配与预算（Step 88）
+
+```text
+persistent history
+  → ContextAssembler (system layers + cache boundary)
+  → messages_for(history)
+  → provider.prepare_request(messages, tool_specs)   # optional, assemble once
+      ├─ opaque HTTP request {url, headers, body}
+      ├─ body bytes / token estimate / SHA-256
+      ├─ output limit
+      └─ content-free cache segments
+  → ContextUsageSnapshot
+  → full-request budget check
+      ├─ fits: stream_prepared(prepared)
+      └─ over: compact context once → rebuild → stream_prepared(final)
+```
+
+- 输入预算与模型窗口分开约束：`request_input <= context_budget`，且
+  `request_input + output_reserve <= model_window`。`output_reserve` 在 Provider 已知
+  真实输出上限时使用该值；旧 Provider 才退化为 `window - context_budget`。
+- Anthropic 的缓存段来自最终 wire payload：system 稳定 block、最后一个 tool schema、
+  最后一条 message block，均最多 3 个显式 `cache_control` 断点。OpenAI/DeepSeek 标记为
+  `implicit` prefix-cache 机会；Gemini 标记 `none`。segment 只保存 kind/token/char/hash，
+  不保存正文。
+- 自动压缩最多执行“探测 → compact → 重新装配”一次。若历史太短或没有可压缩中段，快照
+  会以 `input_fits=false` 明确暴露越限，而不是反复压缩或伪造成功。
+- `ContextUsageSnapshot` 新增 provider/wire fidelity/cache mode/body bytes/body tokens/
+  wire overhead/payload digest/tool/message cacheable tokens/output limit/input fits 与
+  cache segments；TUI、`/context`、recorder、stream-json 和 SDK 共用 `as_record()` 安全记录。
+- 历史归档、token 统计与逻辑消息仍然是 wire-free 规范模型；真实 body 只在单次调用期间
+  存在于 `PreparedLLMRequest`，不写入 history/session。
 
 ## 交互与会话（Step 8）
 

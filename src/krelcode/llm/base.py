@@ -16,10 +16,14 @@ agent 层只消费统一事件，对 provider 差异零感知。
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, Optional, Protocol, Sequence, Union
+from types import MappingProxyType
+from typing import Any, AsyncIterator, Dict, Mapping, Optional, Protocol, Sequence, Tuple, Union
 
+from ..core.context_usage import CacheSegmentSnapshot
 from ..core.messages import Message, ToolCall
+from ..core.tokens import estimate_text_tokens
 
 # 规范化 finish_reason
 FINISH_STOP = "stop"
@@ -113,6 +117,57 @@ class ProviderCapabilities:
     supports_streaming: bool = True
 
 
+@dataclass(frozen=True)
+class PreparedLLMRequest:
+    """A provider-ready request plus content-free accounting metadata.
+
+    The URL, headers and body are kept opaque for transport use. Their repr is
+    suppressed so accidental logging cannot reveal prompts or credentials; the
+    Agent layer only copies the safe metadata into ``ContextUsageSnapshot``.
+    """
+
+    provider: str
+    model: str
+    url: str = field(repr=False)
+    headers: Mapping[str, str] = field(repr=False)
+    body: bytes = field(repr=False)
+    request_body_tokens: int
+    payload_digest: str
+    output_limit_tokens: int = 0
+    cache_mode: str = "none"
+    cache_segments: Tuple[CacheSegmentSnapshot, ...] = ()
+    stable_cache_chars: int = 0
+    stable_cache_hash: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
+        object.__setattr__(self, "body", bytes(self.body))
+        object.__setattr__(self, "cache_segments", tuple(self.cache_segments))
+
+    @property
+    def body_bytes(self) -> int:
+        return len(self.body)
+
+    @property
+    def estimated_input_tokens(self) -> int:
+        return self.request_body_tokens
+
+    @property
+    def wire_fidelity(self) -> str:
+        return "exact"
+
+    def __repr__(self) -> str:
+        return (
+            "PreparedLLMRequest("
+            f"provider={self.provider!r}, model={self.model!r}, "
+            f"body_bytes={self.body_bytes}, "
+            f"request_body_tokens={self.request_body_tokens}, "
+            f"output_limit_tokens={self.output_limit_tokens}, "
+            f"cache_mode={self.cache_mode!r}, "
+            f"cache_segments={len(self.cache_segments)})"
+        )
+
+
 class LLMProvider(Protocol):
     name: str
     model: str
@@ -125,6 +180,92 @@ class LLMProvider(Protocol):
     ) -> AsyncIterator[LLMEvent]:
         """给定完整历史（与统一 ToolSpec），流式产出下一条 assistant 消息。"""
         ...
+
+
+class PreparedLLMProvider(LLMProvider, Protocol):
+    """Optional provider capability for assemble-once execution and accounting."""
+
+    def prepare_request(
+        self,
+        messages: Sequence[Message],
+        tools: Optional[Sequence[ToolSpec]] = None,
+    ) -> PreparedLLMRequest:
+        ...
+
+    async def stream_prepared(
+        self,
+        prepared: PreparedLLMRequest,
+    ) -> AsyncIterator[LLMEvent]:
+        ...
+
+
+def prepare_http_request(
+    *,
+    provider: str,
+    model: str,
+    request: Mapping[str, Any],
+    output_limit_tokens: int = 0,
+    cache_mode: str = "none",
+    cache_segments: Sequence[CacheSegmentSnapshot] = (),
+    stable_cache_chars: int = 0,
+    stable_cache_hash: str = "",
+) -> PreparedLLMRequest:
+    """Convert a provider's built HTTP request into the public prepared contract."""
+    body = request.get("body")
+    if not isinstance(body, (bytes, bytearray)):
+        raise TypeError("provider request body 必须是 bytes")
+    body_bytes = bytes(body)
+    text = body_bytes.decode("utf-8", "replace")
+    return PreparedLLMRequest(
+        provider=provider,
+        model=model,
+        url=str(request.get("url") or ""),
+        headers=dict(request.get("headers") or {}),
+        body=body_bytes,
+        request_body_tokens=estimate_text_tokens(text),
+        payload_digest=hashlib.sha256(body_bytes).hexdigest(),
+        output_limit_tokens=max(0, int(output_limit_tokens or 0)),
+        cache_mode=cache_mode,
+        cache_segments=tuple(cache_segments),
+        stable_cache_chars=max(0, int(stable_cache_chars or 0)),
+        stable_cache_hash=stable_cache_hash,
+    )
+
+
+def cache_segment(
+    kind: str,
+    text: str,
+    *,
+    cache_control: bool = False,
+) -> CacheSegmentSnapshot:
+    """Build content-free cache metadata from a wire segment."""
+    return CacheSegmentSnapshot(
+        kind=kind,
+        tokens=estimate_text_tokens(text),
+        chars=len(text),
+        digest=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        cache_control=cache_control,
+    )
+
+
+def stable_system_prefix(messages: Sequence[Message]) -> str:
+    """Return the first explicit stable system prefix in provider-neutral form."""
+    for message in messages:
+        if message.role != "system" or not message.content:
+            continue
+        boundaries = (message.provider_meta or {}).get(
+            "prompt_cache_boundaries") or []
+        offsets = []
+        for raw in boundaries:
+            try:
+                offsets.append(int(raw))
+            except (TypeError, ValueError):
+                continue
+        if offsets:
+            end = max(0, min(max(offsets), len(message.content)))
+            if end:
+                return message.content[:end]
+    return ""
 
 
 async def collect(

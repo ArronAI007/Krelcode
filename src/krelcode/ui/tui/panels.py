@@ -144,6 +144,7 @@ def build_panels(
             f" · reserve {snapshot.output_reserve_tokens}"
             if snapshot.model_context_window else "window unknown"
         )
+        window_detail += f" · wire {snapshot.wire_fidelity}"
         context_items = (
             PanelItem("context-permission", f"permission · {permission_mode}"),
             PanelItem(
@@ -163,7 +164,8 @@ def build_panels(
                 "context-cache",
                 f"cache · {snapshot.stable_tokens}"
                 f"/{snapshot.volatile_tokens}",
-                f"boundary {snapshot.cache_boundary_chars} chars",
+                f"boundary {snapshot.cache_boundary_chars} chars"
+                f" · {snapshot.cache_mode} {snapshot.cache_segment_count}",
             ),
             PanelItem(
                 "context-fragments",

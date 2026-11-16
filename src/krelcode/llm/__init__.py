@@ -6,6 +6,8 @@ from .base import (
     FINISH_TOOLS,
     LLMEvent,
     LLMProvider,
+    PreparedLLMProvider,
+    PreparedLLMRequest,
     ProviderCapabilities,
     StreamFinished,
     TextDelta,
@@ -13,8 +15,11 @@ from .base import (
     ToolCallReady,
     ToolCallStartedDelta,
     ToolSpec,
+    cache_segment,
     collect,
     normalize_usage,
+    prepare_http_request,
+    stable_system_prefix,
 )
 from .providers.anthropic import AnthropicProvider
 from .providers.gemini import GeminiProvider
@@ -26,9 +31,11 @@ from .registry import (
 from .transport import Transport, TransportResponse, UrllibTransport
 
 __all__ = [
-    "LLMProvider", "LLMEvent", "TextDelta", "StreamFinished", "ToolSpec",
+    "LLMProvider", "PreparedLLMProvider", "PreparedLLMRequest",
+    "LLMEvent", "TextDelta", "StreamFinished", "ToolSpec",
     "ToolCallStartedDelta", "ToolCallArgumentsDelta", "ToolCallReady",
     "ProviderCapabilities", "collect", "normalize_usage",
+    "prepare_http_request", "cache_segment", "stable_system_prefix",
     "FINISH_STOP", "FINISH_TOOLS", "FINISH_LENGTH",
     "OpenAIProvider", "AnthropicProvider", "GeminiProvider", "MockProvider",
     "ProviderSettings", "create_provider", "resolve_settings", "register",

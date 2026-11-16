@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/ArronAI007/Krelcode/main/install.sh
 ./install.sh --no-modify-path         # 不修改 shell PATH
 ./install.sh --python /path/to/python3.12
 ./install.sh --python-mirror https://your-mirror.example/python-build-standalone
-./install.sh --tag v0.77.0
+./install.sh --tag v0.78.0
 ```
 
 对应环境变量为 `KRELCODE_PYTHON`、`KRELCODE_PYTHON_VERSION`、`KRELCODE_PYTHON_MIRROR`、`KRELCODE_INSTALL_ROOT` 和 `KRELCODE_BIN_DIR`。这些选项只用于 CI、离线或特殊网络环境；普通用户直接执行默认的一键安装即可。开发调试仍可使用 `pip install -e .`。
@@ -71,7 +71,7 @@ krelcode               # 进入 REPL
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（沙箱内 1054 通过，2 个本地端口测试自动跳过）
+# 运行全部测试（沙箱内 1062 通过，2 个本地端口测试自动跳过）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -324,7 +324,7 @@ fork-context: true
 
 所有终端输入与 `-m` 单次输入在进入会话前经过统一 `InputProcessor`：规范化原始输入、区分普通消息/业务命令/展示命令/控制命令、后台展开 `@文件` 与图片附件，并执行可选 `user_input` Hook；REPL 只消费结构化 `InputAction`，不再承担输入解释。`user_prompt_submit` 则位于 AgentLoop 查询入口，保证 REPL、headless 与子代理一致执行。会话现场由 `SessionViewState` 显式记录 idle/running/stopping、当前 turn、查询阶段、工具计数与进度；`SessionEventReducer` 统一折叠 QueryEvent，`ReplSessionRunner` 独占 query/consumer/审批 watcher/下一条队列。运行中输入框下方持续显示阶段、Step、工具进度与耗时，渲染器暂停时保留用户草稿和光标。工具增量输出先进入折叠缓存，终端正文不自动展开；历史消息仍只由 AgentLoop 持有。
 
-启动时自动装配工作区上下文（Context v2）：user/project 分层规则、git 分支/状态与目录树统一进入 `[context].max_tokens` 预算，按规则 > git > tree 的优先级保留，超限时截断或省略低优先级来源；`--no-context` 可关闭，长会话中 `/context refresh` 可重采。请求级 assembly 已统一走可插拔 `ContextSource → ContextAssembler`：默认来源包括 Prompt Snapshot、按需目录规则、动态工具目录、Turn Intent 与 Hook runtime context，组装器按 `system → workspace → memory → runtime`、分类内 priority、来源/layer 顺序确定性拼装，异步来源、重复 ID、非法 layer 与单个来源异常彼此隔离；system message 只进入 provider-bound 请求，不改持久历史。所有 system prompt 片段仍由 Prompt/Context Fragment Registry 统一治理：`core:base`、`skills:index`、`workspace:rules|git|tree` 各自带来源、稳定性和可切换属性；`/context sources` 查看实际装配诊断，`/context rules` 查看规则入口/@import 诊断，`/context fragments [source]` 查看 Fragment 来源，`/context enable|disable|toggle <id|source>` 手动启停，`/context cache` 显示稳定前缀断点与哈希。稳定规则永远排在动态 git/tree 之前，Anthropic adapter 使用该边界生成两个 system block（稳定前缀带 `cache_control`、动态尾部不带）；DeepSeek/OpenAI 兼容端点则直接受益于稳定的自动缓存前缀。每个模型 Step 发请求前还会发布精简 `ContextAssembled` 快照：按 system/workspace/memory/history/runtime/tool schema/overhead 拆分 token，并携带预算、模型窗口、cache boundary 与 stable/full hash；快照不包含 Prompt 正文，可安全进入 TUI、JSONL、stream-json 与 SDK。`/context` 优先展示最近一次真实请求而不是事后粗略估算。`/compact preview [--auto]` 可在不修改 history 的前提下查看 head/compact/keep 边界、工具驱逐数、预计 tokens 与待摘要消息；`/compact` 执行后再报告实际策略和边界。同批工具调用并行执行，同一调用连续失败 3 次判定卡死自动中止（`--repeat-failure-limit` 可调）。
+启动时自动装配工作区上下文（Context v2）：user/project 分层规则、git 分支/状态与目录树统一进入 `[context].max_tokens` 预算，按规则 > git > tree 的优先级保留，超限时截断或省略低优先级来源；`--no-context` 可关闭，长会话中 `/context refresh` 可重采。请求级 assembly 已统一走可插拔 `ContextSource → ContextAssembler`：默认来源包括 Prompt Snapshot、按需目录规则、动态工具目录、Turn Intent 与 Hook runtime context，组装器按 `system → workspace → memory → runtime`、分类内 priority、来源/layer 顺序确定性拼装，异步来源、重复 ID、非法 layer 与单个来源异常彼此隔离；system message 只进入 provider-bound 请求，不改持久历史。所有 system prompt 片段仍由 Prompt/Context Fragment Registry 统一治理：`core:base`、`skills:index`、`workspace:rules|git|tree` 各自带来源、稳定性和可切换属性；`/context sources` 查看实际装配诊断，`/context rules` 查看规则入口/@import 诊断，`/context fragments [source]` 查看 Fragment 来源，`/context enable|disable|toggle <id|source>` 手动启停，`/context cache` 显示稳定前缀断点与哈希。稳定规则永远排在动态 git/tree 之前，Anthropic adapter 使用该边界生成两个 system block（稳定前缀带 `cache_control`、动态尾部不带）；DeepSeek/OpenAI 兼容端点则直接受益于稳定的自动缓存前缀。Step 88 起，支持该可选能力的 Provider 会先构造一次不可变的 `PreparedLLMRequest`，AgentLoop 用同一份 wire body 计算预算并执行请求：Anthropic 的 system/tools/messages 三个显式缓存断点、OpenAI/DeepSeek 的隐式前缀缓存机会、Gemini 的无显式缓存状态都会转成无正文 segment 元数据；请求体字节数、wire token、payload hash、provider 输出上限与 `input_fits` 同时进入快照。压缩判断不再只看 history，而是使用完整请求输入加输出预留，并同时约束用户输入预算与模型窗口；真实请求超限时只 compact/重新装配一次，避免循环压缩。旧 Provider 缺少 prepare 能力时自动回退到 estimated 快照。每个模型 Step 发请求前还会发布精简 `ContextAssembled` 快照：按 system/workspace/memory/history/runtime/tool schema/overhead 拆分 token，并携带预算、模型窗口、cache boundary、cache segment 与 stable/full hash；快照不包含 Prompt 正文、headers 或请求体原值，可安全进入 TUI、JSONL、stream-json 与 SDK。`/context` 优先展示最近一次真实请求及其 wire 保真度，`/context cache` 展示显式/隐式缓存段归因。`/compact preview [--auto]` 可在不修改 history 的前提下查看 head/compact/keep 边界、工具驱逐数、预计 tokens 与待摘要消息；`/compact` 执行后再报告实际策略和边界。同批工具调用并行执行，同一调用连续失败 3 次判定卡死自动中止（`--repeat-failure-limit` 可调）。
 
 ## 模块结构（依赖严格单向）
 
