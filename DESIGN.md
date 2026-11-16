@@ -789,6 +789,44 @@ Fragment sources
   历史修改；`/compact` 只调用该入口，然后读取 `last_compact_preview` 回报实际
   strategy、驱逐数与边界，不复制压缩逻辑。
 
+## 终端 TUI Panel Dock、Shell 与 Memory 快捷模式（Step 83）
+
+REPL 仍保留 scrollback 作为对话正文，只把“当前现场”放进输入框上方的固定高度 Dock。
+这样不会为了全屏 alternate-screen 牺牲流式文本、历史滚动与原编辑器的稳定性。
+
+```
+ui/tui/
+├─ model.py       Panel / PanelItem 纯数据
+├─ layout.py      固定高度边框、CJK 截断、tab/item hitbox
+├─ controller.py  焦点、选择、键鼠路由
+├─ mouse.py       SGR mouse + CPR cursor origin codec
+└─ panels.py      SessionViewState → Tasks / Activity / Context / Memory
+          │
+          ▼
+PromptWriter [Panel Dock] → 上分隔线 → 输入 → 下分隔线 → 状态/slash menu
+```
+
+- **结构化任务区**：Tasks 直接消费 reducer 的 `plan_items/plan_statuses/active_index`，
+  不用 renderer 文本反推状态；Activity 展示 turn phase、step、活跃工具、工具进度、
+  队列深度和 Shell 快捷状态；Context 展示权限、历史 tokens/预算、Fragment/cache 与
+  Memory 统计。
+- **键盘导航**：`Ctrl-O` 是唯一入口；面板获得焦点后为模态导航，左右切换 tab、上下
+  移动选择、Enter/Esc 回到输入框。cbreak 模式显式禁用 `VDISCARD`，否则终端驱动会
+  吞掉 Ctrl-O。面板未聚焦时方向键、Shift-Tab、Tab、历史搜索等旧语义完全不变。
+- **可点击组件**：真实 TTY 启用 xterm SGR mouse（1000+1006）。PromptWriter 在重绘后
+  发出 CPR 查询，编辑器把 `ESC[row;colR` 换算为 Dock 顶行；点击坐标仅用于纯
+  hitbox 命中，不依赖固定屏幕尺寸。退出/异常路径都关闭 mouse reporting。
+- **Shell 快捷模式**：`!cmd` 由 InputProcessor 只做分类，REPL 在空闲时启动窄任务。
+  `AgentLoop.execute_direct_tool()` 临时构造与普通 turn 相同的 RuntimeSnapshot、
+  TurnToolPool 和 ToolContext，执行 `run_command` 时仍经过参数 schema、Hooks、
+  风险审批、路径规则、Sandbox 和 secret redaction。执行事件临时旁路给 renderer，
+  但调用与结果都不进入 `loop.history`；运行中拒绝并发执行，Esc/Ctrl-C 可终止进程组。
+- **Memory 快捷模式**：`#text` 写 `<workspace>/.krelcode/memory/entries.jsonl`，
+  单条 2,000 字符、总量 200 条；常见 token/key 形态和当前 SecretRedactor 值都会
+  替换为 `***`。`#` 只打开面板。近期最多 12 条/4,000 字符作为 `memory:project`
+  动态 runtime Fragment 注入；它与 `AGENTS.md` 分离，不进入对话消息，也不会阻断
+  prompt cache 稳定前缀。
+
 ## 统一输入处理管线（Step 67）
 
 借鉴 Claude Code 将 `processUserInput` 与 REPL 分开的思路，终端不再直接解释原始
@@ -800,7 +838,7 @@ raw input (terminal / API / IDE)
   └─ InputEnvelope
       └─ InputProcessor (async)
           ├─ strip / empty normalization
-          ├─ classify: PROMPT | COMMAND | UI_COMMAND | CONTROL
+          ├─ classify: PROMPT | COMMAND | UI_COMMAND | CONTROL | SHELL | MEMORY
           ├─ @text/image expansion (asyncio.to_thread)
           ├─ optional user_input hooks (quoted vars, timeout, fail-open)
           └─ InputAction {text, command, arguments, images, notes, hook_context}

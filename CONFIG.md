@@ -125,6 +125,8 @@ Fragment 启停是**当前会话运行时状态**，不写入 TOML；重启后�
 空闲时 `Ctrl-C` 清空当前输入但**不退出**，`Ctrl-D` 或 `/exit` 退出。
 审批请求由 REPL 前台通过异步 broker 接管；`y`/`n`/`a` 不会被写入用户问题历史。
 **消息语法**：`@路径` 注入文本文件（8K/5 个预算）或附加图片（png/jpeg/webp/gif，5MB/4 张）。
+`!命令` 直接运行 Shell（不进入模型 history，但复用审批/Sandbox）；`#内容` 保存项目记忆，
+裸 `#` 打开 Memory 面板。`Ctrl-O` 聚焦面板，面板内用方向键切换/选择，Enter/Esc 返回。
 
 ## 3. TOML 配置
 
@@ -282,6 +284,7 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 │   └── .archive/      /delete 的可恢复归档
 ├── checkpoints/       文件快照（/undo、/rewind 数据源；meta 带 session/turn 身份）
 ├── tool_outputs/      超长工具输出全文（历史里留截断+路径引用）
+├── memory/            # 快捷记忆（entries.jsonl，脱敏、限长、限条数）
 ├── jobs/              后台 Shell 任务脱敏日志（每任务 output.log，默认 10 MiB 上限）
 ├── sidechains/        子代理 JSONL（按 manager run-id 分目录；定义/feed/状态/history/结果）
 ├── exports/           /export 缺省输出目录

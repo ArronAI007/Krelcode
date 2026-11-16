@@ -23,6 +23,8 @@ class InputKind(str, Enum):
     COMMAND = "command"
     UI_COMMAND = "ui_command"
     CONTROL = "control"
+    SHELL = "shell"
+    MEMORY = "memory"
 
 
 class InputDelivery(str, Enum):
@@ -96,6 +98,30 @@ class InputProcessor:
             return InputAction(
                 kind=InputKind.EMPTY,
                 raw_text=envelope.raw_text,
+                source=envelope.source,
+            )
+
+        # Terminal-native shortcuts are classified here but executed by the
+        # session/UI layer. They deliberately bypass @file expansion.
+        if text.startswith("!"):
+            command_text = text[1:].strip()
+            return InputAction(
+                kind=InputKind.SHELL,
+                text=command_text,
+                raw_text=envelope.raw_text,
+                command=command_text,
+                arguments=command_text,
+                source=envelope.source,
+            )
+
+        if text.startswith("#"):
+            memory_text = text[1:].strip()
+            return InputAction(
+                kind=InputKind.MEMORY,
+                text=memory_text,
+                raw_text=envelope.raw_text,
+                command=memory_text,
+                arguments=memory_text,
                 source=envelope.source,
             )
 

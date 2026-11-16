@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/ArronAI007/Krelcode/main/install.sh
 ./install.sh --no-modify-path         # 不修改 shell PATH
 ./install.sh --python /path/to/python3.12
 ./install.sh --python-mirror https://your-mirror.example/python-build-standalone
-./install.sh --tag v0.72.0
+./install.sh --tag v0.73.0
 ```
 
 对应环境变量为 `KRELCODE_PYTHON`、`KRELCODE_PYTHON_VERSION`、`KRELCODE_PYTHON_MIRROR`、`KRELCODE_INSTALL_ROOT` 和 `KRELCODE_BIN_DIR`。这些选项只用于 CI、离线或特殊网络环境；普通用户直接执行默认的一键安装即可。开发调试仍可使用 `pip install -e .`。
@@ -71,7 +71,7 @@ krelcode               # 进入 REPL
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（沙箱内 997 通过，2 个本地端口测试自动跳过）
+# 运行全部测试（沙箱内 1018 通过，2 个本地端口测试自动跳过）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -101,6 +101,12 @@ REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Mark
 所有命令由统一 `CommandRegistry` 发现：`/help`、slash 菜单、Tab 补全、运行态过滤和 InputProcessor 共用同一份 catalog。允许用户调用的 Skill 会自动显示为 `/<skill-name> [参数]`，MCP Prompt 会命名空间化为 `/mcp__<server>__<prompt> [参数]`；`/skills reload` 与 `/mcp reload` 会原地刷新对应来源，内置命令在命名冲突时保持最高优先级。
 
 **运行中交互**：`Enter` 提交 Steering（当前 turn 的下一步看到）；`Alt+Enter` 将输入排为下一条独立消息，当前 turn 完成后自动发送；`Shift-Tab` 按 `default → plan → read-only → auto-approve` 快速轮换权限模式；`Esc` / `Ctrl-C` 中止当前任务（历史自动修复，可立即续聊）。空闲时 `Ctrl-C` 只清空当前输入，`Ctrl-D` 或 `/exit` 退出。审批请求由 REPL 前台异步接管，不会与字符级输入 reader 抢占 stdin；`/thinking`、`/plan`、`/permissions`、`/tool-output`、`/queue`、`/agents`、`/jobs` 在任务运行中仍可访问。
+
+**终端 TUI（Step 83）**：输入框上方增加结构化 Panel Dock，默认包含 `Tasks`、`Activity`、`Context`、`Memory` 四个面板。`Ctrl-O` 进入/切换面板；焦点在面板内时 `←/→` 换 tab、`↑/↓` 选择条目、`Enter` 或 `Esc` 返回输入框，方向键不会误改草稿。真实 TTY 同时启用 SGR 鼠标：可点击 tab 或面板条目。
+
+- `!命令`：Shell 快捷模式。直接执行命令，不发起模型调用，也不写入模型 history；仍完整经过 `run_command`、审批策略、权限规则和运行时 Sandbox，输出进入现有可折叠工具面板。
+- `#内容`：添加项目记忆，保存到 `<workspace>/.krelcode/memory/entries.jsonl`；敏感值在落盘与展示前脱敏。裸 `#` 打开 Memory 面板。近期记忆以有界、不可缓存的 runtime Fragment 注入，不会修改 `AGENTS.md` 或伪装成用户/助手消息。
+- `#` 记忆总量、单条长度、注入条数与字符数均有上限；任务运行中会要求等待当前任务结束，避免中途改变当前提示词快照。
 
 模型需要澄清时可调用 `ask_user`：前台显示问题与选项，输入序号、完整选项或自定义文本即可继续。回答只进入 `tool_result`，不会伪装成新的用户消息。`/plan <任务>` 会进入只读 Plan 模式，让模型先调查并通过 `update_plan` 提交计划；该轮结束后计划标为待确认，`/plan approve` 恢复进入 Plan 前的权限模式并自动发起执行轮，`/plan cancel` 放弃执行。
 

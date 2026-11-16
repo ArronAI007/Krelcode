@@ -160,6 +160,7 @@ class AgentLoop:
         self._turn_tool_context = tool_context
         self._turn_abort_signal = TurnAbortSignal()
         self._turn_counter = count(1)
+        self._direct_counter = count(1)
         self._current_turn_id = ""
         self._input_counter = count(1)
         self._turn_prepared = False
@@ -208,6 +209,52 @@ class AgentLoop:
             return await self.run(user_input, images=images)
         finally:
             self._turn_prepared = False
+
+    async def execute_direct_tool(
+        self,
+        name: str,
+        arguments: Dict[str, object],
+        *,
+        turn_id: Optional[str] = None,
+    ) -> ToolResult:
+        """Execute one tool outside a model turn while preserving all guards.
+
+        REPL shortcuts such as ``!command`` use this narrow entry.  It applies
+        the same runtime snapshot, dynamic tool pool, schema validation, Hooks,
+        approval policy and Sandbox context as normal tool calls, but never
+        appends either the invocation or its result to model history.
+        """
+        if self._turn_prepared:
+            raise RuntimeError("Agent 正在执行查询，不能并发启动直接工具")
+        saved_context = self._turn_tool_context
+        saved_intent = self._turn_intent
+        saved_pool = self._active_tool_pool
+        saved_abort = self._turn_abort_signal
+        saved_turn_id = self._current_turn_id
+        direct_turn = turn_id or f"direct-{next(self._direct_counter)}"
+        call = ToolCall(
+            id=f"{direct_turn}-call",
+            name=name,
+            arguments=dict(arguments),
+        )
+        self._begin_turn(direct_turn)
+        self._turn_intent = TurnIntent()
+        self._active_tool_pool = TurnToolPool(
+            self.registry,
+            intent=self._turn_intent,
+            runtime=self._turn_tool_context.runtime,
+        )
+        try:
+            return await self._run_stream_tool(call)
+        except asyncio.CancelledError:
+            self._turn_abort_signal.cancel("直接工具被用户中止")
+            raise
+        finally:
+            self._turn_tool_context = saved_context
+            self._turn_intent = saved_intent
+            self._active_tool_pool = saved_pool
+            self._turn_abort_signal = saved_abort
+            self._current_turn_id = saved_turn_id
 
     async def run(
         self,

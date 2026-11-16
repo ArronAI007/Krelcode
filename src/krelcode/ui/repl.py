@@ -37,6 +37,7 @@ except ImportError:  # pragma: no cover - Windows
 from .. import __version__
 from ..agent.loop import AgentLoop
 from ..agent.runtime import AgentRuntime
+from ..agent.tokens import estimate_history_tokens
 from ..core.events import ShellJobFinished
 from ..session.commands import (
     CommandRegistry,
@@ -53,6 +54,7 @@ from ..session.input import (
 )
 from ..session.interactions import UserInputBroker
 from ..session.manager import resolve_resume_target
+from ..session.memory import MemoryStore, memory_lines, sync_memory_fragment
 from ..session.prompt_queue import PromptQueue
 from ..session.repl_session import ReplSessionRunner, SessionPrompt
 from ..session.state import SessionViewState
@@ -64,6 +66,14 @@ from .editor import (
     sanitize_pasted_text,
 )
 from .render import CYAN, DIM, RESET, StreamRenderer, auto_color
+from .tui.controller import PanelController
+from .tui.mouse import (
+    MOUSE_DISABLE,
+    MOUSE_ENABLE,
+    parse_cursor_position,
+    parse_sgr_mouse,
+)
+from .tui.panels import build_panels
 
 RUNNING_HINT = (
     "  （任务运行中：Enter=插话，Alt+Enter=排队下一条，Esc/Ctrl-C 中止；"
@@ -323,7 +333,8 @@ class PromptWriter:
 
     def __init__(self, write: Optional[Callable[[str], None]] = None,
                  enabled: Optional[bool] = None,
-                 color: Optional[bool] = None) -> None:
+                 color: Optional[bool] = None,
+                 *, cursor_probe: bool = False) -> None:
         self._write = write or _stdout_write
         self.enabled = sys.stdout.isatty() if enabled is None else enabled
         self._color = auto_color() if color is None else color
@@ -337,6 +348,8 @@ class PromptWriter:
         self._submitted = False
         self._status = ""
         self._last_status = ""
+        self._panel_lines: tuple[str, ...] = ()
+        self._cursor_probe = cursor_probe
         self._lock = threading.RLock()
 
     @property
@@ -381,6 +394,26 @@ class PromptWriter:
             if signature == (*self._last, self._last_status):
                 return
             self._render(text, suggestions or [], row, column)
+
+    def set_panels(self, lines: list[str] | tuple[str, ...],
+                   *, redraw: bool = True) -> None:
+        """Update the fixed-height panel dock above the input editor."""
+        with self._lock:
+            normalized = tuple(lines)
+            if normalized == self._panel_lines:
+                return
+            self._panel_lines = normalized
+            if not redraw or not self.enabled or not self._visible or not self._last:
+                return
+            text, suggestions, row, column = self._last
+            self._render(text, list(suggestions), row, column)
+
+    def set_cursor_probe(self, enabled: bool) -> None:
+        self._cursor_probe = bool(enabled)
+
+    @property
+    def cursor_row_relative(self) -> int:
+        return self._cursor_row
 
     def set_status(self, status: str) -> None:
         """更新输入框下方的单行状态；可见时原地重绘且保留草稿。"""
@@ -447,7 +480,7 @@ class PromptWriter:
         menu = list(suggestions[:menu_capacity])
         menu.extend([""] * (menu_capacity - len(menu)))
         self._input_rows = len(input_lines)
-        return [rule, *input_lines, rule, *status_rows, *menu]
+        return [*self._panel_lines, rule, *input_lines, rule, *status_rows, *menu]
 
     def _move_to_top(self) -> None:
         if self._cursor_row > 0:
@@ -468,13 +501,15 @@ class PromptWriter:
         rows = self._block(text, suggestions)
         self._write("\n".join(rows))
         self._rendered_rows = len(rows)
-        target_row = 1 + cursor_row
+        target_row = len(self._panel_lines) + 1 + cursor_row
         moves_up = self._rendered_rows - 1 - target_row
         self._write("\r")
         if moves_up > 0:
             self._write(self.CURSOR_UP * moves_up)
         if cursor_column > 0:
             self._write(f"\x1b[{cursor_column}C")
+        if self._cursor_probe and self.enabled:
+            self._write("\x1b[6n")
         self._visible = True
         self._cursor_row = target_row
         self._prompt_width = cursor_column
@@ -488,10 +523,10 @@ class PromptWriter:
             was_visible = self.enabled and self._visible
             if was_visible:
                 self._move_to_top()
-                output_row = 2 + self._input_rows
+                rows_down = max(0, self._rendered_rows - 1 - self._cursor_row)
                 self._write("\r")
-                if output_row > 0:
-                    self._write(self.CURSOR_DOWN * output_row)
+                if rows_down > 0:
+                    self._write(self.CURSOR_DOWN * rows_down)
                 self._write(self.CLEAR_BELOW)
             self._visible = False
             self._last = ""
@@ -539,12 +574,16 @@ class TerminalLineEditor:
     def __init__(self, prompt: PromptWriter,
                  suggest: Callable[[str], list[tuple[str, str]]],
                  color: bool = False,
-                 history: Optional[InputHistory] = None) -> None:
+                 history: Optional[InputHistory] = None,
+                 panels: Optional[PanelController] = None) -> None:
         self._prompt = prompt
         self._suggest = suggest
         self._color = color
         self._history = history if history is not None else InputHistory()
+        self._panels = panels
         self._pending_input = bytearray()
+        if panels is not None:
+            prompt.set_cursor_probe(True)
 
     @property
     def available(self) -> bool:
@@ -564,8 +603,14 @@ class TerminalLineEditor:
         # 会把普通 Enter 错当成多行插入。
         editor_settings[0] &= ~getattr(termios, "ICRNL", 0)
         editor_settings[3] &= ~termios.ISIG
+        # Ctrl-O is the panel-focus key. In cbreak mode the terminal driver may
+        # otherwise interpret it as VDISCARD and silently drop it.
+        if hasattr(termios, "VDISCARD"):
+            editor_settings[6][termios.VDISCARD] = b"\x00"
         termios.tcsetattr(fd, termios.TCSADRAIN, editor_settings)
         self._set_bracketed_paste(fd, True)
+        if self._panels is not None:
+            self._set_mouse_reporting(fd, True)
         buffer = EditBuffer()
         search: Optional[HistorySearch] = None
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -586,6 +631,21 @@ class TerminalLineEditor:
                             buffer.insert(pasted)
                         self._refresh(prompt_text(), buffer, search=search)
                         continue
+                    if self._panels is not None:
+                        cursor = parse_cursor_position(sequence)
+                        if cursor is not None:
+                            self._panels.set_cursor_origin(
+                                cursor[0], self._prompt.cursor_row_relative)
+                            self._refresh(prompt_text(), buffer, search=search)
+                            continue
+                        if parse_sgr_mouse(sequence) is not None:
+                            self._panels.handle_mouse(sequence)
+                            self._refresh(prompt_text(), buffer, search=search)
+                            continue
+                        panel_key = self._panels.key_from_escape(sequence)
+                        if self._panels.handle_key(panel_key):
+                            self._refresh(prompt_text(), buffer, search=search)
+                            continue
                     if search is not None:
                         if sequence in (b"", b"G"):
                             search.cancel(buffer)
@@ -629,6 +689,14 @@ class TerminalLineEditor:
                         self._run_history_search(search, buffer)
                     self._refresh(prompt_text(), buffer, search=search)
                     continue
+                if (self._panels is not None and self._panels.focused
+                        and char not in ("\x03", "\x0f", "\t")):
+                    # Panel focus is modal: Enter returns to the editor and all
+                    # other editing keys are consumed instead of mutating text.
+                    self._panels.handle_key(
+                        "enter" if char == "\r" else "")
+                    self._refresh(prompt_text(), buffer, search=search)
+                    continue
                 if char == "\r":
                     return TerminalSubmission(buffer.text)
                 if char == "\n":               # Ctrl-J：插入换行
@@ -662,12 +730,21 @@ class TerminalLineEditor:
                 elif char == "\x12":             # Ctrl-R
                     search = HistorySearch.begin(buffer)
                     self._run_history_search(search, buffer)
+                elif char == "\x0f":             # Ctrl-O
+                    if self._panels is not None:
+                        self._panels.handle_key("ctrl-o")
                 elif char == "\t":
-                    self._complete(buffer)
+                    if (self._panels is not None
+                            and self._panels.handle_key("tab")):
+                        pass
+                    else:
+                        self._complete(buffer)
                 elif char >= " " and char != "\x7f":
                     buffer.insert(char)
                 self._refresh(prompt_text(), buffer, search=search)
         finally:
+            if self._panels is not None:
+                self._set_mouse_reporting(fd, False)
             self._set_bracketed_paste(fd, False)
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
@@ -681,13 +758,18 @@ class TerminalLineEditor:
     def _read_escape_sequence(self, fd: int) -> bytes:
         """读取 ESC 后紧跟的控制序列；其他终端转义自然忽略。"""
         sequence = bytearray()
-        while len(sequence) < 16:
+        while len(sequence) < 32:
             if not self._pending_input and not select.select(
                 [fd], [], [], 0.01
             )[0]:
                 break
             sequence.extend(self._read_one(fd))
-            if bytes(sequence) in TerminalLineEditor.COMPLETE_ESCAPE_SEQUENCES:
+            raw = bytes(sequence)
+            if raw in TerminalLineEditor.COMPLETE_ESCAPE_SEQUENCES:
+                break
+            if parse_cursor_position(raw) is not None:
+                break
+            if raw.startswith(b"[<") and raw[-1:] in (b"M", b"m"):
                 break
         return bytes(sequence)
 
@@ -734,6 +816,13 @@ class TerminalLineEditor:
         if limit_reached:
             text += "\n[粘贴内容过大，已截断]"
         return text
+
+    @staticmethod
+    def _set_mouse_reporting(fd: int, enabled: bool) -> None:
+        try:
+            os.write(fd, (MOUSE_ENABLE if enabled else MOUSE_DISABLE).encode("ascii"))
+        except OSError:
+            pass
 
     @staticmethod
     def _set_bracketed_paste(fd: int, enabled: bool) -> None:
@@ -875,6 +964,9 @@ class TerminalLineEditor:
         cursor_column = _display_width(cursor_text)
         if cursor_line == 0:
             cursor_column += _display_width(prompt_text)
+        if self._panels is not None:
+            layout = self._panels.render(max(1, columns - 1))
+            self._prompt.set_panels(layout.lines, redraw=False)
         self._prompt.update(
             "\n".join(rendered_lines),
             lines,
@@ -920,8 +1012,9 @@ def print_banner(loop: AgentLoop, tool_names: Optional[list],
 
     accent = (lambda s: f"{CYAN}{s}{RESET}") if color else (lambda s: s)
     write("")
-    write(f"  {accent('/help')} 查看命令 · Shift-Tab 切换权限 · ↑/↓ 历史 · "
-          f"Ctrl-R 搜索 · {accent('@路径')} 引用文件 · {accent('/exit')} 退出")
+    write(f"  {accent('/help')} 查看命令 · Shift-Tab 切换权限 · Ctrl-O 面板 · "
+          f"↑/↓ 历史 · Ctrl-R 搜索 · {accent('@路径')} 引用文件 · "
+          f"{accent('!命令')} Shell · {accent('#记忆')} 记忆 · {accent('/exit')} 退出")
     write("")
 
 
@@ -1003,9 +1096,41 @@ async def run_repl(
         command_registry=processor.command_registry,
     )
 
-    print_banner(loop, tool_names, session_path=session_path)
+    memory_store = getattr(loop, "memory_store", None)
+    if memory_store is None:
+        memory_store = MemoryStore(workspace_root, redactor=redactor)
+        loop.memory_store = memory_store
+    else:
+        memory_store.redactor = redactor
+    sync_memory_fragment(loop, memory_store)
 
     state = SessionViewState()
+    panel_controller = PanelController()
+    quick_status = ""
+
+    def refresh_panels(*, queue_size: int = 0) -> None:
+        snapshot = getattr(loop, "prompt_snapshot", None)
+        fragments = getattr(snapshot, "fragments", ())
+        cache = getattr(snapshot, "cache", None)
+        context_manager = getattr(loop, "context_manager", None)
+        columns = max(1, shutil.get_terminal_size((80, 24)).columns - 1)
+        panels = build_panels(
+            state,
+            permission_mode=controller.permission_manager.mode.value,
+            queue_size=queue_size,
+            context_tokens=estimate_history_tokens(loop.history),
+            context_budget=getattr(context_manager, "max_tokens", None),
+            fragment_count=len(fragments),
+            stable_fragments=len(getattr(cache, "stable_fragments", ())),
+            memory_entries=memory_store.list(limit=8),
+            memory_tokens=memory_store.token_count(),
+            quick_status=quick_status,
+        )
+        panel_controller.set_panels(panels)
+        layout = panel_controller.render(columns)
+        prompt.set_panels(layout.lines)
+
+    print_banner(loop, tool_names, session_path=session_path)
     raw_inbox: asyncio.Queue = asyncio.Queue()
     action_queue: asyncio.Queue = asyncio.Queue()
     job_notifications: asyncio.Queue = asyncio.Queue()
@@ -1031,7 +1156,8 @@ async def run_repl(
             text, running=state.is_running, registry=processor.command_registry)
 
     editor = TerminalLineEditor(
-        prompt, suggest, color=use_color, history=input_history)
+        prompt, suggest, color=use_color, history=input_history,
+        panels=panel_controller)
 
     def refresh_status(
         current: Optional[SessionViewState] = None,
@@ -1039,6 +1165,7 @@ async def run_repl(
         force: bool = False,
     ) -> None:
         nonlocal status_cache, last_status_draw
+        refresh_panels(queue_size=len(runner.queue))
         now = time.monotonic()
         if not force and now - last_status_draw < 0.15:
             return
@@ -1052,7 +1179,7 @@ async def run_repl(
                 "计划待确认 · /plan approve 执行 · "
                 f"{permission} · Shift-Tab 切换")
         else:
-            status = f"{permission} · Shift-Tab 切换"
+            status = f"{permission} · Shift-Tab 切换 · Ctrl-O 面板"
         if status != status_cache:
             status_cache = status
             prompt.set_status(status)
@@ -1067,6 +1194,7 @@ async def run_repl(
 
     def restore_prompt() -> None:
         nonlocal status_cache, last_status_draw
+        refresh_panels(queue_size=len(runner.queue))
         status_cache = state.status_text()
         permission = f"权限 {controller.permission_manager.mode.value}"
         if status_cache:
@@ -1076,7 +1204,7 @@ async def run_repl(
                 "计划待确认 · /plan approve 执行 · "
                 f"{permission} · Shift-Tab 切换")
         else:
-            status_cache = f"{permission} · Shift-Tab 切换"
+            status_cache = f"{permission} · Shift-Tab 切换 · Ctrl-O 面板"
         prompt.set_status(status_cache)
         prompt.resume_or_show(current_prompt())
         last_status_draw = time.monotonic()
@@ -1186,6 +1314,8 @@ async def run_repl(
             label=_queue_label(action),
         )
 
+    quick_task: Optional[asyncio.Task] = None
+    quick_unsubscribe: Optional[Callable[[], None]] = None
     runner = ReplSessionRunner(
         controller,
         state,
@@ -1197,6 +1327,27 @@ async def run_repl(
         approval_broker=approval_broker,
         input_broker=input_broker,
     )
+
+    async def cancel_quick_task(
+        message: str = "⎿ Shell 快捷命令已中止",
+        *,
+        show_notice: bool = True,
+    ) -> None:
+        nonlocal quick_task, quick_unsubscribe, quick_status
+        if quick_task is None:
+            return
+        runner.reject_pending_approval()
+        if not quick_task.done():
+            quick_task.cancel()
+        await asyncio.gather(quick_task, return_exceptions=True)
+        quick_task = None
+        quick_status = "shell · 已中止"
+        if quick_unsubscribe is not None:
+            quick_unsubscribe()
+            quick_unsubscribe = None
+        renderer.end_stream()
+        if show_notice:
+            notice(message)
 
     async def status_loop() -> None:
         """没有新事件时也持续刷新耗时，避免状态栏停住。"""
@@ -1241,9 +1392,37 @@ async def run_repl(
     try:
         while True:
             wait_set = {action_get, job_notice_get, *runner.wait_tasks()}
+            if quick_task is not None:
+                wait_set.add(quick_task)
             done, _ = await asyncio.wait(
                 wait_set, return_when=asyncio.FIRST_COMPLETED)
             handled = await runner.process_completed(done)
+
+            if quick_task is not None and quick_task in done:
+                try:
+                    direct_result = quick_task.result()
+                    lines = [
+                        " ".join(line.split())
+                        for line in direct_result.content.splitlines()
+                        if line.strip()
+                    ]
+                    preview = next(
+                        (line for line in lines if not line.startswith("exit_code:")),
+                        lines[0] if lines else "无输出",
+                    )
+                    quick_status = (
+                        f"shell · {'失败' if direct_result.is_error else '完成'}"
+                        f" · {preview[:100]}")
+                except asyncio.CancelledError:
+                    quick_status = "shell · 已中止"
+                except Exception as exc:
+                    quick_status = f"shell · {type(exc).__name__}: {exc}"
+                quick_task = None
+                if quick_unsubscribe is not None:
+                    quick_unsubscribe()
+                    quick_unsubscribe = None
+                renderer.end_stream()
+                handled = True
 
             if job_notice_get in done:
                 job_event = job_notice_get.result()
@@ -1280,7 +1459,10 @@ async def run_repl(
             # Esc/Ctrl-C：运行中中止；空闲时只清空当前输入。
             if isinstance(raw_action, ReplControl):
                 prompt.hide()
-                if runner.is_running:
+                if quick_task is not None:
+                    await cancel_quick_task()
+                    restore_prompt()
+                elif runner.is_running:
                     await runner.finish_current(interrupt=True)
                     restore_prompt()
                 else:
@@ -1346,9 +1528,14 @@ async def run_repl(
                     continue
                 if action.kind is InputKind.CONTROL:
                     runner.reject_pending_approval()
+                    if action.command == "/stop" and quick_task is not None:
+                        await cancel_quick_task()
+                        restore_prompt()
+                        continue
                     if action.command == "/stop" and runner.is_running:
                         await runner.finish_current(interrupt=True)
                     elif action.command == "/exit":
+                        await cancel_quick_task(show_notice=False)
                         if runner.is_running:
                             await runner.finish_current(
                                 interrupt=True,
@@ -1368,6 +1555,55 @@ async def run_repl(
             input_history.add(action.raw_text)
 
             if action.kind is InputKind.EMPTY:
+                restore_prompt()
+                continue
+
+            if action.kind is InputKind.MEMORY:
+                if not action.text:
+                    prompt.hide()
+                    for line in memory_lines(memory_store.list(limit=8)):
+                        print(f"  {line}")
+                    panel_controller.focus("memory")
+                    restore_prompt()
+                    continue
+                if runner.is_running or quick_task is not None:
+                    notice("⎿ Memory 写入需等待当前任务结束")
+                    restore_prompt()
+                    continue
+                try:
+                    entry = memory_store.add(action.text)
+                except (OSError, ValueError) as exc:
+                    notice(f"⎿ 无法保存项目记忆: {exc}")
+                    restore_prompt()
+                    continue
+                sync_memory_fragment(loop, memory_store)
+                panel_controller.focus("memory")
+                notice(f"⎿ 已保存项目记忆 #{entry.id}")
+                restore_prompt()
+                continue
+
+            if action.kind is InputKind.SHELL:
+                if not action.text:
+                    notice("用法：!<shell 命令>，例如 !pytest -q")
+                    restore_prompt()
+                    continue
+                if runner.is_running or quick_task is not None:
+                    notice("⎿ Shell 快捷命令需等待当前任务结束")
+                    restore_prompt()
+                    continue
+                prompt.hide()
+                quick_status = f"shell · 运行中 · {action.text[:100]}"
+                quick_unsubscribe = loop.bus.subscribe(renderer)
+                quick_task = asyncio.create_task(
+                    controller.execute_shell_shortcut(action.text))
+                restore_prompt()
+                continue
+
+            if quick_task is not None and action.kind is InputKind.CONTROL:
+                prompt.hide()
+                await cancel_quick_task(show_notice=action.command != "/exit")
+                if action.command == "/exit":
+                    return 0
                 restore_prompt()
                 continue
 
@@ -1454,6 +1690,14 @@ async def run_repl(
         unsubscribe_job_notifications()
         await asyncio.gather(
             processor_task, action_get, job_notice_get, return_exceptions=True)
+        if quick_task is not None:
+            if not quick_task.done():
+                quick_task.cancel()
+            await asyncio.gather(quick_task, return_exceptions=True)
+            quick_task = None
+        if quick_unsubscribe is not None:
+            quick_unsubscribe()
+            quick_unsubscribe = None
         await runner.close()
         if approval_broker is not None:
             approval_broker.cancel_all()

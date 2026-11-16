@@ -5,12 +5,12 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（v0.72.0 / Step 82）
+## 1. 项目统计（v0.73.0 / Step 83）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 27,178 行（Python，**零第三方运行时依赖**） |
-| 测试 | 19,263 行 / 101 个文件 / 999 个用例（离线 997 + 本地端口集成 2，提权环境 999/999 全绿） |
+| 源码 | 28,481 行（Python，**零第三方运行时依赖**） |
+| 测试 | 19,771 行 / 104 个文件 / 1,020 个用例（离线 1,018 + 本地端口集成 2，提权环境 1,020/1,020 全绿） |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 16（含 ask_user/update_plan + 4 个后台 Job 工具）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
@@ -20,13 +20,13 @@
 源码按层分布：
 
 ```
-session 6085 · agent 2995 · tools 2813 · ui 2636 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2387
+session 6353 · agent 3042 · ui 3615 · tools 2813 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2396
 safety 2287 · llm 1806 · subagent 1714 · mcp 1652 · skills 949 · core 643
 jobs 582 · plugins 435 · entrypoints 194
 ```
 
 core 只有 643 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
-测试代码量约为源码的 71%，覆盖协议、安全边界与端到端行为。
+测试代码量约为源码的 69%，覆盖协议、安全边界与端到端行为。
 
 ## 2. 关键架构决策时间线
 
@@ -85,6 +85,7 @@ core 只有 643 行——内核保持极小、能力在边缘，正是当初对�
 | 会话录制/恢复/分支/导出/检查点/回退 | `session/{recorder,manager,lifecycle,restore,export,checkpoint,rewind}.py` |
 | 插件发现/隔离加载/热重载 | `plugins/{manifest,loader,manager}.py` |
 | 流式渲染/审批/用户输入/@引用 | `ui/render.py` `ui/approval.py` `session/interactions.py` `ui/atfiles.py` `ui/repl.py` |
+| 终端 Panel Dock / 键鼠导航 / Shell+Memory 快捷模式 | `ui/tui/{model,layout,controller,mouse,panels}.py` `session/memory.py` `agent/loop.py:execute_direct_tool` |
 | hooks / 用量 / 自动提交 | `hooks.py` `agent/usage.py` `session/autocommit.py` |
 | 诊断/脚手架 | `doctor.py` `scaffold.py` |
 | 组装根（唯一认识所有具体类的地方） | `app.py` |
@@ -105,7 +106,7 @@ core 只有 643 行——内核保持极小、能力在边缘，正是当初对�
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 997 通过、2 skip，提权环境 999/999 全过。
+bind 探测自动 skip——沙箱内 1018 通过、2 skip，提权环境 1,020/1,020 全过。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /

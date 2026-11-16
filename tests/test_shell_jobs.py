@@ -459,18 +459,35 @@ def test_repl_idle_receives_background_completion_notice(tmp_path, capsys):
     async def scenario():
         manager, _, _ = make_manager(tmp_path, bus=loop.bus)
         loop.tool_context.shell_jobs = manager
+        completed = asyncio.Event()
+        unsubscribe = loop.bus.subscribe(
+            lambda event: completed.set()
+            if isinstance(event, ShellJobFinished) else None
+        )
+
         async def start_after_subscribe():
             await asyncio.sleep(0.05)
             await manager.start(
                 "printf notified; sleep 0.01", cwd=tmp_path)
 
+        exit_sent = False
+
+        async def exit_after_completion(_prompt):
+            nonlocal exit_sent
+            if exit_sent:
+                raise EOFError
+            await asyncio.wait_for(completed.wait(), timeout=5.0)
+            exit_sent = True
+            return "/exit"
+
         starter = asyncio.create_task(start_after_subscribe())
         try:
             return await run_repl(
                 loop,
-                input_fn=ScriptedInput(["/exit"], delay=0.2),
+                input_fn=exit_after_completion,
             )
         finally:
+            unsubscribe()
             await starter
             await manager.shutdown()
 

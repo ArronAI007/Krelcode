@@ -50,6 +50,7 @@ from .session.autocommit import AutoCommitter
 from .session.checkpoint import CheckpointManager
 from .session.input import InputProcessor
 from .session.interactions import UserInputBroker
+from .session.memory import MemoryStore, sync_memory_fragment
 from .session.restore import refresh_skill_system_prompt, restore_session
 from .session.runner import run_session
 from .skills import SkillManager, build_skill_tools
@@ -394,6 +395,10 @@ async def build_loop(
     skill_fragment = skills_fragment(skill_manager.prompt_index())
     if skill_fragment is not None:
         prompt_registry.register(skill_fragment)
+    memory_store = MemoryStore(workspace_root)
+    memory_fragment = memory_store.fragment()
+    if memory_fragment is not None:
+        prompt_registry.register(memory_fragment)
     prompt_snapshot = prompt_registry.snapshot()
     loop = AgentLoop(
         llm=llm,
@@ -416,6 +421,7 @@ async def build_loop(
     loop.context_options = context_options
     loop.context_enabled = not args.no_context
     loop.workspace_context = workspace_context
+    loop.memory_store = memory_store
     apply_prompt_snapshot(loop, prompt_snapshot)
 
     async def reload_plugins():
@@ -551,6 +557,9 @@ async def async_main(args: argparse.Namespace) -> int:
     redactor = SecretRedactor()
     redactor.add(getattr(loop.llm, "api_key", None))
     loop.redactor = redactor
+    if getattr(loop, "memory_store", None) is not None:
+        loop.memory_store.redactor = redactor
+        sync_memory_fragment(loop, loop.memory_store)
     subagents.redactor = redactor
     subagents.sidechains.redactor = redactor
     if getattr(loop.tool_context, "shell_jobs", None) is not None:

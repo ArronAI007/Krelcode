@@ -147,6 +147,16 @@ class SessionController:
         """任务结束后取出未送达插话，避免污染下一轮。"""
         return self.runtime.drain_steering()
 
+    async def execute_shell_shortcut(self, command: str):
+        """Run a REPL ``!`` command through the guarded direct-tool path."""
+        if self.is_running:
+            raise RuntimeError("当前任务运行中，不能并发执行 Shell 快捷命令")
+        text = str(command).strip()
+        if not text:
+            raise ValueError("Shell 快捷命令不能为空")
+        return await self.loop.execute_direct_tool(
+            "run_command", {"command": text})
+
     async def stop(self) -> bool:
         """取消当前任务；没有活动任务时返回 False。"""
         return await self.runtime.stop()
