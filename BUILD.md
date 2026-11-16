@@ -119,7 +119,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 1,111 通过、2 skip；本地端口可用时 1,113/1,113 全过。
+bind 探测自动 skip——沙箱内 1,131 通过、2 skip；本地端口可用时 1,133/1,133 全过。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /

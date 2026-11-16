@@ -15,6 +15,7 @@ import sys
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from itertools import count
 from pathlib import Path
 from typing import Any, Optional, TextIO
 
@@ -22,6 +23,8 @@ from ..agent.runtime import AgentRuntime
 from ..agent.usage import UsageTotals, UsageTracker
 from ..core.events import ShellJobFinished, ShellJobOutput, ShellJobStarted
 from ..core.redact import SecretRedactor
+from ..agent.query import QueryEvent
+from .controller import SessionController
 from .input import InputEnvelope, InputKind, InputProcessor
 from .stream_json import (
     StreamControlMessage,
@@ -84,6 +87,19 @@ async def run_stream_json_session(
     ))
     writer = _JsonlWriter(output_stream, redactor)
     writer.emit(encoder.init_message())
+    controller = SessionController(
+        runtime,
+        mcp_supervisor=runtime.mcp_supervisor,
+        mcp_reload=runtime.mcp_reload,
+        subagents=runtime.subagents,
+        usage=usage,
+        skills=getattr(loop, "skill_manager", None),
+        workspace_root=runtime.workspace_root,
+        command_registry=(
+            input_processor.command_registry
+            if input_processor is not None else None),
+    )
+    command_counter = count(1)
 
     def on_job_event(event) -> None:
         if isinstance(event, (ShellJobStarted, ShellJobOutput, ShellJobFinished)):
@@ -126,6 +142,8 @@ async def run_stream_json_session(
                 usage=usage,
                 writer=writer,
                 encoder=encoder,
+                controller=controller,
+                command_counter=command_counter,
                 log=log,
             )
             pending.extend(outcome.deferred)
@@ -157,16 +175,49 @@ async def _run_turn(
     usage: UsageTracker,
     writer: _JsonlWriter,
     encoder: StreamJsonEncoder,
+    controller: SessionController,
+    command_counter,
     log,
 ) -> _TurnOutcome:
     """执行一个 turn；同时监听 interrupt/end，并保留后续 user 消息顺序。"""
     started = time.monotonic()
+    command_turn_id = ""
     try:
-        prepared = await _prepare_prompt(
-            input_processor, message.content, log=log)
-        images = list(message.images) or (
-            list(prepared.images) if prepared is not None else None)
-        prompt = prepared.text if prepared is not None else message.content
+        action = await _prepare_input(input_processor, message.content, log=log)
+        if action is not None and action.kind is InputKind.COMMAND:
+            command_turn_id = f"command-{next(command_counter)}"
+            result, event_sequence = await _run_command_action(
+                controller,
+                action,
+                message,
+                command_turn_id=command_turn_id,
+                writer=writer,
+                encoder=encoder,
+            )
+            if result.run_prompt is None:
+                writer.emit(encoder.result_message(
+                    subtype="success",
+                    result="\n".join(result.output),
+                    is_error=False,
+                    turn_id=command_turn_id,
+                    sequence=event_sequence,
+                    extra={
+                        **_result_extra(
+                            usage, duration_ms=_elapsed_ms(started)),
+                        **_request_extra(message),
+                    },
+                ))
+                return _TurnOutcome()
+            prepared = None
+            prompt = result.run_prompt
+            images = None
+        else:
+            prepared = (
+                action if action is not None
+                and action.kind is InputKind.PROMPT else None)
+            images = list(message.images) or (
+                list(prepared.images) if prepared is not None else None)
+            prompt = prepared.text if prepared is not None else message.content
         query = runtime.start_query(prompt, images=images or None)
     except Exception as exc:
         writer.emit(encoder.result_message(
@@ -307,7 +358,7 @@ async def _next_item(queue: asyncio.Queue, pending: deque[Any]) -> Any:
     return await queue.get()
 
 
-async def _prepare_prompt(
+async def _prepare_input(
     processor: Optional[InputProcessor],
     raw_prompt: str,
     *,
@@ -317,11 +368,56 @@ async def _prepare_prompt(
         return None
     action = await processor.process(
         InputEnvelope(raw_prompt, source="stream-json"))
-    if action.kind is not InputKind.PROMPT:
-        return None
     for note in action.notes:
         log(f"[input] {note}")
     return action
+
+
+async def _run_command_action(
+    controller: SessionController,
+    action,
+    message: StreamUserMessage,
+    *,
+    command_turn_id: str,
+    writer: _JsonlWriter,
+    encoder: StreamJsonEncoder,
+):
+    captured = []
+
+    def capture(event) -> None:
+        captured.append(event)
+
+    unsubscribe = controller.loop.bus.subscribe(capture)
+    try:
+        result = await controller.execute_command(action.text)
+    finally:
+        unsubscribe()
+
+    sequence = 0
+    extra = _request_extra(message) or None
+    for event in captured:
+        writer.emit(encoder.encode(
+            QueryEvent(
+                turn_id=command_turn_id,
+                sequence=sequence,
+                event=event,
+            ),
+            extra_fields=extra,
+        ))
+        sequence += 1
+    writer.emit({
+        "type": "command",
+        "subtype": "result",
+        "command": action.command,
+        "handled": result.handled,
+        "output": list(result.output),
+        "run_prompt": result.run_prompt is not None,
+        "turn_id": command_turn_id,
+        "sequence": sequence,
+        "session_id": encoder.metadata.session_id,
+        **(extra or {}),
+    })
+    return result, sequence + 1
 
 
 def _emit_idle_interrupt(

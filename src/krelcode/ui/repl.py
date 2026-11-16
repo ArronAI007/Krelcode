@@ -38,7 +38,7 @@ from .. import __version__
 from ..agent.loop import AgentLoop
 from ..agent.runtime import AgentRuntime
 from ..agent.tokens import estimate_history_tokens
-from ..core.events import ShellJobFinished
+from ..core.events import MemoryWritten, ShellJobFinished
 from ..session.commands import (
     CommandRegistry,
     CommandResult,
@@ -1114,6 +1114,14 @@ async def run_repl(
     panel_controller = PanelController()
     quick_status = ""
 
+    # Panel redraws are high-frequency and must stay disk-free. Refresh this
+    # cache only after an explicit memory mutation or MemoryWritten event.
+    memory_cache = memory_store.dashboard_snapshot(limit=8)
+
+    def refresh_memory_cache() -> None:
+        nonlocal memory_cache
+        memory_cache = memory_store.dashboard_snapshot(limit=8)
+
     def refresh_panels(*, queue_size: int = 0) -> None:
         snapshot = getattr(loop, "prompt_snapshot", None)
         fragments = getattr(snapshot, "fragments", ())
@@ -1128,8 +1136,9 @@ async def run_repl(
             context_budget=getattr(context_manager, "max_tokens", None),
             fragment_count=len(fragments),
             stable_fragments=len(getattr(cache, "stable_fragments", ())),
-            memory_entries=memory_store.list(limit=8),
-            memory_tokens=memory_store.token_count(),
+            memory_entries=memory_cache.entries,
+            memory_total=memory_cache.total_entries,
+            memory_tokens=memory_cache.tokens,
             quick_status=quick_status,
         )
         panel_controller.set_panels(panels)
@@ -1322,10 +1331,17 @@ async def run_repl(
 
     quick_task: Optional[asyncio.Task] = None
     quick_unsubscribe: Optional[Callable[[], None]] = None
+
+    def on_session_event(event) -> None:
+        renderer(event)
+        if isinstance(event, MemoryWritten):
+            refresh_memory_cache()
+            refresh_status(state)
+
     runner = ReplSessionRunner(
         controller,
         state,
-        on_event=renderer,
+        on_event=on_session_event,
         on_status=refresh_status,
         on_approval=show_approval,
         on_notice=notice,
@@ -1374,7 +1390,7 @@ async def run_repl(
             for line in result.output:
                 print(line)
             return result if result.run_prompt is not None else False
-        return await _handle_command(
+        result = await _handle_command(
             action.text, loop, renderer,
             session_path=session_path, sessions_dir=sessions_dir,
             mcp_supervisor=mcp_supervisor, mcp_reload=mcp_reload,
@@ -1384,6 +1400,9 @@ async def run_repl(
             skills_reload=skills_reload, controller=controller,
             command_registry=processor.command_registry,
         )
+        if action.command == "/memory":
+            refresh_memory_cache()
+        return result
 
     restore_prompt()
     reader_task = asyncio.create_task(reader()) if input_fn is not None else None
@@ -1567,7 +1586,7 @@ async def run_repl(
             if action.kind is InputKind.MEMORY:
                 if not action.text:
                     prompt.hide()
-                    for line in memory_lines(memory_store.list(limit=8)):
+                    for line in memory_lines(memory_cache.entries):
                         print(f"  {line}")
                     panel_controller.focus("memory")
                     restore_prompt()
@@ -1584,6 +1603,7 @@ async def run_repl(
                     restore_prompt()
                     continue
                 sync_memory_fragment(loop, memory_store)
+                refresh_memory_cache()
                 panel_controller.focus("memory")
                 notice(
                     f"⎿ 已保存{SCOPE_LABELS[scope]}记忆 #{entry.id}")
@@ -1671,7 +1691,14 @@ async def run_repl(
             if action.kind is InputKind.PROMPT:
                 prompt.hide()
                 show_attachment_notes(action)
-                runner.start(to_session_prompt(action))
+                if action.delivery is InputDelivery.QUEUE:
+                    position = runner.queue_prompt(to_session_prompt(action))
+                    print(f"  ⎿ 下一条已排队（队列 #{position}，"
+                          f"当前任务已结束，立即发送）: "
+                          f"{_queue_label(action, 60)}")
+                    runner.start_queued()
+                else:
+                    runner.start(to_session_prompt(action))
                 restore_prompt()
                 continue
 

@@ -74,25 +74,30 @@ krelcode [子命令] [选项]
 | `/tools` | 已注册工具（含 MCP 远程与子代理工具） |
 | `/model [provider/]model` | 查看/热切换模型（预算联动，失败不破坏现状） |
 | `/cost` | token 用量（本轮+累计）与估算成本 $ |
-| `/context` | 上下文统计、Working Context、Tool Microcompact、Structured Compact generation/来源/校验摘要、最近 checkpoint、Fragment 来源与 cache 边界 |
-| `/context sources` | 查看已注册 ContextSource、最近装配 layer 顺序、来源 token、cache 属性与有界错误诊断 |
+| `/context` | 最近真实请求的 token 分项、预算、stable/volatile、memory 命中、dropped 来源、cache hash 变化、compact 水位与 checkpoint |
+| `/context plan` | 查看最近请求计划、stable/full hash、history digest、Working Context sequence 及有界 layer/source/category 清单 |
+| `/context why <id>` | 解释 layer/source/token-source/dropped item 的 token 归因、cache/compact 属性与 plan 命中；不输出正文 |
+| `/context sources` | 查看已注册 ContextSource、最近装配 layer 顺序、来源 token、cache 属性、dropped item 与有界错误诊断 |
 | `/context rules` | 查看 user/project/directory 规则入口、@import 来源、字符数与越界/循环/敏感文件问题 |
 | `/context fragments [source]` | 列出全部或指定来源的 Fragment、启停状态、group、tokens 与 cache 属性 |
 | `/context enable\|disable\|toggle <id\|source>` | 手动启停单个 Fragment 或整个来源；精确 id 设置优先于 source 设置 |
 | `/context reset` | 清除当前会话的全部手动启停设置 |
-| `/context cache` | 显示稳定前缀字符/token 数、稳定/动态 Fragment 列表与 SHA-256 哈希 |
+| `/context cache` | 显示稳定前缀字符/token 数、稳定/动态 Fragment、stable/full hash、与上一请求相比是否变化及 cache segment 归因 |
 | `/context refresh` | 重采目录树/git/规则文件，原子替换 workspace Fragment 并重建 system prompt |
-| `/memory` · `/memory list` | 列出 user/project/session 三层记忆及 ID、类型和内容 |
+| `/memory` · `/memory list [scope]` | 列出全部或指定 user/project/session 作用域记忆及 ID、类型和内容 |
 | `/memory scopes` | 显示各作用域条数与存储路径 |
-| `/memory add <user\|project\|session> <text>` | 写入指定作用域；user 跨工作区，session 跟随当前会话 |
-| `/memory remove <id>` | 删除指定记忆并重建 memory Fragment |
+| `/memory show <id>` | 查看作用域、类型、source、时间、tag、token 与完整内容；ID 支持唯一后缀 |
+| `/memory add <text> [--scope user\|project\|session]` | 写入指定作用域，缺省 project；兼容 `/memory add <scope> <text>` 旧语法 |
+| `/memory remove <id>` · `/memory forget <id>` | 删除指定记忆并重建 memory Fragment；两者语义相同 |
 | `/memory pin\|unpin <id>` | 固定/取消固定记忆；固定项在搜索和 Prompt 注入中优先 |
-| `/memory search <关键词>` | 按关键词搜索已审核记忆 |
+| `/memory search <关键词> [--scope <scope>]` | 在有界作用域内按相关度搜索已审核记忆，不搜索待审核候选 |
 | `/memory mode [off\|suggest\|auto]` | 查看或切换当前进程的 Auto Memory 模式 |
-| `/memory review` | 查看待审核候选、触发来源、置信度、证据数与冲突 |
+| `/memory review [pending\|accepted\|rejected\|superseded\|all]` | 按状态查看候选、触发来源、置信度、证据数与冲突 |
 | `/memory review accept\|reject <id>` | 接受为 `project/knowledge`，或拒绝且永不自动写入 |
+| `/memory migrate [user\|project\|session]` | 幂等迁移旧 JSONL：补全 schema、脱敏、去重、保留 pinned；仅在变更时备份 |
 | `/compact` | 立即执行工具微压缩+Structured Compact v2（不等预算），完成后显示 generation、来源节省量、checkpoint 与实际边界 |
 | `/compact preview [--auto]` | 预览工具微压缩与 compact 的 head/compact/keep 边界、高低水位、来源节省量、条数、预计 tokens 与待摘要消息；不改 history。`--auto` 仅在超预算时预览 |
+| `/compact <focus>` | 强制 compact，并把自然语言重点写入交接摘要，例如保留 API 设计、失败测试和下一步 |
 | `/sessions` · `/sessions search <关键词>` | 列出/搜索会话标题与用户输入 |
 | `/resume <n\|latest\|path>` | 恢复会话并建立新分支（不覆盖源会话） |
 | `/fork [--turn <n>] [名称]` | 从当前历史或第 n 轮结束点创建并切换独立会话分支（不恢复工作区） |
@@ -128,6 +133,12 @@ Fragment 启停是**当前会话运行时状态**，不写入 TOML；重启后�
 内置来源为 `core`（不可关闭的基础 system prompt）、`skills`（可用 Skill 索引）以及
 `workspace:rules|git|tree`。cacheable Fragment 会形成连续的稳定前缀；只有真正位于
 第一个动态 Fragment 之前的稳定内容会报告为 cache boundary。
+
+TUI 的 `Context` 面板展示当前请求 token 分布、stable/volatile、source/fragment/schema
+数量、cache hash 是否变化、实际 Memory 命中、dropped 来源、Tool Microcompact 节省量与
+compact generation/来源/水位/checkpoint。高频 panel redraw 只读 `SessionViewState` 和缓存
+快照，不调用 Memory `list()` / `dashboard_snapshot()`，也不会重新扫描工作区文件；定向刷新
+使用 `/context refresh`。操作与字段解释见 `docs/context-and-memory.md`。
 
 规则层级为 `user (~/.krelcode/AGENTS.md) → project (根目录 AGENTS.md/KRELCODE.md) →
 directory (当前轮目标路径的祖先目录规则)`。每个目录优先使用 `AGENTS.md`，其次
@@ -334,6 +345,10 @@ Memory 作用域：`user`（跨工作区）→ `project`（当前工作区 `.kre
 Auto Memory 候选保存在项目本地 `.krelcode/memory/candidates.jsonl`，不会跨 workspace；
 模型生成的候选一律为 `knowledge` 类型，写入前执行脱敏、摘要去重、冲突检测与置信度阈值。
 Memory Fragment 明确声明为 untrusted contextual knowledge，而不是 system instructions。
+`/memory migrate [scope]` 会把旧 JSONL 补全为新 schema，脱敏并合并规范化文本重复项，保留
+pinned/tag/metadata，跳过损坏行；只有内容实际变化时才创建同目录
+`entries.jsonl.bak-YYYYMMDD-HHMMSS[-N]`，随后原子重写。迁移幂等，二次执行不会重复备份。
+存储字段、完整命令和恢复方式见 `docs/context-and-memory.md`。
 
 Agent Definition 发现目录（后者覆盖前者同名项）：`~/.krelcode/agents/*.md`、
 `<workspace>/.krelcode/agents/*.md`、`<workspace>/.agents/agents/*.md`。格式：
@@ -435,13 +450,18 @@ MCP stdio 子进程默认同样剥离宿主密钥，但 `[mcp_servers.*].env` �
 `LLMResponseReceived`(usage) · `ToolCallStarted` · `ToolProgress` · `ToolOutputDelta` ·
 `ToolCallCompleted`(is_error) · `PlanUpdated` · `UserInputRequested` ·
 `ApprovalRequested` · `PermissionDenied` · `ContextAssembled`(usage snapshot) ·
+`ContextDropped`(content-free source ids) · `MemoryLoaded`(entry ids/scope/token) ·
+`MemoryCandidateObserved`(candidate id/status/trigger/confidence/digest) ·
+`MemoryWritten`(id/action/scope/kind/token) ·
 `ContextCompressed`(before/after、strategy、summary source/generation、高/低水位、来源节省量、checkpoint ID) ·
+`CompactCheckpointCreated`(checkpoint/generation/before/after/summary digest/source savings) ·
 `HookTriggered` · `SubagentSpawned` · `SubagentFeedUpdated` · `SubagentStateChanged` · `SubagentFinished` ·
 `ShellJobStarted` · `ShellJobOutput` · `ShellJobFinished` · `UserSteered` ·
 `RunFinished` · `ErrorOccurred`
 
 JSONL 审计记录类型：`user_input` `tool_call` `tool_result` `permission_denied`
-`hook_triggered` `context_assembled` `context_compressed`(含 Structured Compact 元数据) `subagent_spawned` `subagent_feed` `subagent_state`
+`hook_triggered` `context_assembled` `context_dropped` `memory_loaded` `memory_candidate`
+`memory_written` `compact_checkpoint` `context_compressed`(含 Structured Compact 元数据) `subagent_spawned` `subagent_feed` `subagent_state`
 `subagent_finished`
 `shell_job_started` `shell_job_finished` `user_steered`
 `run_finished` `history`(快照)。
@@ -516,15 +536,38 @@ stdin 支持两种 user 形式：
 `plan/updated`（含 `items/statuses/active_index/explanation`）、
 `input/requested|resolved`（含 `request_id/options/allow_free_text`；resolved 只表示是否已回答，
 不回传答案正文）、`permission/requested|denied`、`context/assembled|compressed`、
+`context/dropped`、`memory/loaded|candidate|written`、`compact/checkpoint`、
 `hook/triggered`、`subagent/started|feed|state|finished`、`job/started|output_delta|finished`、
 `user/steered`、`error/occurred`；job 事件独立于 turn，因此不带 turn_id，但带
 `session_id`；`job/output_delta` 的 `sequence` 可直接作为 `after_sequence` 游标；
 `context/assembled` 的 `snapshot` 只含 token 分项、预算、cache boundary 与 hash，不含 Prompt 正文；
+`context/dropped` 只含来源 ID 和 reason；`memory/loaded` 只含 entry ID/scope/token，不含
+记忆正文；`memory/candidate` 含 candidate ID/status/trigger/confidence/冲突数/digest；
+`memory/written` 含 memory ID/action/scope/kind/token；`compact/checkpoint` 含
+checkpoint/generation/before/after/summary digest/strategy/source savings；
 `context/compressed` 只含策略、摘要来源/generation、水位、来源节省量与 checkpoint ID，不含摘要正文；
 `subagent/feed` 的 agent cursor 是 `agent_sequence`（外层 `sequence` 仍是 QueryEvent 顺序）；
 最后以 `system/session_end` 结束。turn 内事件都带 `turn_id`、单调 `sequence` 和
 `session_id`，user 对应的全部事件及 result 还带同一 `request_id`；后台 job 是跨 turn
 长生命周期事件，使用自己的 `job_id` 与游标。
+
+上述新事件同时保留旧式 `type/subtype`，并增加稳定 `event` 名：
+`context_assembled`、`context_dropped`、`memory_loaded`、`memory_candidate`、
+`memory_written`、`compact_checkpoint`。消费者可优先按 `event` 路由，兼容消费者仍可按
+`type/subtype` 解析。
+
+stream-json 的 `user.content` 可以是 slash command。命令由同一个 command registry 直接执行，
+不创建模型请求；先输出内部 `memory/*`、`compact/*`、`context/*` 等事件，再输出：
+
+```json
+{"type":"command","subtype":"result","command":"/memory","handled":true,
+ "output":["[memory] ..."],"run_prompt":false,"turn_id":"command-1",
+ "sequence":2,"session_id":"..."}
+```
+
+随后仍为该 user 请求发出唯一普通 `result`。`run_prompt=true` 的命令会继续执行普通 Agent
+查询，最终 `result` 对应该查询；REPL、headless text/json、stream-json 与 SDK 共用同一
+命令处理与脱敏语义。详细示例见 `docs/context-and-memory.md`。
 
 Stream JSON 当前不接收远端 `input/response`；headless 查询中的 `ask_user` 会立即
 fail-closed。需要人工澄清的会话应使用 REPL，或由 SDK 拆成多次普通 user 请求。

@@ -19,13 +19,18 @@ from ..agent.query import QueryEvent
 from ..core.context_usage import ContextUsageSnapshot
 from ..core.events import (
     ApprovalRequested,
+    CompactCheckpointCreated,
     ContextAssembled,
     ContextCompressed,
+    ContextDropped,
     ContextMicrocompacted,
     ErrorOccurred,
     LLMResponseReceived,
     LLMStreamDelta,
     LLMThinkingDelta,
+    MemoryCandidateObserved,
+    MemoryLoaded,
+    MemoryWritten,
     PermissionDenied,
     PlanUpdated,
     QueryPhaseChanged,
@@ -70,12 +75,23 @@ class SessionViewState:
     plan_explanation: str = ""
     plan_approval_status: str = "none"
     context_snapshot: Optional[ContextUsageSnapshot] = None
+    context_memory_hits: int = 0
+    context_memory_scopes: tuple[tuple[str, int], ...] = ()
+    context_dropped_items: tuple[str, ...] = ()
+    context_cache_changed: bool = False
+    context_stable_hash: str = ""
     microcompact_count: int = 0
     microcompact_saved_tokens: int = 0
     compact_generation: int = 0
     compact_source: str = ""
     compact_saved_tokens: int = 0
     compact_checkpoint_id: str = ""
+    compact_high_watermark_tokens: int = 0
+    compact_low_watermark_tokens: int = 0
+    memory_last_candidate_id: str = ""
+    memory_last_candidate_status: str = ""
+    memory_last_action: str = ""
+    memory_last_entry_id: str = ""
     input_request_id: str = ""
     input_prompt: str = ""
     input_options: tuple[str, ...] = ()
@@ -251,7 +267,31 @@ class SessionEventReducer:
         elif isinstance(event, PermissionDenied):
             state.progress = f"{event.tool_call.name} 权限被拒绝"
         elif isinstance(event, ContextAssembled):
+            previous_hash = getattr(state.context_snapshot, "stable_hash", "")
+            state.context_cache_changed = bool(
+                previous_hash
+                and event.snapshot.stable_hash
+                and previous_hash != event.snapshot.stable_hash
+            )
+            state.context_stable_hash = event.snapshot.stable_hash
             state.context_snapshot = event.snapshot
+        elif isinstance(event, ContextDropped):
+            state.context_dropped_items = tuple(event.items)
+        elif isinstance(event, MemoryLoaded):
+            state.context_memory_hits = len(event.entry_ids)
+            state.context_memory_scopes = tuple(event.scope_counts)
+        elif isinstance(event, MemoryCandidateObserved):
+            state.memory_last_candidate_id = event.candidate_id
+            state.memory_last_candidate_status = event.status
+        elif isinstance(event, MemoryWritten):
+            state.memory_last_action = event.action
+            state.memory_last_entry_id = event.memory_id
+        elif isinstance(event, CompactCheckpointCreated):
+            state.compact_checkpoint_id = event.checkpoint_id
+            state.compact_generation = max(
+                state.compact_generation, event.generation)
+            state.compact_high_watermark_tokens = event.before_tokens
+            state.compact_low_watermark_tokens = event.after_tokens
         elif isinstance(event, ContextMicrocompacted):
             state.microcompact_count += event.compacted_count
             state.microcompact_saved_tokens += max(
@@ -266,6 +306,8 @@ class SessionEventReducer:
             state.compact_saved_tokens += max(
                 0, event.before_tokens - event.after_tokens)
             state.compact_checkpoint_id = event.checkpoint_id
+            state.compact_high_watermark_tokens = event.high_watermark_tokens
+            state.compact_low_watermark_tokens = event.low_watermark_tokens
             state.progress = (
                 f"上下文已压缩 {event.before_tokens} → {event.after_tokens} tokens"
                 f" · {event.summary_source or event.strategy}"

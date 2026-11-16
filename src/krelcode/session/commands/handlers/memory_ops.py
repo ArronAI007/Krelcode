@@ -1,9 +1,14 @@
-"""Slash-command handlers for scoped memory and Auto Memory review."""
+"""Slash-command handlers for scoped memory, migration and Auto Memory review."""
 
 from __future__ import annotations
 
+import shlex
+
+from ....agent.tokens import estimate_text_tokens
+from ....core.events import MemoryCandidateObserved, MemoryWritten
 from ....session.memory import (
     SCOPE_LABELS,
+    MemoryEntry,
     coerce_memory_scope,
     sync_memory_fragment,
 )
@@ -20,6 +25,13 @@ def _ok(*output: str) -> CommandResult:
     return CommandResult(handled=True, output=tuple(output))
 
 
+def _parts(raw: str) -> list[str]:
+    try:
+        return shlex.split(raw) if raw.strip() else []
+    except ValueError:
+        return raw.split()
+
+
 def _resolve_candidate(queue, token: str):
     candidate = queue.get(token)
     if candidate is not None:
@@ -28,20 +40,106 @@ def _resolve_candidate(queue, token: str):
     return matches[-1] if len(matches) == 1 else None
 
 
+def _resolve_entry(store, token: str) -> MemoryEntry | None:
+    entries = store.list(limit=0)
+    target = str(token or "").strip()
+    if not target:
+        return None
+    exact = next((entry for entry in entries if entry.id == target), None)
+    if exact is not None:
+        return exact
+    matches = [entry for entry in entries if entry.id.endswith(target)]
+    return matches[-1] if len(matches) == 1 else None
+
+
 def _candidate_lines(candidates) -> list[str]:
-    lines = [f"  [memory review] {len(candidates)} 个待审核候选"]
+    lines = [f"  [memory review] {len(candidates)} 个候选"]
     for item in reversed(candidates):
         trigger = TRIGGER_LABELS.get(item.trigger, item.trigger_value)
         conflict = (
             f" · 冲突 {len(item.conflict_ids)}" if item.conflict_ids else "")
         lines.append(
-            f"  {item.id} · 置信度 {item.confidence:.2f} · {trigger}"
-            f" · 证据 {len(item.evidence)}{conflict}")
+            f"  {item.id} · {item.status.value} · 置信度 {item.confidence:.2f}"
+            f" · {trigger} · 证据 {len(item.evidence)}{conflict}")
         lines.append(f"    {item.text}")
     if candidates:
         lines.append(
             "  /memory review accept <id> 接受；/memory review reject <id> 拒绝")
     return lines
+
+
+def _entry_lines(entries) -> list[str]:
+    lines: list[str] = []
+    for entry in reversed(entries):
+        scope = coerce_memory_scope(entry.scope)
+        pinned = " · pinned" if entry.pinned else ""
+        lines.append(
+            f"  {entry.id} · {scope.value}/{entry.kind_value}{pinned}"
+            f" · {entry.text}")
+    return lines
+
+
+async def _emit(ctx: CommandContext, event) -> None:
+    bus = getattr(ctx.loop, "bus", None)
+    if bus is not None:
+        await bus.emit(event)
+
+
+async def _written(
+    ctx: CommandContext,
+    *,
+    memory_id: str,
+    action: str,
+    scope: str = "",
+    kind: str = "",
+    tokens: int = 0,
+    source: str = "manual",
+) -> None:
+    await _emit(ctx, MemoryWritten(
+        memory_id=memory_id,
+        action=action,
+        scope=scope,
+        kind=kind,
+        tokens=max(0, int(tokens)),
+        source=source,
+    ))
+
+
+def _parse_add(rest: str) -> tuple[str, object]:
+    tokens = _parts(rest)
+    if not tokens:
+        raise ValueError
+    scope_value = ""
+    text_tokens: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--scope" and index + 1 < len(tokens):
+            scope_value = tokens[index + 1]
+            index += 2
+            continue
+        if token.startswith("--scope="):
+            scope_value = token.split("=", 1)[1]
+            index += 1
+            continue
+        text_tokens.append(token)
+        index += 1
+    if scope_value:
+        scope = coerce_memory_scope(scope_value)
+        text = " ".join(text_tokens).strip()
+    else:
+        # Compatibility: /memory add <scope> <text>
+        try:
+            legacy_scope = coerce_memory_scope(tokens[0])
+        except ValueError:
+            scope = coerce_memory_scope("project")
+            text = " ".join(tokens).strip()
+        else:
+            scope = legacy_scope
+            text = " ".join(tokens[1:]).strip()
+    if not text:
+        raise ValueError
+    return text, scope
 
 
 async def handle_memory(ctx: CommandContext) -> CommandResult:
@@ -55,22 +153,30 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
     rest = rest.strip()
 
     if operation == "list":
-        entries = store.list(limit=50)
+        tokens = _parts(rest)
+        if len(tokens) > 1:
+            return _ok("  用法: /memory list [user|project|session]")
+        scopes = None
+        label = "全部"
+        if tokens:
+            try:
+                scope = coerce_memory_scope(tokens[0])
+            except ValueError as exc:
+                return _ok(f"  [memory] {exc}")
+            scopes = (scope,)
+            label = SCOPE_LABELS[scope]
+        entries = store.list(limit=50, scopes=scopes)
         if not entries:
             return _ok(
-                "  [memory] 当前没有记忆",
+                f"  [memory] {label}作用域当前没有记忆",
                 "  #内容 添加项目记忆；#user: / #project: / #session: 指定作用域")
-        lines = [f"  [memory] {len(entries)} 条（最新优先）"]
-        for entry in reversed(entries):
-            scope = coerce_memory_scope(entry.scope)
-            pinned = " · pinned" if entry.pinned else ""
-            lines.append(
-                f"  {entry.id} · {scope.value}/{entry.kind_value}"
-                f"{pinned} · {entry.text}")
+        lines = [f"  [memory] {len(entries)} 条{label}记忆（最新优先）"]
+        lines.extend(_entry_lines(entries))
         if auto_memory is not None:
             pending = auto_memory.queue.pending_count()
             if pending:
-                lines.append(f"  待审核 Auto Memory 候选: {pending}（/memory review）")
+                lines.append(
+                    f"  待审核 Auto Memory 候选: {pending}（/memory review）")
         return _ok(*lines)
 
     if operation == "scopes":
@@ -88,23 +194,47 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
                 f" · queue={auto_memory.queue.path}")
         return _ok(*lines)
 
+    if operation == "show":
+        token = rest.split(maxsplit=1)[0] if rest else ""
+        entry = _resolve_entry(store, token)
+        if entry is None:
+            return _ok(
+                f"  [memory] 未找到: {token}" if token
+                else "  用法: /memory show <id>")
+        return _ok(
+            f"  [memory] {entry.id}",
+            f"  作用域: {entry.scope_value} · 类型: {entry.kind_value}"
+            f" · source: {entry.source}"
+            + (" · pinned" if entry.pinned else ""),
+            f"  created: {entry.created_at} · updated: {entry.updated_at}",
+            f"  tags: {', '.join(entry.tags) or '(none)'}"
+            f" · tokens: {estimate_text_tokens(entry.text)}",
+            "  内容:",
+            entry.text,
+        )
+
     if operation == "add":
-        scope_name, separator, text = rest.partition(" ")
-        if not separator or not text.strip():
-            return _ok("  用法: /memory add <user|project|session> <text>")
         try:
-            scope = coerce_memory_scope(scope_name)
+            text, scope = _parse_add(rest)
             entry = store.add(text, scope=scope)
         except (OSError, ValueError) as exc:
-            return _ok(f"  [memory] 写入失败: {exc}")
+            return _ok(
+                "  [memory] 写入失败: "
+                + (str(exc) if str(exc) else
+                   "用法: /memory add <text> [--scope user|project|session]"))
         sync_memory_fragment(ctx.loop, store)
+        await _written(
+            ctx, memory_id=entry.id, action="added", scope=entry.scope_value,
+            kind=entry.kind_value, tokens=estimate_text_tokens(entry.text))
         return _ok(
-            f"  [memory] 已写入{SCOPE_LABELS[scope]}记忆 {entry.id}")
+            f"  [memory] 已写入{SCOPE_LABELS[scope]}记忆 {entry.id}",
+            "  语法: /memory add <text> --scope user|project|session；"
+            "旧语法 /memory add <scope> <text> 仍兼容")
 
-    if operation == "remove":
+    if operation in {"remove", "forget"}:
         entry_id = rest.split(maxsplit=1)[0] if rest else ""
         if not entry_id:
-            return _ok("  用法: /memory remove <id>")
+            return _ok(f"  用法: /memory {operation} <id>")
         try:
             removed = store.remove(entry_id)
         except OSError as exc:
@@ -112,7 +242,10 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
         if removed is None:
             return _ok(f"  [memory] 未找到: {entry_id}")
         sync_memory_fragment(ctx.loop, store)
-        return _ok(f"  [memory] 已删除: {entry_id}")
+        await _written(
+            ctx, memory_id=removed.id, action="removed",
+            scope=removed.scope_value, kind=removed.kind_value)
+        return _ok(f"  [memory] 已删除: {removed.id}")
 
     if operation in {"pin", "unpin"}:
         entry_id = rest.split(maxsplit=1)[0] if rest else ""
@@ -131,22 +264,35 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
             return _ok(f"  [memory] 未找到: {entry_id}")
         sync_memory_fragment(ctx.loop, store)
         state = "固定" if entry.pinned else "取消固定"
+        await _written(
+            ctx, memory_id=entry.id,
+            action="pinned" if entry.pinned else "unpinned",
+            scope=entry.scope_value, kind=entry.kind_value)
         return _ok(f"  [memory] 已{state}: {entry.id}")
 
     if operation == "search":
         query = rest.strip()
         if not query:
-            return _ok("  用法: /memory search <关键词>")
-        entries = store.search(query, limit=10)
+            return _ok("  用法: /memory search <关键词> [--scope <scope>]")
+        tokens = _parts(query)
+        scopes = None
+        if "--scope" in tokens:
+            index = tokens.index("--scope")
+            if index + 1 >= len(tokens):
+                return _ok("  用法: /memory search <关键词> [--scope <scope>]")
+            try:
+                scopes = (coerce_memory_scope(tokens[index + 1]),)
+            except ValueError as exc:
+                return _ok(f"  [memory] {exc}")
+            tokens = tokens[:index] + tokens[index + 2:]
+        query = " ".join(tokens).strip()
+        if not query:
+            return _ok("  用法: /memory search <关键词> [--scope <scope>]")
+        entries = store.search(query, limit=10, scopes=scopes)
         if not entries:
             return _ok(f"  [memory] 没有匹配: {query}")
         lines = [f"  [memory search] {len(entries)} 条"]
-        for entry in entries:
-            scope = coerce_memory_scope(entry.scope)
-            pinned = " · pinned" if entry.pinned else ""
-            lines.append(
-                f"  {entry.id} · {scope.value}/{entry.kind_value}{pinned}"
-                f" · {entry.text}")
+        lines.extend(_entry_lines(entries))
         return _ok(*lines)
 
     if operation == "mode":
@@ -174,14 +320,22 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
         if auto_memory is None:
             return _ok("  （Auto Memory 未启用）")
         suboperation, _, review_rest = rest.partition(" ")
-        suboperation = suboperation.lower() or "list"
-        if suboperation in {"list", ""}:
-            pending = auto_memory.queue.list(
-                status=MemoryCandidateStatus.PENDING, limit=50)
-            return _ok(*_candidate_lines(pending))
+        suboperation = suboperation.lower() or "pending"
+        status_map = {
+            "pending": MemoryCandidateStatus.PENDING,
+            "accepted": MemoryCandidateStatus.ACCEPTED,
+            "rejected": MemoryCandidateStatus.REJECTED,
+            "superseded": MemoryCandidateStatus.SUPERSEDED,
+            "all": None,
+        }
+        if suboperation in status_map:
+            candidates = auto_memory.queue.list(
+                status=status_map[suboperation], limit=50)
+            return _ok(*_candidate_lines(candidates))
         if suboperation not in {"accept", "reject"}:
             return _ok(
-                "  用法: /memory review [accept|reject <id>]")
+                "  用法: /memory review [pending|accepted|rejected|all] | "
+                "/memory review accept|reject <id>")
         token = review_rest.strip().split(maxsplit=1)[0] if review_rest.strip() else ""
         if not token:
             return _ok(f"  用法: /memory review {suboperation} <id>")
@@ -196,6 +350,18 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
             if accepted is None:
                 return _ok(f"  [memory] 未找到候选: {token}")
             sync_memory_fragment(ctx.loop, store)
+            await _emit(ctx, MemoryCandidateObserved(
+                candidate_id=accepted.id,
+                status=accepted.status.value,
+                trigger=accepted.trigger.value,
+                confidence=accepted.confidence,
+                conflict_count=len(accepted.conflict_ids),
+                digest=accepted.digest,
+            ))
+            await _written(
+                ctx, memory_id=accepted.existing_memory_id or "",
+                action="accepted", scope="project", kind="knowledge",
+                source="auto-memory:review")
             return _ok(
                 f"  [memory] 已接受 {accepted.id}"
                 f" → knowledge {accepted.existing_memory_id}")
@@ -205,7 +371,45 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
             return _ok(f"  [memory] 拒绝失败: {exc}")
         if rejected is None:
             return _ok(f"  [memory] 未找到候选: {token}")
+        await _emit(ctx, MemoryCandidateObserved(
+            candidate_id=rejected.id,
+            status=rejected.status.value,
+            trigger=rejected.trigger.value,
+            confidence=rejected.confidence,
+            conflict_count=len(rejected.conflict_ids),
+            digest=rejected.digest,
+        ))
         return _ok(f"  [memory] 已拒绝 {rejected.id}（不会写入长期记忆）")
 
+    if operation == "migrate":
+        tokens = _parts(rest)
+        if len(tokens) > 1:
+            return _ok("  用法: /memory migrate [user|project|session]")
+        scope = "project"
+        if tokens:
+            try:
+                scope = coerce_memory_scope(tokens[0])
+            except ValueError as exc:
+                return _ok(f"  [memory] {exc}")
+        try:
+            report = store.migrate(scope)
+        except OSError as exc:
+            return _ok(f"  [memory] 迁移失败: {exc}")
+        sync_memory_fragment(ctx.loop, store)
+        await _written(
+            ctx, memory_id="", action="migrated", scope=report.scope,
+            tokens=0, source="migration")
+        lines = [
+            f"  [memory migrate] {report.scope} · {'已更新' if report.changed else '无需更新'}",
+            f"  scanned {report.scanned} · kept {report.kept}"
+            f" · migrated {report.migrated} · duplicates {report.duplicates}"
+            f" · skipped {report.skipped}",
+            f"  path: {report.path}",
+        ]
+        if report.backup_path:
+            lines.append(f"  backup: {report.backup_path}")
+        return _ok(*lines)
+
     return _ok(
-        "  用法: /memory [list|scopes|add|remove|pin|unpin|search|mode|review]")
+        "  用法: /memory [list [scope]|scopes|show|add|remove|forget|"
+        "pin|unpin|search|mode|review|migrate]")

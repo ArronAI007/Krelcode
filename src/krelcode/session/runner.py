@@ -14,6 +14,7 @@ from typing import List
 from ..agent.runtime import AgentRuntime
 from ..core.events import PermissionDenied, ToolCallCompleted
 from .bootstrap import setup_session
+from .controller import SessionController
 from .input import InputEnvelope, InputKind
 
 
@@ -91,6 +92,36 @@ async def run_session(
                     images = list(action.images) or None
                     for note in action.notes:
                         log(f"[input] {note}")
+                elif action.kind is InputKind.COMMAND:
+                    controller = SessionController(
+                        runtime,
+                        mcp_supervisor=supervisor,
+                        mcp_reload=runtime.mcp_reload,
+                        subagents=runtime.subagents,
+                        checkpoints=checkpoints,
+                        usage=usage,
+                        model_switch=model_switch,
+                        skills=getattr(loop, "skill_manager", None),
+                        skills_reload=skills_reload,
+                        workspace_root=runtime.workspace_root,
+                        command_registry=input_processor.command_registry,
+                    )
+                    result = await controller.execute_command(action.text)
+                    output = [redactor.redact(line) for line in result.output]
+                    if args.output_format == "json":
+                        print(json.dumps({
+                            "ok": True,
+                            "command": action.command,
+                            "output": output,
+                            "run_prompt": result.run_prompt is not None,
+                            "session": str(session_path) if session_path else None,
+                        }, ensure_ascii=False))
+                    else:
+                        for line in output:
+                            print(line)
+                    if result.run_prompt is None:
+                        return 0
+                    message = result.run_prompt
             if args.output_format == "json":
                 summary = _RunSummary()
                 loop.bus.subscribe(summary.on_event)

@@ -24,8 +24,10 @@ from ..core.interactions import UserInputPort
 from ..core.redact import SecretRedactor
 from ..core.events import (
     AgentEvent,
+    CompactCheckpointCreated,
     ContextAssembled,
     ContextCompressed,
+    ContextDropped,
     ContextMicrocompacted,
     ErrorOccurred,
     EventBus,
@@ -33,6 +35,7 @@ from ..core.events import (
     LLMResponseReceived,
     LLMStreamDelta,
     LLMThinkingDelta,
+    MemoryLoaded,
     PermissionDenied,
     PlanUpdated,
     QueryPhaseChanged,
@@ -231,6 +234,7 @@ class AgentLoop:
                 self.context_assembler.register(RetrievedMemoryContextSource())
         self.last_context_assembly = None
         self.last_context_snapshot = None
+        self.previous_context_snapshot = None
         self.last_context_plan: ContextPlanSnapshot | None = None
         self.last_context_restore = None
         self.context_integrity = None
@@ -276,6 +280,7 @@ class AgentLoop:
         self.history = self.history[:1] if self.history and self.history[0].role == "system" else []
         self.last_context_assembly = None
         self.last_context_snapshot = None
+        self.previous_context_snapshot = None
         self.last_microcompact_report = None
         self.last_compact_checkpoint = None
         self.working_context_store.clear()
@@ -410,8 +415,10 @@ class AgentLoop:
             self._begin_turn(turn_id, tool_allowlist=tool_allowlist)
         if self.pending_context_refresh:
             await self.refresh_workspace_context()
-        self.last_context_assembly = None
-        self.last_context_snapshot = None
+        # Keep the last completed request visible until this turn's first
+        # request is assembled.  ``_llm_turn`` rotates it into
+        # ``previous_context_snapshot`` so /context cache can compare stable
+        # prefixes across turn boundaries as well as across tool steps.
         self.history.append(Message.user(user_input, images=images or None))
         self._failure_counts = {}
         self._token_total = 0
@@ -584,6 +591,7 @@ class AgentLoop:
         self,
         force: bool = False,
         *,
+        focus: str = "",
         request_tokens: Optional[int] = None,
         output_reserve_tokens: int = 0,
         model_context_window: Optional[int] = None,
@@ -620,6 +628,7 @@ class AgentLoop:
             model_context_window=model_context_window,
             microcompact=not pre_microcompacted,
             current_turn_id=self._current_turn_id,
+            focus=focus,
         )
         report = self.context_manager.last_microcompact_report
         if (
@@ -667,6 +676,17 @@ class AgentLoop:
                 working_context=working,
             )
             self.last_compact_checkpoint = checkpoint
+            if checkpoint is not None:
+                await self._emit(CompactCheckpointCreated(
+                    checkpoint_id=checkpoint.id,
+                    generation=result.generation,
+                    before_tokens=before,
+                    after_tokens=after,
+                    summary_digest=checkpoint.summary.digest,
+                    strategy="structured_summary",
+                    trigger=result.trigger,
+                    source_savings=result.source_savings,
+                ))
         await self.run_lifecycle_hook(
             "post_compact",
             {"before_tokens": str(before), "after_tokens": str(after)},
@@ -764,6 +784,7 @@ class AgentLoop:
                 getattr(self.llm, "model", None)),
             prepared_request=prepared,
             provider_name=str(getattr(self.llm, "name", "") or ""),
+            dropped_items=_context_dropped_items(self),
         )
 
     async def _llm_turn(self, step: int) -> LLMTurnResult:
@@ -809,9 +830,23 @@ class AgentLoop:
                         step=step, specs=specs, messages=messages,
                         context_assembly=context_assembly, prepared=prepared)
 
+        self.previous_context_snapshot = self.last_context_snapshot
         self.last_context_assembly = context_assembly
         self.last_context_snapshot = context_snapshot
         await self._emit(ContextAssembled(context_snapshot))
+        if context_snapshot.dropped_items:
+            await self._emit(ContextDropped(
+                items=tuple(context_snapshot.dropped_items),
+                reason="budget",
+            ))
+        memory_ids, memory_scopes, memory_tokens = _memory_selection(
+            context_assembly)
+        if memory_ids or memory_scopes or memory_tokens:
+            await self._emit(MemoryLoaded(
+                entry_ids=memory_ids,
+                scope_counts=tuple(sorted(memory_scopes.items())),
+                tokens=memory_tokens,
+            ))
         finished: Optional[StreamFinished] = None
         executor = StreamingToolExecutor(
             self._current_tool_pool(), self._run_stream_tool)
@@ -1256,6 +1291,34 @@ def _redact_json(value, redact):
             for key, item in value.items()
         }
     return value
+
+
+def _context_dropped_items(loop: AgentLoop) -> tuple[str, ...]:
+    workspace = getattr(loop, "workspace_context", None)
+    items = [
+        f"workspace:{item}"
+        for item in (getattr(workspace, "omitted", ()) or ())
+    ]
+    return tuple(dict.fromkeys(items))
+
+
+def _memory_selection(
+    assembly,
+) -> tuple[tuple[str, ...], dict[str, int], int]:
+    for layer in getattr(assembly, "layers", ()) or ():
+        metadata = getattr(layer, "metadata", {}) or {}
+        raw_ids = metadata.get("memory_entry_ids", ())
+        ids = tuple(str(item) for item in raw_ids) if isinstance(
+            raw_ids, (list, tuple, set)) else ()
+        raw_scopes = metadata.get("memory_scope_counts", {})
+        scopes = {
+            str(key): max(0, int(value))
+            for key, value in dict(raw_scopes).items()
+        } if isinstance(raw_scopes, dict) else {}
+        tokens = max(0, int(metadata.get("memory_tokens", 0) or 0))
+        if ids or scopes or tokens:
+            return ids, scopes, tokens
+    return (), {}, 0
 
 
 def _persisted_output_path(content: str) -> str:

@@ -65,11 +65,13 @@ def build_panels(
     fragment_count: int = 0,
     stable_fragments: int = 0,
     memory_entries: Iterable[object] = (),
+    memory_total: Optional[int] = None,
     memory_tokens: int = 0,
     quick_status: str = "",
 ) -> tuple[Panel, ...]:
     """Create the four default panels shown above the input editor."""
     memories = tuple(memory_entries)
+    total_memories = len(memories) if memory_total is None else memory_total
     phase = {
         SessionPhase.IDLE: "idle",
         SessionPhase.RUNNING: "running",
@@ -134,8 +136,9 @@ def build_panels(
             ),
             PanelItem(
                 "context-memory",
-                f"memory · {len(memories)}",
-                f"{memory_tokens} tokens",
+                f"memory · {total_memories}",
+                f"hits {state.context_memory_hits}"
+                f" · {memory_tokens} tokens",
             ),
         )
     else:
@@ -165,7 +168,8 @@ def build_panels(
                 f"cache · {snapshot.stable_tokens}"
                 f"/{snapshot.volatile_tokens}",
                 f"boundary {snapshot.cache_boundary_chars} chars"
-                f" · {snapshot.cache_mode} {snapshot.cache_segment_count}",
+                f" · {snapshot.cache_mode} {snapshot.cache_segment_count}"
+                f" · hash {'changed' if state.context_cache_changed else 'same'}",
             ),
             PanelItem(
                 "context-fragments",
@@ -176,10 +180,21 @@ def build_panels(
             ),
             PanelItem(
                 "context-memory",
-                f"memory · {len(memories)}",
-                f"{memory_tokens} tokens",
+                f"memory · {total_memories}",
+                f"hits {state.context_memory_hits}"
+                f" · {memory_tokens} tokens",
             ),
         )
+    if state.context_dropped_items:
+        dropped = state.context_dropped_items
+        preview = ", ".join(dropped[:3])
+        if len(dropped) > 3:
+            preview += f" … +{len(dropped) - 3}"
+        context_items += (PanelItem(
+            "context-dropped",
+            f"dropped · {len(dropped)}",
+            _compact(preview, 96),
+        ),)
     if state.microcompact_count:
         context_items += (PanelItem(
             "context-microcompact",
@@ -191,6 +206,9 @@ def build_panels(
             "context-compact",
             f"compact · generation {state.compact_generation}",
             f"{state.compact_source} · saved {state.compact_saved_tokens} tokens"
+            + (f" · watermarks {state.compact_high_watermark_tokens}/"
+               f"{state.compact_low_watermark_tokens}"
+               if state.compact_high_watermark_tokens else "")
             + (f" · {state.compact_checkpoint_id}"
                if state.compact_checkpoint_id else ""),
         ),)

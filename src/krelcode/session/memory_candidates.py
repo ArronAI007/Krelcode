@@ -20,7 +20,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Optional, Sequence
 
-from ..core.events import AgentEvent, RunFinished, RunStarted
+from ..core.events import (
+    AgentEvent,
+    MemoryCandidateObserved,
+    MemoryWritten,
+    RunFinished,
+    RunStarted,
+)
 from ..core.messages import Message
 from ..core.redact import SecretRedactor
 from .memory import (
@@ -870,7 +876,7 @@ class AutoMemoryCoordinator:
         self.mode = coerce_auto_memory_mode(mode)
         return self.mode
 
-    def on_event(self, event: AgentEvent) -> None:
+    async def on_event(self, event: AgentEvent) -> None:
         if isinstance(event, RunStarted):
             self._turn_input = event.user_input
             self._turn_id = event.turn_id
@@ -882,12 +888,30 @@ class AutoMemoryCoordinator:
             return
         history = tuple(getattr(self.loop, "history", ())[self._turn_start:])
         try:
-            self.process_turn(
+            report = self.process_turn(
                 self._turn_input,
                 history,
                 turn_id=event.turn_id or self._turn_id,
                 session_id=self._session_id,
             )
+            for candidate in report.extracted:
+                await self.loop.bus.emit(MemoryCandidateObserved(
+                    candidate_id=candidate.id,
+                    status=candidate.status.value,
+                    trigger=candidate.trigger.value,
+                    confidence=candidate.confidence,
+                    conflict_count=len(candidate.conflict_ids),
+                    digest=candidate.digest,
+                ))
+            for candidate in report.accepted:
+                await self.loop.bus.emit(MemoryWritten(
+                    memory_id=candidate.existing_memory_id or "",
+                    action="accepted",
+                    scope=MemoryScope.PROJECT.value,
+                    kind=MemoryKind.KNOWLEDGE.value,
+                    tokens=0,
+                    source="auto-memory:review",
+                ))
         except Exception as exc:  # Auto memory must never break the agent loop.
             self.log(f"[memory] 自动记忆提取失败: {type(exc).__name__}: {exc}")
 

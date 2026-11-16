@@ -13,14 +13,19 @@ from typing import Any, Dict, Mapping, Optional
 
 from ..core.events import (
     ApprovalRequested,
+    CompactCheckpointCreated,
     ContextAssembled,
     ContextCompressed,
+    ContextDropped,
     ContextMicrocompacted,
     ErrorOccurred,
     HookTriggered,
     LLMResponseReceived,
     LLMStreamDelta,
     LLMThinkingDelta,
+    MemoryCandidateObserved,
+    MemoryLoaded,
+    MemoryWritten,
     PermissionDenied,
     PlanUpdated,
     QueryPhaseChanged,
@@ -204,7 +209,64 @@ class StreamJsonEncoder:
             payload = {
                 "type": "context",
                 "subtype": "assembled",
+                "event": "context_assembled",
                 "snapshot": event.snapshot.as_record(),
+            }
+        elif isinstance(event, ContextDropped):
+            payload = {
+                "type": "context",
+                "subtype": "dropped",
+                "event": "context_dropped",
+                "items": list(event.items),
+                "reason": event.reason,
+            }
+        elif isinstance(event, MemoryLoaded):
+            payload = {
+                "type": "memory",
+                "subtype": "loaded",
+                "event": "memory_loaded",
+                "entry_ids": list(event.entry_ids),
+                "scope_counts": dict(event.scope_counts),
+                "tokens": event.tokens,
+                "source": event.source,
+            }
+        elif isinstance(event, MemoryCandidateObserved):
+            payload = {
+                "type": "memory",
+                "subtype": "candidate",
+                "event": "memory_candidate",
+                "candidate_id": event.candidate_id,
+                "status": event.status,
+                "trigger": event.trigger,
+                "confidence": event.confidence,
+                "conflict_count": event.conflict_count,
+                "digest": event.digest,
+            }
+        elif isinstance(event, MemoryWritten):
+            payload = {
+                "type": "memory",
+                "subtype": "written",
+                "event": "memory_written",
+                "memory_id": event.memory_id,
+                "action": event.action,
+                "scope": event.scope,
+                "kind": event.kind,
+                "tokens": event.tokens,
+                "source": event.source,
+            }
+        elif isinstance(event, CompactCheckpointCreated):
+            payload = {
+                "type": "compact",
+                "subtype": "checkpoint",
+                "event": "compact_checkpoint",
+                "checkpoint_id": event.checkpoint_id,
+                "generation": event.generation,
+                "before_tokens": event.before_tokens,
+                "after_tokens": event.after_tokens,
+                "summary_digest": event.summary_digest,
+                "strategy": event.strategy,
+                "trigger": event.trigger,
+                "source_savings": dict(event.source_savings),
             }
         elif isinstance(event, ContextMicrocompacted):
             payload = {

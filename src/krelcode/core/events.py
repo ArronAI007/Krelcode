@@ -188,6 +188,70 @@ class ContextAssembled(AgentEvent):
 
 
 @dataclass(frozen=True)
+class ContextDropped(AgentEvent):
+    """Budget or scope filtering omitted one or more context sources.
+
+    Only stable source identifiers and accounting metadata are exposed. The
+    omitted source bodies remain in the workspace-local stores.
+    """
+
+    items: Tuple[str, ...] = ()
+    reason: str = "budget"
+
+
+@dataclass(frozen=True)
+class MemoryLoaded(AgentEvent):
+    """Memory entries injected into one concrete model request.
+
+    Entry identities, scopes and token accounting are content-free. Memory
+    bodies stay inside the assembled prompt and are never copied into events.
+    """
+
+    entry_ids: Tuple[str, ...] = ()
+    scope_counts: Tuple[Tuple[str, int], ...] = ()
+    tokens: int = 0
+    source: str = "scoped_memory"
+
+
+@dataclass(frozen=True)
+class MemoryCandidateObserved(AgentEvent):
+    """Auto Memory produced or refreshed one review candidate."""
+
+    candidate_id: str
+    status: str = "pending"
+    trigger: str = ""
+    confidence: float = 0.0
+    conflict_count: int = 0
+    digest: str = ""
+
+
+@dataclass(frozen=True)
+class MemoryWritten(AgentEvent):
+    """A memory mutation completed; no memory body is included."""
+
+    memory_id: str = ""
+    action: str = "added"
+    scope: str = ""
+    kind: str = ""
+    tokens: int = 0
+    source: str = "manual"
+
+
+@dataclass(frozen=True)
+class CompactCheckpointCreated(AgentEvent):
+    """A pre-compact handoff checkpoint was persisted."""
+
+    checkpoint_id: str
+    generation: int = 0
+    before_tokens: int = 0
+    after_tokens: int = 0
+    summary_digest: str = ""
+    strategy: str = "structured_summary"
+    trigger: str = "manual"
+    source_savings: Tuple[Tuple[str, int], ...] = ()
+
+
+@dataclass(frozen=True)
 class UserSteered(AgentEvent):
     """运行中用户插话被注入历史（Step 26 steering）。"""
     text: str

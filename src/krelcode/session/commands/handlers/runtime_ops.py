@@ -7,6 +7,7 @@ import json
 import shlex
 
 from ....agent.context import build_workspace_context_bundle
+from ....agent.context_inspection import ContextInspectionService
 from ....agent.fragments import (
     GROUP_WORKSPACE,
     refresh_registry_snapshot,
@@ -588,6 +589,14 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
     operation = parts[0].lower() if parts else "stats"
     registry = getattr(ctx.loop, "prompt_registry", None)
 
+    if operation == "plan" and len(parts) == 1:
+        inspection = ContextInspectionService(ctx.loop)
+        return _ok(*inspection.plan_lines())
+
+    if operation == "why" and len(parts) == 2:
+        inspection = ContextInspectionService(ctx.loop)
+        return _ok(*inspection.why_lines(parts[1]))
+
     if operation == "refresh" and len(parts) == 1:
         options = getattr(ctx.loop, "context_options", None)
         rule_loader = getattr(ctx.loop, "rule_loader", None)
@@ -667,24 +676,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             f"  [sources] 已注册 {len(names)} 个 ContextSource: "
             f"{', '.join(names) if names else '(none)'}",
         ]
-        assembly = getattr(ctx.loop, "last_context_assembly", None)
-        if assembly is not None:
-            lines.append(
-                f"  最近装配: {len(assembly.layers)} layers"
-                f" · {assembly.source_count} 个 source 有贡献"
-                f" · {assembly.fragment_count} fragments"
-                f" · cache {assembly.stable_prefix_chars} chars")
-            for layer in assembly.layers:
-                lines.append(
-                    f"  [{layer.priority}] {layer.id} · {layer.source}"
-                    f" · {layer.category} · {layer.tokens} tokens"
-                    f" · {'cache-prefix' if layer.cacheable else 'dynamic'}")
-            if assembly.issues:
-                for issue in assembly.issues:
-                    lines.append(
-                        f"  [warn] {issue.source}: {issue.error}")
-        else:
-            lines.append("  （尚未产生请求，暂无最近装配结果）")
+        lines.extend(ContextInspectionService(ctx.loop).sources_lines())
         return _ok(*lines)
 
     if operation == "fragments":
@@ -741,43 +733,26 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         return _ok(*lines)
 
     if operation == "cache" and len(parts) == 1:
-        lines = []
+        lines = ContextInspectionService(ctx.loop).cache_lines()
         if registry is not None:
             snapshot = registry.snapshot()
             cache = snapshot.cache
-            lines.extend([
-                f"  [cache] stable prefix {cache.offset} chars"
+            lines[0:0] = [
+                f"  [cache] prompt stable prefix {cache.offset} chars"
                 f" · {cache.stable_tokens} tokens"
                 f" · generation {snapshot.generation}",
                 f"  stable fragments: {', '.join(cache.stable_fragments) or '(none)'}",
                 f"  volatile fragments: {', '.join(cache.volatile_fragments) or '(none)'}",
-                f"  stable hash: {cache.stable_hash}",
-                f"  full hash: {cache.full_hash}",
-            ])
-        else:
-            lines.append("  （Prompt Fragment Registry 未启用）")
-        request_snapshot = getattr(ctx.loop, "last_context_snapshot", None)
-        if request_snapshot is not None:
-            lines.extend([
-                f"  wire cache: {request_snapshot.cache_mode}"
-                f" · provider {request_snapshot.provider or '(unknown)'}"
-                f" · {request_snapshot.cache_segment_count} segments"
-                f" ({request_snapshot.cache_control_segment_count} explicit)",
-                f"  cacheable: tools {request_snapshot.tool_cacheable_tokens}"
-                f" · messages {request_snapshot.message_cacheable_tokens}",
-            ])
-            for segment in request_snapshot.cache_segments:
-                control = "cache_control" if segment.cache_control else "implicit"
-                lines.append(
-                    f"  [{segment.kind}] {segment.tokens} tokens"
-                    f" · {segment.chars} chars · {control}"
-                    f" · {segment.digest[:16] or '(none)'}")
+            ]
+        elif not lines:
+            lines = ["  （Prompt Fragment Registry 与请求缓存均未启用）"]
         return _ok(*lines)
 
     if operation != "stats" or parts:
         return _ok(
             "  用法: /context | /context fragments [source] | "
             "/context sources | /context rules | "
+            "/context plan | /context why <id> | "
             "/context enable|disable|toggle <id|source> | "
             "/context reset | /context cache | /context refresh")
 
@@ -854,6 +829,15 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         bundle = getattr(ctx.loop, "workspace_context", None)
         if bundle is not None and bundle.omitted:
             lines.append("  工作区未注入: " + ", ".join(bundle.omitted))
+        inspection = ContextInspectionService(ctx.loop)
+        memory_ids, memory_scopes, memory_tokens = inspection.memory_metadata()
+        scopes_text = " · ".join(
+            f"{scope} {count}" for scope, count in sorted(memory_scopes.items()))
+        lines.append(
+            f"  Memory 命中: {len(memory_ids)} 条"
+            f" · {memory_tokens or snapshot.memory_tokens} tokens"
+            f" · {scopes_text or '(none)'}")
+        lines.append(f"  cache hash changed: {inspection.cache_change_text()}")
         return _ok(*lines)
 
     total = estimate_history_tokens(ctx.loop.history)
@@ -912,12 +896,13 @@ async def handle_compact(ctx: CommandContext) -> CommandResult:
         parts = shlex.split(raw) if raw else []
     except ValueError as exc:
         return _ok(f"  [compact] 参数解析失败: {exc}")
-    if parts and parts[0].lower() != "preview":
-        return _ok("  用法: /compact | /compact preview [--auto]")
-    preview_mode = bool(parts)
-    auto_mode = bool(parts and "--auto" in parts[1:])
-    if preview_mode and any(part != "--auto" for part in parts[1:]):
-        return _ok("  用法: /compact preview [--auto]")
+    preview_mode = bool(parts and parts[0].lower() == "preview")
+    auto_mode = bool(parts and "--auto" in parts)
+    if preview_mode:
+        focus_parts = [part for part in parts[1:] if part != "--auto"]
+    else:
+        focus_parts = [part for part in parts if part != "--auto"]
+    focus = " ".join(focus_parts).strip()
     manager = ctx.loop.context_manager
     if preview_mode:
         preview = manager.preview_compact(
@@ -928,7 +913,7 @@ async def handle_compact(ctx: CommandContext) -> CommandResult:
         ])
 
     before = estimate_history_tokens(ctx.loop.history)
-    done = await ctx.loop.compress_context(force=True)
+    done = await ctx.loop.compress_context(force=True, focus=focus)
     after = estimate_history_tokens(ctx.loop.history)
     preview = getattr(manager, "last_compact_preview", None)
     details = (
@@ -936,7 +921,8 @@ async def handle_compact(ctx: CommandContext) -> CommandResult:
         if preview is not None else []
     )
     if done:
-        lines = [f"  [compact] 已压缩: {before} → {after} tokens"]
+        lines = [f"  [compact] 已压缩: {before} → {after} tokens"
+                 + (f" · focus={focus[:80]}" if focus else "")]
         checkpoint = getattr(ctx.loop, "last_compact_checkpoint", None)
         if checkpoint is not None:
             lines.append(f"  checkpoint: {checkpoint.id}")

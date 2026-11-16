@@ -492,6 +492,24 @@ def test_alt_enter_queues_next_prompt_and_runs_after_current_turn(tmp_path, caps
     assert Message.user("第二条独立消息") in loop.history
 
 
+def test_alt_enter_when_idle_keeps_queue_feedback_and_starts_prompt(
+    tmp_path, capsys,
+):
+    loop = make_loop_with(tmp_path, MockProvider(scripted=["空闲排队完成"]), tools=[])
+    inp = TimedInput([
+        (TerminalSubmission("立即发送的排队消息", queue_next=True), 0),
+        ("/exit", 0.2),
+    ])
+
+    rc = asyncio.run(run_repl(loop, input_fn=inp))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "下一条已排队" in out
+    assert "当前任务已结束，立即发送" in out
+    assert "⏺ 空闲排队完成" in out
+    assert Message.user("立即发送的排队消息") in loop.history
+
+
 class ApprovalRequiredTool:
     name = "approval_required"
     description = "测试审批桥"

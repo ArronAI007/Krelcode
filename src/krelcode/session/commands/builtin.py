@@ -112,19 +112,22 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
         CommandSpec(
             "memory", "查看或管理分层记忆",
             argument_hint=(
-                "[list|scopes|add|remove|pin|unpin|search|mode|review ...]"),
+                "[list [scope]|show|add|forget|pin|search|review|migrate ...]"),
             help=("查看 user/project/session 三层记忆；"
-                  "/memory add <scope> <text> 写入；/memory remove <id> 删除；\n"
+                  "/memory add <text> [--scope <scope>] 写入（兼容旧语法）；"
+                  "/memory forget <id> 删除；\n"
                   "/memory pin|unpin <id> 调整检索优先级；"
                   "/memory search <关键词> 搜索；\n"
                   "/memory mode [off|suggest|auto] 设置 Auto Memory；"
-                  "/memory review [accept|reject <id>] 审核候选知识。")),
+                  "/memory review [pending|accepted|rejected|all|accept|reject <id>]；"
+                  "/memory migrate [scope] 迁移旧格式并备份。")),
         CommandSpec(
             "context", "查看、启停或刷新上下文槽位",
-            argument_hint=("[sources|rules|fragments|enable|disable|toggle|"
-                           "reset|cache|refresh]"),
+            argument_hint=("[plan|why|sources|rules|fragments|enable|disable|"
+                           "toggle|reset|cache|refresh]"),
             help=("显示上下文统计与 Fragment 来源；/context sources 查看 "
                   "ContextSource 装配诊断；/context rules 查看分层规则与 @import；"
+                  "/context plan 查看最近请求计划；/context why <id> 解释来源；"
                   "/context fragments [source] 查看来源；\n"
                   "/context enable|disable|toggle <id|source> 手动启停；"
                   "/context reset 清除启停设置；/context cache 查看缓存边界；\n"
@@ -134,10 +137,11 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             help="导出 Markdown；路径以 .json 结尾时输出可 /resume 的 native 快照"),
         CommandSpec(
             "compact", "立即压缩历史",
-            argument_hint="[preview [--auto]]",
+            argument_hint="[preview [--auto] | <focus>]",
             help=("立即压缩对话历史（LLM 摘要，不必等预算超限）；\n"
                   "/compact preview 预览 compact 边界与待摘要消息；"
-                  "/compact preview --auto 仅在超预算时预览")),
+                  "/compact preview --auto 仅在超预算时预览；"
+                  "/compact <focus> 带重点生成交接摘要")),
         CommandSpec(
             "stop", "中止正在运行的任务", kind=control,
             available_during_run=True,

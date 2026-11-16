@@ -157,6 +157,7 @@ class PromptSnapshotContextSource:
         stable_chars = 0
         fragment_count = 0
         contributions = []
+        metadata: dict[str, object] = {}
         if snapshot is not None and text == snapshot.text:
             stable_chars = snapshot.cache.offset
             fragment_count = len(snapshot.fragments)
@@ -166,6 +167,18 @@ class PromptSnapshotContextSource:
                     category=_fragment_category(fragment),
                     tokens=fragment.tokens,
                 ))
+                if fragment.source == "memory" or fragment.id.startswith("memory:"):
+                    raw_ids = fragment.metadata.get("entry_ids", ())
+                    if isinstance(raw_ids, (list, tuple, set)):
+                        metadata["memory_entry_ids"] = [
+                            str(item) for item in raw_ids]
+                    raw_scopes = fragment.metadata.get("scopes", {})
+                    if isinstance(raw_scopes, dict):
+                        metadata["memory_scope_counts"] = {
+                            str(key): max(0, int(value))
+                            for key, value in raw_scopes.items()
+                        }
+                    metadata["memory_tokens"] = fragment.tokens
         else:
             contributions.append(ContextTokenContribution(
                 source="system",
@@ -181,7 +194,7 @@ class PromptSnapshotContextSource:
             cacheable=stable_chars > 0,
             stable_prefix_chars=stable_chars,
             compactable=False,
-            metadata={"fragment_count": fragment_count},
+            metadata={"fragment_count": fragment_count, **metadata},
             token_contributions=tuple(contributions),
         ),)
 

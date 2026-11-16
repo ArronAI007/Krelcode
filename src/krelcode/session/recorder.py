@@ -20,12 +20,17 @@ from typing import Any, Dict, List, Optional
 
 from ..core.events import (
     AgentEvent,
+    CompactCheckpointCreated,
     ContextAssembled,
     ContextCheckpointCreated,
     ContextCompressed,
+    ContextDropped,
     ContextMicrocompacted,
     EventBus,
     HookTriggered,
+    MemoryCandidateObserved,
+    MemoryLoaded,
+    MemoryWritten,
     PlanUpdated,
     PermissionDenied,
     RunCancelled,
@@ -200,6 +205,44 @@ class SessionRecorder:
                 "ts": ts,
                 **event.snapshot.as_record(),
             }
+        if isinstance(event, ContextDropped):
+            return {
+                "type": "context_dropped",
+                "ts": ts,
+                "items": list(event.items),
+                "reason": event.reason,
+            }
+        if isinstance(event, MemoryLoaded):
+            return {
+                "type": "memory_loaded",
+                "ts": ts,
+                "entry_ids": list(event.entry_ids),
+                "scope_counts": dict(event.scope_counts),
+                "tokens": event.tokens,
+                "source": event.source,
+            }
+        if isinstance(event, MemoryCandidateObserved):
+            return {
+                "type": "memory_candidate",
+                "ts": ts,
+                "candidate_id": event.candidate_id,
+                "status": event.status,
+                "trigger": event.trigger,
+                "confidence": event.confidence,
+                "conflict_count": event.conflict_count,
+                "digest": event.digest,
+            }
+        if isinstance(event, MemoryWritten):
+            return {
+                "type": "memory_written",
+                "ts": ts,
+                "memory_id": event.memory_id,
+                "action": event.action,
+                "scope": event.scope,
+                "kind": event.kind,
+                "tokens": event.tokens,
+                "source": event.source,
+            }
         if isinstance(event, ContextMicrocompacted):
             return {
                 "type": "context_microcompacted", "ts": ts,
@@ -225,6 +268,19 @@ class SessionRecorder:
                 "low_watermark_tokens": event.low_watermark_tokens,
                 "source_savings": dict(event.source_savings),
                 "checkpoint_id": event.checkpoint_id,
+            }
+        if isinstance(event, CompactCheckpointCreated):
+            return {
+                "type": "compact_checkpoint",
+                "ts": ts,
+                "checkpoint_id": event.checkpoint_id,
+                "generation": event.generation,
+                "before_tokens": event.before_tokens,
+                "after_tokens": event.after_tokens,
+                "summary_digest": event.summary_digest,
+                "strategy": event.strategy,
+                "trigger": event.trigger,
+                "source_savings": dict(event.source_savings),
             }
         if isinstance(event, ContextCheckpointCreated):
             return {

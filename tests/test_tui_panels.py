@@ -218,3 +218,52 @@ def test_panel_layout_scrolls_to_keyboard_selection():
     rendered = "\n".join(layout.lines)
     assert "task-7" in rendered
     assert "8/8" in rendered
+
+
+def test_context_panel_explains_memory_hits_drops_watermarks_and_cache_change():
+    from krelcode.core.context_usage import ContextUsageSnapshot
+
+    state = SessionViewState()
+    state.context_snapshot = ContextUsageSnapshot(
+        turn_id="turn-93",
+        step=2,
+        estimated_input_tokens=700,
+        budget_tokens=1000,
+        system_tokens=100,
+        workspace_tokens=80,
+        memory_tokens=40,
+        history_tokens=400,
+        runtime_tokens=50,
+        overhead_tokens=30,
+        stable_tokens=200,
+        volatile_tokens=500,
+        stable_hash="stable-new",
+        full_hash="full-93",
+        source_count=4,
+        fragment_count=5,
+    )
+    state.context_memory_hits = 2
+    state.context_dropped_items = ("workspace:dist", "workspace:vendor")
+    state.context_cache_changed = True
+    state.compact_generation = 2
+    state.compact_source = "model"
+    state.compact_saved_tokens = 300
+    state.compact_high_watermark_tokens = 900
+    state.compact_low_watermark_tokens = 500
+    state.compact_checkpoint_id = "000002-checkpoint"
+
+    panels = build_panels(
+        state,
+        permission_mode="default",
+        memory_entries=(),
+        memory_total=7,
+        memory_tokens=40,
+    )
+    by_id = {panel.id: panel for panel in panels}
+    context = " ".join(
+        f"{item.label} {item.detail}" for item in by_id["context"].items)
+    assert "dropped · 2" in context
+    assert "hits 2" in context
+    assert "hash changed" in context
+    assert "watermarks 900/500" in context
+    assert "memory · 7" in context

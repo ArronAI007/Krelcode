@@ -433,6 +433,7 @@ class ContextManager:
         model_context_window: Optional[int] = None,
         microcompact: bool = True,
         current_turn_id: str = "",
+        focus: str = "",
     ) -> bool:
         """Apply microcompaction and, at a turn boundary, Structured Compact v2.
 
@@ -507,6 +508,7 @@ class ContextManager:
             middle,
             previous=previous,
             compacted_messages=compacted_messages,
+            focus=focus,
         )
         history[head_count:cut] = [Message(
             role="user",
@@ -555,6 +557,7 @@ class ContextManager:
         *,
         previous: Optional[CompactSummary],
         compacted_messages: int,
+        focus: str = "",
     ) -> CompactSummary:
         rendered = render_messages(middle)
         snapshot = None
@@ -570,7 +573,8 @@ class ContextManager:
         prompt = (
             "<previous_summary>" + previous_json + "</previous_summary>\n"
             "<working_context>" + working_text + "</working_context>\n"
-            "<conversation_to_compact>\n" + rendered
+            + (f"<focus>{str(focus).strip()}</focus>\n" if str(focus).strip() else "")
+            + "<conversation_to_compact>\n" + rendered
             + "\n</conversation_to_compact>"
         )
         model_summary: Optional[CompactSummary] = None
