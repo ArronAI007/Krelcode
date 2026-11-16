@@ -590,8 +590,9 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
 
     if operation == "refresh" and len(parts) == 1:
         options = getattr(ctx.loop, "context_options", None)
+        rule_loader = getattr(ctx.loop, "rule_loader", None)
         bundle = await build_workspace_context_bundle(
-            ctx.workspace_root, options=options)
+            ctx.workspace_root, options=options, rule_loader=rule_loader)
         ctx.loop.workspace_context = bundle
         manager = ctx.skills or getattr(ctx.loop, "skill_manager", None)
         if registry is not None:
@@ -624,6 +625,38 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             "  [context] 工作区上下文已刷新",
             *[f"  {line}" for line in bundle.summary_lines()],
         )
+
+    if operation == "rules" and len(parts) == 1:
+        loader = getattr(ctx.loop, "rule_loader", None)
+        base = getattr(getattr(ctx.loop, "workspace_context", None),
+                       "rule_bundle", None)
+        if base is None and loader is not None:
+            base = loader.load_base()
+        directory_source = getattr(ctx.loop, "directory_rule_source", None)
+        directory = getattr(directory_source, "last_bundle", None)
+        bundles = [bundle for bundle in (base, directory) if bundle is not None]
+        if not bundles:
+            return _ok("  [rules] 规则加载未启用")
+        source_count = sum(len(bundle.sources) for bundle in bundles)
+        import_count = sum(bundle.import_count for bundle in bundles)
+        issue_count = sum(len(bundle.issues) for bundle in bundles)
+        lines = [
+            f"  [rules] source {source_count} 个 · import {import_count} 个"
+            f" · issue {issue_count} 个",
+        ]
+        for bundle in bundles:
+            for source in bundle.sources:
+                imported = (
+                    f" · import←{source.imported_by.name}"
+                    if source.imported_by else ""
+                )
+                lines.append(
+                    f"  {source.scope.value:9} {source.display_path}"
+                    f" · {source.chars} chars{imported}")
+            for issue in bundle.issues:
+                lines.append(
+                    f"  [warn] {issue.code} · {issue.path} · {issue.message}")
+        return _ok(*lines)
 
     if operation == "sources":
         assembler = getattr(ctx.loop, "context_assembler", None)
@@ -726,7 +759,8 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
     if operation != "stats" or parts:
         return _ok(
             "  用法: /context | /context fragments [source] | "
-            "/context sources | /context enable|disable|toggle <id|source> | "
+            "/context sources | /context rules | "
+            "/context enable|disable|toggle <id|source> | "
             "/context reset | /context cache | /context refresh")
 
     snapshot = getattr(ctx.loop, "last_context_snapshot", None)

@@ -5,12 +5,12 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（v0.76.0 / Step 86）
+## 1. 项目统计（v0.77.0 / Step 87）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 29,944 行（Python，**零第三方运行时依赖**） |
-| 测试 | 20,443 行 / 104 个测试文件 / 1,043 个用例（离线 1,041 + 本地端口集成 2，提权环境 1,043/1,043 全绿） |
+| 源码 | 30,697 行（Python，**零第三方运行时依赖**） |
+| 测试 | 21,065 行 / 105 个测试文件 / 1,056 个用例（离线 1,054 + 本地端口集成 2，提权环境 1,056/1,056 全绿） |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 16（含 ask_user/update_plan + 4 个后台 Job 工具）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
@@ -20,7 +20,7 @@
 源码按层分布：
 
 ```
-session 6928 · agent 3759 · ui 3677 · tools 2813 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2400
+session 6966 · agent 4412 · ui 3677 · tools 2813 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2400
 safety 2287 · llm 1806 · subagent 1714 · mcp 1652 · skills 949 · core 748
 jobs 582 · plugins 435 · entrypoints 194
 ```
@@ -65,6 +65,7 @@ core 只有 748 行——内核保持极小、能力在边缘，正是当初对�
 | v0.74 | 请求级 Context 观测 | token 分项、预算、cache 边界与 hash 从真实 provider-bound 请求派生；精简快照贯通 UI/JSONL/stream-json/SDK，且不包含 Prompt 正文 |
 | v0.75 | Context assembly 边界 | 临时 system context 不再由 AgentLoop 手拼，统一经 ContextSource/ContextAssembler；分类/priority/注册顺序确定结果，单个可选来源失败只留下异常类型诊断，不让整轮请求失效 |
 | v0.76 | Memory 分层作用域 | 记忆从单文件项目笔记升级为 user/project/session 三作用域结构化记录；文件位置决定 scope，旧 JSONL 原位兼容，session 生命周期跟随 setup/fork/resume，注入预算优先更具体作用域 |
+| v0.77 | 规则分层与按需加载 | user/project 规则进入稳定前缀，目录规则只按当前轮目标路径加载，避免 monorepo 全树扫描；@import 从提示词拼接中独立为有来源、有预算、可诊断的安全解析器，拒绝逃逸/敏感文件/循环，并明确规则与 Memory 的职责边界 |
 
 ## 3. 文件导览（能力 → 位置）
 

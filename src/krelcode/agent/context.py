@@ -18,11 +18,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from ..tools.fsutils import is_hidden_file, is_pruned_dir, truncate_middle
+from .rules import (
+    DEFAULT_IMPORT_MAX_DEPTH,
+    DEFAULT_IMPORT_MAX_FILES,
+    DEFAULT_RULES_MAX_CHARS,
+    RuleBundle,
+    RuleLimits,
+    RuleLoader,
+)
 from .tokens import estimate_text_tokens
 
 TREE_MAX_DEPTH = 3
 TREE_MAX_ENTRIES = 150
-AGENTS_MD_MAX_CHARS = 8_000
+AGENTS_MD_MAX_CHARS = DEFAULT_RULES_MAX_CHARS
 GIT_STATUS_MAX_CHARS = 2_000
 DEFAULT_CONTEXT_MAX_TOKENS = 6_000
 MIN_SECTION_TOKENS = 24
@@ -42,6 +50,10 @@ class ContextOptions:
     tree_max_depth: int = TREE_MAX_DEPTH
     tree_max_entries: int = TREE_MAX_ENTRIES
     rules_max_chars: int = AGENTS_MD_MAX_CHARS
+    include_directory_rules: bool = True
+    rules_imports: bool = True
+    rules_import_max_depth: int = DEFAULT_IMPORT_MAX_DEPTH
+    rules_import_max_files: int = DEFAULT_IMPORT_MAX_FILES
 
     @classmethod
     def from_config(cls, value: Optional[Dict[str, Any]]) -> "ContextOptions":
@@ -67,6 +79,20 @@ class ContextOptions:
                 "tree_max_entries", TREE_MAX_ENTRIES, 10, 5_000),
             rules_max_chars=positive_int(
                 "rules_max_chars", AGENTS_MD_MAX_CHARS, 256, 100_000),
+            include_directory_rules=bool(
+                value.get("include_directory_rules", True)),
+            rules_imports=bool(value.get("rules_imports", True)),
+            rules_import_max_depth=positive_int(
+                "rules_import_max_depth", DEFAULT_IMPORT_MAX_DEPTH, 0, 12),
+            rules_import_max_files=positive_int(
+                "rules_import_max_files", DEFAULT_IMPORT_MAX_FILES, 0, 128),
+        )
+
+    def rule_limits(self) -> RuleLimits:
+        return RuleLimits(
+            max_chars=self.rules_max_chars,
+            import_max_depth=self.rules_import_max_depth,
+            import_max_files=self.rules_import_max_files,
         )
 
 
@@ -90,6 +116,7 @@ class WorkspaceContext:
     max_tokens: int
     total_tokens: int
     omitted: tuple[str, ...] = ()
+    rule_bundle: Optional[RuleBundle] = None
 
     def summary_lines(self) -> List[str]:
         lines = [
@@ -98,6 +125,8 @@ class WorkspaceContext:
         ]
         for section in self.sections:
             lines.append(f"{section.name}: {section.tokens} tokens")
+        if self.rule_bundle is not None and self.rule_bundle.issues:
+            lines.append(f"规则问题: {len(self.rule_bundle.issues)} 个")
         if self.omitted:
             lines.append("未注入: " + ", ".join(self.omitted))
         return lines
@@ -157,38 +186,22 @@ def read_agents_md(
     home: Optional[Path] = None,
     *,
     max_chars: int = AGENTS_MD_MAX_CHARS,
+    imports: bool = True,
+    import_max_depth: int = DEFAULT_IMPORT_MAX_DEPTH,
+    import_max_files: int = DEFAULT_IMPORT_MAX_FILES,
 ) -> str:
-    """全局 ~/.krelcode/AGENTS.md + 项目级规则；项目规则在后、优先级更高。"""
-    home_dir = Path.home() if home is None else Path(home)
-    sections: List[str] = []
-
-    global_path = home_dir / GLOBAL_RULES_RELPATH
-    global_text = _read_capped(global_path, max_chars)
-    if global_text:
-        sections.append(
-            f"全局规则（来自 ~/.krelcode/AGENTS.md，务必遵守）:\n{global_text}")
-
-    for name in AGENTS_MD_NAMES:
-        project_path = root / name
-        try:
-            if not project_path.resolve().is_relative_to(root.resolve()):
-                continue
-        except OSError:
-            continue
-        project_text = _read_capped(project_path, max_chars)
-        if project_text:
-            sections.append(f"项目规则（来自 {name}，务必遵守）:\n{project_text}")
-            break
-    return "\n\n".join(sections)
-
-
-def _read_capped(path: Path, max_chars: int) -> str:
-    if not path.is_file():
-        return ""
-    try:
-        return path.read_text(encoding="utf-8", errors="ignore")[:max_chars]
-    except OSError:
-        return ""
+    """全局 + 项目规则；保留字符串接口供既有调用方使用。"""
+    bundle = RuleLoader(
+        root,
+        home=home,
+        limits=RuleLimits(
+            max_chars=max_chars,
+            import_max_depth=import_max_depth,
+            import_max_files=import_max_files,
+        ),
+        imports_enabled=imports,
+    ).load_base()
+    return bundle.content
 
 
 # ---------------------------------------------------------------------------
@@ -234,19 +247,29 @@ async def build_workspace_context_bundle(
     *,
     options: Optional[ContextOptions] = None,
     extra_sections: Sequence[ContextSection] = (),
+    rule_loader: Optional[RuleLoader] = None,
 ) -> WorkspaceContext:
     """收集、排序并在统一 token 预算内装配工作区上下文。"""
     root = Path(root).resolve()
     opts = options or ContextOptions()
     sections: List[ContextSection] = list(extra_sections)
+    rule_bundle: Optional[RuleBundle] = None
 
     if opts.include_rules:
-        rules = read_agents_md(
-            root, home=home, max_chars=opts.rules_max_chars)
-        if rules:
+        loader = rule_loader or RuleLoader(
+            root,
+            home=home,
+            limits=opts.rule_limits(),
+            imports_enabled=opts.rules_imports,
+        )
+        rule_bundle = loader.load_base()
+        if rule_bundle.content:
+            sources = ", ".join(
+                source.display_path for source in rule_bundle.sources
+                if not source.imported)
             sections.append(ContextSection(
-                name="rules", content=rules, priority=10,
-                source="AGENTS.md/KRELCODE.md"))
+                name="rules", content=rule_bundle.content, priority=10,
+                source=sources or "AGENTS.md/KRELCODE.md"))
 
     if opts.include_git:
         git_part = await git_snapshot(root)
@@ -280,6 +303,7 @@ async def build_workspace_context_bundle(
         max_tokens=opts.max_tokens,
         total_tokens=estimate_text_tokens(text),
         omitted=tuple(omitted),
+        rule_bundle=rule_bundle,
     )
 
 

@@ -23,7 +23,10 @@ from .agent.context import (
 )
 from .agent.loop import DEFAULT_MAX_STEPS, AgentLoop
 from .agent.context_assembler import ContextAssembler
-from .agent.context_source import default_context_sources
+from .agent.context_source import (
+    DirectoryRulesContextSource,
+    default_context_sources,
+)
 from .agent.fragments import (
     GROUP_WORKSPACE,
     PromptFragmentRegistry,
@@ -32,6 +35,7 @@ from .agent.fragments import (
     skills_fragment,
     workspace_fragments,
 )
+from .agent.rules import RuleLoader
 from .agent.runtime import AgentRuntime
 from .agent.usage import UsageTracker
 from .config import load_config
@@ -302,10 +306,26 @@ async def build_loop(
     """
     workspace_root = Path(args.workspace).resolve()
     context_options = ContextOptions.from_config(config.get("context"))
+    rule_loader = RuleLoader(
+        workspace_root,
+        limits=context_options.rule_limits(),
+        imports_enabled=context_options.rules_imports,
+    )
     workspace_context = None
     if not args.no_context:
         workspace_context = await build_workspace_context_bundle(
-            workspace_root, options=context_options)
+            workspace_root, options=context_options, rule_loader=rule_loader)
+        if workspace_context.rule_bundle is not None:
+            rule_bundle = workspace_context.rule_bundle
+            if rule_bundle.content:
+                log(
+                    f"[rules] 已加载 {rule_bundle.entry_count} 个入口"
+                    f" / {rule_bundle.import_count} 个导入"
+                    f"（{rule_bundle.chars} chars）")
+            for issue in rule_bundle.issues:
+                log(
+                    f"[rules] 跳过 {issue.code}: {issue.path}: "
+                    f"{issue.message}")
     bus = EventBus()
     llm = build_llm(args, config, log=log)
     skill_manager = build_skill_manager(args, config)
@@ -402,7 +422,19 @@ async def build_loop(
     if memory_fragment is not None:
         prompt_registry.register(memory_fragment)
     prompt_snapshot = prompt_registry.snapshot()
-    context_assembler = ContextAssembler(default_context_sources())
+    directory_rules_enabled = (
+        not args.no_context
+        and context_options.include_rules
+        and context_options.include_directory_rules
+    )
+    context_sources = default_context_sources(
+        rule_loader if directory_rules_enabled else None)
+    context_assembler = ContextAssembler(context_sources)
+    directory_rule_source = next(
+        (source for source in context_sources
+         if isinstance(source, DirectoryRulesContextSource)),
+        None,
+    )
     loop = AgentLoop(
         llm=llm,
         registry=registry,
@@ -425,6 +457,8 @@ async def build_loop(
     loop.context_options = context_options
     loop.context_enabled = not args.no_context
     loop.workspace_context = workspace_context
+    loop.rule_loader = rule_loader
+    loop.directory_rule_source = directory_rule_source
     loop.memory_store = memory_store
     apply_prompt_snapshot(loop, prompt_snapshot)
 

@@ -900,6 +900,7 @@ AgentLoop._llm_turn(step)
 | Source | 产生内容 | 分类 |
 |--------|----------|------|
 | `prompt` | PromptSnapshot 的完整文本，按 Fragment 保留 token attribution；无 snapshot 时回退 system message | system |
+| `directory_rules` | 当前轮目标路径祖先目录中的 AGENTS.md/KRELCODE.md，按需读取并展开 @import | workspace |
 | `tool_directory` | 本轮动态工具目录，不含完整 JSON Schema | runtime |
 | `turn_intent` | 高置信度“仅解释指定文件”等轮级约束 | runtime |
 | `runtime_hooks` | SessionStart/Compact 等 Hook 注入内容 | runtime |
@@ -956,6 +957,43 @@ MemoryEntry
   `/memory add <scope> <text>` 写入；`/memory remove <id>` 删除。
 - TUI Memory 面板展示 scope 与创建时间；命令和快捷写入后统一调用
   `sync_memory_fragment()`，下一次模型 Step 通过 ContextAssembler 看到新快照。
+
+## 分层规则、目录规则与 @import（Step 87）
+
+规则加载从 `context.py` 内部的简单文件拼接拆到独立 `agent/rules.py`，并把规则内容
+与 Memory 明确分离：规则是持久行为约束，Memory 是任务事实/偏好记录。
+
+```text
+Rule precedence (broad → specific)
+user       ~/.krelcode/AGENTS.md
+project    <workspace>/AGENTS.md | KRELCODE.md
+directory  <target ancestor>/AGENTS.md | KRELCODE.md
+
+RuleLoader
+  ├─ discover: 每个目标路径只检查 workspace 内祖先目录
+  ├─ select:   每个目录 AGENTS.md 优先，其次 KRELCODE.md
+  ├─ expand:   独立行 @relative/path，递归、按出现位置内联
+  ├─ guard:    scope escape / sensitive files / cycles / duplicates
+  ├─ bounds:   depth + file count + total character budget
+  └─ RuleBundle { content, sources, issues, targets, truncated }
+```
+
+- `user` 与 `project` 入口在一次会话的稳定 PromptSnapshot 中；`directory` 由独立的
+  `DirectoryRulesContextSource` 在每个模型 Step 前按当前轮路径收集，因此不会扫描整个
+  仓库，也不会把无关子树规则带进上下文。规则层按 `user → project → directory` 渲染，
+  更具体的规则靠后，表达覆盖优先级。
+- 路径来源包括高置信度 `TurnIntent.target_files`、当前用户消息中的显式路径/附件，以及
+  当前轮已经产生的工具参数（`path/file_path/cwd/...`）。即使目标文件尚不存在，也会从
+  最近的已存在父目录开始检查规则。
+- `@import` 只识别 Markdown 中独占一行的 `@path`，围栏代码内的示例保持原文，避免“文档
+  展示导入语法”本身触发读取。相对路径基于导入文件目录；user 规则只能导入
+  `~/.krelcode/` 内文件，project/directory 只能导入 workspace 内文件。
+- 导入使用现有安全文本读取与路径 resolve；拒绝符号链接逃逸、硬链接/非普通文件、敏感
+  文件、URL、循环和重复导入。单个规则文件最多 256KB，默认最多 5 层/32 个导入，
+  展开后统一受 `rules_max_chars` 限制。所有失败转为不含正文的 `RuleIssue`。
+- `RuleBundle` 同时供 `ContextSection.metadata`、`/context refresh` 和诊断命令复用。
+  `/context rules` 只展示路径、scope、字符数、导入关系与 issue，不输出规则正文。
+  `/context sources` 可看到动态 `workspace:directory-rules` layer 及其 token attribution。
 
 ## 统一输入处理管线（Step 67）
 

@@ -73,6 +73,7 @@ krelcode [子命令] [选项]
 | `/cost` | token 用量（本轮+累计）与估算成本 $ |
 | `/context` | 上下文统计、Fragment 来源/稳定性摘要与 cache 边界 |
 | `/context sources` | 查看已注册 ContextSource、最近装配 layer 顺序、来源 token、cache 属性与有界错误诊断 |
+| `/context rules` | 查看 user/project/directory 规则入口、@import 来源、字符数与越界/循环/敏感文件问题 |
 | `/context fragments [source]` | 列出全部或指定来源的 Fragment、启停状态、group、tokens 与 cache 属性 |
 | `/context enable\|disable\|toggle <id\|source>` | 手动启停单个 Fragment 或整个来源；精确 id 设置优先于 source 设置 |
 | `/context reset` | 清除当前会话的全部手动启停设置 |
@@ -119,6 +120,12 @@ Fragment 启停是**当前会话运行时状态**，不写入 TOML；重启后�
 内置来源为 `core`（不可关闭的基础 system prompt）、`skills`（可用 Skill 索引）以及
 `workspace:rules|git|tree`。cacheable Fragment 会形成连续的稳定前缀；只有真正位于
 第一个动态 Fragment 之前的稳定内容会报告为 cache boundary。
+
+规则层级为 `user (~/.krelcode/AGENTS.md) → project (根目录 AGENTS.md/KRELCODE.md) →
+directory (当前轮目标路径的祖先目录规则)`。每个目录优先使用 `AGENTS.md`，其次
+`KRELCODE.md`；子目录规则按需加载，非递归扫描。规则文件中的独立一行
+`@相对路径` 会递归展开，代码围栏中的示例不会展开；导入仅允许当前作用域内普通
+UTF-8 文件，并受深度、文件数、字符预算、循环/重复与敏感路径保护。
 
 **权限快捷键**：`Shift-Tab` 按 `default → plan → read-only → auto-approve`
 循环切换，状态栏实时显示当前模式；切换会同步更新当前 turn 的策略快照和下一轮
@@ -183,12 +190,16 @@ paths = ["./team-plugins", "/opt/shared-plugins"] # 额外目录，可相对工�
 
 [context]                            # 启动时工作区上下文（Context v2）
 max_tokens = 6000                    # rules + git + tree 的统一 token 预算
-include_rules = true                 # ~/.krelcode/AGENTS.md + 项目规则
+include_rules = true                 # ~/.krelcode/AGENTS.md + 项目根规则
 include_git = true                   # 分支与 porcelain 状态
 include_tree = true                  # 剪枝后的目录树
 tree_max_depth = 3
 tree_max_entries = 150
-rules_max_chars = 8000
+rules_max_chars = 8000               # 入口 + @import 展开后的统一字符预算
+include_directory_rules = true       # 按当前轮目标路径加载祖先目录规则
+rules_imports = true                 # 展开独立行 @相对路径
+rules_import_max_depth = 5
+rules_import_max_files = 32
 
 [mcp_servers.fetch]                  # stdio 传输
 command = "uvx"

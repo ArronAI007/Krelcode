@@ -13,6 +13,7 @@ from .fragments import (
     PromptSnapshot,
 )
 from .intent import TurnIntent
+from .rules import RuleBundle, RuleLoader, extract_rule_targets
 from .tokens import estimate_text_tokens
 from .tool_pool import TurnToolPool
 
@@ -253,13 +254,62 @@ class RuntimeHookContextSource:
         return tuple(layers)
 
 
-def default_context_sources() -> Tuple[ContextSource, ...]:
-    return (
-        PromptSnapshotContextSource(),
+
+class DirectoryRulesContextSource:
+    """Load nested AGENTS.md/KRELCODE.md rules only for current-turn targets."""
+
+    name = "directory_rules"
+
+    def __init__(self, loader: RuleLoader) -> None:
+        self.loader = loader
+        self.last_bundle = RuleBundle(content="")
+
+    def collect(self, request: ContextRequest) -> Sequence[ContextLayer]:
+        targets = extract_rule_targets(
+            request.workspace_root,
+            intent=request.intent,
+            history=request.history,
+        )
+        bundle = self.loader.load_directory(targets)
+        self.last_bundle = bundle
+        if not bundle.content:
+            return ()
+        content = bundle.content
+        sources = tuple(
+            source.display_path for source in bundle.sources if not source.imported)
+        return (ContextLayer(
+            id="workspace:directory-rules",
+            source=self.name,
+            category=CATEGORY_WORKSPACE,
+            content=content,
+            priority=15,
+            cacheable=False,
+            compactable=True,
+            metadata={
+                "rule_files": sources,
+                "rule_import_count": bundle.import_count,
+                "rule_issue_count": len(bundle.issues),
+                "rule_targets": tuple(str(path) for path in targets),
+                "truncated": bundle.truncated,
+            },
+            token_contributions=(ContextTokenContribution(
+                "workspace:directory-rules", CATEGORY_WORKSPACE,
+                estimate_text_tokens(content)),),
+        ),)
+
+
+def default_context_sources(
+    rule_loader: Optional[RuleLoader] = None,
+) -> Tuple[ContextSource, ...]:
+    sources: list[ContextSource] = [PromptSnapshotContextSource()]
+    if rule_loader is not None:
+        sources.append(DirectoryRulesContextSource(rule_loader))
+    sources.extend((
         ToolDirectoryContextSource(),
         TurnIntentContextSource(),
         RuntimeHookContextSource(),
-    )
+    ))
+    return tuple(sources)
 
 
 def _fragment_category(fragment) -> str:

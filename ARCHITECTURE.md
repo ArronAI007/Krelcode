@@ -60,7 +60,7 @@ while steps < max_steps:
 ## 4. 上下文管理
 
 - token 估算（chars/4 粗估或 tiktoken），接近预算时压缩旧对话为摘要
-- 项目上下文自动注入：AGENTS.md、git 分支/diff 状态、目录结构
+- 项目上下文自动注入：user/project 分层 AGENTS.md、按需目录规则与安全 @import、git 分支/diff 状态、目录结构
 - 分层记忆：user 跨工作区、project 跟随仓库、session 跟随会话；结构化记录经统一边界脱敏并作为动态 Fragment 注入
 - 请求级装配：PromptSnapshot、工具目录、Turn Intent、Hooks 经 ContextSource 收集，ContextAssembler 统一排序、隔离异常、计算 cache 边界并生成 provider-bound system message
 - Aider 的 repo-map：用 tree-sitter 生成代码符号地图，低成本让模型了解全仓库

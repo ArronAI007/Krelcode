@@ -56,6 +56,10 @@ api_key_env = "GEMINI_API_KEY"
 # tree_max_depth = 3
 # tree_max_entries = 150
 # rules_max_chars = 8000
+# include_directory_rules = true     # 按当前请求涉及的路径加载祖先目录规则
+# rules_imports = true               # 展开独立行 @相对路径
+# rules_import_max_depth = 5
+# rules_import_max_files = 32
 
 # ---- MCP 服务器（stdio 或 Streamable HTTP）----
 # [mcp_servers.fetch]
@@ -80,7 +84,9 @@ api_key_env = "GEMINI_API_KEY"
 AGENTS_TEMPLATE = '''# 项目规则
 
 > 本文件会随工作区上下文自动注入 agent 的 system prompt（分层规则：
-> 全局 ~/.krelcode/AGENTS.md + 本项目文件）。请写"agent 必须知道"的约定。
+> 全局 ~/.krelcode/AGENTS.md -> 项目根 AGENTS.md -> 目标目录 AGENTS.md）。
+> 子目录规则只在当前任务涉及该目录时加载；独立一行 `@相对路径` 可导入其他
+> Markdown 规则文件。请写"agent 必须知道"的约定。
 
 ## 代码规范
 - （示例）注释与提交信息使用中文

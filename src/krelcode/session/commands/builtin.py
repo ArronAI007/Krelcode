@@ -118,10 +118,11 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
                   "/memory remove <id> 删除。scope 可为 user/project/session。")),
         CommandSpec(
             "context", "查看、启停或刷新上下文槽位",
-            argument_hint=("[sources|fragments|enable|disable|toggle|reset|"
-                           "cache|refresh]"),
+            argument_hint=("[sources|rules|fragments|enable|disable|toggle|"
+                           "reset|cache|refresh]"),
             help=("显示上下文统计与 Fragment 来源；/context sources 查看 "
-                  "ContextSource 装配诊断；/context fragments [source] 查看来源；\n"
+                  "ContextSource 装配诊断；/context rules 查看分层规则与 @import；"
+                  "/context fragments [source] 查看来源；\n"
                   "/context enable|disable|toggle <id|source> 手动启停；"
                   "/context reset 清除启停设置；/context cache 查看缓存边界；\n"
                   "/context refresh 重新采集工作区上下文")),
