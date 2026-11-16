@@ -19,6 +19,7 @@ from typing import Any, Callable, Optional, Protocol, Sequence
 from ..agent.query import QuerySession
 from ..core.events import AgentEvent
 from .controller import SessionController
+from .interactions import InputResolution, UserInputBroker
 from .prompt_queue import PromptQueue
 from .state import SessionEventReducer, SessionViewState
 
@@ -37,6 +38,7 @@ class ApprovalBrokerPort(Protocol):
 EventSink = Callable[[AgentEvent], None]
 StatusSink = Callable[[SessionViewState], None]
 ApprovalSink = Callable[[Any], None]
+UserInputSink = Callable[[Any], None]
 NoticeSink = Callable[[str], None]
 VoidCallback = Callable[[], None]
 
@@ -79,17 +81,21 @@ class ReplSessionRunner:
         on_event: EventSink,
         on_status: Optional[StatusSink] = None,
         on_approval: Optional[ApprovalSink] = None,
+        on_user_input: Optional[UserInputSink] = None,
         on_notice: Optional[NoticeSink] = None,
         on_stream_end: Optional[VoidCallback] = None,
         approval_broker: Optional[ApprovalBrokerPort] = None,
+        input_broker: Optional[UserInputBroker] = None,
         reducer: Optional[SessionEventReducer] = None,
     ) -> None:
         self.controller = controller
         self.state = state
         self.approval_broker = approval_broker
+        self.input_broker = input_broker
         self._on_event = on_event
         self._on_status = on_status or (lambda _state: None)
         self._on_approval = on_approval or (lambda _request: None)
+        self._on_user_input = on_user_input or (lambda _request: None)
         self._on_notice = on_notice or (lambda _message: None)
         self._on_stream_end = on_stream_end or (lambda: None)
         self._reducer = reducer or SessionEventReducer()
@@ -99,7 +105,9 @@ class ReplSessionRunner:
         self.active_prompt: Optional[SessionPrompt] = None
         self.consumer_task: Optional[asyncio.Task] = None
         self.approval_task: Optional[asyncio.Task] = None
+        self.input_task: Optional[asyncio.Task] = None
         self.pending_approval: Optional[Any] = None
+        self.pending_input: Optional[Any] = None
 
     @property
     def is_running(self) -> bool:
@@ -108,6 +116,14 @@ class ReplSessionRunner:
     @property
     def pending(self) -> Optional[Any]:
         return self.pending_approval
+
+    @property
+    def has_pending_input(self) -> bool:
+        """broker watcher 或 reducer 任一先看到请求，都可开始消费回答。"""
+        return (
+            self.pending_input is not None
+            or self.state.awaiting_user_input
+        )
 
     def wait_tasks(self) -> set[asyncio.Task]:
         """返回前台循环应等待的任务集合。"""
@@ -118,6 +134,8 @@ class ReplSessionRunner:
             tasks.add(self.consumer_task)
         if self.approval_task is not None:
             tasks.add(self.approval_task)
+        if self.input_task is not None:
+            tasks.add(self.input_task)
         return tasks
 
     def arm_approval_watcher(self) -> Optional[asyncio.Task]:
@@ -131,9 +149,35 @@ class ReplSessionRunner:
             self.approval_broker.next_request())
         return self.approval_task
 
+    def arm_input_watcher(self) -> Optional[asyncio.Task]:
+        """没有待展示输入时，常驻等待 broker 的下一个请求。"""
+        if self.input_broker is None or self.pending_input is not None:
+            return None
+        if self.input_task is not None:
+            return self.input_task
+        self.input_task = asyncio.create_task(
+            self.input_broker.next_request())
+        return self.input_task
+
     async def process_completed(self, done: set[asyncio.Task]) -> bool:
         """处理前台 ``asyncio.wait`` 的结果；返回是否发生了查询收尾。"""
         handled = False
+        if self.input_task is not None and self.input_task in done:
+            watcher = self.input_task
+            self.input_task = None
+            request: Optional[Any] = None
+            try:
+                request = watcher.result()
+            except asyncio.CancelledError:
+                request = None
+            except Exception as exc:
+                self._on_notice(
+                    f"用户输入监听失败: {type(exc).__name__}: {exc}")
+            if request is not None:
+                self.pending_input = request
+                self._on_user_input(request)
+                handled = True
+
         if self.approval_task is not None and self.approval_task in done:
             watcher = self.approval_task
             self.approval_task = None
@@ -156,6 +200,15 @@ class ReplSessionRunner:
             self.pending_approval = None
             self._on_notice("审批请求已取消或过期")
             self.arm_approval_watcher()
+            handled = True
+
+        if (self.pending_input is not None
+                and self.input_broker is not None
+                and self.input_broker.pending is None
+                and self.pending_input.future.done()):
+            self.pending_input = None
+            self._on_notice("用户输入请求已取消或过期")
+            self.arm_input_watcher()
             handled = True
 
         if self.active_query is not None:
@@ -184,6 +237,7 @@ class ReplSessionRunner:
         self.consumer_task = asyncio.create_task(self._consume(query))
         self._on_status(self.state)
         self.arm_approval_watcher()
+        self.arm_input_watcher()
         return query
 
     async def _consume(self, query: QuerySession) -> None:
@@ -222,6 +276,29 @@ class ReplSessionRunner:
         self._on_status(self.state)
         return True
 
+    def resolve_user_input(self, raw: str) -> bool:
+        """提交当前用户输入；无效选项保留请求并返回 False。"""
+        if self.input_broker is None:
+            return False
+        request_id = (
+            self.pending_input.request_id
+            if self.pending_input is not None
+            else self.state.input_request_id
+        )
+        if not request_id:
+            return False
+        resolution: InputResolution = self.input_broker.resolve(
+            raw, request_id=request_id)
+        if not resolution.accepted:
+            self._on_notice(resolution.reason or "输入无效，请重试")
+            self._on_status(self.state)
+            return False
+        self.pending_input = None
+        self._on_notice("已提交用户输入")
+        self.arm_input_watcher()
+        self._on_status(self.state)
+        return True
+
     def reject_pending_approval(self) -> None:
         """拒绝 broker 中当前与排队的全部审批，并停掉旧 watcher。"""
         if self.approval_broker is not None:
@@ -230,6 +307,15 @@ class ReplSessionRunner:
         if self.approval_task is not None and not self.approval_task.done():
             self.approval_task.cancel()
         self.approval_task = None
+
+    def reject_pending_input(self) -> None:
+        """取消 broker 中当前与排队的全部用户输入请求。"""
+        if self.input_broker is not None:
+            self.input_broker.cancel_all()
+        self.pending_input = None
+        if self.input_task is not None and not self.input_task.done():
+            self.input_task.cancel()
+        self.input_task = None
 
     async def finish_current(
         self,
@@ -243,20 +329,29 @@ class ReplSessionRunner:
         if current is None:
             return
 
-        watcher = self.approval_task
+        approval_watcher = self.approval_task
+        input_watcher = self.input_task
         if interrupt and not current.task.done():
             self.state.request_stop()
             self.reject_pending_approval()
+            self.reject_pending_input()
             await self.controller.stop()
         elif interrupt:
             self.reject_pending_approval()
+            self.reject_pending_input()
 
-        if interrupt and watcher is not None:
-            if not watcher.done():
-                watcher.cancel()
-            await asyncio.gather(watcher, return_exceptions=True)
-            if self.approval_task is watcher:
+        if interrupt and approval_watcher is not None:
+            if not approval_watcher.done():
+                approval_watcher.cancel()
+            await asyncio.gather(approval_watcher, return_exceptions=True)
+            if self.approval_task is approval_watcher:
                 self.approval_task = None
+        if interrupt and input_watcher is not None:
+            if not input_watcher.done():
+                input_watcher.cancel()
+            await asyncio.gather(input_watcher, return_exceptions=True)
+            if self.input_task is input_watcher:
+                self.input_task = None
 
         consumer = self.consumer_task
         consumer_error: Optional[BaseException] = None
@@ -285,11 +380,13 @@ class ReplSessionRunner:
         self.active_prompt = None
         self.consumer_task = None
         self.pending_approval = None
+        self.pending_input = None
         self._on_status(self.state)
         self.drain_steering_notices()
         if run_queued:
             self.start_queued()
         self.arm_approval_watcher()
+        self.arm_input_watcher()
 
     def drain_steering_notices(self) -> None:
         """任务结束后丢弃未送达插话（可见地），避免污染下一轮。"""
@@ -311,3 +408,9 @@ class ReplSessionRunner:
             await asyncio.gather(self.approval_task, return_exceptions=True)
             self.approval_task = None
         self.reject_pending_approval()
+        if self.input_task is not None:
+            if not self.input_task.done():
+                self.input_task.cancel()
+            await asyncio.gather(self.input_task, return_exceptions=True)
+            self.input_task = None
+        self.reject_pending_input()

@@ -58,6 +58,7 @@ class AllowAllPolicy:
 READONLY_TOOLS = {
     "get_time", "read_file", "grep", "glob",
     "find_refs", "repo_map", "check_syntax",
+    "ask_user", "update_plan",
     "list_skills", "load_skill", "list_skill_resources", "read_skill_resource",
 }
 WORKSPACE_WRITE_TOOLS = {"write_file", "edit_file"}

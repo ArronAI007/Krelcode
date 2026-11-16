@@ -675,6 +675,38 @@ PromptWriter <── status callback/500ms ticker ──────────
 - 工具增量正文只更新 `ToolOutputRecord`，完成时仍默认折叠；用户通过
   `/tool-output <编号>` 主动展开，防止实时输出重新污染正文。
 
+## 交互式 Agent 能力（Step 75）
+
+第二阶段补齐模型主动请求输入与结构化计划，同时保持内核不依赖 stdin/终端：
+
+```
+ask_user Tool ─┐
+               ├─ ToolContext.request_user_input/emit_plan（窄端口）
+update_plan ───┘                 │
+                                 ▼
+                         AgentLoop 脱敏/typed events
+                                 │
+                         UserInputBroker / EventBus
+                                 │
+                    ReplSessionRunner / reducer / renderer
+```
+
+- `ask_user` 的 schema 包含 `question/options/allow_free_text`。AgentLoop 先同步登记
+  broker 请求，再发布带稳定 `request_id` 的 `UserInputRequested`，随后等待 Future；
+  回答结束后发布不含正文的 `UserInputResolved`。这样 UI 不会因事件/等待注册竞态而
+  丢失答案，敏感答案也不会重复进入 renderer 或 recorder。
+- `UserInputBroker` 位于 session 层，支持排队、选项序号/精确值归一化、无效答案保留
+  请求、取消全部等待、关闭 fail-closed。REPL 的字符编辑器只提交答案，不直接操作工具
+  的 Future；回答作为 `tool_result` 回填，不写入 user history。
+- `update_plan` 接收完整步骤快照，校验状态后发布 `PlanUpdated`。状态限定为
+  `pending/in_progress/completed`，最多一个 `in_progress`；它与 `ask_user` 都声明为
+  本地只读工具，因此在 read-only/plan 模式仍可用。
+- `SessionViewState` 保存 plan 的 items/statuses/explanation 与 input 的 options/
+  free-text 语义；`/plan` 在运行中和空闲态都可查看。任务结束保留最近计划，下一轮开始
+  时重置。
+- 无交互前台（print/JSON/单次 stream-json/子代理）不注入 UserInputPort；`ask_user`
+  立即返回失败工具结果，避免后台任务永久挂起。
+
 ## 进程入口分流
 
 控制台脚本和 `python -m krelcode` 都进入 `entrypoints/cli.py`，与 Claude Code

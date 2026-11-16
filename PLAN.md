@@ -120,7 +120,8 @@
 
 | 73 | Stream JSON / SDK | 新增 `session.stream_json` 纯协议层与持久 JSONL runner：stdin 支持 user/content-block/图片/control，`request_id` 路由、`turn_id`+单调 `sequence` envelope、唯一 `result` 终态、多轮执行、真正可用的 turn 内 interrupt 与优雅 end；stdout 纯协议、递归脱敏、诊断走 stderr。新增零依赖 `krelcode.sdk`：子进程复用完整 CLI 组装，`query/run/interrupt/close`、异步上下文、并发 request 路由、图像输入、超时/terminate/kill 清理与 stderr 二次脱敏；CLI 增加 `--input-format/--output-format stream-json` 及参数互斥校验 | 33 个新测试：协议全事件/输入校验/终态不可覆盖、单轮/多轮/中断/输入错误/递归脱敏、CLI 参数校验、SDK 命令构造/并发路由/中断/生命周期/错误/密钥清理/mock e2e；全量 880 通过（2 个本地端口测试 skip） | ✅ |
 | 74 | 事件与前台架构 | 新增 `QueryPhaseChanged/ToolProgress/ToolOutputDelta/PlanUpdated/UserInputRequested`；`ToolContext` 受控进度/输出端口与 AgentLoop 统一脱敏；`run_command` 合并流分块读取；`SessionEventReducer` 折叠完整 ViewState；新增 session 层 `ReplSessionRunner` 独占 query/consumer/审批 watcher/队列；PromptWriter 持续状态栏、suspend/resume 保草稿；stream-json 映射新事件 | 10 个新测试：完整 reducer、状态栏字段、工具进度/输出事件、命令首块先于退出、折叠缓存、PromptWriter 草稿恢复、队列自动续跑、中断清理、无 stdin 审批、stream-json 新事件；全量 890 通过（2 个本地端口测试 skip） | ✅ |
-| 测试总数：892（890 离线通过 + 2 个本地端口集成，沙箱内自动 skip） |
+| 75 | 交互式 Agent 能力 | 新增 `ask_user`/`update_plan` 扩展工具；`core/interactions.py` 定义 UserInputPort，`session/interactions.py` 提供可排队/选项归一化/取消 fail-closed 的 UserInputBroker；AgentLoop 先登记再发布 `UserInputRequested/Resolved`，回答只进 tool_result；`PlanUpdated` 增加 statuses/explanation，`update_plan` 校验最多一个 in_progress；SessionViewState、ReplSessionRunner、REPL 输入优先级与 `/plan` 全部接线；stream-json 暴露新字段，无交互形态中的 ask_user 不等待 stdin | 15 个新测试：自由文本/选项/无效重试、无前台与子代理 fail-closed、REPL runner 与 run_repl 端到端、取消修复、回答不进 user history、计划校验/事件/reducer/格式化、默认工具池、renderer、stream-json 字段与 headless 不挂死；全量 905 通过（2 个本地端口测试 skip） | ✅ |
+| 测试总数：907（905 离线通过 + 2 个本地端口集成，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

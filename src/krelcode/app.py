@@ -40,6 +40,7 @@ from .safety.sandbox import ExecutionSandbox, SandboxError
 from .session.autocommit import AutoCommitter
 from .session.checkpoint import CheckpointManager
 from .session.input import InputProcessor
+from .session.interactions import UserInputBroker
 from .session.restore import refresh_skill_system_prompt, restore_session
 from .session.runner import run_session
 from .skills import SkillManager, build_skill_tools
@@ -63,18 +64,20 @@ from .tools.builtin.run_command import RunCommandTool
 from .tools.builtin.find_refs import FindRefsTool
 from .tools.builtin.time_tool import GetTimeTool
 from .tools.builtin.write_file import WriteFileTool
+from .tools.extension.ask_user import AskUserTool
+from .tools.extension.update_plan import UpdatePlanTool
 from .tools.registry import ToolRegistry
 from .ui.approval import ApprovalBroker
 from .ui.repl import run_repl
 
 
 def default_tools() -> List[Tool]:
-    """内置工具集（10 个 + 4 个子代理工具在 build_loop 注册）。
+    """内置工具集（12 个 + 4 个子代理工具在 build_loop 注册）。
     MCP 远程工具在运行时追加注册。"""
     return [
         GetTimeTool(), ReadFileTool(), WriteFileTool(), EditFileTool(),
         RunCommandTool(), GrepTool(), GlobTool(), RepoMapTool(),
-        FindRefsTool(), CheckSyntaxTool(),
+        FindRefsTool(), CheckSyntaxTool(), AskUserTool(), UpdatePlanTool(),
     ]
 
 
@@ -245,6 +248,7 @@ async def build_loop(
     extra_tools: Optional[List[Tool]] = None,
     log=print,
     approver=None,
+    user_input_port=None,
 ):
     """返回 (AgentLoop, SubagentManager)。
 
@@ -331,6 +335,7 @@ async def build_loop(
         repeat_failure_limit=args.repeat_failure_limit,
         context_manager=context_manager,
         token_budget=args.token_budget,
+        user_input_port=user_input_port,
     )
     # fork_context 数据源：getter 形式，/resume 重绑定 loop.history 后依然正确
     manager.get_parent_history = lambda: loop.history
@@ -441,12 +446,18 @@ async def async_main(args: argparse.Namespace) -> int:
         if resolve_run_mode(args) is RunMode.REPL and not getattr(args, "no_sandbox", False)
         else None
     )
+    input_broker = (
+        UserInputBroker()
+        if resolve_run_mode(args) is RunMode.REPL
+        else None
+    )
     try:
         loop, subagents = await build_loop(
             args,
             config,
             log=note,
             approver=approval_broker.request if approval_broker is not None else None,
+            user_input_port=input_broker,
         )
     except SandboxError as e:
         print(f"Sandbox 配置错误: {e}", file=sys.stderr)
@@ -528,11 +539,14 @@ async def async_main(args: argparse.Namespace) -> int:
             log=note,
             repl_runner=run_repl,
             approval_broker=approval_broker,
+            user_input_broker=input_broker,
             hooks=hooks,
         )
     finally:
         if approval_broker is not None:
             approval_broker.close()
+        if input_broker is not None:
+            input_broker.close()
         await runtime.close()
 
 

@@ -21,6 +21,10 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             available_during_run=True,
             help="展开最近一次思考（保留 Markdown 多行）"),
         CommandSpec(
+            "plan", "查看当前执行计划", kind=ui,
+            available_during_run=True,
+            help="显示模型最近一次 update_plan 提交的结构化计划"),
+        CommandSpec(
             "tool-output", "查看或展开工具输出", kind=ui,
             argument_hint="[编号|last]", available_during_run=True,
             help="列出工具输出；/tool-output <编号|last> 展开灰色面板"),
@@ -106,7 +110,7 @@ def render_help(registry: CommandRegistry) -> str:
         for continuation in details[1:]:
             lines.append(f"  {'':<{width}}{continuation}")
     lines.extend((
-        "任务运行中：直接输入文字 = 插话（steering）；/thinking 展开思考；",
+        "任务运行中：直接输入文字 = 插话（steering）；/thinking 展开思考；/plan 查看计划；",
         "/tool-output <编号> 展开工具输出；/stop 中止。",
         "输入 / 会实时显示匹配命令，Tab 可补全唯一匹配；↑/↓ 调取历史，Ctrl-R 增量搜索。",
         "Alt+Enter 排队下一条消息；/queue 可查看、删除、移动或清空队列。",

@@ -33,6 +33,7 @@ from ..core.events import (
     ToolOutputDelta,
     ToolProgress,
     UserInputRequested,
+    UserInputResolved,
     UserSteered,
 )
 from ..core.messages import ImageRef, Message, ToolCall
@@ -237,6 +238,8 @@ class StreamJsonEncoder:
                 "subtype": "updated",
                 "items": list(event.items),
                 "active_index": event.active_index,
+                "statuses": list(event.statuses),
+                "explanation": event.explanation,
             }
         elif isinstance(event, UserInputRequested):
             payload = {
@@ -245,6 +248,14 @@ class StreamJsonEncoder:
                 "request_id": event.request_id,
                 "prompt": event.prompt,
                 "options": list(event.options),
+                "allow_free_text": event.allow_free_text,
+            }
+        elif isinstance(event, UserInputResolved):
+            payload = {
+                "type": "input",
+                "subtype": "resolved",
+                "request_id": event.request_id,
+                "answered": event.answered,
             }
         elif isinstance(event, RunFinished):
             terminal_fields = {

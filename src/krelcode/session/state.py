@@ -35,6 +35,7 @@ from ..core.events import (
     ToolOutputDelta,
     ToolProgress,
     UserInputRequested,
+    UserInputResolved,
     UserSteered,
 )
 
@@ -61,10 +62,13 @@ class SessionViewState:
     tool_calls_completed: int = 0
     tool_output_chars: int = 0
     plan_items: tuple[str, ...] = ()
+    plan_statuses: tuple[str, ...] = ()
     plan_active_index: int = -1
+    plan_explanation: str = ""
     input_request_id: str = ""
     input_prompt: str = ""
     input_options: tuple[str, ...] = ()
+    input_allow_free_text: bool = True
     last_activity: float = 0.0
     started_at: Optional[float] = None
     _turn_sequence: int = field(default=0, init=False, repr=False)
@@ -103,10 +107,13 @@ class SessionViewState:
         self.tool_calls_completed = 0
         self.tool_output_chars = 0
         self.plan_items = ()
+        self.plan_statuses = ()
         self.plan_active_index = -1
+        self.plan_explanation = ""
         self.input_request_id = ""
         self.input_prompt = ""
         self.input_options = ()
+        self.input_allow_free_text = True
         self.started_at = time.monotonic()
         self.last_activity = self.started_at
         return self.current_turn_id
@@ -138,11 +145,10 @@ class SessionViewState:
         self.tool_calls_started = 0
         self.tool_calls_completed = 0
         self.tool_output_chars = 0
-        self.plan_items = ()
-        self.plan_active_index = -1
         self.input_request_id = ""
         self.input_prompt = ""
         self.input_options = ()
+        self.input_allow_free_text = True
         self.last_activity = 0.0
         self.started_at = None
 
@@ -236,15 +242,32 @@ class SessionEventReducer:
             state.progress = "已接收运行中插话"
         elif isinstance(event, PlanUpdated):
             state.plan_items = tuple(event.items)
+            state.plan_statuses = tuple(event.statuses)
+            if len(state.plan_statuses) != len(state.plan_items):
+                state.plan_statuses = tuple(
+                    "in_progress" if index == event.active_index else "pending"
+                    for index in range(len(state.plan_items))
+                )
             state.plan_active_index = event.active_index
+            state.plan_explanation = event.explanation
             if 0 <= event.active_index < len(state.plan_items):
                 state.progress = f"计划：{state.plan_items[event.active_index]}"
         elif isinstance(event, UserInputRequested):
             state.input_request_id = event.request_id
             state.input_prompt = event.prompt
             state.input_options = tuple(event.options)
+            state.input_allow_free_text = event.allow_free_text
             state.query_phase = "input"
-            state.progress = event.prompt or "等待用户输入"
+            state.progress = "等待用户输入"
+        elif isinstance(event, UserInputResolved):
+            if event.request_id == state.input_request_id:
+                state.input_request_id = ""
+                state.input_prompt = ""
+                state.input_options = ()
+                state.input_allow_free_text = True
+            state.query_phase = "tool"
+            state.progress = (
+                "已收到用户输入" if event.answered else "用户输入请求已取消")
         elif isinstance(event, ErrorOccurred):
             state.progress = f"错误：{event.error}"
         elif isinstance(event, RunCancelled):
@@ -253,12 +276,14 @@ class SessionEventReducer:
             state.input_request_id = ""
             state.input_prompt = ""
             state.input_options = ()
+            state.input_allow_free_text = True
         elif isinstance(event, RunFinished):
             state.query_phase = "finished"
             state.progress = "回答完成"
             state.input_request_id = ""
             state.input_prompt = ""
             state.input_options = ()
+            state.input_allow_free_text = True
             state.active_tool_id = ""
             state.active_tool_name = ""
         state.last_activity = now

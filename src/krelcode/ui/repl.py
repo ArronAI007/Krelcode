@@ -50,6 +50,7 @@ from ..session.input import (
     InputKind,
     InputProcessor,
 )
+from ..session.interactions import UserInputBroker
 from ..session.manager import resolve_resume_target
 from ..session.prompt_queue import PromptQueue
 from ..session.repl_session import ReplSessionRunner, SessionPrompt
@@ -65,7 +66,7 @@ from .render import CYAN, DIM, RESET, StreamRenderer, auto_color
 
 RUNNING_HINT = (
     "  （任务运行中：Enter=插话，Alt+Enter=排队下一条，Esc/Ctrl-C 中止；"
-    "/thinking 展开思考，/tool-output <编号> 展开输出，/queue 管理队列，"
+    "/thinking 展开思考，/plan 查看计划，/tool-output <编号> 展开输出，/queue 管理队列，"
     "/stop 中止，/exit 退出）"
 )
 
@@ -163,6 +164,27 @@ def manage_prompt_queue(
         write(f"队列操作失败: {message}")
         return
     write(QUEUE_USAGE)
+
+
+def format_plan_lines(state: SessionViewState) -> list[str]:
+    """把 reducer 中的计划快照渲染为纯文本行，供 /plan 与测试复用。"""
+    if not state.plan_items:
+        return ["当前没有执行计划"]
+    statuses = list(state.plan_statuses)
+    if len(statuses) != len(state.plan_items):
+        statuses = [
+            "in_progress" if index == state.plan_active_index else "pending"
+            for index in range(len(state.plan_items))
+        ]
+    marks = {"pending": "[ ]", "in_progress": "[>]", "completed": "[x]"}
+    completed = sum(status == "completed" for status in statuses)
+    lines = [f"当前执行计划（{completed}/{len(statuses)} 完成）:"]
+    for index, (item, status) in enumerate(
+            zip(state.plan_items, statuses), 1):
+        lines.append(f"  {marks.get(status, '[?]')} {index}. {item}")
+    if state.plan_explanation:
+        lines.append(f"  说明: {state.plan_explanation}")
+    return lines
 
 
 def _stdout_write(s: str) -> None:
@@ -835,9 +857,13 @@ async def run_repl(
     runtime: Optional[AgentRuntime] = None,
     input_processor: Optional[InputProcessor] = None,
     approval_broker: Optional[ApprovalBroker] = None,
+    input_broker: Optional[UserInputBroker] = None,
     history_path: Optional[Path] = None,
     persist_history: Optional[bool] = None,
 ) -> int:
+    if input_broker is not None and loop.user_input_port is None:
+        # 直接嵌入 run_repl 的调用方可能先构建 AgentLoop；这里补齐端口。
+        loop.user_input_port = input_broker
     runtime = runtime or AgentRuntime(
         loop,
         subagents=subagents,
@@ -1054,6 +1080,7 @@ async def run_repl(
         on_notice=notice,
         on_stream_end=renderer.end_stream,
         approval_broker=approval_broker,
+        input_broker=input_broker,
     )
 
     async def status_loop() -> None:
@@ -1064,6 +1091,11 @@ async def run_repl(
                 refresh_status(state, force=True)
 
     async def handle_command(action: InputAction):
+        if action.command == "/plan":
+            prompt.hide()
+            for line in format_plan_lines(state):
+                print(f"  {line}")
+            return False
         return await _handle_command(
             action.text, loop, renderer,
             session_path=session_path, sessions_dir=sessions_dir,
@@ -1083,6 +1115,7 @@ async def run_repl(
     action_get = asyncio.create_task(action_queue.get())
     status_task = asyncio.create_task(status_loop())
     runner.arm_approval_watcher()
+    runner.arm_input_watcher()
     try:
         while True:
             wait_set = {action_get, *runner.wait_tasks()}
@@ -1091,7 +1124,8 @@ async def run_repl(
             handled = await runner.process_completed(done)
 
             if action_get not in done:
-                if handled or runner.pending is not None:
+                if (handled or runner.pending is not None
+                        or runner.has_pending_input):
                     restore_prompt()
                 continue
             raw_action = action_get.result()
@@ -1126,6 +1160,34 @@ async def run_repl(
             if action.kind is InputKind.UI_COMMAND and action.command == "/queue":
                 prompt.hide()
                 manage_prompt_queue(action.arguments, runner.queue, write=print)
+                restore_prompt()
+                continue
+
+            # ask_user 请求优先消费普通文本；控制命令和展示命令仍可使用。
+            if runner.has_pending_input:
+                if action.kind is InputKind.UI_COMMAND:
+                    prompt.hide()
+                    await handle_command(action)
+                    restore_prompt()
+                    continue
+                if action.kind is InputKind.CONTROL:
+                    runner.reject_pending_input()
+                    if action.command == "/stop" and runner.is_running:
+                        await runner.finish_current(interrupt=True)
+                    elif action.command == "/exit":
+                        if runner.is_running:
+                            await runner.finish_current(
+                                interrupt=True,
+                                run_queued=False,
+                                show_stopped_note=False,
+                            )
+                        return 0
+                    else:
+                        print("  （当前正在等待用户输入；可输入回答、/stop 或 /exit）")
+                        restore_prompt()
+                    continue
+                prompt.hide()
+                runner.resolve_user_input(action.raw_text)
                 restore_prompt()
                 continue
 
@@ -1241,6 +1303,8 @@ async def run_repl(
         await runner.close()
         if approval_broker is not None:
             approval_broker.cancel_all()
+        if input_broker is not None:
+            input_broker.cancel_all()
         state.finish_turn()
         prompt.finish()
 

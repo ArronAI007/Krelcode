@@ -43,6 +43,7 @@ async def run_session(
     redactor,
     input_processor=None,
     approval_broker=None,
+    user_input_broker=None,
     hooks=None,
     log=print,
     repl_runner=None,
@@ -145,6 +146,7 @@ async def run_session(
             skills_reload=skills_reload,
             input_processor=input_processor,
             approval_broker=approval_broker,
+            input_broker=user_input_broker,
         )
 
     try:

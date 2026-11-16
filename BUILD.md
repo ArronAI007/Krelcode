@@ -5,14 +5,14 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（v0.65.0 / Step 74）
+## 1. 项目统计（v0.66.0 / Step 75）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 20,499 行（Python，**零第三方运行时依赖**） |
-| 测试 | 16,284 行 / 90 个文件 / 892 个用例（离线 890 + 本地端口集成 2，提权环境 892/892 全绿） |
+| 源码 | 21,345 行（Python，**零第三方运行时依赖**） |
+| 测试 | 16,744 行 / 91 个文件 / 907 个用例（离线 905 + 本地端口集成 2，提权环境 907/907 全绿） |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
-| 工具 | 内置 10 + 子代理 4 + MCP 远程动态注册 |
+| 工具 | 内置 12（含 ask_user/update_plan）+ 子代理 4 + MCP 远程动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
 | CLI 入口 | REPL 对话 · -m 单次（text/json/stream-json）· stream-json 持久会话 · Python SDK · doctor · init · review |
 | 文档 | README（上手）· CONFIG（全量参考）· DESIGN（契约）· ARCHITECTURE（对标）· PLAN（路线）· BUILD（本文） |
@@ -20,8 +20,8 @@
 源码按层分布：
 
 ```
-session 3905 · ui 2382 · agent 2333 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2259
-tools 2305 · llm 1762 · mcp 1652 · safety 1608 · skills 949 · subagent 620
+session 4277 · ui 2467 · agent 2390 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2273
+tools 2572 · llm 1762 · mcp 1652 · safety 1609 · skills 949 · subagent 620
 core 534 · entrypoints 190
 ```
 
@@ -66,12 +66,12 @@ core 只有 534 行——内核保持极小、能力在边缘，正是当初对�
 | 压缩两道防线 | `agent/compression.py`（驱逐 + LLM 摘要） |
 | token 估算/价目/窗口 | `agent/tokens.py` `agent/pricing.py` |
 | 工作区上下文注入 | `agent/context.py`（目录树/git/分层 AGENTS.md） |
-| 工具端口与注册表 | `tools/base.py` `tools/registry.py`；具体工具 `tools/builtin/` |
+| 工具端口与注册表 | `tools/base.py` `tools/registry.py`；具体工具 `tools/builtin/`，交互工具 `tools/extension/` |
 | 命令风险分级/审批/写保护 | `safety/commands.py` `safety/policy.py` `safety/rules.py` |
 | MCP 客户端/传输/热重载 | `mcp/client.py` `mcp/{stdio,sse}_transport.py` `mcp/streamable.py` `mcp/supervisor.py` |
 | 子代理 | `subagent/manager.py`（队列/打断/wait_many）`subagent/tools.py` |
 | 会话录制/恢复/导出/检查点 | `session/{recorder,manager,export,checkpoint}.py` |
-| 流式渲染/审批交互/@引用 | `ui/render.py` `ui/approval.py` `ui/atfiles.py` `ui/repl.py` |
+| 流式渲染/审批/用户输入/@引用 | `ui/render.py` `ui/approval.py` `session/interactions.py` `ui/atfiles.py` `ui/repl.py` |
 | hooks / 用量 / 自动提交 | `hooks.py` `agent/usage.py` `session/autocommit.py` |
 | 诊断/脚手架 | `doctor.py` `scaffold.py` |
 | 组装根（唯一认识所有具体类的地方） | `app.py` |
@@ -92,7 +92,7 @@ core 只有 534 行——内核保持极小、能力在边缘，正是当初对�
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 890 通过、2 skip，提权环境 892/892 全过。
+bind 探测自动 skip——沙箱内 905 通过、2 skip，提权环境 907/907 全过。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /

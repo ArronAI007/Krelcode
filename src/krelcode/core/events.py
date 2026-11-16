@@ -134,10 +134,16 @@ class UserSteered(AgentEvent):
 
 @dataclass(frozen=True)
 class PlanUpdated(AgentEvent):
-    """执行计划快照；items 是有序的人类可读步骤。"""
+    """执行计划快照；items 与 statuses 一一对应。
+
+    status 取值为 pending / in_progress / completed；active_index 指向唯一的
+    in_progress，未开始或已全部完成时为 -1。
+    """
 
     items: Tuple[str, ...] = ()
     active_index: int = -1
+    statuses: Tuple[str, ...] = ()
+    explanation: str = ""
 
 
 @dataclass(frozen=True)
@@ -147,6 +153,15 @@ class UserInputRequested(AgentEvent):
     request_id: str
     prompt: str
     options: Tuple[str, ...] = ()
+    allow_free_text: bool = True
+
+
+@dataclass(frozen=True)
+class UserInputResolved(AgentEvent):
+    """请求已结束；不携带答案正文，避免重复进入可视化/持久化通道。"""
+
+    request_id: str
+    answered: bool = False
 
 
 @dataclass(frozen=True)

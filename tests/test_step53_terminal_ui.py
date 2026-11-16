@@ -114,6 +114,7 @@ def test_slash_commands_filter_by_prefix():
 def test_running_suggests_thinking_stop_and_exit():
     assert match_slash_commands("/", running=True) == [
         ("/thinking", "展开最近一次思考"),
+        ("/plan", "查看当前执行计划"),
         ("/tool-output", "查看或展开工具输出"),
         ("/queue", "查看或管理下一条消息队列"),
         ("/stop", "中止正在运行的任务"),

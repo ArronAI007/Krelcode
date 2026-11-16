@@ -189,8 +189,11 @@ def test_encoder_encodes_query_progress_and_input_events():
     assert encoded[2]["stream"] == "combined"
     assert encoded[3]["type"] == "plan"
     assert encoded[3]["items"] == ["读取", "测试"]
+    assert encoded[3]["statuses"] == []
+    assert encoded[3]["explanation"] == ""
     assert encoded[4]["type"] == "input"
     assert encoded[4]["options"] == ["是", "否"]
+    assert encoded[4]["allow_free_text"] is True
 
 
 def test_terminal_fields_cannot_be_overwritten_by_extensions():

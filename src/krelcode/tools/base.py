@@ -166,6 +166,12 @@ class TurnAbortSignal:
 
 ProgressEmitter = Callable[[str, Dict[str, object]], Union[None, Awaitable[None]]]
 OutputEmitter = Callable[[str, str], Union[None, Awaitable[None]]]
+InputRequester = Callable[
+    [str, Tuple[str, ...], bool], Awaitable[Optional[str]]]
+PlanEmitter = Callable[
+    [Tuple[str, ...], Tuple[str, ...], int, str],
+    Union[None, Awaitable[None]],
+]
 
 
 @dataclass
@@ -186,6 +192,8 @@ class ToolContext:
     progress_emitter: Optional[ProgressEmitter] = field(
         default=None, repr=False)
     output_emitter: Optional[OutputEmitter] = field(default=None, repr=False)
+    input_requester: Optional[InputRequester] = field(default=None, repr=False)
+    plan_emitter: Optional[PlanEmitter] = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not self.sandbox_enabled:
@@ -210,6 +218,33 @@ class ToolContext:
         if not text or self.output_emitter is None:
             return
         pending = self.output_emitter(text, stream)
+        if inspect.isawaitable(pending):
+            await pending
+
+    async def request_user_input(
+        self,
+        prompt: str,
+        options: Tuple[str, ...] = (),
+        *,
+        allow_free_text: bool = True,
+    ) -> Optional[str]:
+        """请求前台补充输入；没有交互前台时明确返回 None（fail-closed）。"""
+        if self.input_requester is None:
+            return None
+        return await self.input_requester(prompt, tuple(options), allow_free_text)
+
+    async def emit_plan(
+        self,
+        items: Tuple[str, ...],
+        statuses: Tuple[str, ...],
+        active_index: int = -1,
+        explanation: str = "",
+    ) -> None:
+        """发布计划快照；具体工具不依赖 UI 或 EventBus。"""
+        if self.plan_emitter is None:
+            return
+        pending = self.plan_emitter(
+            tuple(items), tuple(statuses), active_index, explanation)
         if inspect.isawaitable(pending):
             await pending
 

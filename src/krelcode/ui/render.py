@@ -36,6 +36,7 @@ from ..core.events import (
     ToolOutputDelta,
     ToolProgress,
     UserInputRequested,
+    UserInputResolved,
     UserSteered,
 )
 
@@ -316,8 +317,15 @@ class StreamRenderer:
             return
         elif isinstance(event, UserInputRequested):
             self.end_stream()
-            self._write(
-                f"  {self._mark(RESULT_MARK)}等待输入: {event.prompt}\n")
+            self._write(f"  {self._mark(ASSISTANT_MARK)}{event.prompt}\n")
+            for index, option in enumerate(event.options, 1):
+                self._write(f"    {index}. {option}\n")
+            if event.options:
+                hint = "输入序号/选项" + (
+                    "，或直接输入自定义回答" if event.allow_free_text else "")
+                self._write(f"    {hint}\n")
+        elif isinstance(event, UserInputResolved):
+            return
         elif isinstance(event, PermissionDenied):
             self.end_stream()
             self._write(

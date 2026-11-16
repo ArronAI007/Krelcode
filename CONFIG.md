@@ -255,7 +255,7 @@ Skill 发现目录（后者覆盖前者同名项）：`~/.agents/skills`、`~/.k
 
 | 操作 | 处置 |
 |------|------|
-| 只读工具（get_time/read_file/grep/glob/find_refs/repo_map/check_syntax，以及 list/load/read Skill） | 放行 |
+| 只读工具（get_time/read_file/grep/glob/find_refs/repo_map/check_syntax/ask_user/update_plan，以及 list/load/read Skill） | 放行；`ask_user` 无交互前台时工具结果 fail-closed |
 | write_file/edit_file（普通路径） | 放行（工作区约束兜底） |
 | write/edit 受保护路径：`.git/`、`.krelcode/`、`krelcode.toml`、`.env*`、`*.pem/*.key/*.p12/*.pfx`、`id_rsa*`、`secrets.*`、`credentials*`、`.npmrc/.netrc/.pgpass/.htpasswd` | ASK（非交互拒绝） |
 | run_command 只读命令（ls/cat/grep/git status·log·diff…） | 放行 |
@@ -330,10 +330,15 @@ stdin 支持两种 user 形式：
 `subtype` 可为 `success` / `cancelled` / `error`。其他消息类型包括
 `system/turn_started`、`step/started`、`query/phase_changed`、
 `assistant/text_delta|thinking_delta|message`、`tool/started|progress|output_delta|completed`、
-`plan/updated`、`input/requested`、`permission/requested|denied`、`context/compressed`、
+`plan/updated`（含 `items/statuses/active_index/explanation`）、
+`input/requested|resolved`（含 `request_id/options/allow_free_text`；resolved 只表示是否已回答，
+不回传答案正文）、`permission/requested|denied`、`context/compressed`、
 `hook/triggered`、`subagent/started|finished`、`user/steered`、`error/occurred`；
 最后以 `system/session_end` 结束。所有事件都带 `turn_id`、单调 `sequence` 和
 `session_id`，user 对应的全部事件及 result 还带同一 `request_id`。
+
+Stream JSON 当前不接收远端 `input/response`；headless 查询中的 `ask_user` 会立即
+fail-closed。需要人工澄清的会话应使用 REPL，或由 SDK 拆成多次普通 user 请求。
 
 ## 10. Python SDK
 

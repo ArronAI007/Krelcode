@@ -16,6 +16,7 @@ from itertools import count
 from typing import Callable, Dict, Iterable, List, Optional
 
 from ..core.hooks import HookPort, HookResult
+from ..core.interactions import UserInputPort
 from ..core.redact import SecretRedactor
 from ..core.events import (
     AgentEvent,
@@ -27,6 +28,7 @@ from ..core.events import (
     LLMStreamDelta,
     LLMThinkingDelta,
     PermissionDenied,
+    PlanUpdated,
     QueryPhaseChanged,
     RunCancelled,
     RunFinished,
@@ -36,6 +38,8 @@ from ..core.events import (
     ToolCallStarted,
     ToolOutputDelta,
     ToolProgress,
+    UserInputRequested,
+    UserInputResolved,
     UserSteered,
 )
 from ..core.textutil import truncate_middle
@@ -129,6 +133,7 @@ class AgentLoop:
             Callable[[RuntimeSnapshot], RuntimeSnapshot]
         ] = None,
         hook_port: Optional[HookPort] = None,
+        user_input_port: Optional[UserInputPort] = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -143,6 +148,7 @@ class AgentLoop:
         self.redactor = redactor
         self.runtime_snapshot_provider = runtime_snapshot_provider
         self.hook_port = hook_port
+        self.user_input_port = user_input_port
         self.runtime_context: List[str] = []
         self._token_total = 0
         self._failure_counts: Dict[str, int] = {}
@@ -151,6 +157,7 @@ class AgentLoop:
         self._turn_tool_context = tool_context
         self._turn_abort_signal = TurnAbortSignal()
         self._turn_counter = count(1)
+        self._input_counter = count(1)
         self._turn_prepared = False
         # 运行中用户插话队列（REPL steering）：每个 step 开始前注入历史
         self.steering_queue: asyncio.Queue = asyncio.Queue()
@@ -606,11 +613,61 @@ class AgentLoop:
                 await self._emit(ToolOutputDelta(
                     tool_call.id, tool_call.name, safe_text, stream))
 
+        async def request_user_input(
+            prompt: str,
+            options: tuple[str, ...],
+            allow_free_text: bool,
+        ) -> Optional[str]:
+            if self.user_input_port is None:
+                return None
+            safe_prompt = (
+                self.redactor.redact(prompt) if self.redactor else prompt)
+            safe_options = tuple(
+                self.redactor.redact(option) if self.redactor else option
+                for option in options
+            )
+            turn_id = self._turn_tool_context.runtime.turn_id or "turn"
+            request_id = f"{turn_id}:input:{next(self._input_counter)}"
+            exchange = self.user_input_port.submit(
+                safe_prompt,
+                safe_options,
+                allow_free_text=allow_free_text,
+                request_id=request_id,
+            )
+            await self._emit(UserInputRequested(
+                request_id=exchange.request_id,
+                prompt=safe_prompt,
+                options=safe_options,
+                allow_free_text=allow_free_text,
+            ))
+            answer = await exchange.wait()
+            await self._emit(UserInputResolved(
+                request_id=exchange.request_id,
+                answered=answer is not None,
+            ))
+            return answer
+
+        async def emit_plan(
+            items: tuple[str, ...],
+            statuses: tuple[str, ...],
+            active_index: int,
+            explanation: str,
+        ) -> None:
+            redact = self.redactor.redact if self.redactor else (lambda text: text)
+            await self._emit(PlanUpdated(
+                items=tuple(redact(item) for item in items),
+                active_index=active_index,
+                statuses=tuple(redact(status) for status in statuses),
+                explanation=redact(explanation),
+            ))
+
         execution_ctx = replace(
             self._turn_tool_context,
             tool_descriptor=pool.descriptor(tool_call.name),
             progress_emitter=emit_progress,
             output_emitter=emit_output,
+            input_requester=request_user_input,
+            plan_emitter=emit_plan,
         )
 
         # 2) 参数格式与 JSON Schema：坏参数不进入审批或工具实现。
