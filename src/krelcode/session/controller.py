@@ -104,6 +104,8 @@ class SessionController:
                 session_lifecycle=self.session_lifecycle,
                 plan_manager=self.plan_manager,
                 checkpoints=self.checkpoints,
+                compact_checkpoints=getattr(
+                    self.loop, "compact_checkpoint_store", None),
             )
         )
         self.command_registry = command_registry or builtin_command_registry()

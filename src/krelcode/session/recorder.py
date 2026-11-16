@@ -196,8 +196,19 @@ class SessionRecorder:
                 "referenced_count": event.referenced_count,
             }
         if isinstance(event, ContextCompressed):
-            return {"type": "context_compressed", "ts": ts,
-                    "before_tokens": event.before_tokens, "after_tokens": event.after_tokens}
+            return {
+                "type": "context_compressed",
+                "ts": ts,
+                "before_tokens": event.before_tokens,
+                "after_tokens": event.after_tokens,
+                "strategy": event.strategy,
+                "summary_source": event.summary_source,
+                "generation": event.generation,
+                "high_watermark_tokens": event.high_watermark_tokens,
+                "low_watermark_tokens": event.low_watermark_tokens,
+                "source_savings": dict(event.source_savings),
+                "checkpoint_id": event.checkpoint_id,
+            }
         if isinstance(event, PlanUpdated):
             record = {"type": "plan_updated", "ts": ts,
                       "items": list(event.items), "statuses": list(event.statuses),

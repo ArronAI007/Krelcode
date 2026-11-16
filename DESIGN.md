@@ -246,15 +246,14 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   更早的大输出按结构摘要 → 单行引用分级（消息本身保留 → tool_call/result 配对永远完整；
   零 LLM 调用、幂等、短于 200 字符的结果跳过）；仍超预算（或 /compact 强制）才走 LLM 摘要
 - **预算压缩**（agent/compression.py ContextManager）：超 `--context-tokens`（默认 10 万）时，
-  把「中段历史」渲染后交给 LLM 摘要成一条 `[上下文摘要]` 消息，
-  结构变为 `[system] + [摘要] + [最近 keep_recent 条]`；
-  切点安全：保留区绝不以孤儿 tool 消息开头（否则 provider 拒绝请求）；
-  失败安全：摘要调用出错退化为占位说明，不崩主循环；
-  太短的历史（<6 条）不压缩，防抖动
+  在高水位触发、向低水位目标选择最远安全 turn 边界；中段历史合并为一条
+  `Structured Compact v2` 交接消息，当前 turn 永不切割。保留区绝不以孤儿 tool
+  消息开头；模型失败时由 Working Context/history 生成确定性降级摘要；太短的历史
+  （<6 条）不压缩，防抖动
 - **大输出落盘**（loop）：工具结果 > 12K 字符（可调）时全文写入
   `<workspace>/.krelcode/tool_outputs/`，历史只留 truncate_middle 版 + 文件引用；
   落盘失败退回纯截断
-- 压缩发生会 emit `ContextCompressed(before_tokens, after_tokens)`，UI 可提示用户；REPL `/compact` 经 `maybe_compress(force=True)` 手动触发（不必等预算超限）
+- 压缩发生会 emit 内容无关的 `ContextCompressed`，携带策略、摘要来源/generation、高/低水位、来源节省量与 checkpoint ID；REPL `/compact` 经 `maybe_compress(force=True)` 手动触发（不必等预算超限）
 - 跨平台：run_command 超时终止在 POSIX 走进程组 killpg(SIGKILL)，Windows 退化为杀主进程（os.killpg/SIGKILL 不存在时不触碰）
 
 ### 真实请求装配与预算（Step 88）
@@ -336,6 +335,44 @@ ToolMicrocompactor (zero LLM, in-place, pairing preserved)
   `context/microcompacted`，Renderer 不污染正文。
 - `/compact preview` 使用 deepcopy 执行同一 microcompact 预览，不修改 history；正式
   `/compact` 仍是显式强制完整压缩入口。
+
+## Structured Compact v2（Step 90）
+
+Step 90 把自由文本摘要升级为可验证、可合并、可恢复的交接记录。摘要不是另一份
+会话历史，而是当前任务继续执行所需的最小结构化现场。
+
+```text
+high watermark reached
+  → choose safe turn boundary (never include active turn)
+  → target low watermark; preserve last turn if target unreachable
+  → Tool Microcompact (no LLM, protected recent/current/error/write results)
+  → still over budget: LLM structured summary
+       ├─ strict CompactSummary v2 JSON (machine validated)
+       ├─ merge previous summary + Working Context + history fallback
+       └─ invalid/failed model output: deterministic fallback
+  → [system] + [CompactSummary v2] + [tail turns]
+  → persist pre-compact history + checkpoint metadata
+```
+
+`CompactSummary v2` 的稳定字段为 `goal`、`decisions`、`files`、`commands`、`tests`、
+`errors`、`open_issues`、`next_steps`、`handoff_notes`。文件带 path/status/note，
+测试带 name/status/detail；模型输出必须包含全部字段，非法版本、类型、枚举或重复 key
+会触发降级。wire 中使用短别名并在 `Message.provider_meta` 保存 generation/source 等
+非 provider 元数据，减少重复 compact 的 token 成本。
+
+- 每次 compact 都从已有摘要继续合并；旧 goal/file/test/error/open issue 不会因模型
+  本轮“没说”而消失，generation 单调递增，compacted message 计数累计。
+- 自动模式只在已完成 turn 的 user 边界切割，当前 turn（含 steering 后的全部消息）
+  保持原样；若中段只剩上一条摘要，不会重复摘要同一内容。
+- 高低水位是触发与目标而非两个阈值循环：高水位判断完整请求预算，低水位用于选择
+  更激进的合法切点；若无法达到低水位，选择最激进的合法 turn 边界。
+- compact 前完整 history、摘要、边界、水位、来源节省量和 Working Context 快照写入
+  `.krelcode/compact-checkpoints/`，原子替换、fail-open、SecretRedactor 脱敏。
+- `/compact preview` 展示按来源（tool results/conversation/total）的预计节省量与
+  low-watermark 是否可达；正式 `/compact` 展示 checkpoint ID。
+- `ContextCompressed`、TUI Context 面板、recorder、stream-json 和子代理 feed 只传播
+  内容无关元数据，不复制摘要正文。`/rewind` 匹配摘要 digest 后优先恢复 compact 前
+  完整现场，再重建 Working Context 和压缩状态。
 
 ## 交互与会话（Step 8）
 

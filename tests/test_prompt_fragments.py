@@ -383,8 +383,9 @@ def test_compact_boundary_avoids_orphan_tool_result():
     preview = manager.preview_compact(history, force=True)
 
     assert preview.boundary is not None
-    assert preview.boundary.safe_adjusted
-    assert preview.boundary.middle_end == 4
+    assert preview.boundary.turn_aligned
+    assert preview.boundary.middle_end == 5
+    assert history[preview.boundary.tail_start].role == "user"
     assert history[preview.boundary.tail_start].role != "tool"
 
 

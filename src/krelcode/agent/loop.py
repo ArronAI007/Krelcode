@@ -12,9 +12,12 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from itertools import count
-from typing import Awaitable, Callable, Dict, Iterable, List, Optional
+from typing import (
+    Any, Awaitable, Callable, Dict, Iterable, List, Optional, Protocol,
+)
 
 from ..core.hooks import HookPort, HookResult
 from ..core.interactions import UserInputPort
@@ -91,6 +94,13 @@ from ..tools.schema import validate_tool_arguments
 DEFAULT_MAX_STEPS = 64
 
 
+class CompactCheckpointPort(Protocol):
+    """Persistence boundary for pre-compact history checkpoints."""
+
+    def record(self, **kwargs: Any) -> Any:
+        ...
+
+
 def max_steps_reached_text(max_steps: int) -> str:
     """步数守卫中止说明：同时给出原因和可操作的调整方式。"""
     return (
@@ -153,6 +163,7 @@ class AgentLoop:
         step_gate: Optional[Callable[[], Awaitable[None]]] = None,
         working_context_store: Optional[WorkingContextStore] = None,
         tool_microcompactor: Optional[ToolMicrocompactor] = None,
+        compact_checkpoint_store: Optional[CompactCheckpointPort] = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -176,6 +187,12 @@ class AgentLoop:
             self.working_context_store.redactor = redactor
         if tool_microcompactor is not None and context_manager is not None:
             context_manager.microcompactor = tool_microcompactor
+        if context_manager is not None:
+            if context_manager.working_context_provider is None:
+                context_manager.working_context_provider = (
+                    lambda: self.working_context_store.snapshot())
+            if redactor is not None:
+                context_manager.redactor = redactor
         self.tool_microcompactor = (
             tool_microcompactor
             or (
@@ -201,6 +218,8 @@ class AgentLoop:
         self.last_context_assembly = None
         self.last_context_snapshot = None
         self.last_microcompact_report: Optional[MicrocompactReport] = None
+        self.compact_checkpoint_store = compact_checkpoint_store
+        self.last_compact_checkpoint = None
         self.runtime_snapshot_provider = runtime_snapshot_provider
         self.hook_port = hook_port
         self.user_input_port = user_input_port
@@ -223,6 +242,8 @@ class AgentLoop:
         self.history: List[Message] = (
             [Message.system(system_prompt)] if system_prompt else []
         )
+        if self.context_manager is not None:
+            self.context_manager.rebuild_state(self.history)
 
     async def _emit(self, event: AgentEvent) -> None:
         await self.bus.emit(event)
@@ -233,11 +254,15 @@ class AgentLoop:
         self.last_context_assembly = None
         self.last_context_snapshot = None
         self.last_microcompact_report = None
+        self.last_compact_checkpoint = None
         self.working_context_store.clear()
 
     def rebuild_working_context(self):
         """Rebuild session-scoped working facts after resume/fork/rewind."""
-        return self.working_context_store.rebuild_from_history(self.history)
+        snapshot = self.working_context_store.rebuild_from_history(self.history)
+        if self.context_manager is not None:
+            self.context_manager.rebuild_state(self.history)
+        return snapshot
 
     def add_runtime_context(self, contents: Iterable[str], source: str = "hook") -> int:
         """注入不写入历史快照的运行时上下文（SessionStart/Compact Hook）。"""
@@ -534,6 +559,9 @@ class AgentLoop:
         if needs_compression:
             await self.run_lifecycle_hook(
                 "pre_compact", {"before_tokens": str(before)})
+        pre_compact_history = deepcopy(self.history)
+        self.context_manager.last_compact_result = None
+        self.last_compact_checkpoint = None
         changed = await self.context_manager.maybe_compress(
             self.history,
             force=force,
@@ -563,11 +591,52 @@ class AgentLoop:
         if not changed:
             return False
         after = estimate_history_tokens(self.history) + extra_tokens
+        result = self.context_manager.last_compact_result
+        checkpoint = None
+        if result is not None and self.compact_checkpoint_store is not None:
+            working = self.working_context_store.snapshot().as_record()
+            checkpoint = self.compact_checkpoint_store.record(
+                pre_compact_history=pre_compact_history,
+                summary=result.summary,
+                trigger=result.trigger,
+                before_tokens=before,
+                after_tokens=after,
+                session_id=(
+                    self._turn_tool_context.runtime.session_id or ""),
+                turn_id=self._current_turn_id,
+                boundary={
+                    "head_end": result.boundary.head_end,
+                    "middle_start": result.boundary.middle_start,
+                    "middle_end": result.boundary.middle_end,
+                    "tail_start": result.boundary.tail_start,
+                    "tail_end": result.boundary.tail_end,
+                    "turn_aligned": result.boundary.turn_aligned,
+                    "safe_adjusted": result.boundary.safe_adjusted,
+                },
+                source_savings=result.savings_dict(),
+                working_context=working,
+            )
+            self.last_compact_checkpoint = checkpoint
         await self.run_lifecycle_hook(
             "post_compact",
             {"before_tokens": str(before), "after_tokens": str(after)},
         )
-        await self._emit(ContextCompressed(before, after))
+        await self._emit(ContextCompressed(
+            before,
+            after,
+            strategy="structured_summary" if result is not None else "evict_tools",
+            summary_source=result.summary_source if result is not None else "",
+            generation=result.generation if result is not None else 0,
+            high_watermark_tokens=(
+                result.high_watermark_tokens if result is not None
+                else self.context_manager.high_watermark_tokens),
+            low_watermark_tokens=(
+                result.low_watermark_tokens if result is not None
+                else self.context_manager.low_watermark_tokens),
+            source_savings=(
+                result.source_savings if result is not None else ()),
+            checkpoint_id=checkpoint.id if checkpoint is not None else "",
+        ))
         return True
 
     def _repair_after_cancel(self) -> None:

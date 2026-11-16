@@ -75,8 +75,10 @@ def test_compression_replaces_middle_with_summary():
     assert h[0] == Message.system("SYS")                       # 头部保留
     assert h[1].role == "user" and h[1].content.startswith(SUMMARY_PREFIX)
     assert "完成了 A、B、C" in h[1].content
-    assert len(h) == 1 + 1 + 6                                  # system + 摘要 + keep_recent
-    assert h[-1].content.startswith("回答11")                    # 最新消息保留
+    # 低水位目标无法仅靠保留最近 6 条达到，因此选择最激进的合法 turn
+    # 边界：system + 摘要 + 最后一轮 user/assistant。
+    assert len(h) == 1 + 1 + 2
+    assert h[-1].content.startswith("回答11")                    # 最新 turn 保留
     # 摘要调用的 prompt 结构
     summary_request = provider.calls[0]
     assert summary_request[0].role == "system"

@@ -72,6 +72,10 @@ class SessionViewState:
     context_snapshot: Optional[ContextUsageSnapshot] = None
     microcompact_count: int = 0
     microcompact_saved_tokens: int = 0
+    compact_generation: int = 0
+    compact_source: str = ""
+    compact_saved_tokens: int = 0
+    compact_checkpoint_id: str = ""
     input_request_id: str = ""
     input_prompt: str = ""
     input_options: tuple[str, ...] = ()
@@ -256,8 +260,16 @@ class SessionEventReducer:
                 f"工具输出已微压缩 {event.compacted_count} 条"
                 f" · {event.before_tokens} → {event.after_tokens} tokens")
         elif isinstance(event, ContextCompressed):
+            state.compact_generation = max(
+                state.compact_generation, event.generation)
+            state.compact_source = event.summary_source or event.strategy
+            state.compact_saved_tokens += max(
+                0, event.before_tokens - event.after_tokens)
+            state.compact_checkpoint_id = event.checkpoint_id
             state.progress = (
-                f"上下文已压缩 {event.before_tokens} → {event.after_tokens} tokens")
+                f"上下文已压缩 {event.before_tokens} → {event.after_tokens} tokens"
+                f" · {event.summary_source or event.strategy}"
+                f" · generation {event.generation or '-'}")
         elif isinstance(event, UserSteered):
             state.progress = "已接收运行中插话"
         elif isinstance(event, PlanUpdated):

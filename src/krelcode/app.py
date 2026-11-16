@@ -55,6 +55,7 @@ from .safety.policy import AllowAllPolicy, SandboxPolicy
 from .safety.sandbox import ExecutionSandbox, SandboxError
 from .session.autocommit import AutoCommitter
 from .session.checkpoint import CheckpointManager
+from .session.compact_checkpoint import CompactCheckpointStore
 from .session.input import InputProcessor
 from .session.interactions import UserInputBroker
 from .session.memory import MemoryStore, sync_memory_fragment
@@ -429,6 +430,8 @@ async def build_loop(
         and context_options.include_directory_rules
     )
     working_context_store = WorkingContextStore(workspace_root)
+    compact_checkpoint_store = (
+        None if args.no_checkpoint else CompactCheckpointStore(workspace_root))
     context_sources = default_context_sources(
         rule_loader if directory_rules_enabled else None)
     context_assembler = ContextAssembler(context_sources)
@@ -451,6 +454,7 @@ async def build_loop(
         context_assembler=context_assembler,
         user_input_port=user_input_port,
         working_context_store=working_context_store,
+        compact_checkpoint_store=compact_checkpoint_store,
     )
     # fork_context 数据源：getter 形式，/resume 重绑定 loop.history 后依然正确
     manager.get_parent_history = lambda: loop.history
@@ -600,6 +604,10 @@ async def async_main(args: argparse.Namespace) -> int:
     loop.redactor = redactor
     if getattr(loop, "working_context_store", None) is not None:
         loop.working_context_store.redactor = redactor
+    if getattr(loop, "context_manager", None) is not None:
+        loop.context_manager.redactor = redactor
+    if getattr(loop, "compact_checkpoint_store", None) is not None:
+        loop.compact_checkpoint_store.redactor = redactor
     if getattr(loop, "memory_store", None) is not None:
         loop.memory_store.redactor = redactor
         sync_memory_fragment(loop, loop.memory_store)

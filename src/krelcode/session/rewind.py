@@ -241,6 +241,7 @@ class RewindCoordinator:
         session_lifecycle,
         plan_manager,
         checkpoints: Optional[CheckpointManager] = None,
+        compact_checkpoints=None,
         timeline: Optional[TurnTimeline] = None,
     ) -> None:
         self.runtime = runtime
@@ -248,6 +249,7 @@ class RewindCoordinator:
         self.session_lifecycle = session_lifecycle
         self.plan_manager = plan_manager
         self.checkpoints = checkpoints
+        self.compact_checkpoints = compact_checkpoints
         self.timeline = timeline or TurnTimeline(
             loop.bus, lambda: self.loop.history, plan_manager, checkpoints)
         self.timeline.attach()
@@ -275,8 +277,22 @@ class RewindCoordinator:
         except CheckpointRestoreError as exc:
             raise RewindError(f"文件检查点恢复失败；会话未改变: {exc}") from exc
 
-        self.loop.history = self._history_with_current_system(
-            entry.history_before)
+        history_before = entry.history_before
+        restored_compact = None
+        if self.compact_checkpoints is not None:
+            restored_compact = self.compact_checkpoints.find_matching_before(
+                history_before,
+                session_id=entry.session_id,
+                created_at=entry.started_at,
+            )
+            if (
+                restored_compact is not None
+                and restored_compact.pre_compact_history
+            ):
+                history_before = restored_compact.pre_compact_history
+        self.loop.history = self._history_with_current_system(history_before)
+        if restored_compact is not None:
+            self.loop.last_compact_checkpoint = restored_compact
         rebuild = getattr(self.loop, "rebuild_working_context", None)
         if callable(rebuild):
             rebuild()

@@ -146,9 +146,16 @@ ToolsMicrocompacted = ContextMicrocompacted
 
 @dataclass(frozen=True)
 class ContextCompressed(AgentEvent):
-    """历史被摘要压缩（Step 7）。"""
+    """历史被结构化摘要压缩，并保留可审计的交接元数据。"""
     before_tokens: int
     after_tokens: int
+    strategy: str = "structured_summary"
+    summary_source: str = "model"
+    generation: int = 0
+    high_watermark_tokens: int = 0
+    low_watermark_tokens: int = 0
+    source_savings: Tuple[Tuple[str, int], ...] = ()
+    checkpoint_id: str = ""
 
 
 @dataclass(frozen=True)

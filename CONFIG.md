@@ -49,7 +49,7 @@ krelcode [子命令] [选项]
 | `--no-mcp` | — | 不启动配置中的 MCP 服务器 |
 | `--resume` | — | 恢复会话：裸旗=最新，`--resume <path>`=指定 |
 | `--no-session` | — | 关闭会话 JSONL 录制 |
-| `--no-checkpoint` | — | 关闭文件检查点及 `/undo`、`/rewind` 的文件恢复 |
+| `--no-checkpoint` | — | 关闭文件检查点及 compact 前 history checkpoint；同时禁用 `/undo`、`/rewind` 的对应恢复 |
 | `--auto-commit` | — | 每轮有变更自动 git 提交 |
 | `--version` | — | 打印版本退出 |
 
@@ -71,7 +71,7 @@ krelcode [子命令] [选项]
 | `/tools` | 已注册工具（含 MCP 远程与子代理工具） |
 | `/model [provider/]model` | 查看/热切换模型（预算联动，失败不破坏现状） |
 | `/cost` | token 用量（本轮+累计）与估算成本 $ |
-| `/context` | 上下文统计、Working Context、Tool Microcompact、Fragment 来源与 cache 边界 |
+| `/context` | 上下文统计、Working Context、Tool Microcompact、Structured Compact generation/来源/校验摘要、最近 checkpoint、Fragment 来源与 cache 边界 |
 | `/context sources` | 查看已注册 ContextSource、最近装配 layer 顺序、来源 token、cache 属性与有界错误诊断 |
 | `/context rules` | 查看 user/project/directory 规则入口、@import 来源、字符数与越界/循环/敏感文件问题 |
 | `/context fragments [source]` | 列出全部或指定来源的 Fragment、启停状态、group、tokens 与 cache 属性 |
@@ -83,13 +83,13 @@ krelcode [子命令] [选项]
 | `/memory scopes` | 显示各作用域条数与存储路径 |
 | `/memory add <user\|project\|session> <text>` | 写入指定作用域；user 跨工作区，session 跟随当前会话 |
 | `/memory remove <id>` | 删除指定记忆并重建 memory Fragment |
-| `/compact` | 立即执行工具微压缩+LLM 摘要（不等预算），完成后显示实际策略与边界 |
-| `/compact preview [--auto]` | 预览工具微压缩与 compact 的 head/compact/keep 边界、条数、预计 tokens 与待摘要消息；不改 history。`--auto` 仅在超预算时预览 |
+| `/compact` | 立即执行工具微压缩+Structured Compact v2（不等预算），完成后显示 generation、来源节省量、checkpoint 与实际边界 |
+| `/compact preview [--auto]` | 预览工具微压缩与 compact 的 head/compact/keep 边界、高低水位、来源节省量、条数、预计 tokens 与待摘要消息；不改 history。`--auto` 仅在超预算时预览 |
 | `/sessions` · `/sessions search <关键词>` | 列出/搜索会话标题与用户输入 |
 | `/resume <n\|latest\|path>` | 恢复会话并建立新分支（不覆盖源会话） |
 | `/fork [--turn <n>] [名称]` | 从当前历史或第 n 轮结束点创建并切换独立会话分支（不恢复工作区） |
 | `/rewind` · `/rewind list` | 列出当前进程内可回退的 turn |
-| `/rewind <n>` | 回到第 n 轮开始前，联合恢复 history + 文件 checkpoint + plan/审批/权限状态 |
+| `/rewind <n>` | 回到第 n 轮开始前，联合恢复 history、compact 前完整现场、文件 checkpoint 与 plan/审批/权限状态 |
 | `/rewind fork <n> [名称]` | 从第 n 轮结束后的 history + plan 分叉，工作区文件保持当前状态 |
 | `/rename <名称>` | 为当前会话设置可搜索标题 |
 | `/delete <n\|path> [--force]` | 二次确认后归档非活动会话到 `sessions/.archive` |
@@ -300,6 +300,7 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 ├── sessions/          会话 JSONL（session_start/session_meta + 审计事件流 + history）
 │   └── .archive/      /delete 的可恢复归档
 ├── checkpoints/       文件快照（/undo、/rewind 数据源；meta 带 session/turn 身份）
+├── compact-checkpoints/  compact 前完整脱敏 history + Structured Compact 摘要（/rewind 数据源）
 ├── tool_outputs/      超长工具输出全文（历史里留截断+路径引用）
 ├── memory/            # project 记忆 entries.jsonl + sessions/<session-id>.jsonl
 ├── jobs/              后台 Shell 任务脱敏日志（每任务 output.log，默认 10 MiB 上限）
@@ -418,13 +419,13 @@ MCP stdio 子进程默认同样剥离宿主密钥，但 `[mcp_servers.*].env` �
 `LLMResponseReceived`(usage) · `ToolCallStarted` · `ToolProgress` · `ToolOutputDelta` ·
 `ToolCallCompleted`(is_error) · `PlanUpdated` · `UserInputRequested` ·
 `ApprovalRequested` · `PermissionDenied` · `ContextAssembled`(usage snapshot) ·
-`ContextCompressed`(before/after) ·
+`ContextCompressed`(before/after、strategy、summary source/generation、高/低水位、来源节省量、checkpoint ID) ·
 `HookTriggered` · `SubagentSpawned` · `SubagentFeedUpdated` · `SubagentStateChanged` · `SubagentFinished` ·
 `ShellJobStarted` · `ShellJobOutput` · `ShellJobFinished` · `UserSteered` ·
 `RunFinished` · `ErrorOccurred`
 
 JSONL 审计记录类型：`user_input` `tool_call` `tool_result` `permission_denied`
-`hook_triggered` `context_assembled` `context_compressed` `subagent_spawned` `subagent_feed` `subagent_state`
+`hook_triggered` `context_assembled` `context_compressed`(含 Structured Compact 元数据) `subagent_spawned` `subagent_feed` `subagent_state`
 `subagent_finished`
 `shell_job_started` `shell_job_finished` `user_steered`
 `run_finished` `history`(快照)。
@@ -503,6 +504,7 @@ stdin 支持两种 user 形式：
 `user/steered`、`error/occurred`；job 事件独立于 turn，因此不带 turn_id，但带
 `session_id`；`job/output_delta` 的 `sequence` 可直接作为 `after_sequence` 游标；
 `context/assembled` 的 `snapshot` 只含 token 分项、预算、cache boundary 与 hash，不含 Prompt 正文；
+`context/compressed` 只含策略、摘要来源/generation、水位、来源节省量与 checkpoint ID，不含摘要正文；
 `subagent/feed` 的 agent cursor 是 `agent_sequence`（外层 `sequence` 仍是 QueryEvent 顺序）；
 最后以 `system/session_end` 结束。turn 内事件都带 `turn_id`、单调 `sequence` 和
 `session_id`，user 对应的全部事件及 result 还带同一 `request_id`；后台 job 是跨 turn

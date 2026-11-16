@@ -883,6 +883,22 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         lines.append(
             f"  Tool Microcompact: {micro.compacted_count} 条"
             f" · saved {micro.saved_tokens} tokens")
+    manager = getattr(ctx.loop, "context_manager", None)
+    summary = getattr(manager, "last_summary", None)
+    if summary is not None:
+        lines.append(
+            f"  Structured Compact: v{summary.version}"
+            f" · generation {summary.generation}"
+            f" · source {summary.source}"
+            f" · {summary.token_count} tokens"
+            f" · {len(summary.files)} files"
+            f" · {len(summary.tests)} tests"
+            f" · digest {summary.digest}")
+    checkpoint = getattr(ctx.loop, "last_compact_checkpoint", None)
+    if checkpoint is not None:
+        lines.append(
+            f"  Compact Checkpoint: {checkpoint.id}"
+            f" · {checkpoint.before_tokens} → {checkpoint.after_tokens} tokens")
     if registry is not None:
         lines.extend(f"  {line}" for line in registry.snapshot().summary_lines())
     return _ok(*lines)
@@ -921,6 +937,9 @@ async def handle_compact(ctx: CommandContext) -> CommandResult:
     )
     if done:
         lines = [f"  [compact] 已压缩: {before} → {after} tokens"]
+        checkpoint = getattr(ctx.loop, "last_compact_checkpoint", None)
+        if checkpoint is not None:
+            lines.append(f"  checkpoint: {checkpoint.id}")
     else:
         lines = [f"  [compact] 未压缩（当前约 {before} tokens）"]
     lines.extend(f"  {line}" for line in details)

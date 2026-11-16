@@ -372,9 +372,13 @@ class StreamRenderer:
             return
         elif isinstance(event, ContextCompressed):
             self.end_stream()
+            generation = (
+                f" · generation {event.generation}"
+                if event.generation else "")
             self._write(
                 f"  {self._mark(RESULT_MARK)}历史已压缩: "
-                f"{event.before_tokens} → {event.after_tokens} tokens\n")
+                f"{event.before_tokens} → {event.after_tokens} tokens"
+                f"{generation}\n")
         elif isinstance(event, ErrorOccurred):
             self.end_stream()
             self._write(

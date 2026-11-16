@@ -5,12 +5,12 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（v0.79.0 / Step 89）
+## 1. 项目统计（v0.80.0 / Step 90）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 32,796 行（Python，**零第三方运行时依赖**） |
-| 测试 | 21,944 行 / 107 个测试文件 / 1,077 个用例（离线 1,075 + 本地端口集成 2） |
+| 源码 | 34,444 行（Python，**零第三方运行时依赖**） |
+| 测试 | 22,455 行 / 108 个测试文件 / 1,090 个用例（离线 1,088 + 本地端口集成 2） |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 16（含 ask_user/update_plan + 4 个后台 Job 工具）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
@@ -20,13 +20,13 @@
 源码按层分布：
 
 ```
-session 6995 · agent 4590 · ui 3679 · tools 2813 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2440
-safety 2287 · llm 2143 · subagent 1714 · mcp 1652 · skills 949 · core 852
+session 7392 · agent 7228 · ui 3701 · tools 2813 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2440
+safety 2287 · llm 2143 · subagent 1714 · mcp 1652 · skills 949 · core 894
 jobs 582 · plugins 435 · entrypoints 194
 ```
 
-core 只有 852 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
-测试代码量约为源码的 68%，覆盖协议、安全边界与端到端行为。
+core 只有 894 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
+测试代码量约为源码的 65%，覆盖协议、安全边界与端到端行为。
 
 ## 2. 关键架构决策时间线
 
@@ -68,6 +68,7 @@ core 只有 852 行——内核保持极小、能力在边缘，正是当初对�
 | v0.77 | 规则分层与按需加载 | user/project 规则进入稳定前缀，目录规则只按当前轮目标路径加载，避免 monorepo 全树扫描；@import 从提示词拼接中独立为有来源、有预算、可诊断的安全解析器，拒绝逃逸/敏感文件/循环，并明确规则与 Memory 的职责边界 |
 | v0.78 | 真实请求装配与预算 | Snapshot 不再只看统一 Message：Provider 先构造可复用的 PreparedRequest，再从最终 wire body 提取字节/token/hash/缓存段；压缩同时使用完整输入与真实输出预留，超限只重新装配一次。旧 Provider 通过 estimated 回退保持兼容 |
 | v0.79 | Working Context 与 Tool Microcompact | 当前任务事实从长期 Memory 分离为 bounded/redacted session store；真实预算链路先做零 LLM 工具分级压缩，保护当前轮/错误/写编辑/计划，仍超限才摘要。工具结构化元数据可随会话恢复，微压缩事件贯通 UI/JSONL/stream-json |
+| v0.80 | Structured Compact v2 | compact 从自由摘要升级为严格 schema 的 goal/files/tests/handoff；失败时 Working Context 降级、旧摘要合并、turn 边界与高低水位控制，pre-compact history 持久化后由 Rewind 恢复。可观测元数据贯通 UI/JSONL/stream-json，避免历史和工具结果反复摘要 |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -117,7 +118,7 @@ core 只有 852 行——内核保持极小、能力在边缘，正是当初对�
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 1,075 通过、2 skip；本地端口可用时 1,077/1,077 全过。
+bind 探测自动 skip——沙箱内 1,088 通过、2 skip；本地端口可用时 1,090/1,090 全过。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /
@@ -151,5 +152,5 @@ python scripts/real_acceptance.py --provider anthropic --keep
   thinking 块（含签名/redacted）经 Message.provider_meta 完整回传（Step 34），
   其他 provider 无此要求
 - MCP 反向请求支持 sampling/roots/ping（Step 35）；elicitation 等更新的能力未实现
-- 上下文压缩的摘要质量依赖所用模型；小模型摘要可能丢细节（有占位兜底）
+- Structured Compact 的模型摘要仍依赖模型能力；失败或 schema 非法时使用 Working Context/history 降级，宁可保留结构化事实也不阻断主循环
 - Fragment 手动启停是当前会话运行时状态，重启恢复默认；需要长期策略时应修改来源本身或后续增加持久化 overrides

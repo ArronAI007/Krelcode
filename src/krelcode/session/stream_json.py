@@ -225,6 +225,13 @@ class StreamJsonEncoder:
                 "subtype": "compressed",
                 "before_tokens": event.before_tokens,
                 "after_tokens": event.after_tokens,
+                "strategy": event.strategy,
+                "summary_source": event.summary_source,
+                "generation": event.generation,
+                "high_watermark_tokens": event.high_watermark_tokens,
+                "low_watermark_tokens": event.low_watermark_tokens,
+                "source_savings": dict(event.source_savings),
+                "checkpoint_id": event.checkpoint_id,
             }
         elif isinstance(event, HookTriggered):
             payload = {
