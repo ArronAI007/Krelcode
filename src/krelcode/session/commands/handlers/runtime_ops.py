@@ -8,6 +8,8 @@ import shlex
 from ....agent.context import build_workspace_context_bundle
 from ....agent.prompts import build_system_prompt
 from ....agent.tokens import estimate_history_tokens
+from ....safety.runtime import parse_permission_mode
+from ....safety.rules import RuleDecision, RuleScope
 from ..context import CommandContext
 from ..sources import sync_mcp_prompt_commands, sync_skill_commands
 from ..types import CommandResult
@@ -321,6 +323,97 @@ async def handle_allow(ctx: CommandContext) -> CommandResult:
         removed = rules.remove_program(parts[1])
         return _ok(f"  [allow] {'已移除' if removed else '规则不存在'}: {parts[1]}")
     return _ok("  用法: /allow | /allow add <程序名> | /allow remove <程序名>")
+
+
+async def handle_permissions(ctx: CommandContext) -> CommandResult:
+    """运行时权限模式与 session/workspace 规则管理。"""
+    manager = ctx.permission_manager
+    rules = getattr(ctx.loop.policy, "rules", None)
+    if manager is None and rules is None:
+        return _ok("  （权限管理不可用）")
+
+    try:
+        parts = shlex.split(ctx.request.arguments)
+    except ValueError as exc:
+        return _ok(f"  [permissions] 参数解析失败: {exc}")
+
+    if not parts:
+        lines = ["  [permissions] 当前权限模式与规则"]
+        if manager is not None:
+            lines.extend(manager.mode_lines())
+        if rules is None:
+            lines.append("  规则仓库: 不可用（--no-sandbox）")
+        else:
+            lines.append(f"  规则文件: {rules.path or '（仅内存）'}")
+            rule_lines = [rules.format_rule(rule) for rule in rules.as_rules()]
+            lines.extend(f"  {line}" for line in rule_lines)
+            legacy_programs = rules.as_list()
+            legacy_commands = rules.as_commands()
+            if legacy_programs:
+                lines.append(
+                    "  旧版程序 allow: " + ", ".join(legacy_programs))
+            if legacy_commands:
+                lines.append(
+                    "  旧版精确命令 allow: " + ", ".join(legacy_commands))
+            if not rule_lines and not legacy_programs and not legacy_commands:
+                lines.append("  规则: （空，沿用内置风险分级）")
+            lines.append("  优先级: deny > ask > allow；受限模式不能通过规则越权")
+        lines.append(
+            "  用法: /permissions mode <default|plan|read-only|auto-approve>")
+        lines.append(
+            "        /permissions add <allow|ask|deny> <session|workspace> "
+            "<path|command|command_program|tool> <pattern>")
+        lines.append("        /permissions remove <rule-id>")
+        return _ok(*lines)
+
+    operation = parts[0].lower()
+    if operation == "mode" and len(parts) == 2:
+        if manager is None:
+            return _ok("  （权限模式管理不可用）")
+        try:
+            mode = parse_permission_mode(parts[1])
+        except ValueError:
+            return _ok("  [permissions] mode 必须是 default / plan / read-only / auto-approve")
+        previous = manager.mode
+        manager.set_mode(mode)
+        if ctx.plan_manager is not None:
+            ctx.plan_manager.on_mode_change(previous, manager.mode)
+        return _ok(
+            f"  [permissions] 模式: {previous.value} → {manager.mode.value}",
+            f"  {manager.status_line()}",
+        )
+
+    if operation in {"allow", "ask", "deny"} and len(parts) == 4:
+        parts = ["add", operation, *parts[1:]]
+        operation = "add"
+    if operation == "add" and len(parts) == 5:
+        if rules is None:
+            return _ok("  （安全策略未启用，无法管理规则）")
+        decision, scope, kind, pattern = parts[1:]
+        try:
+            rule, added = rules.add_rule(
+                RuleDecision(decision), RuleScope(scope), kind, pattern)
+        except ValueError as exc:
+            return _ok(f"  [permissions] 添加失败: {exc}")
+        return _ok(
+            f"  [permissions] {'已添加' if added else '规则已存在'}: "
+            f"{rules.format_rule(rule)}",
+            f"  作用域: {rule.scope.value}"
+            + ("（仅本次会话）" if rule.scope is RuleScope.SESSION else "（已持久化）"),
+        )
+
+    if operation == "remove" and len(parts) == 2:
+        if rules is None:
+            return _ok("  （安全策略未启用，无法管理规则）")
+        removed = rules.remove_rule(parts[1])
+        return _ok(
+            f"  [permissions] {'已移除' if removed else '规则不存在'}: {parts[1]}")
+
+    return _ok(
+        "  用法: /permissions | /permissions mode <mode> | "
+        "/permissions add <decision> <scope> <kind> <pattern> | "
+        "/permissions remove <rule-id>"
+    )
 
 
 async def handle_cost(ctx: CommandContext) -> CommandResult:

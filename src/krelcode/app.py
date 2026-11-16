@@ -162,6 +162,7 @@ def build_policy(
         rules_path=workspace_root / ".krelcode" / "allow_rules.json",
         bus=bus,
         auto_approve=args.auto_approve,
+        workspace_root=workspace_root,
     )
 
 

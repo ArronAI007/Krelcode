@@ -36,7 +36,8 @@ def test_repl_commands_documented():
     text = (ROOT / "CONFIG.md").read_text(encoding="utf-8")
     for command in ("/help", "/history", "/tools", "/session", "/sessions",
                     "/resume", "/mcp", "/agents", "/skills", "/skill",
-                    "/undo", "/model", "/allow", "/cost", "/context",
+                    "/undo", "/model", "/allow", "/permissions", "/cost",
+                    "/context",
                     "/compact", "/export", "/reset", "/stop", "/exit",
                     "/thinking", "/tool-output", "/plugins", "/fork",
                     "/rename", "/delete"):

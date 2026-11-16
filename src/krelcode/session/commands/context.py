@@ -29,3 +29,5 @@ class CommandContext:
     plugins: Any = None
     plugins_reload: Any = None
     session_lifecycle: Any = None
+    permission_manager: Any = None
+    plan_manager: Any = None

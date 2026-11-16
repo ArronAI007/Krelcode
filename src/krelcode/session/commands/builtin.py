@@ -81,6 +81,13 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             help=("查看/热切换模型（\"gpt-4o\" 沿用当前 provider，\n"
                   "\"anthropic/claude-sonnet-4-5\" 跨 provider）")),
         CommandSpec(
+            "permissions", "切换权限模式并管理会话/工作区规则",
+            argument_hint="[mode|add|remove ...]", available_during_run=True,
+            help=("查看当前权限模式与规则；/permissions mode <mode> 切换；\n"
+                  "/permissions add <allow|ask|deny> <session|workspace> "
+                  "<path|command|command_program|tool> <pattern>；\n"
+                  "/permissions remove <rule-id>。规则优先级 deny > ask > allow。")),
+        CommandSpec(
             "allow", "管理命令审批白名单", argument_hint="[add|remove <程序名>]",
             help=("查看审批白名单；/allow add <程序名> 添加显式程序级规则、\n"
                   "/allow remove <程序名> 移除（持久化到工作区；审批中的\n"

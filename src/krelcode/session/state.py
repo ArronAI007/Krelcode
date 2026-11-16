@@ -65,6 +65,7 @@ class SessionViewState:
     plan_statuses: tuple[str, ...] = ()
     plan_active_index: int = -1
     plan_explanation: str = ""
+    plan_approval_status: str = "none"
     input_request_id: str = ""
     input_prompt: str = ""
     input_options: tuple[str, ...] = ()
@@ -110,6 +111,7 @@ class SessionViewState:
         self.plan_statuses = ()
         self.plan_active_index = -1
         self.plan_explanation = ""
+        self.plan_approval_status = "none"
         self.input_request_id = ""
         self.input_prompt = ""
         self.input_options = ()

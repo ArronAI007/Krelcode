@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from ..agent.loop import AgentLoop
 from ..agent.runtime import AgentRuntime
+from ..safety.runtime import PlanApprovalCoordinator, RuntimePermissionManager
 from ..tools.base import CommandDescriptor, ToolServices
 from .lifecycle import SessionLifecycle
 from .commands import (
@@ -53,6 +54,8 @@ class SessionController:
         plugins_reload=None,
         workspace_root: Optional[Path] = None,
         command_registry: Optional[CommandRegistry] = None,
+        permission_manager: Optional[RuntimePermissionManager] = None,
+        plan_manager: Optional[PlanApprovalCoordinator] = None,
     ) -> None:
         self.runtime = (runtime if isinstance(runtime, AgentRuntime)
                         else AgentRuntime(runtime))
@@ -85,6 +88,10 @@ class SessionController:
         self.plugins_reload = (plugins_reload if plugins_reload is not None
                                else getattr(self.loop, "plugin_reload", None))
         self.workspace_root = workspace_root or self.runtime.workspace_root
+        self.permission_manager = (
+            permission_manager or RuntimePermissionManager(self.loop))
+        self.plan_manager = (
+            plan_manager or PlanApprovalCoordinator(self.permission_manager))
         self.command_registry = command_registry or builtin_command_registry()
         sync_skill_commands(self.command_registry, self.skills)
         sync_mcp_prompt_commands(self.command_registry, self.mcp_supervisor)
@@ -106,6 +113,8 @@ class SessionController:
         tool_allowlist: Optional[list[str]] = None,
     ):
         """启动一轮查询并返回可消费事件的 QuerySession。"""
+        if self.permission_manager.mode.value == "plan":
+            message = self.plan_manager.wrap_request(message)
         return self.runtime.start_query(
             message,
             images=images,
@@ -158,6 +167,32 @@ class SessionController:
         self.refresh_tool_services()
         return result
 
+    def set_permission_mode(self, mode) -> tuple[str, str]:
+        """切换模式并让 Plan 协调器同步处理待确认状态。"""
+        previous = self.permission_manager.mode
+        self.permission_manager.set_mode(mode)
+        current = self.permission_manager.mode
+        self.plan_manager.on_mode_change(previous, current)
+        return previous.value, current.value
+
+    def cycle_permission_mode(self, *, reverse: bool = False) -> tuple[str, str]:
+        previous = self.permission_manager.mode
+        current = self.permission_manager.cycle_mode(reverse=reverse)
+        self.plan_manager.on_mode_change(previous, current)
+        return previous.value, current.value
+
+    def record_plan(
+        self,
+        items,
+        statuses,
+        active_index: int = -1,
+        explanation: str = "",
+    ) -> None:
+        self.plan_manager.record(
+            items, statuses, active_index=active_index,
+            explanation=explanation,
+        )
+
     def refresh_tool_services(self) -> None:
         """把命令/MCP 目录刷新为 ToolUseContext 中的只读窄快照。"""
         commands = tuple(
@@ -197,4 +232,6 @@ class SessionController:
             plugins=self.plugins,
             plugins_reload=self.plugins_reload,
             session_lifecycle=self.session_lifecycle,
+            permission_manager=self.permission_manager,
+            plan_manager=self.plan_manager,
         )

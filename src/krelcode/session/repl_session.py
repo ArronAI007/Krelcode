@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional, Protocol, Sequence
 
 from ..agent.query import QuerySession
-from ..core.events import AgentEvent
+from ..core.events import AgentEvent, PlanUpdated
 from .controller import SessionController
 from .interactions import InputResolution, UserInputBroker
 from .prompt_queue import PromptQueue
@@ -243,7 +243,17 @@ class ReplSessionRunner:
     async def _consume(self, query: QuerySession) -> None:
         async for item in query.events:
             self._reducer.apply(item, self.state)
-            self._on_event(item.event)
+            event = item.event
+            if isinstance(event, PlanUpdated):
+                self.controller.record_plan(
+                    event.items,
+                    event.statuses,
+                    active_index=event.active_index,
+                    explanation=event.explanation,
+                )
+                self.state.plan_approval_status = (
+                    self.controller.plan_manager.status.value)
+            self._on_event(event)
             self._on_status(self.state)
 
     def queue_prompt(self, prompt: SessionPrompt) -> int:

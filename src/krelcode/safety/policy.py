@@ -26,7 +26,7 @@ from ..tools.base import (
     ToolSource,
 )
 from .commands import RISK_ALLOW, RISK_DENY, classify_command
-from .rules import AllowRules
+from .rules import AllowRules, RuleDecision, RuleMatch
 
 
 @dataclass(frozen=True)
@@ -77,9 +77,13 @@ class SandboxPolicy:
         rules_path: Optional[Path] = None,
         bus: Optional[EventBus] = None,
         auto_approve: bool = False,
+        workspace_root: Optional[Path] = None,
     ) -> None:
         self.approver = approver
-        self.rules = AllowRules(rules_path)
+        self.rules = AllowRules(
+            rules_path,
+            workspace_root=workspace_root,
+        )
         self.bus = bus
         self.auto_approve = auto_approve
 
@@ -91,6 +95,13 @@ class SandboxPolicy:
             and descriptor.read_only
             and descriptor.source is not ToolSource.MCP
         )
+        rule_match = _combine_rule_matches(
+            self.rules.evaluate_tool(name),
+            self.rules.evaluate_paths(_tool_paths(tool_call.arguments)),
+        )
+        if rule_match is not None and rule_match.decision is RuleDecision.DENY:
+            return deny(f"权限规则拒绝: {rule_match.reason}")
+
         restricted = (
             ctx.runtime.permission_mode in {
                 PermissionMode.READ_ONLY,
@@ -103,23 +114,52 @@ class SandboxPolicy:
                 "当前 read-only/plan/review 权限模式禁止有副作用的工具: "
                 f"{name}"
             )
+
         if local_read_only or name in READONLY_TOOLS:
+            if rule_match is not None and rule_match.decision is RuleDecision.ASK:
+                return await self._ask(
+                    tool_call, rule_match.reason, ctx=ctx,
+                    ignore_rules=True, force_approval=True)
             return ALLOW
+
         if name in WORKSPACE_WRITE_TOOLS:
+            if rule_match is not None and rule_match.decision is RuleDecision.ASK:
+                return await self._ask(
+                    tool_call, rule_match.reason, ctx=ctx,
+                    ignore_rules=True, force_approval=True)
             protected = classify_protected_path(
                 str(tool_call.arguments.get("path", "")), ctx.workspace_root)
             if protected:
                 return await self._ask(
                     tool_call, f"写入受保护路径（{protected}）", ctx=ctx)
+            if rule_match is not None and rule_match.decision is RuleDecision.ALLOW:
+                return Decision(True, rule_match.reason)
             return ALLOW
+
         if name in SHELL_TOOLS:
-            return await self._check_command(tool_call, ctx)
-        # 未知/未来新工具：保守 ASK
+            return await self._check_command(tool_call, ctx, rule_match)
+
+        # 未知/未来新工具：显式 allow 才能免审批，其他情况保守 ASK。
+        if rule_match is not None and rule_match.decision is RuleDecision.ALLOW:
+            return Decision(True, rule_match.reason)
+        reason = (
+            rule_match.reason
+            if rule_match is not None
+            else f"未分级工具 {name}，保守请求审批"
+        )
         return await self._ask(
-            tool_call, f"未分级工具 {name}，保守请求审批", ctx=ctx)
+            tool_call, reason, ctx=ctx,
+            ignore_rules=rule_match is not None,
+            force_approval=(
+                rule_match is not None
+                and rule_match.decision is RuleDecision.ASK),
+        )
 
     async def _check_command(
-        self, tool_call: ToolCall, ctx: ToolContext,
+        self,
+        tool_call: ToolCall,
+        ctx: ToolContext,
+        rule_match: Optional[RuleMatch] = None,
     ) -> Decision:
         if tool_call.name == "run_skill_script":
             script = str(tool_call.arguments.get("script", ""))
@@ -128,9 +168,26 @@ class SandboxPolicy:
             command = f"skill-script {script} {suffix}".strip()
         else:
             command = str(tool_call.arguments.get("command", ""))
+        command_match = _combine_rule_matches(
+            rule_match, self.rules.evaluate_command(command))
+        if command_match is not None and command_match.decision is RuleDecision.DENY:
+            return deny(f"权限规则拒绝: {command_match.reason}")
+
         risk, reason = classify_command(command)
         if risk == RISK_DENY:
             return deny(reason)
+        if command_match is not None:
+            if command_match.decision is RuleDecision.ASK:
+                return await self._ask(
+                    tool_call,
+                    f"{command_match.reason}；风险：{reason}",
+                    command=command,
+                    ctx=ctx,
+                    ignore_rules=True,
+                    force_approval=True,
+                )
+            if command_match.decision is RuleDecision.ALLOW:
+                return Decision(True, command_match.reason)
         if risk == RISK_ALLOW:
             return ALLOW
         return await self._ask(tool_call, reason, command=command, ctx=ctx)
@@ -142,16 +199,18 @@ class SandboxPolicy:
         command: Optional[str] = None,
         *,
         ctx: Optional[ToolContext] = None,
+        ignore_rules: bool = False,
+        force_approval: bool = False,
     ) -> Decision:
-        # 1) 持久化规则命中
-        if command is not None and self.rules.matches(command):
+        # 1) 旧版持久化规则仅在没有显式 ask/更高优先级规则时生效。
+        if not ignore_rules and command is not None and self.rules.matches(command):
             return Decision(True, f"命中已存 allow 规则: {reason}")
         # 2) 全自动批准模式
         runtime_auto = bool(
             ctx is not None
             and ctx.runtime.permission_mode is PermissionMode.AUTO_APPROVE
         )
-        if self.auto_approve or runtime_auto:
+        if not force_approval and (self.auto_approve or runtime_auto):
             source = "运行时权限模式" if runtime_auto else "--auto-approve"
             return Decision(True, f"{source}自动批准: {reason}")
         # 3) 交互审批
@@ -169,6 +228,26 @@ class SandboxPolicy:
         if answer == "yes":
             return Decision(True, f"用户批准: {reason}")
         return deny(f"用户拒绝（{reason}）")
+
+
+def _tool_paths(arguments) -> tuple[str, ...]:
+    """提取需要参与路径规则匹配的参数；未知工具也使用同一安全边界。"""
+    values = []
+    for key in ("path", "file_path"):
+        value = arguments.get(key) if hasattr(arguments, "get") else None
+        if value not in (None, ""):
+            values.append(str(value))
+    return tuple(values)
+
+
+def _combine_rule_matches(
+    *matches: Optional[RuleMatch],
+) -> Optional[RuleMatch]:
+    for decision in (RuleDecision.DENY, RuleDecision.ASK, RuleDecision.ALLOW):
+        for match in matches:
+            if match is not None and match.decision is decision:
+                return match
+    return None
 
 
 # ---------------------------------------------------------------------------

@@ -79,6 +79,7 @@ class ReplControl(str, Enum):
     """终端控制键产生的非文本动作。"""
 
     INTERRUPT = "interrupt"
+    CYCLE_PERMISSION = "cycle-permission"
 
 
 @dataclass(frozen=True)
@@ -184,7 +185,74 @@ def format_plan_lines(state: SessionViewState) -> list[str]:
         lines.append(f"  {marks.get(status, '[?]')} {index}. {item}")
     if state.plan_explanation:
         lines.append(f"  说明: {state.plan_explanation}")
+    approval = {
+        "pending": "待确认 · /plan approve 执行 · /plan cancel 取消",
+        "approved": "已批准",
+        "cancelled": "已取消",
+    }.get(state.plan_approval_status)
+    if approval:
+        lines.append(f"  状态: {approval}")
     return lines
+
+
+def handle_plan_command(
+    arguments: str,
+    plan_manager,
+    state: SessionViewState,
+    *,
+    allow_actions: bool = True,
+) -> CommandResult:
+    """执行 `/plan` 的查看、生成、批准与取消动作。"""
+    text = (arguments or "").strip()
+    operation = text.lower()
+    if operation == "approve":
+        if not allow_actions:
+            return CommandResult(
+                handled=True,
+                output=("  计划执行确认需等待当前任务结束后操作",),
+            )
+        ok, message, prompt = plan_manager.approve()
+        state.plan_approval_status = plan_manager.status.value
+        return CommandResult(
+            handled=True,
+            output=(f"  [plan] {message}",),
+            run_prompt=prompt if ok else None,
+        )
+    if operation == "cancel":
+        if not allow_actions:
+            return CommandResult(
+                handled=True,
+                output=("  计划取消需等待当前任务结束后操作",),
+            )
+        ok, message = plan_manager.cancel()
+        state.plan_approval_status = plan_manager.status.value
+        return CommandResult(handled=True, output=(f"  [plan] {message}",))
+    if text:
+        if not allow_actions:
+            return CommandResult(
+                handled=True,
+                output=("  当前任务运行中：只能使用 /plan 查看计划",),
+            )
+        try:
+            prompt = plan_manager.start_request(text)
+        except ValueError as exc:
+            return CommandResult(
+                handled=True, output=(f"  [plan] {exc}",))
+        state.plan_approval_status = plan_manager.status.value
+        return CommandResult(
+            handled=True,
+            output=("  [plan] 已进入 Plan 模式，开始只读调查并生成计划",),
+            run_prompt=prompt,
+        )
+    lines = (
+        plan_manager.render_lines()
+        if plan_manager.snapshot.items
+        else format_plan_lines(state)
+    )
+    return CommandResult(
+        handled=True,
+        output=tuple(f"  {line}" for line in lines),
+    )
 
 
 def _stdout_write(s: str) -> None:
@@ -447,7 +515,7 @@ class TerminalLineEditor:
     COMPLETE_ESCAPE_SEQUENCES = frozenset({
         b"[A", b"OA", b"[B", b"OB", b"[D", b"OD", b"[C", b"OC",
         b"[H", b"OH", b"[1~", b"[7~", b"[F", b"OF", b"[4~", b"[8~",
-        b"[3~", b"[3;5~", b"[200~", b"[13;2u", b"[13;3u",
+        b"[3~", b"[3;5~", b"[200~", b"[Z", b"[13;2u", b"[13;3u",
         b"[27;2;13~", b"[27;3;13~",
         b"b", b"B", b"f", b"F", b"\x7f", b"\r", b"\n",
     })
@@ -686,6 +754,8 @@ class TerminalLineEditor:
 
         if not sequence:
             return ReplControl.INTERRUPT       # 单独 ESC
+        if sequence == b"[Z":                  # Shift-Tab
+            return ReplControl.CYCLE_PERMISSION
         if sequence in (b"\r", b"\n", b"[13;3u", b"[27;3;13~"):
             return TerminalSubmission(state.text, queue_next=True)  # Alt+Enter
         if sequence in (b"[13;2u", b"[27;2;13~"):  # Shift+Enter
@@ -834,8 +904,8 @@ def print_banner(loop: AgentLoop, tool_names: Optional[list],
 
     accent = (lambda s: f"{CYAN}{s}{RESET}") if color else (lambda s: s)
     write("")
-    write(f"  {accent('/help')} 查看命令 · ↑/↓ 历史 · Ctrl-R 搜索 · "
-          f"{accent('@路径')} 引用文件 · {accent('/exit')} 退出")
+    write(f"  {accent('/help')} 查看命令 · Shift-Tab 切换权限 · ↑/↓ 历史 · "
+          f"Ctrl-R 搜索 · {accent('@路径')} 引用文件 · {accent('/exit')} 退出")
     write("")
 
 
@@ -951,6 +1021,15 @@ async def run_repl(
             return
         view = current or state
         status = view.status_text()
+        permission = f"权限 {controller.permission_manager.mode.value}"
+        if status:
+            status = f"{status} · {permission}"
+        elif controller.plan_manager.pending:
+            status = (
+                "计划待确认 · /plan approve 执行 · "
+                f"{permission} · Shift-Tab 切换")
+        else:
+            status = f"{permission} · Shift-Tab 切换"
         if status != status_cache:
             status_cache = status
             prompt.set_status(status)
@@ -966,6 +1045,15 @@ async def run_repl(
     def restore_prompt() -> None:
         nonlocal status_cache, last_status_draw
         status_cache = state.status_text()
+        permission = f"权限 {controller.permission_manager.mode.value}"
+        if status_cache:
+            status_cache = f"{status_cache} · {permission}"
+        elif controller.plan_manager.pending:
+            status_cache = (
+                "计划待确认 · /plan approve 执行 · "
+                f"{permission} · Shift-Tab 切换")
+        else:
+            status_cache = f"{permission} · Shift-Tab 切换"
         prompt.set_status(status_cache)
         prompt.resume_or_show(current_prompt())
         last_status_draw = time.monotonic()
@@ -1097,9 +1185,15 @@ async def run_repl(
     async def handle_command(action: InputAction):
         if action.command == "/plan":
             prompt.hide()
-            for line in format_plan_lines(state):
-                print(f"  {line}")
-            return False
+            result = handle_plan_command(
+                action.arguments,
+                controller.plan_manager,
+                state,
+                allow_actions=not state.is_running,
+            )
+            for line in result.output:
+                print(line)
+            return result if result.run_prompt is not None else False
         return await _handle_command(
             action.text, loop, renderer,
             session_path=session_path, sessions_dir=sessions_dir,
@@ -1134,6 +1228,24 @@ async def run_repl(
                 continue
             raw_action = action_get.result()
             action_get = asyncio.create_task(action_queue.get())
+
+            # Shift-Tab：在任意前台状态快速轮换权限模式，保留当前草稿。
+            if raw_action is ReplControl.CYCLE_PERMISSION:
+                plan_status_before = controller.plan_manager.status.value
+                previous, current = controller.cycle_permission_mode()
+                suffix = ""
+                if (
+                    plan_status_before != "cancelled"
+                    and controller.plan_manager.status.value == "cancelled"
+                ):
+                    suffix = "；待确认计划已取消"
+                if current in {"plan", "read-only"} and runner.pending is not None:
+                    runner.reject_pending_approval()
+                    suffix += "；待审批请求已拒绝"
+                notice(
+                    f"权限模式: {previous} → {current}{suffix}")
+                restore_prompt()
+                continue
 
             # Esc/Ctrl-C：运行中中止；空闲时只清空当前输入。
             if isinstance(raw_action, ReplControl):
@@ -1249,6 +1361,11 @@ async def run_repl(
                     restore_prompt()
                     continue
                 if action.kind is InputKind.COMMAND:
+                    if action.command == "/permissions":
+                        prompt.hide()
+                        await handle_command(action)
+                        restore_prompt()
+                        continue
                     print(RUNNING_HINT)
                     restore_prompt()
                     continue

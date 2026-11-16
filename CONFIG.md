@@ -60,6 +60,12 @@ krelcode [子命令] [选项]
 | `/help` | 帮助 |
 | `/history` | 当前对话历史 |
 | `/thinking` | 展开最近一次思考（正文默认折叠） |
+| `/plan` · `/plan <任务>` | 查看最近计划 · 进入只读 Plan 模式并生成待确认计划 |
+| `/plan approve` · `/plan cancel` | 恢复进入 Plan 前的权限模式并自动执行 · 取消待确认计划 |
+| `/permissions` | 当前权限模式、session/workspace 规则与优先级 |
+| `/permissions mode <mode>` | 运行时切换 `default / plan / read-only / auto-approve` |
+| `/permissions add <decision> <scope> <kind> <pattern>` | 添加 `allow/ask/deny` × `session/workspace` 规则 |
+| `/permissions remove <rule-id>` | 按 ID 删除规则 |
 | `/tool-output [编号\|last]` | 列出工具输出（默认折叠）；按编号或 `last` 在灰色背景面板中展开 |
 | `/queue [delete <n>\|move <n> <m>\|clear]` | 查看或管理 `Alt+Enter` 排队的下一条消息 |
 | `/tools` | 已注册工具（含 MCP 远程与子代理工具） |
@@ -83,10 +89,14 @@ krelcode [子命令] [选项]
 | `/skill <name> [参数]` | 用户主动加载并执行 Skill；参数替换 `$ARGUMENTS` |
 | `/plugins [reload\|show <name>]` | 查看插件状态/问题 · 热重载 · 查看单个 manifest |
 | `/mcp` · `/mcp reload` | MCP 服务器状态 · 重读配置热重载 |
-| `/allow [add\|remove <程序名>]` | 命令审批白名单管理（持久化） |
+| `/allow [add\|remove <程序名>]` | 旧版程序白名单兼容入口（持久化） |
 | `/stop` | 中止运行中任务（历史自动修复） |
 | `/reset` | 清空历史 |
 | `/exit` | 退出（Ctrl-D 同） |
+
+**权限快捷键**：`Shift-Tab` 按 `default → plan → read-only → auto-approve`
+循环切换，状态栏实时显示当前模式；切换会同步更新当前 turn 的策略快照和下一轮
+工具池。`/permissions mode` 也可在任务运行中切换。
 
 **运行中（steering）**：`Enter`=插话（当前 turn 下一步看到，`[用户插话]` 前缀注入）；
 `Alt+Enter`=排队为下一条独立消息，当前 turn 自然完成或中止后自动发送；
@@ -252,7 +262,7 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 ├── tool_outputs/      超长工具输出全文（历史里留截断+路径引用）
 ├── exports/           /export 缺省输出目录
 ├── sandbox/            隔离 HOME/TMP/cache（命令与 Skill 脚本使用）
-└── allow_rules.json   审批白名单（{"allow_programs": [...]}，仅用户可改）
+└── allow_rules.json   审批规则（旧版 allow_programs/allow_commands + rules[]，仅用户可改）
 ```
 
 全局：`~/.krelcode/config.toml`（配置）、`~/.krelcode/AGENTS.md`（全局规则，
@@ -268,18 +278,61 @@ Plugin 发现目录（后者覆盖前者同名插件）：`~/.krelcode/plugins`�
 只记录 issue，不影响主 Agent。插件工具统一命名空间为
 `plugin__<plugin-name>__<tool-name>`。
 
+### 运行时权限与规则示例
+
+```text
+/permissions
+/permissions mode plan
+/permissions add allow session path "docs/**"
+/permissions add ask workspace command "git push"
+/permissions add deny workspace command_program rm
+/permissions remove session-allow-1
+```
+
+`kind` 支持：
+
+| kind | pattern 语义 |
+|------|---------------|
+| `path` | 解析 symlink 后的工作区相对路径 glob，例如 `docs/**`、`src/*.py` |
+| `command` | 规范化后的完整直接命令，例如 `git push origin main` |
+| `command_program` | 单一直接命令的首程序名，例如 `pytest`；包装/复合命令不匹配 |
+| `tool` | 工具名 glob，例如 `write_file`、`mcp__catalog__*` |
+
+workspace 规则文件新增字段示例：
+
+```json
+{
+  "allow_programs": [],
+  "allow_commands": [],
+  "rules": [
+    {
+      "id": "workspace-allow-1",
+      "decision": "allow",
+      "scope": "workspace",
+      "kind": "path",
+      "pattern": "docs/**"
+    }
+  ]
+}
+```
+
+规则文件本身位于受保护目录 `.krelcode/`，Agent 写它仍需用户审批；模型没有
+修改权限规则的专用工具，规则管理入口只属于用户命令。
+
 ## 6. 安全策略速查（审批策略 + 运行时 Sandbox，默认开启）
 
 | 操作 | 处置 |
 |------|------|
-| 只读工具（get_time/read_file/grep/glob/find_refs/repo_map/check_syntax/ask_user/update_plan，以及 list/load/read Skill） | 放行；`ask_user` 无交互前台时工具结果 fail-closed |
+| 只读工具（get_time/read_file/grep/glob/find_refs/repo_map/check_syntax/ask_user/update_plan，以及 list/load/read Skill） | 放行；显式 `deny/ask` 路径或工具规则优先；`ask_user` 无交互前台时工具结果 fail-closed |
 | write_file/edit_file（普通路径） | 放行（工作区约束兜底） |
 | write/edit 受保护路径：`.git/`、`.krelcode/`、`krelcode.toml`、`.env*`、`*.pem/*.key/*.p12/*.pfx`、`id_rsa*`、`secrets.*`、`credentials*`、`.npmrc/.netrc/.pgpass/.htpasswd` | ASK（非交互拒绝） |
 | run_command 只读命令（ls/cat/grep/git status·log·diff…） | 放行 |
 | run_command 执行代码/装依赖/删文件/git 写操作/网络/未知命令/重定向 | ASK |
 | run_skill_script（Skill 内 bundled 脚本） | ASK；参数数组不经过 shell，子进程走运行时 Sandbox |
 | run_command：sudo/su、dd/mkfs/diskutil、shutdown/reboot、rm 灾难目标、curl\|sh、fork 炸弹 | **DENY（不可越过，--auto-approve 也拒）** |
-| ASK 处理链 | allow_rules 命中 → --auto-approve → 交互 [y/n/a] → 都没有则拒绝（fail-closed） |
+| 统一规则优先级 | `deny > ask > allow`；`deny` 不能靠 auto-approve 越过，显式 `ask` 也不会被 auto-approve 跳过 |
+| 规则作用域 | `session` 仅当前进程；`workspace` 持久化到 `.krelcode/allow_rules.json`；`path` 必须是工作区相对 glob 且拒绝 `..` |
+| ASK 处理链 | 统一规则 → 旧版 allow 规则 → --auto-approve/运行时模式 → 交互 [y/n/a] → 都没有则拒绝（fail-closed） |
 | 文件/命令路径约束 | resolve 后限定工作区（含 symlink 逃逸防护）；Skill 根目录仅额外只读 |
 | 子进程环境 | 剥离 API key/token/password/proxy/SSH agent/动态加载注入变量，HOME/TMP 重定向到 `.krelcode/sandbox/` |
 | OS 隔离后端 | macOS `seatbelt` 或 Linux `bubblewrap`：工作区可写、系统运行时只读、Home 不可读、网络默认关闭 |

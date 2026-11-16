@@ -50,7 +50,7 @@ src/krelcode/
 │   ├── attachments.py # @文本/图片展开（工作区约束与预算）
 │   ├── state.py      # SessionViewState：idle/running/stopping 与 turn 现场
 │   ├── commands/     # CommandSpec/Registry → dispatcher/handlers
-│   │   ├── builtin.py # 28 个内置命令元数据与 help 渲染
+│   │   ├── builtin.py # 29 个内置命令元数据与 help 渲染
 │   │   ├── registry.py # 解析、别名、隐藏/启用、运行态与来源冲突
 │   │   ├── sources.py # Skill / MCP Prompt → dynamic CommandSpec
 │   │   └── handlers/  # 会话、上下文、Skill、MCP 等执行器
@@ -119,7 +119,9 @@ class ApprovalPolicy(Protocol):
 #     - 按控制符切段(punctuation_chars)逐段分级，整条取最严格；重定向升级为 ASK
 #     - 无条件 DENY：sudo/dd/mkfs/shutdown、rm 灾难目标、curl|sh、fork 炸弹
 #     - ASK：执行代码/装依赖/git 写操作/删文件/网络/未知命令
-#   · ASK 处理链：持久化 allow 规则(按程序名) → --auto-approve → 交互 approver(y/n/a)
+#   · 统一规则：allow/ask/deny × session/workspace × command/command_program/path/tool
+#     优先级 deny > ask > allow；显式 ask 与受限模式不能被 auto-approve 越过
+#   · ASK 处理链：统一规则/旧版 allow 规则 → auto-approve → 交互 approver(y/n/a)
 #     → 都没有则拒绝（fail-closed）；拒绝原因经 PermissionDenied 事件 + is_error 回填 LLM
 
 # safety/sandbox.py —— 运行时执行边界（Step 61，与审批策略正交）
@@ -579,6 +581,37 @@ AgentRuntime.session_id 三者一致：
 `/sessions search`。`/export *.json` 写出版本化 `krelcode-session` 快照，`load_history`
 可直接读取并通过 `/resume` 建立新分支；Markdown 继续用于人读分享。分支采用 copy-on-resume
 语义，原会话不变，避免恢复动作覆盖来源历史。
+
+## 运行时权限与 Plan 审批（Step 78）
+
+权限模式不再只是启动时写入的 `RuntimeSnapshot` 字段，而由
+`safety.runtime.RuntimePermissionManager` 独占修改。`set_mode()` 同时更新
+`loop.tool_context.runtime` 与已固化的当前 turn 策略快照；工具池仍是 turn 边界，
+新模式下下一轮会重新计算真实可用工具。REPL 的 Shift-Tab 只产生
+`ReplControl.CYCLE_PERMISSION`，由前台调用 manager，编辑器不依赖安全层：
+
+```
+default ──Shift-Tab──> plan ──> read-only ──> auto-approve ──> default
+```
+
+规则仓库保持向后兼容：旧 `allow_programs/allow_commands` 继续读写；新版 `rules[]`
+增加 `allow/ask/deny`、`session/workspace` 和四种匹配 kind。`path` 在 symlink
+解析后转成工作区相对路径并拒绝 `..`；`deny` 在只读工具与命令分级之前执行，
+`ask` 不被 auto-approve 跳过，PLAN/READ_ONLY 仍由策略层二次拒绝副作用。
+
+Plan 交互由 `PlanApprovalCoordinator` 独立维护：
+
+```
+/plan <request>
+  → 保存进入 Plan 前模式，切到 PLAN
+  → 模型只读调查 + update_plan
+  → PlanUpdated 写入 coordinator，status=PENDING
+  → /plan approve: status=APPROVED，恢复原模式，生成 approved_plan 执行 Prompt
+  → REPL 自动启动下一轮；/plan cancel 清为 CANCELLED 且保留计划历史
+```
+
+`SessionViewState` 只镜像计划内容和 approval status，用于状态栏与 `/plan` 展示；
+执行授权事实仍在 coordinator，命令 handler、REPL 和未来 TUI 可复用同一状态机。
 
 ## 统一输入处理管线（Step 67）
 
