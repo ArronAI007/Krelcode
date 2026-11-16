@@ -394,13 +394,14 @@ MCP stdio 子进程默认同样剥离宿主密钥，但 `[mcp_servers.*].env` �
 `RunStarted` · `StepStarted` · `QueryPhaseChanged` · `LLMThinkingDelta` · `LLMStreamDelta` ·
 `LLMResponseReceived`(usage) · `ToolCallStarted` · `ToolProgress` · `ToolOutputDelta` ·
 `ToolCallCompleted`(is_error) · `PlanUpdated` · `UserInputRequested` ·
-`ApprovalRequested` · `PermissionDenied` · `ContextCompressed`(before/after) ·
+`ApprovalRequested` · `PermissionDenied` · `ContextAssembled`(usage snapshot) ·
+`ContextCompressed`(before/after) ·
 `HookTriggered` · `SubagentSpawned` · `SubagentFeedUpdated` · `SubagentStateChanged` · `SubagentFinished` ·
 `ShellJobStarted` · `ShellJobOutput` · `ShellJobFinished` · `UserSteered` ·
 `RunFinished` · `ErrorOccurred`
 
 JSONL 审计记录类型：`user_input` `tool_call` `tool_result` `permission_denied`
-`hook_triggered` `context_compressed` `subagent_spawned` `subagent_feed` `subagent_state`
+`hook_triggered` `context_assembled` `context_compressed` `subagent_spawned` `subagent_feed` `subagent_state`
 `subagent_finished`
 `shell_job_started` `shell_job_finished` `user_steered`
 `run_finished` `history`(快照)。
@@ -474,10 +475,11 @@ stdin 支持两种 user 形式：
 `assistant/text_delta|thinking_delta|message`、`tool/started|progress|output_delta|completed`、
 `plan/updated`（含 `items/statuses/active_index/explanation`）、
 `input/requested|resolved`（含 `request_id/options/allow_free_text`；resolved 只表示是否已回答，
-不回传答案正文）、`permission/requested|denied`、`context/compressed`、
+不回传答案正文）、`permission/requested|denied`、`context/assembled|compressed`、
 `hook/triggered`、`subagent/started|feed|state|finished`、`job/started|output_delta|finished`、
 `user/steered`、`error/occurred`；job 事件独立于 turn，因此不带 turn_id，但带
 `session_id`；`job/output_delta` 的 `sequence` 可直接作为 `after_sequence` 游标；
+`context/assembled` 的 `snapshot` 只含 token 分项、预算、cache boundary 与 hash，不含 Prompt 正文；
 `subagent/feed` 的 agent cursor 是 `agent_sequence`（外层 `sequence` 仍是 QueryEvent 顺序）；
 最后以 `system/session_end` 结束。turn 内事件都带 `turn_id`、单调 `sequence` 和
 `session_id`，user 对应的全部事件及 result 还带同一 `request_id`；后台 job 是跨 turn

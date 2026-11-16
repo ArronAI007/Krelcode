@@ -2,7 +2,8 @@
 
 JSONL 格式，两类记录：
 - 审计事件流：user_input / tool_call / tool_result / permission_denied /
-  context_compressed / run_finished（每事件一行，便于 grep 与回放）
+  context_assembled / context_compressed / run_finished（每事件一行，
+  便于 grep 与回放）
 - history 快照：每次 RunFinished 落一行完整对话历史（--resume 用最后一条恢复）
 
 文件：<workspace>/.krelcode/sessions/YYYYmmdd-HHMMSS-<pid>.jsonl
@@ -19,6 +20,7 @@ from typing import Any, Dict, List, Optional
 
 from ..core.events import (
     AgentEvent,
+    ContextAssembled,
     ContextCompressed,
     EventBus,
     HookTriggered,
@@ -174,6 +176,12 @@ class SessionRecorder:
             return {"type": "subagent_finished", "ts": ts,
                     "agent_id": event.agent_id, "status": event.status,
                     "preview": event.preview}
+        if isinstance(event, ContextAssembled):
+            return {
+                "type": "context_assembled",
+                "ts": ts,
+                **event.snapshot.as_record(),
+            }
         if isinstance(event, ContextCompressed):
             return {"type": "context_compressed", "ts": ts,
                     "before_tokens": event.before_tokens, "after_tokens": event.after_tokens}

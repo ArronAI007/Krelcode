@@ -20,6 +20,7 @@ from ..core.interactions import UserInputPort
 from ..core.redact import SecretRedactor
 from ..core.events import (
     AgentEvent,
+    ContextAssembled,
     ContextCompressed,
     ErrorOccurred,
     EventBus,
@@ -64,7 +65,9 @@ from ..llm.base import (
     ToolCallReady,
 )
 from .compression import ContextManager
+from .context_usage import build_context_usage_snapshot
 from .intent import TurnIntent, infer_turn_intent
+from .pricing import match_context_window
 from .streaming_tools import StreamingToolExecutor
 from .tokens import estimate_history_tokens
 from .tool_pool import TurnToolPool
@@ -146,6 +149,7 @@ class AgentLoop:
         self.context_manager = context_manager
         self.tool_output_inline_limit = tool_output_inline_limit
         self.token_budget = token_budget
+        self.last_context_snapshot = None
         self.redactor = redactor
         self.runtime_snapshot_provider = runtime_snapshot_provider
         self.hook_port = hook_port
@@ -176,6 +180,7 @@ class AgentLoop:
     def reset(self) -> None:
         """清空历史，只保留系统提示词。"""
         self.history = self.history[:1] if self.history and self.history[0].role == "system" else []
+        self.last_context_snapshot = None
 
     def add_runtime_context(self, contents: Iterable[str], source: str = "hook") -> int:
         """注入不写入历史快照的运行时上下文（SessionStart/Compact Hook）。"""
@@ -273,6 +278,7 @@ class AgentLoop:
         """
         if not self._turn_prepared:
             self._begin_turn(turn_id, tool_allowlist=tool_allowlist)
+        self.last_context_snapshot = None
         self.history.append(Message.user(user_input, images=images or None))
         self._failure_counts = {}
         self._token_total = 0
@@ -311,7 +317,7 @@ class AgentLoop:
                 await self._emit(StepStarted(step))
                 await self._emit(QueryPhaseChanged(
                     "model", f"模型生成中（Step {step}）"))
-                llm_turn = await self._llm_turn()
+                llm_turn = await self._llm_turn(step)
                 assistant = llm_turn.message
                 finish_failure = finish_reason_failure(
                     llm_turn.finish_reason,
@@ -437,17 +443,41 @@ class AgentLoop:
 
     # -- 内部：一次 LLM 调用 ---------------------------------------------------
 
-    async def _llm_turn(self) -> LLMTurnResult:
+    async def _llm_turn(self, step: int) -> LLMTurnResult:
         await self.compress_context()
         # 能力协商：provider 声明不支持 tools 时不 advertise，避免 400。
         # 无 capabilities 属性的测试替身保持旧行为（照常传 tools）。
         capabilities = getattr(self.llm, "capabilities", None)
         if capabilities is not None and not capabilities.supports_tools:
-            tools = None
+            specs = []
         else:
             specs = self._current_tool_pool().tool_specs()
-            tools = specs or None
-        messages = self._messages_for_turn()
+        tools = specs or None
+        hints = self._turn_system_hints()
+        messages = self._messages_for_turn(hints)
+        prompt_snapshot = getattr(self, "prompt_snapshot", None)
+        base_system_text = (
+            self.history[0].content or ""
+            if self.history and self.history[0].role == "system" else ""
+        )
+        budget_tokens = (
+            self.context_manager.max_tokens
+            if self.context_manager is not None else None
+        )
+        context_snapshot = build_context_usage_snapshot(
+            messages,
+            turn_id=self._current_turn_id,
+            step=step,
+            tool_specs=specs,
+            prompt_snapshot=prompt_snapshot,
+            base_system_text=base_system_text,
+            runtime_hints=hints,
+            budget_tokens=budget_tokens,
+            model_context_window=match_context_window(
+                getattr(self.llm, "model", None)),
+        )
+        self.last_context_snapshot = context_snapshot
+        await self._emit(ContextAssembled(context_snapshot))
         finished: Optional[StreamFinished] = None
         executor = StreamingToolExecutor(
             self._current_tool_pool(), self._run_stream_tool)
@@ -517,8 +547,8 @@ class AgentLoop:
             )
         return self._active_tool_pool
 
-    def _messages_for_turn(self) -> List[Message]:
-        """临时注入本轮工具目录与意图，不污染持久历史。"""
+    def _turn_system_hints(self) -> List[str]:
+        """本轮临时 system context；与最终请求和可观测快照共用。"""
         hints = [
             self._current_tool_pool().system_hint(),
             self._turn_intent.system_hint(self.tool_context.workspace_root),
@@ -527,7 +557,12 @@ class AgentLoop:
             f"<runtime_context>\n{context}\n</runtime_context>"
             for context in self.runtime_context
         )
-        hint = "\n\n".join(part for part in hints if part)
+        return [part for part in hints if part]
+
+    def _messages_for_turn(self, hints: Optional[List[str]] = None) -> List[Message]:
+        """临时注入本轮工具目录与意图，不污染持久历史。"""
+        parts = self._turn_system_hints() if hints is None else hints
+        hint = "\n\n".join(part for part in parts if part)
         if not hint:
             return self.history
         if self.history and self.history[0].role == "system":

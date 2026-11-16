@@ -19,6 +19,7 @@ from ..core.redact import SecretRedactor
 from ..core.messages import ToolCall
 from ..core.events import (
     AgentEvent,
+    ContextAssembled,
     ContextCompressed,
     ErrorOccurred,
     HookTriggered,
@@ -362,6 +363,9 @@ class StreamRenderer:
             self._write(
                 f"  {self._mark(RESULT_MARK)}agent {event.agent_id} "
                 f"{event.status}{detail}\n")
+        elif isinstance(event, ContextAssembled):
+            # 仅由 /context、TUI 面板、recorder 与 SDK 消费，不污染正文。
+            return
         elif isinstance(event, ContextCompressed):
             self.end_stream()
             self._write(

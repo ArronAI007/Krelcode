@@ -13,6 +13,7 @@ from typing import Any, Dict, Mapping, Optional
 
 from ..core.events import (
     ApprovalRequested,
+    ContextAssembled,
     ContextCompressed,
     ErrorOccurred,
     HookTriggered,
@@ -197,6 +198,12 @@ class StreamJsonEncoder:
                 "subtype": "denied",
                 "tool_call": _tool_call_payload(event.tool_call),
                 "reason": event.reason,
+            }
+        elif isinstance(event, ContextAssembled):
+            payload = {
+                "type": "context",
+                "subtype": "assembled",
+                "snapshot": event.snapshot.as_record(),
             }
         elif isinstance(event, ContextCompressed):
             payload = {

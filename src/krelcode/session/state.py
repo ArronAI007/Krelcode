@@ -16,8 +16,10 @@ from enum import Enum
 from typing import Optional
 
 from ..agent.query import QueryEvent
+from ..core.context_usage import ContextUsageSnapshot
 from ..core.events import (
     ApprovalRequested,
+    ContextAssembled,
     ContextCompressed,
     ErrorOccurred,
     LLMResponseReceived,
@@ -66,6 +68,7 @@ class SessionViewState:
     plan_active_index: int = -1
     plan_explanation: str = ""
     plan_approval_status: str = "none"
+    context_snapshot: Optional[ContextUsageSnapshot] = None
     input_request_id: str = ""
     input_prompt: str = ""
     input_options: tuple[str, ...] = ()
@@ -112,6 +115,7 @@ class SessionViewState:
         self.plan_active_index = -1
         self.plan_explanation = ""
         self.plan_approval_status = "none"
+        self.context_snapshot = None
         self.input_request_id = ""
         self.input_prompt = ""
         self.input_options = ()
@@ -237,6 +241,8 @@ class SessionEventReducer:
             state.progress = f"等待审批 {event.tool_call.name}"
         elif isinstance(event, PermissionDenied):
             state.progress = f"{event.tool_call.name} 权限被拒绝"
+        elif isinstance(event, ContextAssembled):
+            state.context_snapshot = event.snapshot
         elif isinstance(event, ContextCompressed):
             state.progress = (
                 f"上下文已压缩 {event.before_tokens} → {event.after_tokens} tokens")

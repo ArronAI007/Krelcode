@@ -5,12 +5,12 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（v0.73.0 / Step 83）
+## 1. 项目统计（v0.74.0 / Step 84）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 28,481 行（Python，**零第三方运行时依赖**） |
-| 测试 | 19,771 行 / 104 个文件 / 1,020 个用例（离线 1,018 + 本地端口集成 2，提权环境 1,020/1,020 全绿） |
+| 源码 | 28,919 行（Python，**零第三方运行时依赖**） |
+| 测试 | 20,110 行 / 105 个文件 / 1,026 个用例（离线 1,024 + 本地端口集成 2，提权环境 1,026/1,026 全绿） |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 16（含 ask_user/update_plan + 4 个后台 Job 工具）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
@@ -75,6 +75,7 @@ core 只有 643 行——内核保持极小、能力在边缘，正是当初对�
 | system prompt 来源/启停/cache 边界 | `agent/fragments.py` |
 | 压缩边界/预览与两道防线 | `agent/compression.py`（驱逐 + LLM 摘要） |
 | token 估算/价目/窗口 | `agent/tokens.py` `agent/pricing.py` |
+| 请求级 Context 可观测性 | `core/context_usage.py` `agent/context_usage.py` |
 | 工作区上下文注入 | `agent/context.py`（目录树/git/分层 AGENTS.md） |
 | 工具端口与注册表 | `tools/base.py` `tools/registry.py`；具体工具 `tools/builtin/`，交互工具 `tools/extension/` |
 | 命令风险分级/审批/写保护 | `safety/commands.py` `safety/policy.py` `safety/rules.py` |
@@ -106,7 +107,7 @@ core 只有 643 行——内核保持极小、能力在边缘，正是当初对�
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 1018 通过、2 skip，提权环境 1,020/1,020 全过。
+bind 探测自动 skip——沙箱内 1024 通过、2 skip，提权环境 1,026/1,026 全过。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /

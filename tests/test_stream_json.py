@@ -14,8 +14,10 @@ from krelcode.agent.query import QueryEvent
 from krelcode.agent.runtime import AgentRuntime
 from krelcode.agent.usage import UsageTracker
 from krelcode.app import build_parser
+from krelcode.core.context_usage import ContextUsageSnapshot
 from krelcode.core.events import (
     ApprovalRequested,
+    ContextAssembled,
     ContextCompressed,
     ErrorOccurred,
     HookTriggered,
@@ -117,6 +119,8 @@ def test_encoder_preserves_envelope_and_encodes_all_event_families():
         ApprovalRequested(call, "need approval"),
         PermissionDenied(call, "denied"),
         ContextCompressed(100, 40),
+        ContextAssembled(ContextUsageSnapshot(
+            turn_id="turn-1", step=1, estimated_input_tokens=80)),
         HookTriggered("pre_tool", True, False, "read_file", "ok", "context"),
         SubagentSpawned("agent-1", "inspect"),
         SubagentFinished("agent-1", "completed", "done"),
@@ -145,20 +149,22 @@ def test_encoder_preserves_envelope_and_encodes_all_event_families():
     assert encoded[7]["subtype"] == "requested"
     assert encoded[8]["subtype"] == "denied"
     assert encoded[9]["subtype"] == "compressed"
-    assert encoded[10]["subtype"] == "triggered"
-    assert encoded[11]["subtype"] == "started"
-    assert encoded[12]["subtype"] == "finished"
-    assert encoded[13]["subtype"] == "steered"
-    assert encoded[14]["subtype"] == "success"
-    assert encoded[15]["subtype"] == "cancelled"
-    assert encoded[16]["type"] == "error"
+    assert encoded[10]["subtype"] == "assembled"
+    assert encoded[10]["snapshot"]["estimated_input_tokens"] == 80
+    assert encoded[11]["subtype"] == "triggered"
+    assert encoded[12]["subtype"] == "started"
+    assert encoded[13]["subtype"] == "finished"
+    assert encoded[14]["subtype"] == "steered"
+    assert encoded[15]["subtype"] == "success"
+    assert encoded[16]["subtype"] == "cancelled"
+    assert encoded[17]["type"] == "error"
     for sequence, item in enumerate(encoded):
         assert item["turn_id"] == "turn-1"
         assert item["sequence"] == sequence
         assert item["session_id"] == "session-1"
         assert item["request_id"] == "req-1"
-    assert encoded[14]["result"] == "finished"
-    assert encoded[15]["result"] == "stopped"
+    assert encoded[15]["result"] == "finished"
+    assert encoded[16]["result"] == "stopped"
 
 
 def test_encoder_encodes_query_progress_and_input_events():

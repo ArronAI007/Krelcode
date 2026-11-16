@@ -10,6 +10,7 @@ import inspect
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
+from .context_usage import ContextUsageSnapshot
 from .messages import Message, ToolCall, ToolResultBlock
 
 
@@ -126,6 +127,15 @@ class ContextCompressed(AgentEvent):
     """历史被摘要压缩（Step 7）。"""
     before_tokens: int
     after_tokens: int
+
+
+@dataclass(frozen=True)
+class ContextAssembled(AgentEvent):
+    """一次真实模型请求的上下文组装快照。
+
+    快照只包含 token 分项、缓存边界和哈希，不携带 Prompt 正文。
+    """
+    snapshot: ContextUsageSnapshot
 
 
 @dataclass(frozen=True)

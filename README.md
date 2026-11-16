@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/ArronAI007/Krelcode/main/install.sh
 ./install.sh --no-modify-path         # 不修改 shell PATH
 ./install.sh --python /path/to/python3.12
 ./install.sh --python-mirror https://your-mirror.example/python-build-standalone
-./install.sh --tag v0.73.0
+./install.sh --tag v0.74.0
 ```
 
 对应环境变量为 `KRELCODE_PYTHON`、`KRELCODE_PYTHON_VERSION`、`KRELCODE_PYTHON_MIRROR`、`KRELCODE_INSTALL_ROOT` 和 `KRELCODE_BIN_DIR`。这些选项只用于 CI、离线或特殊网络环境；普通用户直接执行默认的一键安装即可。开发调试仍可使用 `pip install -e .`。
@@ -71,7 +71,7 @@ krelcode               # 进入 REPL
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（沙箱内 1018 通过，2 个本地端口测试自动跳过）
+# 运行全部测试（沙箱内 1024 通过，2 个本地端口测试自动跳过）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -96,13 +96,13 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --mode
 #   api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp`（状态）、`/mcp reload`（热重载并重新发现 Prompt）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>]`（查看/热重载本地插件）、`/compact [preview [--auto]]`（立即压缩；先预览摘要边界且不改历史）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [fragments|enable|disable|toggle|reset|cache|refresh]`（Fragment 来源、启停、缓存边界与工作区重采）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp`（状态）、`/mcp reload`（热重载并重新发现 Prompt）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>]`（查看/热重载本地插件）、`/compact [preview [--auto]]`（立即压缩；先预览摘要边界且不改历史）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [fragments|enable|disable|toggle|reset|cache|refresh]`（最近请求 token 分项、Fragment 来源、启停、缓存边界与工作区重采）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
 
 所有命令由统一 `CommandRegistry` 发现：`/help`、slash 菜单、Tab 补全、运行态过滤和 InputProcessor 共用同一份 catalog。允许用户调用的 Skill 会自动显示为 `/<skill-name> [参数]`，MCP Prompt 会命名空间化为 `/mcp__<server>__<prompt> [参数]`；`/skills reload` 与 `/mcp reload` 会原地刷新对应来源，内置命令在命名冲突时保持最高优先级。
 
 **运行中交互**：`Enter` 提交 Steering（当前 turn 的下一步看到）；`Alt+Enter` 将输入排为下一条独立消息，当前 turn 完成后自动发送；`Shift-Tab` 按 `default → plan → read-only → auto-approve` 快速轮换权限模式；`Esc` / `Ctrl-C` 中止当前任务（历史自动修复，可立即续聊）。空闲时 `Ctrl-C` 只清空当前输入，`Ctrl-D` 或 `/exit` 退出。审批请求由 REPL 前台异步接管，不会与字符级输入 reader 抢占 stdin；`/thinking`、`/plan`、`/permissions`、`/tool-output`、`/queue`、`/agents`、`/jobs` 在任务运行中仍可访问。
 
-**终端 TUI（Step 83）**：输入框上方增加结构化 Panel Dock，默认包含 `Tasks`、`Activity`、`Context`、`Memory` 四个面板。`Ctrl-O` 进入/切换面板；焦点在面板内时 `←/→` 换 tab、`↑/↓` 选择条目、`Enter` 或 `Esc` 返回输入框，方向键不会误改草稿。真实 TTY 同时启用 SGR 鼠标：可点击 tab 或面板条目。
+**终端 TUI（Step 83/84）**：输入框上方增加结构化 Panel Dock，默认包含 `Tasks`、`Activity`、`Context`、`Memory` 四个面板；Context 优先展示 `ContextAssembled` 最近一次真实请求的 token 分项、tool schema 与 cache 边界。`Ctrl-O` 进入/切换面板；焦点在面板内时 `←/→` 换 tab、`↑/↓` 选择条目、`Enter` 或 `Esc` 返回输入框，方向键不会误改草稿。真实 TTY 同时启用 SGR 鼠标：可点击 tab 或面板条目。
 
 - `!命令`：Shell 快捷模式。直接执行命令，不发起模型调用，也不写入模型 history；仍完整经过 `run_command`、审批策略、权限规则和运行时 Sandbox，输出进入现有可折叠工具面板。
 - `#内容`：添加项目记忆，保存到 `<workspace>/.krelcode/memory/entries.jsonl`；敏感值在落盘与展示前脱敏。裸 `#` 打开 Memory 面板。近期记忆以有界、不可缓存的 runtime Fragment 注入，不会修改 `AGENTS.md` 或伪装成用户/助手消息。
@@ -321,7 +321,7 @@ fork-context: true
 
 所有终端输入与 `-m` 单次输入在进入会话前经过统一 `InputProcessor`：规范化原始输入、区分普通消息/业务命令/展示命令/控制命令、后台展开 `@文件` 与图片附件，并执行可选 `user_input` Hook；REPL 只消费结构化 `InputAction`，不再承担输入解释。`user_prompt_submit` 则位于 AgentLoop 查询入口，保证 REPL、headless 与子代理一致执行。会话现场由 `SessionViewState` 显式记录 idle/running/stopping、当前 turn、查询阶段、工具计数与进度；`SessionEventReducer` 统一折叠 QueryEvent，`ReplSessionRunner` 独占 query/consumer/审批 watcher/下一条队列。运行中输入框下方持续显示阶段、Step、工具进度与耗时，渲染器暂停时保留用户草稿和光标。工具增量输出先进入折叠缓存，终端正文不自动展开；历史消息仍只由 AgentLoop 持有。
 
-启动时自动装配工作区上下文（Context v2）：分层规则、git 分支/状态与目录树统一进入 `[context].max_tokens` 预算，按规则 > git > tree 的优先级保留，超限时截断或省略低优先级来源；`--no-context` 可关闭，长会话中 `/context refresh` 可重采，`/context` 显示各来源 token 统计。所有 system prompt 片段现在由 Prompt/Context Fragment Registry 统一组装：`core:base`、`skills:index`、`workspace:rules|git|tree` 各自带来源、稳定性和可切换属性；`/context fragments [source]` 查看来源，`/context enable|disable|toggle <id|source>` 手动启停，`/context cache` 显示稳定前缀断点与哈希。稳定规则永远排在动态 git/tree 之前，Anthropic adapter 使用该边界生成两个 system block（稳定前缀带 `cache_control`、动态尾部不带）；DeepSeek/OpenAI 兼容端点则直接受益于稳定的自动缓存前缀。`/compact preview [--auto]` 可在不修改 history 的前提下查看 head/compact/keep 边界、工具驱逐数、预计 tokens 与待摘要消息；`/compact` 执行后再报告实际策略和边界。同批工具调用并行执行，同一调用连续失败 3 次判定卡死自动中止（`--repeat-failure-limit` 可调）。
+启动时自动装配工作区上下文（Context v2）：分层规则、git 分支/状态与目录树统一进入 `[context].max_tokens` 预算，按规则 > git > tree 的优先级保留，超限时截断或省略低优先级来源；`--no-context` 可关闭，长会话中 `/context refresh` 可重采，`/context` 显示各来源 token 统计。所有 system prompt 片段现在由 Prompt/Context Fragment Registry 统一组装：`core:base`、`skills:index`、`workspace:rules|git|tree` 各自带来源、稳定性和可切换属性；`/context fragments [source]` 查看来源，`/context enable|disable|toggle <id|source>` 手动启停，`/context cache` 显示稳定前缀断点与哈希。稳定规则永远排在动态 git/tree 之前，Anthropic adapter 使用该边界生成两个 system block（稳定前缀带 `cache_control`、动态尾部不带）；DeepSeek/OpenAI 兼容端点则直接受益于稳定的自动缓存前缀。每个模型 Step 发请求前还会发布精简 `ContextAssembled` 快照：按 system/workspace/memory/history/runtime/tool schema/overhead 拆分 token，并携带预算、模型窗口、cache boundary 与 stable/full hash；快照不包含 Prompt 正文，可安全进入 TUI、JSONL、stream-json 与 SDK。`/context` 优先展示最近一次真实请求而不是事后粗略估算。`/compact preview [--auto]` 可在不修改 history 的前提下查看 head/compact/keep 边界、工具驱逐数、预计 tokens 与待摘要消息；`/compact` 执行后再报告实际策略和边界。同批工具调用并行执行，同一调用连续失败 3 次判定卡死自动中止（`--repeat-failure-limit` 可调）。
 
 ## 模块结构（依赖严格单向）
 

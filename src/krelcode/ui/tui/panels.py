@@ -113,24 +113,70 @@ def build_panels(
         activity.append(PanelItem(
             "activity-shell", _compact(quick_status, 100), "", "▶"))
 
+    snapshot = state.context_snapshot
+    if snapshot is not None:
+        context_tokens = snapshot.estimated_input_tokens
+        context_budget = snapshot.budget_tokens or context_budget
+        fragment_count = snapshot.fragment_count or fragment_count
+        memory_tokens = snapshot.memory_tokens
     budget_text = (
         f"{context_tokens}/{context_budget} tokens"
         if context_budget else f"{context_tokens} tokens"
     )
-    context_items = (
-        PanelItem("context-permission", f"permission · {permission_mode}"),
-        PanelItem("context-window", f"context · {budget_text}"),
-        PanelItem(
-            "context-fragments",
-            f"fragments · {fragment_count}",
-            f"stable {stable_fragments}",
-        ),
-        PanelItem(
-            "context-memory",
-            f"memory · {len(memories)}",
-            f"{memory_tokens} tokens",
-        ),
-    )
+    if snapshot is None:
+        context_items = (
+            PanelItem("context-permission", f"permission · {permission_mode}"),
+            PanelItem("context-window", f"context · {budget_text}"),
+            PanelItem(
+                "context-fragments",
+                f"fragments · {fragment_count}",
+                f"stable {stable_fragments}",
+            ),
+            PanelItem(
+                "context-memory",
+                f"memory · {len(memories)}",
+                f"{memory_tokens} tokens",
+            ),
+        )
+    else:
+        window_detail = (
+            f"window {snapshot.model_context_window}"
+            f" · reserve {snapshot.output_reserve_tokens}"
+            if snapshot.model_context_window else "window unknown"
+        )
+        context_items = (
+            PanelItem("context-permission", f"permission · {permission_mode}"),
+            PanelItem(
+                "context-window", f"context · {budget_text}", window_detail),
+            PanelItem(
+                "context-system",
+                f"system · {snapshot.system_tokens}",
+                f"workspace {snapshot.workspace_tokens}"
+                f" · runtime {snapshot.runtime_tokens}",
+            ),
+            PanelItem(
+                "context-history",
+                f"history · {snapshot.history_tokens}",
+                f"overhead {snapshot.overhead_tokens}",
+            ),
+            PanelItem(
+                "context-cache",
+                f"cache · {snapshot.stable_tokens}"
+                f"/{snapshot.volatile_tokens}",
+                f"boundary {snapshot.cache_boundary_chars} chars",
+            ),
+            PanelItem(
+                "context-fragments",
+                f"fragments · {fragment_count}",
+                f"tools {snapshot.tool_count}"
+                f" · schema {snapshot.tool_schema_tokens}",
+            ),
+            PanelItem(
+                "context-memory",
+                f"memory · {len(memories)}",
+                f"{memory_tokens} tokens",
+            ),
+        )
 
     memory_items: list[PanelItem] = []
     for index, entry in enumerate(memories):

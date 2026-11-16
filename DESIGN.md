@@ -827,6 +827,38 @@ PromptWriter [Panel Dock] → 上分隔线 → 输入 → 下分隔线 → 状�
   动态 runtime Fragment 注入；它与 `AGENTS.md` 分离，不进入对话消息，也不会阻断
   prompt cache 稳定前缀。
 
+## Context 可观测性与基线（Step 84）
+
+Context 可观测性复用请求组装边界，不复制 Prompt 拼接逻辑：
+
+```
+AgentLoop._llm_turn(step)
+  ├─ compress_context()
+  ├─ TurnToolPool.tool_specs()
+  ├─ PromptSnapshot + turn runtime hints
+  ├─ provider-bound messages
+  ├─ ContextUsageSnapshot
+  │    ├─ estimated_input_tokens（messages + tool schemas）
+  │    ├─ system/workspace/memory/history/runtime/tool_schema/overhead
+  │    ├─ budget/model window/output reserve
+  │    ├─ stable/volatile + cache boundary/SHA-256
+  │    └─ tool/fragment count + source token map
+  └─ emit ContextAssembled → provider.stream(messages, tools)
+```
+
+- `core/context_usage.py` 是跨层稳定契约；`agent/context_usage.py` 只做派生计算。
+  分项采用与 compact 相同的 CJK 感知估算器，并通过最大余数归一化保证各项之和
+  精确等于 `estimated_input_tokens`。
+- AgentLoop 保存 `last_context_snapshot` 供 `/context` 使用；`SessionViewState`
+  保存最近快照供 TUI Context 面板使用。两者共享同一对象契约，不在 UI 重算。
+- Recorder 写 `context_assembled` 精简记录；stream-json 编码为
+  `context/assembled`，`snapshot` 可安全持久化/传输。Renderer 默认忽略该事件，
+  不污染对话正文。
+- 快照不含 system prompt、消息正文、工具参数或凭据，只有来源名、token 计数、
+  预算与哈希，因此不会形成新的敏感内容泄漏路径。
+- Step 84 只增加观测基线，不改变真实 Prompt 内容、工具 schema、预算判断或 compact
+  行为；`/context` 在尚无快照时保持旧版估算输出兼容。
+
 ## 统一输入处理管线（Step 67）
 
 借鉴 Claude Code 将 `processUserInput` 与 REPL 分开的思路，终端不再直接解释原始

@@ -700,6 +700,59 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             "/context enable|disable|toggle <id|source> | /context reset | "
             "/context cache | /context refresh")
 
+    snapshot = getattr(ctx.loop, "last_context_snapshot", None)
+    if snapshot is not None:
+        budget = (
+            f"{snapshot.budget_tokens} tokens"
+            if snapshot.budget_tokens else "未启用压缩")
+        window = (
+            f"{snapshot.model_context_window} tokens"
+            if snapshot.model_context_window else "未知")
+        reserve = (
+            f"{snapshot.output_reserve_tokens} tokens"
+            if snapshot.model_context_window else "未知")
+        ratio = (
+            f"{snapshot.usage_ratio:.1%}"
+            if snapshot.usage_ratio is not None else "未知")
+        sources = " · ".join(
+            f"{name} {tokens}"
+            for name, tokens in sorted(
+                snapshot.source_tokens.items(),
+                key=lambda item: (-item[1], item[0]))[:8]
+        ) or "（空）"
+        lines = [
+            f"  [context] 最近组装请求 · {snapshot.turn_id or '(unknown turn)'}"
+            f" · Step {snapshot.step}",
+            f"  输入估算: {snapshot.estimated_input_tokens} tokens"
+            f" · 压缩预算: {budget} · 使用率: {ratio}",
+            f"  模型窗口: {window} · 输出/安全保留: {reserve}",
+            f"  分项: system {snapshot.system_tokens}"
+            f" · workspace {snapshot.workspace_tokens}"
+            f" · memory {snapshot.memory_tokens}"
+            f" · history {snapshot.history_tokens}"
+            f" · runtime {snapshot.runtime_tokens}"
+            f" · tool schema {snapshot.tool_schema_tokens}"
+            f" · overhead {snapshot.overhead_tokens}",
+            f"  缓存: stable {snapshot.stable_tokens}"
+            f" · volatile {snapshot.volatile_tokens}"
+            f" · boundary {snapshot.cache_boundary_chars} chars",
+            f"  stable hash: {snapshot.stable_hash or '(none)'}",
+            f"  full hash: {snapshot.full_hash or '(none)'}",
+            f"  工具 {snapshot.tool_count} 个 · fragment {snapshot.fragment_count} 个",
+            f"  来源: {sources}",
+        ]
+        tool_messages = sum(
+            1 for message in ctx.loop.history if message.role == "tool")
+        lines.append(
+            f"  当前历史 {len(ctx.loop.history)} 条消息"
+            f"（其中工具结果 {tool_messages} 条）")
+        if snapshot.dropped_items:
+            lines.append("  已裁剪: " + ", ".join(snapshot.dropped_items))
+        bundle = getattr(ctx.loop, "workspace_context", None)
+        if bundle is not None and bundle.omitted:
+            lines.append("  工作区未注入: " + ", ".join(bundle.omitted))
+        return _ok(*lines)
+
     total = estimate_history_tokens(ctx.loop.history)
     budget = (ctx.loop.context_manager.max_tokens
               if ctx.loop.context_manager else "未启用压缩")
