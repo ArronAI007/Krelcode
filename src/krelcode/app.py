@@ -35,6 +35,7 @@ from .llm.providers.mock import MockProvider
 from .llm.registry import create_provider, resolve_settings
 from .llm.retry import RetryPolicy, RetryingProvider
 from .mcp.supervisor import MCPSupervisor
+from .plugins import PluginManager
 from .safety.policy import AllowAllPolicy, SandboxPolicy
 from .safety.sandbox import ExecutionSandbox, SandboxError
 from .session.autocommit import AutoCommitter
@@ -242,6 +243,30 @@ def build_skill_manager(args: argparse.Namespace, config: Dict[str, Any]) -> Ski
     )
 
 
+def build_plugin_manager(
+    args: argparse.Namespace,
+    config: Dict[str, Any],
+    workspace_root: Path,
+) -> PluginManager:
+    """按配置/CLI 构建目录插件管理器；插件代码仅从显式目录加载。"""
+    section = config.get("plugins") or {}
+    if not isinstance(section, dict):
+        section = {}
+    configured = section.get("paths") or []
+    if isinstance(configured, str):
+        configured = [configured]
+    cli_paths = getattr(args, "plugins_dir", None) or []
+    enabled = (
+        not getattr(args, "no_plugins", False)
+        and bool(section.get("enabled", True))
+    )
+    return PluginManager(
+        workspace_root,
+        extra_paths=list(configured) + list(cli_paths),
+        enabled=enabled,
+    )
+
+
 async def build_loop(
     args: argparse.Namespace,
     config: Dict[str, Any],
@@ -267,6 +292,9 @@ async def build_loop(
     llm = build_llm(args, config, log=log)
     skill_manager = build_skill_manager(args, config)
     skill_tools = build_skill_tools(skill_manager) if skill_manager.enabled else []
+    plugin_manager = build_plugin_manager(args, config, workspace_root)
+    await plugin_manager.load()
+    plugin_tools = list(plugin_manager.tools)
     if skill_manager.enabled:
         if skill_manager.list():
             log("[skills] 已加载 "
@@ -274,6 +302,15 @@ async def build_loop(
                 + f"（{len(skill_manager.list())} 个）")
         for issue in skill_manager.issues:
             log(f"[skills] 跳过无效 skill: {issue.path}: {issue.message}")
+    if plugin_manager.enabled:
+        if plugin_manager.records():
+            log("[plugins] 已发现 "
+                + ", ".join(
+                    f"{record.name}@{record.version}[{record.status}]"
+                    for record in plugin_manager.records())
+                + f"（{len(plugin_tools)} 个工具）")
+        for issue in plugin_manager.issues:
+            log(f"[plugins] 跳过问题: {issue.path}: {issue.message}")
     context_manager = None
     context_budget = None
     if not args.no_compress:
@@ -301,12 +338,15 @@ async def build_loop(
         ),
     )
     policy = build_policy(args, workspace_root, bus, approver=approver)
-    tool_factory = lambda: default_tools() + skill_tools
+    tool_factory = lambda: default_tools() + skill_tools + list(plugin_manager.tools)
     registry = ToolRegistry(default_tools())
     for tool in skill_tools:
         registry.register(
             tool, ToolDescriptor.from_tool(tool, source=ToolSource.SKILL))
     for tool in extra_tools or []:
+        registry.register(
+            tool, ToolDescriptor.from_tool(tool, source=ToolSource.PLUGIN))
+    for tool in plugin_tools:
         registry.register(
             tool, ToolDescriptor.from_tool(tool, source=ToolSource.PLUGIN))
     manager = SubagentManager(
@@ -340,9 +380,22 @@ async def build_loop(
     # fork_context 数据源：getter 形式，/resume 重绑定 loop.history 后依然正确
     manager.get_parent_history = lambda: loop.history
     loop.skill_manager = skill_manager
+    loop.plugin_manager = plugin_manager
     loop.skill_base_prompt = skill_base_prompt
     loop.context_options = context_options
     loop.workspace_context = workspace_context
+
+    async def reload_plugins():
+        records = await plugin_manager.reload()
+        registry.unregister_prefix("plugin__")
+        for plugin_tool in plugin_manager.tools:
+            registry.register(
+                plugin_tool,
+                ToolDescriptor.from_tool(
+                    plugin_tool, source=ToolSource.PLUGIN))
+        return records
+
+    loop.plugin_reload = reload_plugins
     return loop, manager
 
 

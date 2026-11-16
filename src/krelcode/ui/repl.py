@@ -852,6 +852,8 @@ async def run_repl(
     model_switch=None,
     skills=None,
     skills_reload=None,
+    plugins=None,
+    plugins_reload=None,
     input_fn=None,
     redactor=None,
     runtime: Optional[AgentRuntime] = None,
@@ -909,6 +911,8 @@ async def run_repl(
         model_switch=model_switch,
         skills=skills,
         skills_reload=skills_reload,
+        plugins=plugins,
+        plugins_reload=plugins_reload,
         workspace_root=workspace_root,
         command_registry=processor.command_registry,
     )
@@ -1326,6 +1330,8 @@ async def _handle_command(
     model_switch=None,
     skills=None,
     skills_reload=None,
+    plugins=None,
+    plugins_reload=None,
     controller: Optional[SessionController] = None,
     command_registry: Optional[CommandRegistry] = None,
 ):
@@ -1360,6 +1366,8 @@ async def _handle_command(
             model_switch=model_switch,
             skills=skills,
             skills_reload=skills_reload,
+            plugins=plugins,
+            plugins_reload=plugins_reload,
             workspace_root=workspace_root,
             command_registry=command_registry,
         )

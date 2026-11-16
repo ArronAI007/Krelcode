@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from ..core.messages import Message
+from .codec import history_to_dicts
 
 TOOL_RESULT_PREVIEW = 2_000
 ARGS_PREVIEW = 300
@@ -47,7 +48,7 @@ def render_markdown(history: List[Message], title: str = "Krelcode 会话") -> s
 
 
 def export_session(history: List[Message], path: Optional[Path] = None,
-                   export_dir: Optional[Path] = None) -> Path:
+                   export_dir: Optional[Path] = None, *, redactor=None) -> Path:
     """写出 Markdown；path 缺省时落到 export_dir/session-<ts>.md。"""
     if path is None:
         directory = Path(export_dir or Path("."))
@@ -56,5 +57,39 @@ def export_session(history: List[Message], path: Optional[Path] = None,
     path = Path(path)
     if path.parent and not path.parent.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_markdown(history), encoding="utf-8")
+    text = render_markdown(history)
+    if redactor is not None:
+        text = redactor.redact(text)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def export_native_session(
+    history: List[Message],
+    path: Optional[Path] = None,
+    *,
+    metadata: Optional[Mapping[str, Any]] = None,
+    export_dir: Optional[Path] = None,
+    redactor=None,
+) -> Path:
+    """写出可重新导入的 JSON 快照（/resume 可直接加载）。"""
+    if path is None:
+        directory = Path(export_dir or Path("."))
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"session-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    path = Path(path)
+    if path.suffix.lower() != ".json":
+        path = path.with_suffix(path.suffix + ".json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload: Dict[str, Any] = {
+        "format": "krelcode-session",
+        "format_version": 1,
+        "exported_at": time.time(),
+        "metadata": dict(metadata or {}),
+        "messages": history_to_dicts(history),
+    }
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    if redactor is not None:
+        text = redactor.redact(text)
+    path.write_text(text, encoding="utf-8")
     return path

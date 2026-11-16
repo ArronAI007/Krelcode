@@ -103,6 +103,52 @@ async def handle_skills(ctx: CommandContext) -> CommandResult:
     return _ok(*output)
 
 
+async def handle_plugins(ctx: CommandContext) -> CommandResult:
+    manager = ctx.plugins
+    if manager is None:
+        return _ok("  （插件系统未启用）")
+    if not getattr(manager, "enabled", False):
+        return _ok("  （插件已禁用：移除 --no-plugins 或设置 plugins.enabled=true）")
+    parts = ctx.request.arguments.split(maxsplit=1)
+    sub = parts[0].strip() if parts else ""
+    output: list[str] = []
+    if sub == "reload":
+        if ctx.plugins_reload is not None:
+            result = ctx.plugins_reload()
+            if hasattr(result, "__await__"):
+                await result
+        else:
+            result = manager.reload()
+            if hasattr(result, "__await__"):
+                await result
+        output.append("  [plugins] 已重新扫描插件目录")
+    elif sub == "show":
+        if len(parts) < 2 or not parts[1].strip():
+            return _ok("  用法: /plugins show <name>")
+        name = parts[1].strip()
+        record = next(
+            (item for item in manager.records() if item.name == name), None)
+        if record is None:
+            return _ok(f"  [plugins] 未找到插件: {name}")
+        output.extend((
+            f"  [plugin] {record.name}@{record.version} [{record.status}]",
+            f"  位置: {record.path}",
+            f"  入口: {record.entrypoint or '（无）'}",
+            f"  工具: {record.tools_count}",
+        ))
+        if record.description:
+            output.append(f"  描述: {record.description}")
+        if record.error:
+            output.append(f"  错误: {record.error}")
+    else:
+        output.extend(manager.status_lines())
+    for issue in manager.issues:
+        line = f"  ! {issue.path}: {issue.message}"
+        if line not in output:
+            output.append(line)
+    return _ok(*output)
+
+
 async def handle_skill(ctx: CommandContext) -> CommandResult:
     if _skills_disabled(ctx):
         return _ok(_disabled_message())

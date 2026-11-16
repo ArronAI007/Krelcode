@@ -13,21 +13,26 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from ..core.events import (
     AgentEvent,
     ContextCompressed,
     EventBus,
     HookTriggered,
+    PlanUpdated,
     PermissionDenied,
+    RunCancelled,
     RunFinished,
     RunStarted,
     SubagentFinished,
     SubagentSpawned,
     ToolCallCompleted,
     ToolCallStarted,
+    UserInputRequested,
+    UserInputResolved,
     UserSteered,
 )
 from ..core.messages import Message
@@ -41,16 +46,26 @@ class SessionRecorder:
         path: Path,
         get_history,
         redactor: Optional[SecretRedactor] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         """get_history: 无参可调用，返回当前 List[Message]（避免循环依赖注入 loop）。"""
         self.path = Path(path)
         self._get_history = get_history
         self._redactor = redactor
+        self.metadata = dict(metadata or {})
         self._unsub: Optional[object] = None
+        self._session_start_written = False
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def attach(self, bus: EventBus) -> None:
         self._unsub = bus.subscribe(self.on_event)
+        if self.metadata and not self._session_start_written:
+            self._write({
+                "type": "session_start",
+                "ts": _now(),
+                **self.metadata,
+            })
+            self._session_start_written = True
 
     def detach(self) -> None:
         if self._unsub is not None:
@@ -62,10 +77,19 @@ class SessionRecorder:
         if record is None:
             return
         self._write(record)
-        if isinstance(event, RunFinished):
+        if isinstance(event, (RunFinished, RunCancelled)):
             # 每轮结束落一份完整历史快照（resume 取最后一条）
-            self._write({"type": "history", "ts": _now(),
-                         "messages": history_to_dicts(self._get_history())})
+            self.flush_history()
+
+    def flush_history(self) -> None:
+        """持久化当前完整历史；取消/分叉前也显式调用。"""
+        self._write({"type": "history", "ts": _now(),
+                     "messages": history_to_dicts(self._get_history())})
+
+    def update_metadata(self, **metadata: Any) -> None:
+        """追加一条可覆盖的会话元数据（当前用于 rename）。"""
+        self.metadata.update(metadata)
+        self._write({"type": "session_meta", "ts": _now(), **metadata})
 
     def _event_record(self, event: AgentEvent) -> Optional[dict]:
         ts = _now()
@@ -101,8 +125,23 @@ class SessionRecorder:
         if isinstance(event, ContextCompressed):
             return {"type": "context_compressed", "ts": ts,
                     "before_tokens": event.before_tokens, "after_tokens": event.after_tokens}
+        if isinstance(event, PlanUpdated):
+            return {"type": "plan_updated", "ts": ts,
+                    "items": list(event.items), "statuses": list(event.statuses),
+                    "active_index": event.active_index,
+                    "explanation": event.explanation}
+        if isinstance(event, UserInputRequested):
+            return {"type": "user_input_requested", "ts": ts,
+                    "request_id": event.request_id, "prompt": event.prompt,
+                    "options": list(event.options),
+                    "allow_free_text": event.allow_free_text}
+        if isinstance(event, UserInputResolved):
+            return {"type": "user_input_resolved", "ts": ts,
+                    "request_id": event.request_id, "answered": event.answered}
         if isinstance(event, RunFinished):
             return {"type": "run_finished", "ts": ts}
+        if isinstance(event, RunCancelled):
+            return {"type": "run_cancelled", "ts": ts, "reason": event.reason}
         return None  # 其余事件（delta 等）不落盘，避免文件爆炸
 
     def _write(self, record: dict) -> None:
@@ -122,7 +161,8 @@ def _now() -> float:
 
 def new_session_path(sessions_dir: Path) -> Path:
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    return sessions_dir / f"{stamp}-{os.getpid()}.jsonl"
+    suffix = uuid.uuid4().hex[:6]
+    return sessions_dir / f"{stamp}-{os.getpid()}-{suffix}.jsonl"
 
 
 def latest_session(sessions_dir: Path) -> Optional[Path]:
@@ -132,6 +172,8 @@ def latest_session(sessions_dir: Path) -> Optional[Path]:
 
 def load_history(path: Path) -> List[Message]:
     """从会话文件恢复历史：取最后一条 history 快照。"""
+    if Path(path).suffix.lower() == ".json":
+        return _load_native_history(Path(path))
     last: Optional[List[Message]] = None
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -145,3 +187,16 @@ def load_history(path: Path) -> List[Message]:
             if record.get("type") == "history":
                 last = history_from_dicts(record.get("messages", []))
     return last or []
+
+
+def _load_native_history(path: Path) -> List[Message]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(raw, dict) or raw.get("format") != "krelcode-session":
+        return []
+    messages = raw.get("messages")
+    if not isinstance(messages, list):
+        return []
+    return history_from_dicts(messages)

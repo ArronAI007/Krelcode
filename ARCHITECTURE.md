@@ -19,7 +19,7 @@
 │ 工具层                                           │
 │   文件: read / write / edit / glob / grep        │
 │   执行: run_command (超时/截断/后台进程)           │
-│   扩展: MCP / 插件 / web_search                  │
+│   扩展: MCP / 本地插件 / Skills / web_search     │
 ├─────────────────────────────────────────────────┤
 │ 安全与权限层                                      │
 │   沙箱: Seatbelt / Landlock / Docker             │
@@ -86,7 +86,8 @@ while steps < max_steps:
 ## 7. Krelcode 的分步映射
 
 见 PLAN.md：Step 1(模型层+REPL) → 2(主循环) → 3(文件工具) → 4(Shell工具)
-→ 5(循环加固) → 6(安全层) → 7(上下文管理) → 8(交互增强)。
+→ 5(循环加固) → 6(安全层) → 7(上下文管理) → 8(交互增强)
+→ MCP/Skills/Plugins 生态 → 多会话 metadata/fork/resume/rename/search/native exchange。
 
 ## 8. Claude Code REPL 六步对齐
 

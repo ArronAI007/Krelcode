@@ -41,11 +41,20 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             "session", "显示当前会话文件",
             help="显示当前会话文件路径"),
         CommandSpec(
-            "sessions", "列出工作区会话",
-            help="列出工作区的全部会话"),
+            "sessions", "列出或搜索工作区会话", argument_hint="[search <关键词>]",
+            help="列出工作区的全部会话；/sessions search <关键词> 搜索标题与用户输入"),
         CommandSpec(
             "resume", "恢复指定会话", argument_hint="<n|latest|path>",
-            help="切换到第 n 个会话（/sessions 里的序号；latest=最新）"),
+            help="恢复第 n 个会话（/sessions 里的序号；latest=最新），并建立新分支"),
+        CommandSpec(
+            "fork", "从当前历史创建会话分支", argument_hint="[名称]",
+            help="复制当前上下文到新会话并切换；原会话保持不变"),
+        CommandSpec(
+            "rename", "重命名当前会话", argument_hint="<名称>",
+            help="为当前会话写入可搜索标题"),
+        CommandSpec(
+            "delete", "归档一个非活动会话", argument_hint="<n|path> [--force]",
+            help="删除前要求二次确认；文件移入 sessions/.archive 可手动恢复"),
         CommandSpec(
             "mcp", "查看或重载 MCP", argument_hint="[reload]",
             help="查看 MCP 服务器状态；/mcp reload 重读配置并热重启"),
@@ -55,6 +64,9 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
         CommandSpec(
             "skills", "查看或重载 Skills", argument_hint="[reload|show <name>]",
             help="列出 Skill；/skills reload 热重载；/skills show <name> 查看详情"),
+        CommandSpec(
+            "plugins", "查看或重载插件", argument_hint="[reload|show <name>]",
+            help="列出目录插件与加载问题；/plugins reload 热重载"),
         CommandSpec(
             "skill", "调用指定 Skill", argument_hint="<name> [参数]",
             help="用户主动加载并执行一个 Skill"),
@@ -78,7 +90,7 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             help="显示上下文统计；/context refresh 重新采集工作区上下文"),
         CommandSpec(
             "export", "导出当前会话", argument_hint="[路径]",
-            help="把当前会话导出为 Markdown（缺省存 .krelcode/exports/）"),
+            help="导出 Markdown；路径以 .json 结尾时输出可 /resume 的 native 快照"),
         CommandSpec(
             "compact", "立即压缩历史",
             help="立即压缩对话历史（LLM 摘要，不必等预算超限）"),

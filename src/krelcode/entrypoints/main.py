@@ -54,6 +54,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="禁用 Agent Skills 发现、索引与相关工具")
     p.add_argument("--skills-dir", action="append", default=[],
                    help="额外 skill 根目录（可重复；优先级高于项目/全局目录）")
+    p.add_argument("--no-plugins", action="store_true",
+                   help="禁用本地目录插件发现与插件工具")
+    p.add_argument("--plugins-dir", action="append", default=[],
+                   help="额外插件根目录（可重复；优先级高于项目/全局目录）")
     p.add_argument("--auto-approve", action="store_true",
                    help="ASK 级操作自动批准（信任模式；DENY 级仍然拒绝）")
     p.add_argument("--permission-mode",

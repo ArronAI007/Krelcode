@@ -42,6 +42,11 @@ api_key_env = "GEMINI_API_KEY"
 # enabled = true                    # false 等价 --no-skills
 # paths = ["./team-skills"]        # 额外目录；相对路径基于工作区
 
+# ---- 本地目录插件（plugin.toml；仅可信代码）----
+# [plugins]
+# enabled = true                    # false 等价 --no-plugins
+# paths = ["./team-plugins"]       # 额外目录；相对路径基于工作区
+
 # ---- 工作区上下文预算（Context v2）----
 # [context]
 # max_tokens = 6000                # 规则 + git + 目录树总预算

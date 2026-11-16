@@ -42,6 +42,7 @@ src/krelcode/
 │   ├── registry.py   # ToolRegistry -> OpenAI tools schema
 │   └── builtin/      # 每个工具一个文件，互相独立
 ├── skills/      # 文件系统型 Agent Skills：发现/解析/渐进加载/资源/脚本
+├── plugins/     # 轻量本地插件：manifest → 隔离 import → Tool 适配/命名空间
 ├── safety/      # 策略层（实现 ApprovalPolicy 端口）
 │   └── policy.py     # Decision / AllowAllPolicy（Step 6 加沙箱与交互审批）
 ├── session/     # 交互会话层 + 状态适配器
@@ -49,7 +50,7 @@ src/krelcode/
 │   ├── attachments.py # @文本/图片展开（工作区约束与预算）
 │   ├── state.py      # SessionViewState：idle/running/stopping 与 turn 现场
 │   ├── commands/     # CommandSpec/Registry → dispatcher/handlers
-│   │   ├── builtin.py # 22 个内置命令元数据与 help 渲染
+│   │   ├── builtin.py # 28 个内置命令元数据与 help 渲染
 │   │   ├── registry.py # 解析、别名、隐藏/启用、运行态与来源冲突
 │   │   ├── sources.py # Skill / MCP Prompt → dynamic CommandSpec
 │   │   └── handlers/  # 会话、上下文、Skill、MCP 等执行器
@@ -532,6 +533,52 @@ Skill 是用户可安装的指令包，不是 Python 插件；Krelcode 只解析
 安全边界：Skill 正文和 bundled script 都来自用户安装内容，等同用户信任的
 指令/代码；脚本仍必须审批。模型不能借资源 reader 越过 Skill 根目录，也不应
 把 Skill 当作任意文件的通用读取后门。
+
+## 轻量插件生态（Step 76）
+
+Krelcode 延续“pi 式分层 + 轻量事件总线”，不实现插件微内核。插件只是把已有
+Tool 协议从显式目录组装进来的边界适配器：
+
+1. **发现**：`PluginManager` 扫描 `~/.krelcode/plugins`、项目
+   `.krelcode/plugins`、`[plugins].paths` / `--plugins-dir`；每个目录一个
+   `plugin.toml`，后者同名覆盖前者。
+2. **隔离加载**：manifest 严格校验 name/version/entrypoint/enabled；入口模块用
+   唯一 synthetic package 名加载，保留包内相对导入且避免同名模块污染。单插件
+   manifest/import/工厂/工具校验失败只记录 issue，不阻断主 Agent。
+3. **统一协议**：入口返回一个 `Tool`、Tool 列表或同步工厂；不新增 execute 参数、
+   第二套 schema 或插件专属上下文。工具被包装为
+   `plugin__<plugin>__<tool>`，原 Tool 仍接收现有 `ToolUseContext`。
+4. **动态工具池**：插件工具携带 `ToolSource.PLUGIN + plugin_name`，与内置、Skill、
+   Subagent、MCP 工具进入同一个 `ToolRegistry/TurnToolPool`，继续受权限模式、
+   allowlist、run mode 与 disabled_tools 过滤。
+5. **生命周期**：`/plugins` 显示 loaded/disabled/error 与 issue；`/plugins reload`
+   重扫目录并原子替换 `plugin__` 前缀工具。主代理与后续子代理共享同一 manager。
+
+安全边界：插件代码是用户显式安装的本地可信 Python，不等同于 MCP 远程工具的
+readOnlyHint；其读写/命令能力仍走现有 Tool 实现、审批策略和 Sandbox。当前不为插件
+提供自动依赖安装、进程级故障隔离或不可信代码沙箱。
+
+## 会话生命周期与交换（Step 77）
+
+会话文件从“history 快照旁路”升级为可审计的多会话事实源。`session_start/session_meta`
+携带 stable session id、title、parent id、provider/model/workspace；审计流继续记录输入、
+工具、Hook、计划、用户澄清、子代理与 run 完成/取消。`SessionRecorder` 在正常完成与
+取消时都刷新 history，崩溃/取消不会再丢失最后一轮快照。
+
+`SessionLifecycle` 独占活动会话切换，保证 loop.history、EventBus recorder 与
+AgentRuntime.session_id 三者一致：
+
+```
+/fork ─────── 当前内存 history → 新 JSONL(title, parent_id) → 切换 recorder/runtime
+/resume ───── 目标 history → 新 JSONL(title, target id)       → 切换 recorder/runtime
+/rename ───── 追加 session_meta 覆盖 title（recorder 统一脱敏）
+/delete ───── 确认后移入 sessions/.archive（非不可逆删除，拒绝活动会话）
+```
+
+`SessionInfo` 从元数据和所有 user_input/history 构建轻量索引，支持
+`/sessions search`。`/export *.json` 写出版本化 `krelcode-session` 快照，`load_history`
+可直接读取并通过 `/resume` 建立新分支；Markdown 继续用于人读分享。分支采用 copy-on-resume
+语义，原会话不变，避免恢复动作覆盖来源历史。
 
 ## 统一输入处理管线（Step 67）
 

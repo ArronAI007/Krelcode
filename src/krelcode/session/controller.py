@@ -14,6 +14,7 @@ from typing import Any, Optional
 from ..agent.loop import AgentLoop
 from ..agent.runtime import AgentRuntime
 from ..tools.base import CommandDescriptor, ToolServices
+from .lifecycle import SessionLifecycle
 from .commands import (
     CommandContext,
     CommandKind,
@@ -48,6 +49,8 @@ class SessionController:
         model_switch=None,
         skills=None,
         skills_reload=None,
+        plugins=None,
+        plugins_reload=None,
         workspace_root: Optional[Path] = None,
         command_registry: Optional[CommandRegistry] = None,
     ) -> None:
@@ -56,6 +59,13 @@ class SessionController:
         self.loop = self.runtime.loop
         self.session_path = session_path
         self.sessions_dir = sessions_dir
+        self.session_lifecycle = SessionLifecycle(
+            self.loop,
+            sessions_dir,
+            session_path,
+            runtime=self.runtime,
+            redactor=getattr(self.loop, "redactor", None),
+        )
         self.mcp_supervisor = (mcp_supervisor
                                if mcp_supervisor is not None
                                else self.runtime.mcp_supervisor)
@@ -70,6 +80,10 @@ class SessionController:
         self.model_switch = model_switch
         self.skills = skills
         self.skills_reload = skills_reload
+        self.plugins = (plugins if plugins is not None
+                        else getattr(self.loop, "plugin_manager", None))
+        self.plugins_reload = (plugins_reload if plugins_reload is not None
+                               else getattr(self.loop, "plugin_reload", None))
         self.workspace_root = workspace_root or self.runtime.workspace_root
         self.command_registry = command_registry or builtin_command_registry()
         sync_skill_commands(self.command_registry, self.skills)
@@ -139,6 +153,8 @@ class SessionController:
                 output=(f"  （未知命令: /{name}，/help 查看可用命令）",),
             )
         result = await handler(context)
+        if self.session_lifecycle.session_path is not None:
+            self.session_path = str(self.session_lifecycle.session_path)
         self.refresh_tool_services()
         return result
 
@@ -178,4 +194,7 @@ class SessionController:
             model_switch=self.model_switch,
             skills=self.skills,
             skills_reload=self.skills_reload,
+            plugins=self.plugins,
+            plugins_reload=self.plugins_reload,
+            session_lifecycle=self.session_lifecycle,
         )

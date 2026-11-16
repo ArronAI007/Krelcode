@@ -39,6 +39,8 @@ krelcode [子命令] [选项]
 | `--no-context` | — | 跳过启动时工作区上下文注入 |
 | `--no-skills` | — | 关闭 Agent Skills（不发现、不注册 Skill 工具） |
 | `--skills-dir <路径>` | — | 追加 Skill 根目录，可重复；也支持 TOML `[skills].paths` |
+| `--no-plugins` | — | 关闭本地目录插件发现与插件工具 |
+| `--plugins-dir <路径>` | — | 追加插件根目录，可重复；也支持 TOML `[plugins].paths` |
 | `--auto-approve` | — | ASK 级操作自动批准（DENY 级仍拒绝） |
 | `--permission-mode default\|read-only\|auto-approve\|plan` | 配置/`default` | 工具权限模式；`read-only`/`plan` 只暴露只读工具 |
 | `--sandbox-backend auto\|static\|seatbelt\|bubblewrap` | auto | 运行时隔离后端；显式后端不可用则启动失败 |
@@ -66,16 +68,20 @@ krelcode [子命令] [选项]
 | `/context` | 上下文统计（消息数/估算 tokens/预算） |
 | `/context refresh` | 重采目录树/git/规则文件并重建 system prompt |
 | `/compact` | 立即压缩历史（驱逐+LLM 摘要，不等预算） |
-| `/sessions` | 列出工作区全部会话 |
-| `/resume <n\|latest\|path>` | 会话内切换 |
-| `/session` | 当前会话文件路径 |
-| `/export [路径]` | 导出会话 Markdown（缺省 `.krelcode/exports/`） |
+| `/sessions` · `/sessions search <关键词>` | 列出/搜索会话标题与用户输入 |
+| `/resume <n\|latest\|path>` | 恢复会话并建立新分支（不覆盖源会话） |
+| `/fork [名称]` | 从当前历史创建并切换独立会话分支 |
+| `/rename <名称>` | 为当前会话设置可搜索标题 |
+| `/delete <n\|path> [--force]` | 二次确认后归档非活动会话到 `sessions/.archive` |
+| `/session` | 当前会话文件、标题、父会话与模型元数据 |
+| `/export [路径]` | 导出 Markdown；`.json` 路径输出可重新 `/resume` 的 native 快照 |
 | `/undo` · `/undo list` | 回滚上一轮文件改动 · 查看检查点栈 |
 | `/agents` | 子代理状态（含排队深度） |
 | `/skills [关键词]` | 列出或搜索 Skill |
 | `/skills reload` | 重读全部 Skill 目录并刷新 system prompt 索引 |
 | `/skills show <name>` | 查看元数据、资源与完整 `SKILL.md` |
 | `/skill <name> [参数]` | 用户主动加载并执行 Skill；参数替换 `$ARGUMENTS` |
+| `/plugins [reload\|show <name>]` | 查看插件状态/问题 · 热重载 · 查看单个 manifest |
 | `/mcp` · `/mcp reload` | MCP 服务器状态 · 重读配置热重载 |
 | `/allow [add\|remove <程序名>]` | 命令审批白名单管理（持久化） |
 | `/stop` | 中止运行中任务（历史自动修复） |
@@ -131,6 +137,10 @@ disabled = []                        # 本轮工具池永久排除的工具名
 [skills]
 enabled = true                       # false 等价 --no-skills
 paths = ["./team-skills", "/opt/shared-skills"]  # 额外目录，可相对工作区
+
+[plugins]                            # 轻量目录插件（本地可信代码）
+enabled = true                       # false 等价 --no-plugins
+paths = ["./team-plugins", "/opt/shared-plugins"] # 额外目录，可相对工作区
 
 [context]                            # 启动时工作区上下文（Context v2）
 max_tokens = 6000                    # rules + git + tree 的统一 token 预算
@@ -236,7 +246,8 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 
 ```
 .krelcode/
-├── sessions/          会话 JSONL（审计事件流 + 每轮 history 快照）
+├── sessions/          会话 JSONL（session_start/session_meta + 审计事件流 + history）
+│   └── .archive/      /delete 的可恢复归档
 ├── checkpoints/       文件快照（/undo 数据源，NNNN-<ts>/meta.json + files/）
 ├── tool_outputs/      超长工具输出全文（历史里留截断+路径引用）
 ├── exports/           /export 缺省输出目录
@@ -250,6 +261,12 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 Skill 发现目录（后者覆盖前者同名项）：`~/.agents/skills`、`~/.krelcode/skills`、
 `<workspace>/.agents/skills`、`<workspace>/.krelcode/skills`，再追加
 `[skills].paths` / `--skills-dir`。每个 Skill 是包含 `SKILL.md` 的目录。
+
+Plugin 发现目录（后者覆盖前者同名插件）：`~/.krelcode/plugins`、
+`<workspace>/.krelcode/plugins`，再追加 `[plugins].paths` / `--plugins-dir`。
+每个插件是包含 `plugin.toml` 的目录；插件代码按本地可信代码处理，单插件加载失败
+只记录 issue，不影响主 Agent。插件工具统一命名空间为
+`plugin__<plugin-name>__<tool-name>`。
 
 ## 6. 安全策略速查（审批策略 + 运行时 Sandbox，默认开启）
 

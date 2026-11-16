@@ -277,6 +277,7 @@ class ToolDescriptor:
     read_only: bool = False
     required_feature: Optional[str] = None
     run_modes: Optional[FrozenSet[RunMode]] = None
+    plugin_name: Optional[str] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "source", ToolSource(self.source))
@@ -305,4 +306,5 @@ class ToolDescriptor:
             read_only=bool(getattr(tool, "read_only", False)),
             required_feature=getattr(tool, "required_feature", None),
             run_modes=getattr(tool, "run_modes", None),
+            plugin_name=getattr(tool, "plugin_name", None),
         )

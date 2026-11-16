@@ -144,6 +144,8 @@ async def run_session(
             redactor=redactor,
             skills=loop.skill_manager,
             skills_reload=skills_reload,
+            plugins=getattr(loop, "plugin_manager", None),
+            plugins_reload=getattr(loop, "plugin_reload", None),
             input_processor=input_processor,
             approval_broker=approval_broker,
             input_broker=user_input_broker,

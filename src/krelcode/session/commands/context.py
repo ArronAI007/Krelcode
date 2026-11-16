@@ -26,3 +26,6 @@ class CommandContext:
     model_switch: Any = None
     skills: Any = None
     skills_reload: Any = None
+    plugins: Any = None
+    plugins_reload: Any = None
+    session_lifecycle: Any = None
