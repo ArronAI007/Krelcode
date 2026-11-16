@@ -37,6 +37,12 @@ api_key_env = "GEMINI_API_KEY"
 # backend = "auto"        # auto / static / seatbelt(macOS) / bubblewrap(Linux)
 # network = false         # 默认断网；需要依赖下载时临时启用 --sandbox-network
 
+# ---- Auto Memory（稳定、可复用、经过验证的项目知识）----
+# [memory]
+# mode = "suggest"        # off / suggest / auto；默认只生成候选供审核
+# suggest_threshold = 0.55
+# auto_threshold = 0.80
+
 # ---- Agent Skills（SKILL.md 指令包）----
 # [skills]
 # enabled = true                    # false 等价 --no-skills

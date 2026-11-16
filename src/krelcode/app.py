@@ -59,6 +59,13 @@ from .session.compact_checkpoint import CompactCheckpointStore
 from .session.input import InputProcessor
 from .session.interactions import UserInputBroker
 from .session.memory import MemoryStore, sync_memory_fragment
+from .session.memory_candidates import (
+    DEFAULT_AUTO_THRESHOLD,
+    DEFAULT_SUGGEST_THRESHOLD,
+    AutoMemoryCoordinator,
+    AutoMemoryMode,
+    coerce_auto_memory_mode,
+)
 from .session.restore import refresh_skill_system_prompt, restore_session
 from .session.runner import run_session
 from .skills import SkillManager, build_skill_tools
@@ -83,6 +90,7 @@ from .tools.builtin.job_tools import (
     JobOutputTool,
     JobStartTool,
 )
+from .tools.builtin.memory_search import MemorySearchTool
 from .tools.builtin.read_file import ReadFileTool
 from .tools.builtin.repo_map import RepoMapTool
 from .tools.builtin.run_command import RunCommandTool
@@ -96,15 +104,56 @@ from .ui.approval import ApprovalBroker
 from .ui.repl import run_repl
 
 
-def default_tools() -> List[Tool]:
+def default_tools(memory_store: Optional[MemoryStore] = None) -> List[Tool]:
     """内置工具集（16 个 + 9 个子代理工具在 build_loop 注册）。
-    MCP 远程工具在运行时追加注册。"""
-    return [
+    MCP 远程工具在运行时追加注册；传入 MemoryStore 时额外暴露只读
+    ``memory_search``。"""
+    tools: List[Tool] = [
         GetTimeTool(), ReadFileTool(), WriteFileTool(), EditFileTool(),
         RunCommandTool(), GrepTool(), GlobTool(), RepoMapTool(),
         FindRefsTool(), CheckSyntaxTool(), AskUserTool(), UpdatePlanTool(),
         JobStartTool(), JobOutputTool(), JobListTool(), JobKillTool(),
     ]
+    if memory_store is not None:
+        tools.append(MemorySearchTool(memory_store))
+    return tools
+
+
+def resolve_auto_memory_mode(
+    args: argparse.Namespace,
+    config: Dict[str, Any],
+) -> AutoMemoryMode:
+    """CLI > ``[memory].mode`` > conservative ``suggest`` default."""
+    explicit = getattr(args, "memory_mode", None)
+    if explicit:
+        return coerce_auto_memory_mode(explicit)
+    section = config.get("memory") or {}
+    configured = section.get("mode") if isinstance(section, dict) else None
+    return coerce_auto_memory_mode(configured or AutoMemoryMode.SUGGEST.value)
+
+
+def resolve_auto_memory_thresholds(
+    args: argparse.Namespace,
+    config: Dict[str, Any],
+) -> tuple[float, float]:
+    section = config.get("memory") or {}
+    if not isinstance(section, dict):
+        section = {}
+    suggest = getattr(args, "memory_suggest_threshold", None)
+    auto = getattr(args, "memory_auto_threshold", None)
+    try:
+        suggest_value = float(
+            suggest if suggest is not None else
+            section.get("suggest_threshold", DEFAULT_SUGGEST_THRESHOLD))
+        auto_value = float(
+            auto if auto is not None else
+            section.get("auto_threshold", DEFAULT_AUTO_THRESHOLD))
+    except (TypeError, ValueError):
+        suggest_value = DEFAULT_SUGGEST_THRESHOLD
+        auto_value = DEFAULT_AUTO_THRESHOLD
+    suggest_value = max(0.0, min(suggest_value, 1.0))
+    auto_value = max(suggest_value, min(auto_value, 1.0))
+    return suggest_value, auto_value
 
 
 def build_llm(args: argparse.Namespace, config: Dict[str, Any], log=print) -> LLMProvider:
@@ -330,6 +379,7 @@ async def build_loop(
                     f"{issue.message}")
     bus = EventBus()
     llm = build_llm(args, config, log=log)
+    memory_store = MemoryStore(workspace_root)
     skill_manager = build_skill_manager(args, config)
     skill_tools = build_skill_tools(skill_manager) if skill_manager.enabled else []
     plugin_manager = build_plugin_manager(args, config, workspace_root)
@@ -380,8 +430,14 @@ async def build_loop(
     shell_jobs = ShellJobManager(bus, workspace_root=workspace_root)
     tool_context.shell_jobs = shell_jobs
     policy = build_policy(args, workspace_root, bus, approver=approver)
-    tool_factory = lambda: default_tools() + skill_tools + list(plugin_manager.tools)
-    registry = ToolRegistry(default_tools())
+    builtin_tools = default_tools(memory_store)
+    tool_factory = lambda: (
+        default_tools(memory_store)
+        + skill_tools
+        + list(extra_tools or [])
+        + list(plugin_manager.tools)
+    )
+    registry = ToolRegistry(builtin_tools)
     for tool in skill_tools:
         registry.register(
             tool, ToolDescriptor.from_tool(tool, source=ToolSource.SKILL))
@@ -419,7 +475,6 @@ async def build_loop(
     skill_fragment = skills_fragment(skill_manager.prompt_index())
     if skill_fragment is not None:
         prompt_registry.register(skill_fragment)
-    memory_store = MemoryStore(workspace_root)
     memory_fragment = memory_store.fragment()
     if memory_fragment is not None:
         prompt_registry.register(memory_fragment)
@@ -468,6 +523,20 @@ async def build_loop(
     loop.directory_rule_source = directory_rule_source
     loop.memory_store = memory_store
     apply_prompt_snapshot(loop, prompt_snapshot)
+
+    suggest_threshold, auto_threshold = resolve_auto_memory_thresholds(
+        args, config)
+    auto_memory = AutoMemoryCoordinator(
+        loop,
+        memory_store,
+        mode=resolve_auto_memory_mode(args, config),
+        suggest_threshold=suggest_threshold,
+        auto_threshold=auto_threshold,
+        on_memory_changed=lambda: sync_memory_fragment(loop, memory_store),
+        log=log,
+    )
+    auto_memory.attach(bus)
+    loop.auto_memory = auto_memory
 
     async def reload_plugins():
         records = await plugin_manager.reload()
@@ -611,6 +680,8 @@ async def async_main(args: argparse.Namespace) -> int:
     if getattr(loop, "memory_store", None) is not None:
         loop.memory_store.redactor = redactor
         sync_memory_fragment(loop, loop.memory_store)
+    if getattr(loop, "auto_memory", None) is not None:
+        loop.auto_memory.set_redactor(redactor)
     subagents.redactor = redactor
     subagents.sidechains.redactor = redactor
     if getattr(loop.tool_context, "shell_jobs", None) is not None:

@@ -5,14 +5,14 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（v0.80.0 / Step 90）
+## 1. 项目统计（v0.81.0 / Step 91）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 34,444 行（Python，**零第三方运行时依赖**） |
-| 测试 | 22,455 行 / 108 个测试文件 / 1,090 个用例（离线 1,088 + 本地端口集成 2） |
+| 源码 | 36,110 行（Python，**零第三方运行时依赖**） |
+| 测试 | 22,674 行 / 109 个测试文件 / 1,113 个用例（离线 1,111 + 本地端口集成 2） |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
-| 工具 | 内置 16（含 ask_user/update_plan + 4 个后台 Job 工具）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
+| 工具 | 内置 16 + 只读 `memory_search`（装配 MemoryStore 时）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
 | CLI 入口 | REPL 对话 · -m 单次（text/json/stream-json）· stream-json 持久会话 · Python SDK · doctor · init · review |
 | 文档 | README（上手）· CONFIG（全量参考）· DESIGN（契约）· ARCHITECTURE（对标）· PLAN（路线）· BUILD（本文） |
@@ -20,9 +20,9 @@
 源码按层分布：
 
 ```
-session 7392 · agent 7228 · ui 3701 · tools 2813 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2440
-safety 2287 · llm 2143 · subagent 1714 · mcp 1652 · skills 949 · core 894
-jobs 582 · plugins 435 · entrypoints 194
+session 8857 · agent 7228 · ui 3701 · tools 2930 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2530
+safety 2287 · llm 2143 · subagent 1721 · mcp 1652 · skills 949 · core 894
+jobs 582 · plugins 435 · entrypoints 201
 ```
 
 core 只有 894 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
@@ -69,6 +69,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | v0.78 | 真实请求装配与预算 | Snapshot 不再只看统一 Message：Provider 先构造可复用的 PreparedRequest，再从最终 wire body 提取字节/token/hash/缓存段；压缩同时使用完整输入与真实输出预留，超限只重新装配一次。旧 Provider 通过 estimated 回退保持兼容 |
 | v0.79 | Working Context 与 Tool Microcompact | 当前任务事实从长期 Memory 分离为 bounded/redacted session store；真实预算链路先做零 LLM 工具分级压缩，保护当前轮/错误/写编辑/计划，仍超限才摘要。工具结构化元数据可随会话恢复，微压缩事件贯通 UI/JSONL/stream-json |
 | v0.80 | Structured Compact v2 | compact 从自由摘要升级为严格 schema 的 goal/files/tests/handoff；失败时 Working Context 降级、旧摘要合并、turn 边界与高低水位控制，pre-compact history 持久化后由 Rewind 恢复。可观测元数据贯通 UI/JSONL/stream-json，避免历史和工具结果反复摘要 |
+| v0.81 | Auto Memory | 长期记忆写入改为候选流水线：显式“记住”、用户纠正、成功测试复用、架构重复确认和任务完成事实先进入 project-local 队列；统一脱敏、精确去重、证据累积、冲突检测与阈值晋级。默认 suggest，`/memory review` 人工审核，auto 只晋级高置信无冲突 knowledge；新增只读 `memory_search` 与 pin 检索优先 |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -97,7 +98,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | 插件发现/隔离加载/热重载 | `plugins/{manifest,loader,manager}.py` |
 | 流式渲染/审批/用户输入/@引用 | `ui/render.py` `ui/approval.py` `session/interactions.py` `ui/atfiles.py` `ui/repl.py` |
 | 终端 Panel Dock / 键鼠导航 / Shell+Memory 快捷模式 | `ui/tui/{model,layout,controller,mouse,panels}.py` `session/memory.py` `agent/loop.py:execute_direct_tool` |
-| Memory 模型/作用域/存储与命令 | `session/memory.py` `session/commands/handlers/memory_ops.py` |
+| Memory 模型/作用域/存储与命令 | `session/memory.py` `session/memory_candidates.py` `session/commands/handlers/memory_ops.py` `tools/builtin/memory_search.py` |
 | hooks / 用量 / 自动提交 | `hooks.py` `agent/usage.py` `session/autocommit.py` |
 | 诊断/脚手架 | `doctor.py` `scaffold.py` |
 | 组装根（唯一认识所有具体类的地方） | `app.py` |
@@ -118,7 +119,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 1,088 通过、2 skip；本地端口可用时 1,090/1,090 全过。
+bind 探测自动 skip——沙箱内 1,111 通过、2 skip；本地端口可用时 1,113/1,113 全过。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /

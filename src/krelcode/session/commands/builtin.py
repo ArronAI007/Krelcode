@@ -111,11 +111,14 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
                   "“始终允许此命令”只保存当前精确命令）")),
         CommandSpec(
             "memory", "查看或管理分层记忆",
-            argument_hint="[list|scopes|add <scope> <text>|remove <id>]",
+            argument_hint=(
+                "[list|scopes|add|remove|pin|unpin|search|mode|review ...]"),
             help=("查看 user/project/session 三层记忆；"
-                  "/memory scopes 查看作用域和存储位置；\n"
-                  "/memory add <scope> <text> 写入；"
-                  "/memory remove <id> 删除。scope 可为 user/project/session。")),
+                  "/memory add <scope> <text> 写入；/memory remove <id> 删除；\n"
+                  "/memory pin|unpin <id> 调整检索优先级；"
+                  "/memory search <关键词> 搜索；\n"
+                  "/memory mode [off|suggest|auto] 设置 Auto Memory；"
+                  "/memory review [accept|reject <id>] 审核候选知识。")),
         CommandSpec(
             "context", "查看、启停或刷新上下文槽位",
             argument_hint=("[sources|rules|fragments|enable|disable|toggle|"

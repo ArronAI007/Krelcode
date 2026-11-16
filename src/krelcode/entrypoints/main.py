@@ -70,6 +70,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="允许 Sandbox 子进程访问网络（默认关闭）")
     p.add_argument("--no-sandbox", action="store_true",
                    help="关闭审批策略与运行时 Sandbox（AllowAll，仅建议在隔离环境中使用）")
+    p.add_argument("--memory-mode", choices=("off", "suggest", "auto"), default=None,
+                   help="Auto Memory 模式（默认: [memory].mode 或 suggest；"
+                        "suggest 仅入队等待 /memory review）")
+    p.add_argument("--memory-suggest-threshold", type=float, default=None,
+                   help="Auto Memory 候选入队最低置信度（默认 0.55）")
+    p.add_argument("--memory-auto-threshold", type=float, default=None,
+                   help="auto 模式自动写入最低置信度（默认 0.80）")
     p.add_argument("--context-tokens", type=int, default=None,
                    help="上下文 token 预算，超限自动压缩（默认: 模型上下文窗口×75%%，"
                         f"未知模型回退 {DEFAULT_CONTEXT_BUDGET}）")

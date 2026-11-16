@@ -1042,9 +1042,10 @@ Memory 从单一项目笔记升级为显式分层模型。记录和存储路径�
 MemoryEntry
 ├─ id / text
 ├─ scope      user | project | session
-├─ kind       note | preference | fact | workflow
+├─ kind       note | preference | fact | workflow | knowledge
 ├─ source     manual | legacy | future extractor
 ├─ tags[]
+├─ pinned
 ├─ created_at / updated_at
 └─ metadata{}
 ```
@@ -1078,9 +1079,47 @@ MemoryEntry
 
 - `#内容` = project；`#user: 内容` / `#project: 内容` / `#session: 内容` 显式选择 scope。
 - `/memory [list]` 查看 ID、scope、kind 和内容；`/memory scopes` 查看条数与路径；
-  `/memory add <scope> <text>` 写入；`/memory remove <id>` 删除。
+  `/memory add <scope> <text>` 写入；`/memory remove <id>` 删除；
+  `/memory pin|unpin <id>` 调整搜索与注入优先级；`/memory search <关键词>` 检索。
 - TUI Memory 面板展示 scope 与创建时间；命令和快捷写入后统一调用
   `sync_memory_fragment()`，下一次模型 Step 通过 ContextAssembler 看到新快照。
+
+## Auto Memory 候选与审核（Step 91）
+
+长期记忆写入分为 `extract → queue → review/promote` 三段。`AutoMemoryCoordinator`
+作为 EventBus 旁路订阅 `RunStarted/RunFinished`，因此 agent 内核不依赖 session 层；
+提取失败只记录诊断，不破坏当前任务。
+
+```text
+RunFinished
+  └─ MemoryCandidateExtractor
+      ├─ explicit remember      用户明确“记住”
+      ├─ user correction        用户纠正
+      ├─ successful test reuse  成功测试命令跨 turn 复用
+      ├─ architecture pattern   架构陈述重复确认
+      └─ task completion        最终答复中的稳定高价值事实
+           ↓
+MemoryCandidateQueue  (.krelcode/memory/candidates.jsonl, project-local)
+  ├─ redact → exact digest dedupe → evidence append
+  ├─ confidence threshold + conflict reconciliation
+  └─ pending | accepted | rejected | superseded
+           ↓ suggest / auto
+/memory review  ........................ 人工接受或拒绝
+           ↓
+MemoryStore(project/knowledge)  → memory_search / memory Fragment
+```
+
+- 默认模式是 `suggest`：只生成候选，不写长期记忆；`auto` 仅在候选置信度达到
+  `0.80`、证据成立且与已有候选/记忆无冲突时晋级；`off` 完全停止提取。
+- 候选队列按 workspace 隔离，并记录 project id；模型生成的候选被强制为
+  `project/knowledge`，不能借候选写入 user scope，也不能升级为 system instruction。
+- 稳定知识必须带证据：turn/session、用户原句、工具名、命令与 exit code。重复成功的
+  测试命令只累积 evidence，不重复建候选；不同正式测试命令被标为冲突并阻止自动晋级。
+- 文本、证据、tags 与 metadata 在落盘前统一经过 SecretRedactor 和密钥模式过滤；覆盖
+  API key、Authorization/Bearer、Cookie、常见平台 token 与私钥块。脱敏后无实质信息的
+  候选直接丢弃。
+- `memory_search` 是本地只读工具，返回带 `role="contextual_knowledge"` 和
+  `trust="untrusted"` 边界的已审核记录；Memory Fragment 同样声明内容不是系统指令。
 
 ## 分层规则、目录规则与 @import（Step 87）
 
