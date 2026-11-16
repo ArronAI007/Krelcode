@@ -159,6 +159,26 @@ class ContextCompressed(AgentEvent):
 
 
 @dataclass(frozen=True)
+class ContextCheckpointCreated(AgentEvent):
+    """A full resume/fork context checkpoint was persisted.
+
+    The event carries identifiers, counts and hashes only. Full history,
+    Working Context bodies and memory text remain in the workspace-local
+    checkpoint store and are never copied into UI or stream-json channels.
+    """
+
+    checkpoint_id: str
+    session_id: str = ""
+    turn_id: str = ""
+    phase: str = "end"
+    history_hash: str = ""
+    file_count: int = 0
+    memory_count: int = 0
+    compact_checkpoint_id: str = ""
+    context_plan_hash: str = ""
+
+
+@dataclass(frozen=True)
 class ContextAssembled(AgentEvent):
     """一次真实模型请求的上下文组装快照。
 

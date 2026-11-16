@@ -19,7 +19,8 @@ class SpawnAgentTool:
         "task 要自包含：子代理看不到你的对话历史。"
         "多个子代理要并行写文件时，传 isolated=true 让每个在独立 git worktree "
         "分支中工作（互不冲突，改动提交到 krelcode/agent-<id> 分支）。"
-        "子任务依赖当前对话背景时，传 fork_context=true 让子代理继承你的对话历史。"
+        "子代理始终继承 Base/Managed/User/Project 指令和与本任务相关的 Memory，"
+        "但不会继承父代理完整对话历史。fork_context 仅保留兼容标记。"
         "返回子代理 id；用 wait_agent 等待结果，list_agents 查看状态。"
         "可传 definition 使用 ~/.krelcode/agents 或项目 .krelcode/agents 中的自定义定义。"
     )
@@ -30,7 +31,7 @@ class SpawnAgentTool:
             "isolated": {"type": "boolean",
                          "description": "true=在独立 git worktree 分支中执行（需工作区为 git 仓库）"},
             "fork_context": {"type": "boolean",
-                             "description": "true=继承父对话历史（依赖型子任务；task 仍需说明要做什么）"},
+                             "description": "兼容标记；子代理只继承指令与任务相关 Memory，不复制完整历史"},
             "definition": {"type": "string",
                            "description": "可选 Agent Definition 名称（自定义系统提示与工具范围）"},
         },
@@ -59,7 +60,7 @@ class SpawnAgentTool:
         if handle.definition:
             extra += f"，定义 {handle.definition}"
         if handle.forked:
-            extra += "，已继承当前对话上下文"
+            extra += "，已继承指令与筛选 Memory（不含完整历史）"
         return ToolResult(
             content=f"已启动子代理 {handle.id}（后台运行）{extra}。"
                     f"用 wait_agent(agent_id=\"{handle.id}\") 等待结果。",

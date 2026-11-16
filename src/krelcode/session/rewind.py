@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
+from ..agent.context_plan import ContextPlanSnapshot
 from ..core.events import (
     AgentEvent,
     EventBus,
@@ -37,6 +38,7 @@ from .checkpoint import (
     CheckpointRestoreError,
     RestoreTurnsResult,
 )
+from .context_checkpoint import restore_context_checkpoint
 
 
 class RewindError(RuntimeError):
@@ -56,6 +58,8 @@ class TurnEntry:
     history_after: Optional[Tuple[Message, ...]] = None
     plan_after: Optional[PlanCheckpoint] = None
     checkpoint_ids: Tuple[int, ...] = field(default_factory=tuple)
+    context_checkpoint_before: str = ""
+    context_checkpoint_after: str = ""
     cancelled: bool = False
 
     @property
@@ -78,11 +82,13 @@ class TurnTimeline:
         get_history: Callable[[], List[Message]],
         plan_manager,
         checkpoints: Optional[CheckpointManager] = None,
+        context_checkpoints=None,
     ) -> None:
         self.bus = bus
         self._get_history = get_history
         self.plan_manager = plan_manager
         self.checkpoints = checkpoints
+        self.context_checkpoints = context_checkpoints
         self.entries: List[TurnEntry] = []
         self._active: Optional[TurnEntry] = None
         self._unsubscribe: Optional[Callable[[], None]] = None
@@ -120,6 +126,10 @@ class TurnTimeline:
         history = self._snapshot_history()
         before = history[:-1] if history else ()
         plan = self.plan_manager.checkpoint()
+        context_checkpoint = None
+        if self.context_checkpoints is not None:
+            context_checkpoint = self.context_checkpoints.latest_before(
+                event.session_id, time.time())
         entry = TurnEntry(
             turn_id=event.turn_id or f"turn-{len(self.entries) + 1}",
             session_id=event.session_id,
@@ -129,6 +139,8 @@ class TurnTimeline:
             history_before=before,
             plan_before=plan,
             plan_after=plan,
+            context_checkpoint_before=(
+                context_checkpoint.id if context_checkpoint is not None else ""),
         )
         self.entries.append(entry)
         self._active = entry
@@ -175,6 +187,11 @@ class TurnTimeline:
                 for group in self.checkpoints.groups_for_turn(
                     entry.turn_id, session_id=entry.session_id)
             )
+        if self.context_checkpoints is not None:
+            context_checkpoint = self.context_checkpoints.latest_for_turn(
+                entry.session_id, entry.turn_id)
+            entry.context_checkpoint_after = (
+                context_checkpoint.id if context_checkpoint is not None else "")
         self._active = None
 
     def _snapshot_history(self) -> Tuple[Message, ...]:
@@ -220,6 +237,7 @@ class RewindResult:
     label: str
     removed_turns: int
     files: RestoreTurnsResult
+    context_checkpoint_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -228,6 +246,7 @@ class TurnForkResult:
     source_turn_id: str
     label: str
     path: Path
+    context_checkpoint_id: str = ""
 
 
 class RewindCoordinator:
@@ -242,6 +261,8 @@ class RewindCoordinator:
         plan_manager,
         checkpoints: Optional[CheckpointManager] = None,
         compact_checkpoints=None,
+        context_checkpoints=None,
+        context_coordinator=None,
         timeline: Optional[TurnTimeline] = None,
     ) -> None:
         self.runtime = runtime
@@ -250,8 +271,11 @@ class RewindCoordinator:
         self.plan_manager = plan_manager
         self.checkpoints = checkpoints
         self.compact_checkpoints = compact_checkpoints
+        self.context_checkpoints = context_checkpoints
+        self.context_coordinator = context_coordinator
         self.timeline = timeline or TurnTimeline(
-            loop.bus, lambda: self.loop.history, plan_manager, checkpoints)
+            loop.bus, lambda: self.loop.history, plan_manager, checkpoints,
+            context_checkpoints)
         self.timeline.attach()
         # resume/fork 切换会话后，旧会话的 turn 边界不再有效。
         self.session_lifecycle.on_switch = self.timeline.clear
@@ -278,6 +302,15 @@ class RewindCoordinator:
             raise RewindError(f"文件检查点恢复失败；会话未改变: {exc}") from exc
 
         history_before = entry.history_before
+        context_before = None
+        if (
+            self.context_checkpoints is not None
+            and entry.context_checkpoint_before
+        ):
+            context_before = self.context_checkpoints.load(
+                entry.context_checkpoint_before)
+            if context_before is not None and context_before.history:
+                history_before = context_before.history
         restored_compact = None
         if self.compact_checkpoints is not None:
             restored_compact = self.compact_checkpoints.find_matching_before(
@@ -285,17 +318,39 @@ class RewindCoordinator:
                 session_id=entry.session_id,
                 created_at=entry.started_at,
             )
-            if (
+            if context_before is not None:
+                history_before = context_before.history or history_before
+            elif (
                 restored_compact is not None
                 and restored_compact.pre_compact_history
             ):
                 history_before = restored_compact.pre_compact_history
-        self.loop.history = self._history_with_current_system(history_before)
-        if restored_compact is not None:
-            self.loop.last_compact_checkpoint = restored_compact
-        rebuild = getattr(self.loop, "rebuild_working_context", None)
-        if callable(rebuild):
-            rebuild()
+        restore_result = None
+        if context_before is not None:
+            restore_result = restore_context_checkpoint(
+                self.loop,
+                context_before,
+                compact_store=self.compact_checkpoints,
+                memory_store=getattr(self.loop, "memory_store", None),
+                history_override=history_before,
+            )
+        else:
+            self.loop.history = self._history_with_current_system(history_before)
+            if restored_compact is not None:
+                self.loop.last_compact_checkpoint = restored_compact
+            rebuild = getattr(self.loop, "rebuild_working_context", None)
+            if callable(rebuild):
+                rebuild()
+            self.loop.pending_context_refresh = True
+            current_plan = getattr(self.loop, "last_context_plan", None)
+            if current_plan is None:
+                current_plan = ContextPlanSnapshot()
+            self.loop.last_context_plan = current_plan.restored_for(
+                self.loop.history,
+                "",
+                working_context_sequence=(
+                    self.loop.working_context_store.snapshot().sequence),
+            )
         self.plan_manager.restore(entry.plan_before)
         self.timeline.truncate_before(turn_index)
 
@@ -314,6 +369,8 @@ class RewindCoordinator:
             label=entry.label,
             removed_turns=len(removed),
             files=files,
+            context_checkpoint_id=(
+                restore_result.checkpoint_id if restore_result is not None else ""),
         )
 
     def fork_turn(self, turn_index: int, title: str = "") -> TurnForkResult:
@@ -324,10 +381,22 @@ class RewindCoordinator:
             raise RewindError(f"turn {turn_index} 的历史边界不完整")
         fork_title = title.strip() or (
             f"Fork · turn {turn_index} · {entry.label[:40]}")
+        checkpoint = None
+        if (
+            self.context_checkpoints is not None
+            and entry.context_checkpoint_after
+        ):
+            checkpoint = self.context_checkpoints.load(
+                entry.context_checkpoint_after)
+        fork_history = (
+            checkpoint.history if checkpoint is not None and checkpoint.history
+            else entry.history_after)
         try:
             path = self.session_lifecycle.fork(
                 fork_title,
-                history=self._history_with_current_system(entry.history_after),
+                history=self._history_with_current_system(fork_history),
+                context_checkpoint_id=(
+                    checkpoint.id if checkpoint is not None else ""),
             )
         except Exception as exc:
             raise RewindError(f"历史分叉失败: {exc}") from exc
@@ -337,6 +406,8 @@ class RewindCoordinator:
             source_turn_id=entry.turn_id,
             label=entry.label,
             path=path,
+            context_checkpoint_id=(
+                checkpoint.id if checkpoint is not None else ""),
         )
 
     def _history_with_current_system(

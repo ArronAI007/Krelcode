@@ -106,6 +106,10 @@ class SessionController:
                 checkpoints=self.checkpoints,
                 compact_checkpoints=getattr(
                     self.loop, "compact_checkpoint_store", None),
+                context_checkpoints=getattr(
+                    self.loop, "context_checkpoint_store", None),
+                context_coordinator=getattr(
+                    self.loop, "context_checkpoint_coordinator", None),
             )
         )
         self.command_registry = command_registry or builtin_command_registry()

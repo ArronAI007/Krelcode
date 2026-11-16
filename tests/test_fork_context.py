@@ -1,4 +1,4 @@
-"""Step 42 测试：子代理 fork_context（继承父对话上下文）。"""
+"""Step 92：子代理只继承指令与筛选 Memory，不复制父对话历史。"""
 
 import asyncio
 from pathlib import Path
@@ -63,7 +63,7 @@ def seed_parent_history(parent):
 
 # -- 核心语义 ---------------------------------------------------------------------------------
 
-def test_fork_copies_history_sanitizes_and_merges_pending_user(tmp_path):
+def test_fork_context_never_copies_parent_history(tmp_path):
     async def go():
         parent, manager = make_env(tmp_path)
         seed_parent_history(parent)
@@ -74,22 +74,15 @@ def test_fork_copies_history_sanitizes_and_merges_pending_user(tmp_path):
         assert handle.status == "completed"
 
         child = handle.loop.history
-        # 结构：子代理 system + 父历史（去 system、消毒、弹出未答 user）+ 合并任务 + 回复
-        assert child[0].role == "system"
-        assert "SUBAGENT" in child[0].content            # 子代理自己的 system，不是父的
+        assert [message.role for message in child] == [
+            "system", "user", "assistant"]
+        assert "SUBAGENT" in child[0].content
         assert child[0].content != "PARENT-SYS"
-        assert child[1] == Message.user("问题1")          # 已完成轮次保留
-        assert child[2] == Message.assistant("回答1")
-        # 悬挂的 assistant(tool_calls) 被消毒；未答 user 与子任务合并
-        assert not any(m.tool_calls for m in child)
-        merged = child[3]
-        assert merged.role == "user"
-        assert "请帮我处理登录模块" in merged.content
-        assert "[委派的子任务] 修复登录 bug" in merged.content
-        assert child[4].role == "assistant" and child[4].content.startswith("完成:")
-        # 角色严格交替（Anthropic 约束）
-        roles = [m.role for m in child]
-        assert roles == ["system", "user", "assistant", "user", "assistant"]
+        assert child[1].content == "修复登录 bug"
+        rendered = "\n".join(str(message.content or "") for message in child)
+        assert "问题1" not in rendered
+        assert "请帮我处理登录模块" not in rendered
+        assert handle.loop.parent_history_inherited is False
 
     asyncio.run(go())
 
@@ -108,21 +101,21 @@ def test_no_fork_by_default_starts_fresh(tmp_path):
     asyncio.run(go())
 
 
-def test_fork_without_pending_user_tail(tmp_path):
-    """父历史以完整 assistant 回复结尾（无悬挂）：不产生合并，任务独立成 user 消息。"""
+def test_fork_context_with_complete_parent_tail_still_starts_fresh(tmp_path):
     async def go():
         parent, manager = make_env(tmp_path)
         parent.history.extend([Message.user("q"), Message.assistant("a")])
         handle = await manager.spawn("后续任务", fork_context=True)
         await manager.wait("a1", timeout=5)
         child = handle.loop.history
-        assert [m.role for m in child] == ["system", "user", "assistant", "user", "assistant"]
-        assert child[3].content == "后续任务"              # 无需合并
+        assert [m.role for m in child] == ["system", "user", "assistant"]
+        assert child[1].content == "后续任务"
+        assert all(message.content not in {"q", "a"} for message in child)
 
     asyncio.run(go())
 
 
-def test_fork_is_deep_copy_isolated_from_parent(tmp_path):
+def test_child_history_is_isolated_from_parent(tmp_path):
     async def go():
         parent, manager = make_env(tmp_path)
         seed_parent_history(parent)
@@ -130,28 +123,26 @@ def test_fork_is_deep_copy_isolated_from_parent(tmp_path):
         await manager.wait("a1", timeout=5)
 
         child = handle.loop.history
-        # 子代理消息是独立对象：改写不影响父历史
         assert child[1] is not parent.history[1]
-        child[1].content = "子代理侧篡改"
+        child[1].content = "子代理侧任务"
         assert parent.history[1].content == "问题1"
-        # 子代理继续对话也不影响父
         await manager.send_input("a1", "追加")
         await manager.wait("a1", timeout=5)
-        assert len(parent.history) == 5                    # 父历史原样
+        assert len(parent.history) == 5
 
     asyncio.run(go())
 
 
-def test_fork_without_history_source_is_noop(tmp_path):
-    """未注入 get_parent_history（如独立使用 manager）→ fork_context 静默退化为全新上下文。"""
+def test_fork_context_is_compatibility_flag_not_history_source(tmp_path):
     async def go():
         manager = SubagentManager(
             llm=EchoProvider(), tool_factory=list,
             tool_context=ToolContext(workspace_root=tmp_path), bus=EventBus())
         handle = await manager.spawn("任务", fork_context=True)
-        assert handle.forked is False                      # 无源不 fork
+        assert handle.forked is True
         await manager.wait("a1", timeout=5)
         assert [m.role for m in handle.loop.history] == ["system", "user", "assistant"]
+        assert handle.loop.history[1].content == "任务"
 
     asyncio.run(go())
 
@@ -168,17 +159,17 @@ def test_spawn_tool_fork_context_param(tmp_path):
             ToolContext(workspace_root=tmp_path))
         assert not r.is_error
         assert r.data["forked"] is True
-        assert "已继承当前对话上下文" in r.content
+        assert "已继承指令与筛选 Memory" in r.content
+        assert "不含完整历史" in r.content
 
         wait = WaitAgentTool(manager)
         r2 = await wait.execute({"agent_id": "a1", "timeout": 5},
                                 ToolContext(workspace_root=tmp_path))
         assert "[a1] completed" in r2.content
-        # 子代理确实看到了父上下文（回复引用合并后的任务文本）
-        assert "委派的子任务" in r2.content
+        assert "委派的子任务" not in r2.content
+        assert "修复登录 bug" in r2.content
 
-        # 状态行标注继承
-        assert any("继承上下文" in line for line in manager.status_lines())
+        assert any("继承指令/Memory" in line for line in manager.status_lines())
         await manager.shutdown()
 
     asyncio.run(go())

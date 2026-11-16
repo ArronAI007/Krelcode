@@ -71,10 +71,22 @@ from ..llm.base import (
     ToolCallReady,
 )
 from .compression import ContextManager
+from .context import build_workspace_context_bundle
 from .context_assembler import ContextAssembler
-from .context_source import ContextAssembly
-from .context_source import ContextRequest, default_context_sources
+from .context_plan import ContextPlanSnapshot
+from .context_source import (
+    ContextAssembly,
+    ContextRequest,
+    RetrievedMemoryContextSource,
+    default_context_sources,
+)
 from .context_usage import build_context_usage_snapshot
+from .fragments import (
+    GROUP_WORKSPACE,
+    refresh_registry_snapshot,
+    skills_fragment,
+    workspace_fragments,
+)
 from .intent import TurnIntent, infer_turn_intent
 from .pricing import match_context_window
 from .streaming_tools import StreamingToolExecutor
@@ -215,8 +227,19 @@ class AgentLoop:
             ):
                 self.context_assembler.register(
                     WorkingContextSource(self.working_context_store))
+            if "memory_retrieval" not in self.context_assembler.source_names:
+                self.context_assembler.register(RetrievedMemoryContextSource())
         self.last_context_assembly = None
         self.last_context_snapshot = None
+        self.last_context_plan: ContextPlanSnapshot | None = None
+        self.last_context_restore = None
+        self.context_integrity = None
+        self.context_workspace_fingerprint = None
+        self.restored_workspace_fingerprint = None
+        self.restored_context_checkpoint_id = ""
+        self.restored_memory_context: tuple[str, ...] = ()
+        self.restored_relevant_memory_ids: tuple[str, ...] = ()
+        self.pending_context_refresh = False
         self.last_microcompact_report: Optional[MicrocompactReport] = None
         self.compact_checkpoint_store = compact_checkpoint_store
         self.last_compact_checkpoint = None
@@ -263,6 +286,31 @@ class AgentLoop:
         if self.context_manager is not None:
             self.context_manager.rebuild_state(self.history)
         return snapshot
+
+    async def refresh_workspace_context(self):
+        """Reload git/tree/rules and rebuild the prompt snapshot from live state."""
+        options = getattr(self, "context_options", None)
+        rule_loader = getattr(self, "rule_loader", None)
+        bundle = await build_workspace_context_bundle(
+            self.tool_context.workspace_root,
+            options=options,
+            rule_loader=rule_loader,
+        )
+        self.workspace_context = bundle
+        registry = getattr(self, "prompt_registry", None)
+        if registry is not None:
+            registry.replace_group(
+                GROUP_WORKSPACE, workspace_fragments(bundle))
+            manager = getattr(self, "skill_manager", None)
+            if manager is not None:
+                fragment = skills_fragment(manager.prompt_index())
+                if fragment is None:
+                    registry.remove("skills:index")
+                else:
+                    registry.upsert(fragment)
+            refresh_registry_snapshot(self)
+        self.pending_context_refresh = False
+        return bundle
 
     def add_runtime_context(self, contents: Iterable[str], source: str = "hook") -> int:
         """注入不写入历史快照的运行时上下文（SessionStart/Compact Hook）。"""
@@ -360,6 +408,8 @@ class AgentLoop:
         """
         if not self._turn_prepared:
             self._begin_turn(turn_id, tool_allowlist=tool_allowlist)
+        if self.pending_context_refresh:
+            await self.refresh_workspace_context()
         self.last_context_assembly = None
         self.last_context_snapshot = None
         self.history.append(Message.user(user_input, images=images or None))
@@ -670,8 +720,17 @@ class AgentLoop:
             intent=self._turn_intent,
             runtime_context=tuple(self.runtime_context),
             working_context=self.working_context_store.snapshot(),
+            relevant_memory=tuple(self.restored_memory_context),
         )
         context_assembly = await self.context_assembler.assemble(context_request)
+        working_snapshot = self.working_context_store.snapshot()
+        self.last_context_plan = ContextPlanSnapshot.from_assembly(
+            context_assembly,
+            history=self.history,
+            turn_id=self._current_turn_id,
+            step=step,
+            working_context_sequence=working_snapshot.sequence,
+        )
         messages = context_assembly.messages_for(self.history)
         prepared: Optional[PreparedLLMRequest] = None
         prepare = getattr(self.llm, "prepare_request", None)

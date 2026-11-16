@@ -311,6 +311,120 @@ class WorkingContextStore:
         self._entries = [item for item in self._entries if item.id != entry_id]
         return len(self._entries) != before
 
+    def invalidate_files(
+        self,
+        paths: Sequence[str],
+        *,
+        reason: str = "file-changed",
+    ) -> int:
+        """Drop stale file facts after resume hash verification.
+
+        Re-resumed history remains authoritative, but a file that changed after
+        the checkpoint must not keep presenting its old state as a current task
+        fact. The invalidation itself is retained as an open issue.
+        """
+        normalized = tuple(
+            dict.fromkeys(str(path).strip() for path in paths if str(path).strip()))
+        if not normalized:
+            return 0
+        wanted = set(normalized)
+        removed = 0
+        kept = []
+        for entry in self._entries:
+            metadata_path = str((entry.metadata or {}).get("path", "") or "")
+            matches = metadata_path in wanted
+            if not matches:
+                matches = any(
+                    path in entry.content
+                    or entry.id.endswith(f":{path}")
+                    for path in normalized
+                )
+            if matches and entry.kind in {"file", "observation"}:
+                removed += 1
+                continue
+            kept.append(entry)
+        self._entries = kept
+        self.upsert(
+            "open_issue",
+            "文件在会话检查点后发生变化，旧内容已失效: "
+            + ", ".join(normalized),
+            id="open_issue:resume-file-integrity",
+            source="context-restore",
+            status="stale",
+            metadata={
+                "paths": list(normalized),
+                "reason": reason,
+                "invalidated_entries": removed,
+            },
+        )
+        return removed
+
+    def restore_snapshot(self, record: Mapping[str, Any]) -> WorkingContextSnapshot:
+        """Hydrate the bounded task facts captured in a ContextCheckpoint.
+
+        Rebuilding from history is sufficient for short sessions, but a compact
+        turn intentionally removes older facts from the authoritative message
+        list. The checkpoint therefore preserves the exact live projection so
+        resume/rewind can start from the same handoff state. File-backed facts
+        are verified and invalidated by the caller before the next request.
+        """
+        raw_entries = record.get("entries")
+        restored: list[WorkingEntry] = []
+        if isinstance(raw_entries, (list, tuple)):
+            for raw in raw_entries:
+                if not isinstance(raw, Mapping):
+                    continue
+                try:
+                    kind = normalize_kind(str(raw.get("kind", "") or ""))
+                except ValueError:
+                    continue
+                content = _bounded_text(
+                    raw.get("content", ""), self.max_entry_chars, self.redactor)
+                if not content:
+                    continue
+                metadata = _safe_metadata_value(
+                    raw.get("metadata", {}), self.redactor)
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                try:
+                    sequence = max(0, int(raw.get("sequence", 0) or 0))
+                    timestamp = float(raw.get("timestamp", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    sequence = 0
+                    timestamp = 0.0
+                restored.append(WorkingEntry(
+                    id=str(raw.get("id", "") or f"{kind}:{sequence or len(restored) + 1}"),
+                    kind=kind,
+                    content=content,
+                    source=_bounded_text(
+                        raw.get("source", "context-checkpoint"),
+                        120,
+                        self.redactor,
+                    ) or "context-checkpoint",
+                    status=_bounded_text(
+                        raw.get("status", "active"), 80, self.redactor) or "active",
+                    metadata=metadata,
+                    sequence=sequence,
+                    timestamp=timestamp,
+                ))
+
+        self._entries = sorted(
+            restored,
+            key=lambda item: (item.sequence, item.timestamp, item.id),
+        )
+        try:
+            recorded_sequence = max(0, int(record.get("sequence", 0) or 0))
+        except (TypeError, ValueError):
+            recorded_sequence = 0
+        self._sequence = max(
+            recorded_sequence,
+            max((item.sequence for item in self._entries), default=0),
+        )
+        self._generation += 1
+        self._dropped_entries = 0
+        self._trim_entry_count()
+        return self.snapshot()
+
     def begin_turn(self, turn_id: str, user_input: str) -> Optional[WorkingEntry]:
         """Set the current goal; previous goals are intentionally superseded."""
         return self.upsert(

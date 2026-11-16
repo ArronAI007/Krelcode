@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 from ..core.events import (
     AgentEvent,
     ContextAssembled,
+    ContextCheckpointCreated,
     ContextCompressed,
     ContextMicrocompacted,
     EventBus,
@@ -122,6 +123,22 @@ class SessionRecorder:
         self.metadata.update(metadata)
         self._write({"type": "session_meta", "ts": _now(), **metadata})
 
+    def record_context_checkpoint(self, record: dict) -> None:
+        """Append a content-light ContextCheckpoint reference to this session."""
+        checkpoint_id = str(record.get("id", record.get("checkpoint_id", "")) or "")
+        if not checkpoint_id:
+            return
+        payload = {
+            "type": "context_checkpoint",
+            "ts": _now(),
+            "checkpoint_id": checkpoint_id,
+            **{
+                key: value for key, value in record.items()
+                if key not in {"type", "id", "checkpoint_id", "ts"}
+            },
+        }
+        self._write(payload)
+
     def _event_record(self, event: AgentEvent) -> Optional[dict]:
         ts = _now()
         if isinstance(event, RunStarted):
@@ -209,6 +226,20 @@ class SessionRecorder:
                 "source_savings": dict(event.source_savings),
                 "checkpoint_id": event.checkpoint_id,
             }
+        if isinstance(event, ContextCheckpointCreated):
+            return {
+                "type": "context_checkpoint",
+                "ts": ts,
+                "checkpoint_id": event.checkpoint_id,
+                "session_id": event.session_id,
+                "turn_id": event.turn_id,
+                "phase": event.phase,
+                "history_hash": event.history_hash,
+                "file_count": event.file_count,
+                "memory_count": event.memory_count,
+                "compact_checkpoint_id": event.compact_checkpoint_id,
+                "context_plan_hash": event.context_plan_hash,
+            }
         if isinstance(event, PlanUpdated):
             record = {"type": "plan_updated", "ts": ts,
                       "items": list(event.items), "statuses": list(event.statuses),
@@ -280,6 +311,31 @@ def load_history(path: Path) -> List[Message]:
             if record.get("type") == "history":
                 last = history_from_dicts(record.get("messages", []))
     return last or []
+
+
+def load_latest_context_checkpoint_id(path: Path) -> str:
+    """Return the latest full-context checkpoint reference from a session."""
+    checkpoint_id = ""
+    if Path(path).suffix.lower() == ".json":
+        return checkpoint_id
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("type") != "context_checkpoint":
+                    continue
+                candidate = str(record.get("checkpoint_id", "") or "")
+                if candidate:
+                    checkpoint_id = candidate
+    except OSError:
+        return ""
+    return checkpoint_id
 
 
 def _load_native_history(path: Path) -> List[Message]:

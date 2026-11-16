@@ -50,8 +50,21 @@ class MemorySearchTool:
     read_only = True
     internal = True
 
-    def __init__(self, store: StoreProvider) -> None:
+    def __init__(
+        self,
+        store: StoreProvider,
+        *,
+        allowed_entry_ids: Optional[frozenset[str]] = None,
+    ) -> None:
         self._store = store
+        self._allowed_entry_ids = allowed_entry_ids
+
+    def restricted_to(self, entry_ids: set[str] | frozenset[str]) -> "MemorySearchTool":
+        """Return an immutable view that can only return inherited entries."""
+        return MemorySearchTool(
+            self._store,
+            allowed_entry_ids=frozenset(str(item) for item in entry_ids),
+        )
 
     def _resolve_store(self) -> Optional[MemoryStore]:
         if isinstance(self._store, MemoryStore):
@@ -78,7 +91,13 @@ class MemorySearchTool:
         except (TypeError, ValueError) as exc:
             return ToolResult(content=f"invalid memory_search arguments: {exc}", is_error=True)
 
-        entries = store.search(query, scopes=scopes, limit=limit)
+        search_limit = 1_000 if self._allowed_entry_ids is not None else limit
+        entries = store.search(query, scopes=scopes, limit=search_limit)
+        if self._allowed_entry_ids is not None:
+            entries = tuple(
+                entry for entry in entries
+                if entry.id in self._allowed_entry_ids
+            )[:limit]
         if not entries:
             return ToolResult(
                 content=(

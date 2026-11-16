@@ -197,6 +197,18 @@ class RuleLoader:
         self._load_project(state)
         return self._finish(state, ())
 
+    def load_user(self) -> RuleBundle:
+        """Load only the managed-path user instruction layer."""
+        state = self._state()
+        self._load_user(state)
+        return self._finish(state, ())
+
+    def load_project(self) -> RuleBundle:
+        """Load only the project-root instruction layer."""
+        state = self._state()
+        self._load_project(state)
+        return self._finish(state, ())
+
     def load_directory(self, target_paths: Iterable[Path]) -> RuleBundle:
         """Load only on-demand directory layers for the supplied targets."""
         targets = normalize_rule_targets(self.workspace_root, target_paths)

@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from ..agent.loop import AgentLoop
+from .context_checkpoint import restore_context_checkpoint
 from .memory import sync_memory_fragment
 from .recorder import SessionRecorder, latest_session, new_session_path
 from .restore import restore_session
@@ -15,6 +16,7 @@ def setup_session(args, loop: AgentLoop, log=print, redactor=None):
     """恢复历史（--resume）并挂载 JSONL 录制器；返回会话文件路径或 None。"""
     sessions_dir = loop.tool_context.workspace_root / ".krelcode" / "sessions"
     resumed_from = ""
+    resumed_path = None
 
     if args.resume:
         if args.resume == "latest":
@@ -24,6 +26,7 @@ def setup_session(args, loop: AgentLoop, log=print, redactor=None):
             else:
                 if restore_session(loop, path, log=log):
                     resumed_from = path.stem
+                    resumed_path = path
         else:
             resumed_path = Path(args.resume)
             if restore_session(loop, resumed_path, log=log):
@@ -32,6 +35,9 @@ def setup_session(args, loop: AgentLoop, log=print, redactor=None):
     if args.no_session:
         return None
     session_path = new_session_path(sessions_dir)
+    memory_store = getattr(loop, "memory_store", None)
+    if memory_store is not None and resumed_from:
+        memory_store.copy_session(resumed_from, session_path.stem)
     metadata = {
         "session_id": session_path.stem,
         "title": "",
@@ -49,8 +55,24 @@ def setup_session(args, loop: AgentLoop, log=print, redactor=None):
     )
     recorder.attach(loop.bus)
     loop.session_recorder = recorder
-    memory_store = getattr(loop, "memory_store", None)
     if memory_store is not None:
         memory_store.bind_session(session_path.stem)
         sync_memory_fragment(loop, memory_store)
+    context_store = getattr(loop, "context_checkpoint_store", None)
+    if context_store is not None and resumed_path is not None:
+        source_checkpoint = context_store.latest_for_session(resumed_from)
+        if source_checkpoint is not None:
+            copied = context_store.copy_reference(
+                source_checkpoint,
+                session_id=session_path.stem,
+                parent_checkpoint_id=source_checkpoint.id,
+            )
+            if copied is not None:
+                recorder.record_context_checkpoint(copied.metadata_record())
+                restore_context_checkpoint(
+                    loop,
+                    copied,
+                    compact_store=getattr(loop, "compact_checkpoint_store", None),
+                    memory_store=memory_store,
+                )
     return session_path

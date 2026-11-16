@@ -18,8 +18,10 @@ from ..agent.compression import ContextManager
 from ..agent.context import _git
 from ..agent.loop import DEFAULT_MAX_STEPS, AgentLoop
 from ..agent.prompts import build_system_prompt
+from ..agent.working_context import WorkingContextStore
 from ..core.events import (
     ContextCompressed,
+    ContextCheckpointCreated,
     ErrorOccurred,
     EventBus,
     LLMStreamDelta,
@@ -44,11 +46,16 @@ from ..core.redact import SecretRedactor
 from ..llm.base import LLMProvider
 from ..safety.policy import AllowAllPolicy
 from ..session.autocommit import ensure_local_exclude, git_is_repo
+from ..session.context_checkpoint import (
+    ContextCheckpointCoordinator,
+    ContextCheckpointStore,
+)
 from ..tools.base import RunMode, Tool, ToolContext, TurnAbortSignal
 from ..tools.registry import ToolRegistry
 from .control import AgentControl
 from .definition import AgentDefinition, AgentDefinitionManager
 from .feed import AgentFeed, AgentFeedPage
+from .instructions import build_subagent_instructions, render_relevant_memory
 from .sidechain import (
     AgentSidechainWriter,
     SidechainInfo,
@@ -99,6 +106,9 @@ class AgentHandle:
     control: AgentControl = field(default_factory=AgentControl, repr=False)
     sidechain_path: Optional[Path] = None
     sidechain: Optional[AgentSidechainWriter] = field(default=None, repr=False)
+    context_checkpoint_id: str = ""
+    inherited_memory_ids: Tuple[str, ...] = field(default_factory=tuple)
+    instruction_layers: Tuple[str, ...] = field(default_factory=tuple)
     kill_requested: bool = field(default=False, repr=False)
 
     def preview(self) -> str:
@@ -125,6 +135,7 @@ class SubagentManager:
         sidechain_store: Optional[SidechainStore] = None,
         feed_max_entries: int = 2_000,
         feed_max_entry_chars: int = 24_000,
+        memory_store=None,
     ) -> None:
         self.llm = llm
         self.tool_factory = tool_factory
@@ -144,6 +155,7 @@ class SubagentManager:
             self.sidechains.redactor = redactor
         self.feed_max_entries = feed_max_entries
         self.feed_max_entry_chars = feed_max_entry_chars
+        self.memory_store = memory_store
         self._handles: Dict[str, AgentHandle] = {}
         self._counter = 0
         self._exclude_checked = False
@@ -187,6 +199,9 @@ class SubagentManager:
                 definition_obj.default_fork_context if definition_obj else False)
 
         tools = list(self.tool_factory())
+        memory_entries = self._relevant_memory(task)
+        memory_ids = tuple(str(entry.id) for entry in memory_entries)
+        tools = self._restrict_memory_tools(tools, memory_ids)
         if definition_obj is not None and definition_obj.allowed_tools:
             available = {tool.name for tool in tools}
             missing = sorted(set(definition_obj.allowed_tools) - available)
@@ -205,6 +220,7 @@ class SubagentManager:
             self.tool_context.runtime,
             run_mode=RunMode.SUBAGENT,
             turn_id=None,
+            session_id=f"subagent-{agent_id}",
             tool_allowlist=(
                 frozenset(definition_obj.allowed_tools)
                 if definition_obj is not None and definition_obj.allowed_tools
@@ -240,10 +256,16 @@ class SubagentManager:
             if self.system_prompt_provider is not None
             else SUBAGENT_SYSTEM_PROMPT
         )
-        system_prompt = (
-            definition_obj.system_prompt_with_base(base_prompt)
-            if definition_obj is not None else base_prompt
+        instruction_bundle = build_subagent_instructions(
+            tool_context.workspace_root,
+            task,
+            base_prompt=base_prompt,
+            definition=definition_obj,
+            redactor=self.redactor,
         )
+        system_prompt = instruction_bundle.text
+        own_working_context = WorkingContextStore(
+            tool_context.workspace_root, redactor=self.redactor)
         loop = AgentLoop(
             llm=self.llm,
             registry=ToolRegistry(tools),
@@ -257,16 +279,38 @@ class SubagentManager:
             redactor=self.redactor,
             hook_port=child_hook_port,
             step_gate=control.wait_if_paused,
+            working_context_store=own_working_context,
         )
 
         effective_task = task
-        forked = False
-        if fork_context and self.get_parent_history is not None:
-            forked_history, pending_user = self._fork_parent_history()
-            if pending_user is not None:
-                effective_task = f"{pending_user}\n\n[委派的子任务] {task}".strip()
-            loop.history.extend(forked_history)
-            forked = True
+        forked = bool(fork_context)
+        memory_context = render_relevant_memory(memory_entries)
+        if memory_context:
+            loop.add_runtime_context((memory_context,), source="inherited_memory")
+        loop.subagent_instruction_layers = instruction_bundle.layers
+        loop.inherited_memory_ids = memory_ids
+        loop.parent_history_inherited = False
+
+        context_store_directory = (
+            tool_context.workspace_root / ".krelcode" / "context-checkpoints"
+            / "subagents" / agent_id
+        )
+        child_context_store = ContextCheckpointStore(
+            tool_context.workspace_root,
+            redactor=self.redactor,
+            directory=context_store_directory,
+        )
+        loop.context_checkpoint_store = child_context_store
+        child_context_coordinator = ContextCheckpointCoordinator(
+            loop=loop,
+            store=child_context_store,
+            compact_store=None,
+            memory_store=self.memory_store,
+            capture_start=False,
+            capture_workspace=False,
+        )
+        child_context_coordinator.attach(child_bus)
+        loop.context_checkpoint_coordinator = child_context_coordinator
 
         feed = AgentFeed(
             agent_id,
@@ -284,6 +328,9 @@ class SubagentManager:
             "fork_context": bool(fork_context),
             "worktree": str(worktree_path) if worktree_path else "",
             "branch": branch or "",
+            "parent_history_inherited": False,
+            "inherited_memory_ids": list(memory_ids),
+            "instruction_layers": instruction_bundle.metadata(),
         })
         handle = AgentHandle(
             id=agent_id,
@@ -297,6 +344,9 @@ class SubagentManager:
             control=control,
             sidechain_path=sidechain.path,
             sidechain=sidechain,
+            inherited_memory_ids=memory_ids,
+            instruction_layers=tuple(
+                layer.kind for layer in instruction_bundle.layers),
         )
         self._handles[agent_id] = handle
         child_bus.subscribe(
@@ -307,6 +357,37 @@ class SubagentManager:
         await self.bus.emit(SubagentSpawned(
             agent_id, task, definition=handle.definition))
         return handle
+
+    def _relevant_memory(self, task: str):
+        if self.memory_store is None:
+            return ()
+        parent_tail = ""
+        if self.get_parent_history is not None:
+            for message in reversed(self.get_parent_history() or ()):
+                if message.role != "user" or not message.content:
+                    continue
+                text = " ".join(str(message.content).split())
+                if text.startswith("[上下文摘要]") or text.startswith("[用户插话]"):
+                    continue
+                parent_tail = text[:2_000]
+                break
+        query = "\n".join(item for item in (parent_tail, task) if item)
+        return self.memory_store.search(query, limit=8) if query else ()
+
+    @staticmethod
+    def _restrict_memory_tools(tools: List[Tool], memory_ids: Tuple[str, ...]) -> List[Tool]:
+        restricted = []
+        allowed = frozenset(memory_ids)
+        for tool in tools:
+            if tool.name != "memory_search":
+                restricted.append(tool)
+                continue
+            factory = getattr(tool, "restricted_to", None)
+            if callable(factory):
+                restricted.append(factory(allowed))
+            elif allowed:
+                restricted.append(tool)
+        return restricted
 
     def _fork_parent_history(self) -> Tuple[List[Message], Optional[str]]:
         source = self.get_parent_history() or []
@@ -324,6 +405,16 @@ class SubagentManager:
     # -- child feed ---------------------------------------------------------------
 
     async def _on_child_event(self, handle: AgentHandle, event) -> None:
+        if isinstance(event, ContextCheckpointCreated):
+            handle.context_checkpoint_id = event.checkpoint_id
+            if handle.sidechain is not None:
+                handle.sidechain.write({
+                    "type": "context_checkpoint",
+                    "checkpoint_id": event.checkpoint_id,
+                    "turn_id": event.turn_id,
+                    "phase": event.phase,
+                    "history_hash": event.history_hash,
+                })
         if handle.feed is None:
             return
         now = time.time()
@@ -611,11 +702,14 @@ class SubagentManager:
                 task_preview = task_preview[:60] + "…"
             queued = f" · 排队 {len(handle.queue)}" if handle.queue else ""
             branch = f" · 分支 {handle.branch}" if handle.branch else ""
-            branch += " · 继承上下文" if handle.forked else ""
+            branch += " · 继承指令/Memory（非历史）" if handle.forked else ""
             definition = f" · 定义 {handle.definition}" if handle.definition else ""
+            memory = (
+                f" · Memory {len(handle.inherited_memory_ids)}"
+                if handle.inherited_memory_ids else "")
             sequence = f" · feed {handle.feed.latest_sequence}" if handle.feed else ""
             line = (f"{handle.id} [{handle.status}] {handle.turns} 轮{queued}{branch}"
-                    f"{definition}{sequence} · 任务: {task_preview.replace(chr(10), ' ')}")
+                    f"{definition}{memory}{sequence} · 任务: {task_preview.replace(chr(10), ' ')}")
             if handle.status in TERMINAL_STATUSES:
                 line += f" · 结果: {handle.preview()}"
             lines.append(line)

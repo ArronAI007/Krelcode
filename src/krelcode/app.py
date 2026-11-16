@@ -56,6 +56,10 @@ from .safety.sandbox import ExecutionSandbox, SandboxError
 from .session.autocommit import AutoCommitter
 from .session.checkpoint import CheckpointManager
 from .session.compact_checkpoint import CompactCheckpointStore
+from .session.context_checkpoint import (
+    ContextCheckpointCoordinator,
+    ContextCheckpointStore,
+)
 from .session.input import InputProcessor
 from .session.interactions import UserInputBroker
 from .session.memory import MemoryStore, sync_memory_fragment
@@ -464,6 +468,7 @@ async def build_loop(
         system_prompt_provider=(
             lambda: skill_manager.apply_to_prompt(SUBAGENT_SYSTEM_PROMPT)),
         definitions=agent_definitions,
+        memory_store=memory_store,
     )
     for tool in manager.build_tools():
         registry.register(
@@ -487,6 +492,8 @@ async def build_loop(
     working_context_store = WorkingContextStore(workspace_root)
     compact_checkpoint_store = (
         None if args.no_checkpoint else CompactCheckpointStore(workspace_root))
+    context_checkpoint_store = (
+        None if args.no_checkpoint else ContextCheckpointStore(workspace_root))
     context_sources = default_context_sources(
         rule_loader if directory_rules_enabled else None)
     context_assembler = ContextAssembler(context_sources)
@@ -522,6 +529,17 @@ async def build_loop(
     loop.rule_loader = rule_loader
     loop.directory_rule_source = directory_rule_source
     loop.memory_store = memory_store
+    loop.context_checkpoint_store = context_checkpoint_store
+    if context_checkpoint_store is not None:
+        context_coordinator = ContextCheckpointCoordinator(
+            loop=loop,
+            store=context_checkpoint_store,
+            compact_store=compact_checkpoint_store,
+            memory_store=memory_store,
+            log=log,
+        )
+        context_coordinator.attach(bus)
+        loop.context_checkpoint_coordinator = context_coordinator
     apply_prompt_snapshot(loop, prompt_snapshot)
 
     suggest_threshold, auto_threshold = resolve_auto_memory_thresholds(
@@ -684,6 +702,10 @@ async def async_main(args: argparse.Namespace) -> int:
         loop.auto_memory.set_redactor(redactor)
     subagents.redactor = redactor
     subagents.sidechains.redactor = redactor
+    if getattr(loop, "context_checkpoint_store", None) is not None:
+        loop.context_checkpoint_store.redactor = redactor
+    if getattr(loop, "context_checkpoint_coordinator", None) is not None:
+        loop.context_checkpoint_coordinator.redactor = redactor
     if getattr(loop.tool_context, "shell_jobs", None) is not None:
         loop.tool_context.shell_jobs.redactor = redactor
     supervisor = MCPSupervisor(

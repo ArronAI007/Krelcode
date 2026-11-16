@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from .context_checkpoint import restore_context_checkpoint
 from .memory import sync_memory_fragment
 from .manager import (
     SessionInfo,
@@ -55,6 +56,7 @@ class SessionLifecycle:
         self.runtime = runtime
         self.redactor = redactor
         self.on_switch: Optional[Callable[[], None]] = None
+        self.context_checkpoints = getattr(loop, "context_checkpoint_store", None)
         memory_store = getattr(loop, "memory_store", None)
         if memory_store is not None and self.session_path is not None:
             memory_store.bind_session(self.session_path.stem)
@@ -95,6 +97,7 @@ class SessionLifecycle:
         *,
         title: str,
         parent_id: str,
+        context_checkpoint=None,
     ) -> None:
         if self.sessions_dir is None:
             raise SessionLifecycleError("会话目录未知，无法切换会话")
@@ -121,12 +124,23 @@ class SessionLifecycle:
             sync_memory_fragment(self.loop, memory_store)
         if self.on_switch is not None:
             self.on_switch()
+        if context_checkpoint is not None:
+            recorder.record_context_checkpoint(
+                context_checkpoint.metadata_record())
+            restore_context_checkpoint(
+                self.loop,
+                context_checkpoint,
+                compact_store=getattr(
+                    self.loop, "compact_checkpoint_store", None),
+                memory_store=memory_store,
+            )
 
     def fork(
         self,
         title: str = "",
         *,
         history: Optional[list] = None,
+        context_checkpoint_id: str = "",
     ) -> Path:
         """建立独立会话；可指定历史边界，原会话与工作区保持不变。"""
         if self.sessions_dir is None:
@@ -135,13 +149,32 @@ class SessionLifecycle:
         self._validate_title(title)
         self._flush_current()
         parent_id = self.session_path.stem if self.session_path else ""
+        source_session_id = parent_id
         if history is not None:
             self.loop.history = list(history)
         rebuild = getattr(self.loop, "rebuild_working_context", None)
         if callable(rebuild):
             rebuild()
         path = new_session_path(self.sessions_dir)
-        self._activate(path, title=title, parent_id=parent_id)
+        memory_store = getattr(self.loop, "memory_store", None)
+        if memory_store is not None and source_session_id:
+            memory_store.copy_session(source_session_id, path.stem)
+        copied_checkpoint = None
+        if (
+            self.context_checkpoints is not None
+            and context_checkpoint_id
+        ):
+            copied_checkpoint = self.context_checkpoints.copy_reference(
+                context_checkpoint_id,
+                session_id=path.stem,
+                parent_checkpoint_id=context_checkpoint_id,
+            )
+        self._activate(
+            path,
+            title=title,
+            parent_id=parent_id,
+            context_checkpoint=copied_checkpoint,
+        )
         return path
 
     def resume(self, path: Path, log: Callable[[str], None] = print) -> bool:
@@ -161,8 +194,26 @@ class SessionLifecycle:
         if not restore_session(self.loop, path, log=log):
             return False
         if self.sessions_dir is not None:
-            self._activate(new_session_path(self.sessions_dir),
-                           title=title[:80], parent_id=parent_id)
+            new_path = new_session_path(self.sessions_dir)
+            memory_store = getattr(self.loop, "memory_store", None)
+            if memory_store is not None:
+                memory_store.copy_session(path.stem, new_path.stem)
+            copied_checkpoint = None
+            if self.context_checkpoints is not None:
+                source_checkpoint = self.context_checkpoints.latest_for_session(
+                    path.stem)
+                if source_checkpoint is not None:
+                    copied_checkpoint = self.context_checkpoints.copy_reference(
+                        source_checkpoint,
+                        session_id=new_path.stem,
+                        parent_checkpoint_id=source_checkpoint.id,
+                    )
+            self._activate(
+                new_path,
+                title=title[:80],
+                parent_id=parent_id,
+                context_checkpoint=copied_checkpoint,
+            )
         return True
 
     def rename(self, title: str) -> Path:

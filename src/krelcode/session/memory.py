@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import threading
 import unicodedata
 import uuid
@@ -397,6 +398,27 @@ class MemoryStore:
             self._session_entries = []
             for entry in pending:
                 self._append_entry(entry)
+
+    def copy_session(self, source_session_id: str, target_session_id: str) -> bool:
+        """Copy session-scoped memory into a fork without sharing future writes."""
+        source = _SAFE_SESSION_ID_RE.sub(
+            "_", str(source_session_id).strip())[:128]
+        target = _SAFE_SESSION_ID_RE.sub(
+            "_", str(target_session_id).strip())[:128]
+        if not source or not target or source == target:
+            return False
+        source_path = self.project_path.parent / "sessions" / f"{source}.jsonl"
+        target_path = self.project_path.parent / "sessions" / f"{target}.jsonl"
+        if not source_path.is_file():
+            return False
+        if target_path.exists():
+            return True
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source_path, target_path)
+        except OSError:
+            return False
+        return True
 
     def scope_path(self, scope: MemoryScope | str) -> Optional[Path]:
         normalized = coerce_memory_scope(scope)

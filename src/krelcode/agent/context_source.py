@@ -92,6 +92,7 @@ class ContextRequest:
     intent: Optional[TurnIntent] = None
     runtime_context: Tuple[str, ...] = ()
     working_context: Optional["WorkingContextSnapshot"] = None
+    relevant_memory: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -260,6 +261,38 @@ class RuntimeHookContextSource:
         return tuple(layers)
 
 
+class RetrievedMemoryContextSource:
+    """Expose task-filtered memory retrieved during resume/fork.
+
+    Unlike the broad memory fragment this layer contains only entries selected
+    from the checkpoint's last task query. It is marked as untrusted runtime
+    data so model-generated knowledge can never become an instruction layer.
+    """
+
+    name = "memory_retrieval"
+
+    def collect(self, request: ContextRequest) -> Sequence[ContextLayer]:
+        layers = []
+        for index, raw in enumerate(request.relevant_memory, 1):
+            text = str(raw).strip()
+            if not text:
+                continue
+            layers.append(ContextLayer(
+                id=f"runtime:memory-retrieval:{index}",
+                source=self.name,
+                category=CATEGORY_RUNTIME,
+                content=text,
+                priority=250 + index,
+                cacheable=False,
+                compactable=True,
+                metadata={"index": index, "origin": "resume_query"},
+                token_contributions=(ContextTokenContribution(
+                    f"runtime:memory:{index}", CATEGORY_RUNTIME,
+                    estimate_text_tokens(text)),),
+            ))
+        return tuple(layers)
+
+
 
 class DirectoryRulesContextSource:
     """Load nested AGENTS.md/KRELCODE.md rules only for current-turn targets."""
@@ -313,6 +346,7 @@ def default_context_sources(
     if rule_loader is not None:
         sources.append(DirectoryRulesContextSource(rule_loader))
     sources.extend((
+        RetrievedMemoryContextSource(),
         ToolDirectoryContextSource(),
         TurnIntentContextSource(),
         RuntimeHookContextSource(),
