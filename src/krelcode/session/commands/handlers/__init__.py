@@ -32,6 +32,7 @@ from .session_ops import (
     handle_reset,
     handle_rename,
     handle_resume,
+    handle_rewind,
     handle_session,
     handle_sessions,
 )
@@ -46,6 +47,7 @@ BUILTIN_HANDLERS: dict[str, CommandHandler] = {
     "sessions": handle_sessions,
     "resume": handle_resume,
     "fork": handle_fork,
+    "rewind": handle_rewind,
     "rename": handle_rename,
     "delete": handle_delete,
     "mcp": handle_mcp,

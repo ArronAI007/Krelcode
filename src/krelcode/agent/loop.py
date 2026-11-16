@@ -157,6 +157,7 @@ class AgentLoop:
         self._turn_tool_context = tool_context
         self._turn_abort_signal = TurnAbortSignal()
         self._turn_counter = count(1)
+        self._current_turn_id = ""
         self._input_counter = count(1)
         self._turn_prepared = False
         # 运行中用户插话队列（REPL steering）：每个 step 开始前注入历史
@@ -233,7 +234,11 @@ class AgentLoop:
             intent=self._turn_intent,
             runtime=self._turn_tool_context.runtime,
         )
-        await self._emit(RunStarted(user_input))
+        await self._emit(RunStarted(
+            user_input,
+            turn_id=self._current_turn_id,
+            session_id=self._turn_tool_context.runtime.session_id or "",
+        ))
         await self._emit(QueryPhaseChanged(
             "awaiting_model", "等待模型响应"))
         await self.run_lifecycle_hook(
@@ -248,7 +253,8 @@ class AgentLoop:
                     text = (f"[krelcode] token 预算耗尽（已用 {self._token_total} > "
                             f"预算 {self.token_budget}），中止本轮。")
                     self.history.append(Message.assistant(text))
-                    await self._emit(RunFinished(text))
+                    await self._emit(RunFinished(
+                        text, turn_id=self._current_turn_id))
                     return text
                 await self._emit(StepStarted(step))
                 await self._emit(QueryPhaseChanged(
@@ -267,24 +273,28 @@ class AgentLoop:
                         assistant, finish_failure, llm_turn.finish_reason)
                 if not assistant.tool_calls:
                     final_text = assistant.content or ""
-                    await self._emit(RunFinished(final_text))
+                    await self._emit(RunFinished(
+                        final_text, turn_id=self._current_turn_id))
                     return final_text
                 abort_reason = await self._apply_tool_results(
                     assistant.tool_calls, llm_turn.tool_results)
                 if abort_reason:
                     text = f"[krelcode] {abort_reason}，判定为循环，已中止本轮。"
                     self.history.append(Message.assistant(text))
-                    await self._emit(RunFinished(text))
+                    await self._emit(RunFinished(
+                        text, turn_id=self._current_turn_id))
                     return text
         except asyncio.CancelledError:
             self._turn_abort_signal.cancel()
             self._repair_after_cancel()
-            await self._emit(RunCancelled())
+            await self._emit(RunCancelled(
+                turn_id=self._current_turn_id))
             raise
 
         text = max_steps_reached_text(self.max_steps)
         self.history.append(Message.assistant(text))
-        await self._emit(RunFinished(text))
+        await self._emit(RunFinished(
+            text, turn_id=self._current_turn_id))
         return text
 
     def _begin_turn(
@@ -294,6 +304,7 @@ class AgentLoop:
         tool_allowlist: Optional[list[str]] = None,
     ) -> None:
         resolved_turn_id = turn_id or f"turn-{next(self._turn_counter)}"
+        self._current_turn_id = resolved_turn_id
         self._turn_abort_signal = TurnAbortSignal()
         snapshot = self.tool_context.runtime
         if self.runtime_snapshot_provider is not None:
@@ -441,7 +452,8 @@ class AgentLoop:
         final_text = assistant.content
         await self._emit(ErrorOccurred(
             failure, f"finish_reason={finish_reason or 'unknown'}"))
-        await self._emit(RunFinished(final_text))
+        await self._emit(RunFinished(
+            final_text, turn_id=self._current_turn_id))
         return final_text
 
     def _current_tool_pool(self) -> TurnToolPool:
@@ -659,6 +671,7 @@ class AgentLoop:
                 active_index=active_index,
                 statuses=tuple(redact(status) for status in statuses),
                 explanation=redact(explanation),
+                turn_id=self._current_turn_id,
             ))
 
         execution_ctx = replace(

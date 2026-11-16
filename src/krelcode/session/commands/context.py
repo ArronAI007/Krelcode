@@ -31,3 +31,4 @@ class CommandContext:
     session_lifecycle: Any = None
     permission_manager: Any = None
     plan_manager: Any = None
+    rewind: Any = None

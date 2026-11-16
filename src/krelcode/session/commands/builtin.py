@@ -47,8 +47,16 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             "resume", "恢复指定会话", argument_hint="<n|latest|path>",
             help="恢复第 n 个会话（/sessions 里的序号；latest=最新），并建立新分支"),
         CommandSpec(
-            "fork", "从当前历史创建会话分支", argument_hint="[名称]",
-            help="复制当前上下文到新会话并切换；原会话保持不变"),
+            "fork", "从当前历史或指定 turn 创建会话分支",
+            argument_hint="[--turn <n>] [名称]",
+            help=("复制当前上下文到新会话并切换；/fork --turn <n> [名称] "
+                  "从第 n 轮结束后的 history + plan 分叉（不恢复工作区文件）")),
+        CommandSpec(
+            "rewind", "回到任意 turn 开始前并联合恢复",
+            argument_hint="[n|list|fork <n> [名称]]",
+            help=("查看可回退 turn；/rewind <n> 回到第 n 轮开始前并恢复 "
+                  "history + 文件 checkpoint + plan；/rewind fork <n> [名称] "
+                  "从第 n 轮结束后的历史分叉")),
         CommandSpec(
             "rename", "重命名当前会话", argument_hint="<名称>",
             help="为当前会话写入可搜索标题"),

@@ -53,6 +53,7 @@ class SessionLifecycle:
         self.session_path = Path(session_path) if session_path else None
         self.runtime = runtime
         self.redactor = redactor
+        self.on_switch: Optional[Callable[[], None]] = None
 
     @property
     def metadata(self) -> dict[str, Any]:
@@ -109,15 +110,24 @@ class SessionLifecycle:
         self.session_path = path
         if self.runtime is not None:
             self.runtime.bind_session(path.stem)
+        if self.on_switch is not None:
+            self.on_switch()
 
-    def fork(self, title: str = "") -> Path:
-        """从当前内存历史建立独立会话；原会话保持不变。"""
+    def fork(
+        self,
+        title: str = "",
+        *,
+        history: Optional[list] = None,
+    ) -> Path:
+        """建立独立会话；可指定历史边界，原会话与工作区保持不变。"""
         if self.sessions_dir is None:
             raise SessionLifecycleError("会话目录未知，无法 fork")
         title = title.strip() or f"Fork · {time.strftime('%Y-%m-%d %H:%M:%S')}"
         self._validate_title(title)
         self._flush_current()
         parent_id = self.session_path.stem if self.session_path else ""
+        if history is not None:
+            self.loop.history = list(history)
         path = new_session_path(self.sessions_dir)
         self._activate(path, title=title, parent_id=parent_id)
         return path
@@ -127,7 +137,10 @@ class SessionLifecycle:
         path = Path(path)
         old_path = self.session_path
         if old_path is not None and path.resolve() == old_path.resolve():
-            return restore_session(self.loop, path, log=log)
+            restored = restore_session(self.loop, path, log=log)
+            if restored and self.on_switch is not None:
+                self.on_switch()
+            return restored
         info = inspect_session(path)
         parent_id = info.session_id if info is not None else path.stem
         title_source = (info.title or info.preview) if info is not None else ""

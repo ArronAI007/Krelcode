@@ -368,16 +368,18 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
 ## 检查点与回滚（Step 16）
 
 - **CheckpointManager**（session/checkpoint.py）：纯事件订阅者——
-  RunStarted 开组（label=用户输入预览）、ToolCallStarted 对 write_file/edit_file
-  的目标文件在**首次修改前**做字节级快照（同组同文件只记第一次，保最原始版本）、
-  RunFinished 关组（无文件改动的空组直接丢弃）
-- 落盘 `<workspace>/.krelcode/checkpoints/NNNN-<ts>/`：meta.json（文件清单）
-  + files/ 备份；构造时扫描目录重建组栈 → /undo 跨重启可用
+  RunStarted 开组（label=用户输入预览，记录 session/turn 身份）、
+  ToolCallStarted 对 write_file/edit_file 的目标文件在**首次修改前**做字节级快照
+  （同组同文件只记第一次，保最原始版本）、RunFinished/RunCancelled 关组
+  （无文件改动的空组直接丢弃）
+- 落盘 `<workspace>/.krelcode/checkpoints/NNNN-<ts>/`：meta.json（session/turn/文件清单）
+  + files/ 备份；构造时扫描目录重建组栈 → /undo 与 /rewind 跨重启可用
 - undo_last()：LIFO 弹出最近已关闭组，逐文件恢复（existed=True 还原备份、
   existed=False 删除新建），单文件失败不阻断其余
 - 边界：run_command 的文件修改不可静态追踪，不在快照范围（文档注明）；
   路径解析与工具层同规则（越界路径静默跳过）
-- REPL：`/undo`（回滚上一轮）、`/undo list`（查看检查点栈）、`--no-checkpoint` 关闭
+- REPL：`/undo`（回滚上一轮）、`/undo list`（查看检查点栈）、
+  `/rewind <n>`（多轮批量逆序恢复）、`--no-checkpoint` 关闭
 
 ## 用量统计与 git 自动提交（Step 17）
 
@@ -612,6 +614,39 @@ Plan 交互由 `PlanApprovalCoordinator` 独立维护：
 
 `SessionViewState` 只镜像计划内容和 approval status，用于状态栏与 `/plan` 展示；
 执行授权事实仍在 coordinator，命令 handler、REPL 和未来 TUI 可复用同一状态机。
+
+## 对话级 Rewind 与历史分叉（Step 79）
+
+Rewind 不进入 AgentLoop 或工具实现，而是 session 层的独立协调器
+（`session/rewind.py`）。稳定身份从事件边界向下传递：
+`RunStarted.turn_id/session_id`、`PlanUpdated.turn_id`、`RunFinished/RunCancelled.turn_id`
+同时被 CheckpointManager、SessionRecorder 与 TurnTimeline 使用。时间线为每个已完成
+turn 深拷贝 `history_before/history_after` 与 `plan_before/plan_after`；plan 边界还包含
+审批状态和权限模式，避免只恢复清单却丢失 Plan 授权现场。
+
+```
+/rewind <n>
+  ├─ 拒绝运行中/非法/未完成 turn
+  ├─ 收集 n..last 的 session-scoped checkpoint
+  ├─ 预检全部 backup/path，并保存当前文件安全快照
+  ├─ 按 checkpoint seq 逆序恢复（跨多轮逐步退回边界版本）
+  ├─ loop.history = history_before(n)
+  ├─ plan_manager.restore(plan_before(n))
+  ├─ 截断内存 TurnTimeline
+  └─ recorder 追加 rewind + 权威 history 快照
+```
+
+文件层先在内存中预读所有目标版本并验证路径；任一备份缺失或越界时在写文件前失败。
+写入异常会尝试恢复回退前的当前文件。checkpoint 带 `session_id + turn_id`，即使工作区
+存在多个会话都曾使用 `turn-1`，也只恢复当前会话。history 回退保留**当前**
+system prompt/技能索引，只回退对话消息，避免把重新采集的工作区规则一起退回旧版本。
+`run_command` 的任意文件副作用仍不可追踪，命令输出会明确提示这一边界。
+
+`/rewind fork <n>`（等价 `/fork --turn <n>`）取第 n 轮**结束后**的 history/plan 建立新
+JSONL 分支并切换 recorder/runtime id；它明确不恢复工作区文件，因为“回到旧对话但保留
+当前改动”是常见评审/对比场景。真正需要文件也回到历史边界时使用 `/rewind <n>`。
+运行中的 rewind 一律拒绝；`/reset` 与 resume/fork 切换会清空旧时间线，防止把边界
+错配到另一份 history。
 
 ## 统一输入处理管线（Step 67）
 

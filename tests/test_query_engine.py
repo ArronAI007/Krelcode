@@ -147,5 +147,5 @@ def test_query_engine_drains_events_before_propagating_error(tmp_path):
         return consumed
 
     consumed = asyncio.run(go())
-    assert consumed[0] == RunStarted("部分输出")
+    assert consumed[0] == RunStarted("部分输出", turn_id="turn-1")
     assert consumed[-1].text == "已输出"

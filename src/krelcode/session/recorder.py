@@ -79,12 +79,36 @@ class SessionRecorder:
         self._write(record)
         if isinstance(event, (RunFinished, RunCancelled)):
             # 每轮结束落一份完整历史快照（resume 取最后一条）
-            self.flush_history()
+            self.flush_history(turn_id=event.turn_id)
 
-    def flush_history(self) -> None:
-        """持久化当前完整历史；取消/分叉前也显式调用。"""
-        self._write({"type": "history", "ts": _now(),
-                     "messages": history_to_dicts(self._get_history())})
+    def flush_history(self, *, turn_id: str = "") -> None:
+        """持久化当前完整历史；取消/分叉/rewind 后均以最后一条为准。"""
+        record = {"type": "history", "ts": _now(),
+                  "messages": history_to_dicts(self._get_history())}
+        if turn_id:
+            record["turn_id"] = turn_id
+        self._write(record)
+
+    def record_rewind(
+        self,
+        *,
+        target_index: int,
+        target_turn_id: str,
+        removed_turns: int,
+        restored: int = 0,
+        deleted: int = 0,
+    ) -> None:
+        """记录一次联合回退，并立即写入回退后的权威 history 快照。"""
+        self._write({
+            "type": "rewind",
+            "ts": _now(),
+            "target_index": target_index,
+            "target_turn_id": target_turn_id,
+            "removed_turns": removed_turns,
+            "restored_files": restored,
+            "deleted_files": deleted,
+        })
+        self.flush_history()
 
     def update_metadata(self, **metadata: Any) -> None:
         """追加一条可覆盖的会话元数据（当前用于 rename）。"""
@@ -94,7 +118,12 @@ class SessionRecorder:
     def _event_record(self, event: AgentEvent) -> Optional[dict]:
         ts = _now()
         if isinstance(event, RunStarted):
-            return {"type": "user_input", "ts": ts, "content": event.user_input}
+            record = {"type": "user_input", "ts": ts, "content": event.user_input}
+            if event.turn_id:
+                record["turn_id"] = event.turn_id
+            if event.session_id:
+                record["session_id"] = event.session_id
+            return record
         if isinstance(event, ToolCallStarted):
             return {"type": "tool_call", "ts": ts, "id": event.tool_call.id,
                     "name": event.tool_call.name, "arguments": event.tool_call.arguments}
@@ -126,10 +155,13 @@ class SessionRecorder:
             return {"type": "context_compressed", "ts": ts,
                     "before_tokens": event.before_tokens, "after_tokens": event.after_tokens}
         if isinstance(event, PlanUpdated):
-            return {"type": "plan_updated", "ts": ts,
-                    "items": list(event.items), "statuses": list(event.statuses),
-                    "active_index": event.active_index,
-                    "explanation": event.explanation}
+            record = {"type": "plan_updated", "ts": ts,
+                      "items": list(event.items), "statuses": list(event.statuses),
+                      "active_index": event.active_index,
+                      "explanation": event.explanation}
+            if event.turn_id:
+                record["turn_id"] = event.turn_id
+            return record
         if isinstance(event, UserInputRequested):
             return {"type": "user_input_requested", "ts": ts,
                     "request_id": event.request_id, "prompt": event.prompt,
@@ -139,9 +171,15 @@ class SessionRecorder:
             return {"type": "user_input_resolved", "ts": ts,
                     "request_id": event.request_id, "answered": event.answered}
         if isinstance(event, RunFinished):
-            return {"type": "run_finished", "ts": ts}
+            record = {"type": "run_finished", "ts": ts}
+            if event.turn_id:
+                record["turn_id"] = event.turn_id
+            return record
         if isinstance(event, RunCancelled):
-            return {"type": "run_cancelled", "ts": ts, "reason": event.reason}
+            record = {"type": "run_cancelled", "ts": ts, "reason": event.reason}
+            if event.turn_id:
+                record["turn_id"] = event.turn_id
+            return record
         return None  # 其余事件（delta 等）不落盘，避免文件爆炸
 
     def _write(self, record: dict) -> None:

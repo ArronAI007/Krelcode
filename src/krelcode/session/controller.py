@@ -16,6 +16,7 @@ from ..agent.runtime import AgentRuntime
 from ..safety.runtime import PlanApprovalCoordinator, RuntimePermissionManager
 from ..tools.base import CommandDescriptor, ToolServices
 from .lifecycle import SessionLifecycle
+from .rewind import RewindCoordinator
 from .commands import (
     CommandContext,
     CommandKind,
@@ -56,6 +57,7 @@ class SessionController:
         command_registry: Optional[CommandRegistry] = None,
         permission_manager: Optional[RuntimePermissionManager] = None,
         plan_manager: Optional[PlanApprovalCoordinator] = None,
+        rewind=None,
     ) -> None:
         self.runtime = (runtime if isinstance(runtime, AgentRuntime)
                         else AgentRuntime(runtime))
@@ -92,6 +94,16 @@ class SessionController:
             permission_manager or RuntimePermissionManager(self.loop))
         self.plan_manager = (
             plan_manager or PlanApprovalCoordinator(self.permission_manager))
+        self.rewind = (
+            rewind
+            or RewindCoordinator(
+                runtime=self.runtime,
+                loop=self.loop,
+                session_lifecycle=self.session_lifecycle,
+                plan_manager=self.plan_manager,
+                checkpoints=self.checkpoints,
+            )
+        )
         self.command_registry = command_registry or builtin_command_registry()
         sync_skill_commands(self.command_registry, self.skills)
         sync_mcp_prompt_commands(self.command_registry, self.mcp_supervisor)
@@ -234,4 +246,5 @@ class SessionController:
             session_lifecycle=self.session_lifecycle,
             permission_manager=self.permission_manager,
             plan_manager=self.plan_manager,
+            rewind=self.rewind,
         )

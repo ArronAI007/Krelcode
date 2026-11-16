@@ -5,12 +5,12 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（v0.68.0 / Step 78）
+## 1. 项目统计（v0.69.0 / Step 79）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 23,313 行（Python，**零第三方运行时依赖**） |
-| 测试 | 17,664 行 / 97 个文件 / 948 个用例（离线 946 + 本地端口集成 2，提权环境 948/948 全绿） |
+| 源码 | 24,035 行（Python，**零第三方运行时依赖**） |
+| 测试 | 18,029 行 / 98 个文件 / 959 个用例（离线 957 + 本地端口集成 2，提权环境 959/959 全绿） |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 12（含 ask_user/update_plan）+ 子代理 4 + MCP 远程动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
@@ -20,12 +20,12 @@
 源码按层分布：
 
 ```
-session 4850 · ui 2475 · agent 2390 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2331
-tools 2571 · llm 1762 · mcp 1652 · safety 1609 · skills 949 · subagent 620
-plugins 435 · core 583 · entrypoints 190
+session 5659 · ui 2592 · tools 2571 · agent 2403 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2332
+safety 2277 · llm 1762 · mcp 1652 · skills 949 · subagent 620 · core 589
+plugins 435 · entrypoints 194
 ```
 
-core 只有 583 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
+core 只有 589 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
 测试代码量约为源码的 75%，覆盖协议、安全边界与端到端行为。
 
 ## 2. 关键架构决策时间线
@@ -56,6 +56,8 @@ core 只有 583 行——内核保持极小、能力在边缘，正是当初对�
 | v0.67 | 会话恢复语义 | `/resume` 与 `/fork` 都建立 copy-on-write 式新分支，源会话不改写；rename/delete/metadata 由 SessionLifecycle 独占，保证 recorder/runtime id 同步 |
 | v0.68 | 运行时权限边界 | 权限模式从启动参数升级为独立运行时管理器；统一 allow/ask/deny 规则，旧白名单保持兼容；显式 ask、deny 和受限模式都有不可被快捷键/auto-approve 绕过的安全下限 |
 | v0.68 | Plan 执行确认 | 计划生成与执行授权分离：Plan 模式只读调查，批准后恢复进入 Plan 前模式并自动启动执行轮，避免“看到计划即视为授权” |
+| v0.69 | 对话级状态恢复 | rewind 不是简单截 history：稳定 turn/session 身份把 history 边界、文件 checkpoint、plan 审批/权限合成一个事务；预检失败不改会话，文件写入失败尝试回滚 |
+| v0.69 | 历史分叉语义 | fork 只复制选定边界的 history + plan，不静默改工作区；“恢复文件”和“从旧对话另开分支”明确拆成 `/rewind` 与 `/rewind fork` 两个动作 |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -75,7 +77,7 @@ core 只有 583 行——内核保持极小、能力在边缘，正是当初对�
 | 运行时权限/Plan 审批状态机 | `safety/runtime.py` |
 | MCP 客户端/传输/热重载 | `mcp/client.py` `mcp/{stdio,sse}_transport.py` `mcp/streamable.py` `mcp/supervisor.py` |
 | 子代理 | `subagent/manager.py`（队列/打断/wait_many）`subagent/tools.py` |
-| 会话录制/恢复/分支/导出/检查点 | `session/{recorder,manager,lifecycle,restore,export,checkpoint}.py` |
+| 会话录制/恢复/分支/导出/检查点/回退 | `session/{recorder,manager,lifecycle,restore,export,checkpoint,rewind}.py` |
 | 插件发现/隔离加载/热重载 | `plugins/{manifest,loader,manager}.py` |
 | 流式渲染/审批/用户输入/@引用 | `ui/render.py` `ui/approval.py` `session/interactions.py` `ui/atfiles.py` `ui/repl.py` |
 | hooks / 用量 / 自动提交 | `hooks.py` `agent/usage.py` `session/autocommit.py` |
@@ -98,7 +100,7 @@ core 只有 583 行——内核保持极小、能力在边缘，正是当初对�
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 946 通过、2 skip，提权环境 948/948 全过。
+bind 探测自动 skip——沙箱内 957 通过、2 skip，提权环境 959/959 全过。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /

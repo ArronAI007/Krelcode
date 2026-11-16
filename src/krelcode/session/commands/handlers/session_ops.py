@@ -17,6 +17,7 @@ from ...manager import (
     search_sessions,
 )
 from ...restore import restore_session
+from ...rewind import RewindError
 from ..builtin import render_help
 from ..context import CommandContext
 from ..types import CommandResult
@@ -94,11 +95,78 @@ async def handle_resume(ctx: CommandContext) -> CommandResult:
 async def handle_fork(ctx: CommandContext) -> CommandResult:
     if ctx.session_lifecycle is None:
         return _ok("  （会话分支不可用）")
+    arguments = ctx.request.arguments.strip()
+    fork_parts = arguments.split(maxsplit=2)
+    if fork_parts and fork_parts[0] == "--turn":
+        if ctx.rewind is None:
+            return _ok("  （历史 turn 分叉不可用）")
+        parts = fork_parts
+        if len(parts) < 2:
+            return _ok("  用法: /fork --turn <n> [名称]")
+        try:
+            turn_index = int(parts[1])
+            title = parts[2] if len(parts) > 2 else ""
+        except ValueError:
+            return _ok("  turn 编号必须是正整数")
+        try:
+            result = ctx.rewind.fork_turn(turn_index, title)
+        except RewindError as exc:
+            return _ok(f"  [fork] {exc}")
+        return _ok(
+            f"  [fork] 已从 turn {result.source_turn} 创建并切换到: {result.path}",
+            "  仅分叉 history + plan；工作区文件保持当前状态",
+            clear_tool_outputs=True,
+        )
     try:
-        path = ctx.session_lifecycle.fork(ctx.request.arguments)
+        path = ctx.session_lifecycle.fork(arguments)
     except SessionLifecycleError as exc:
         return _ok(f"  [fork] {exc}")
     return _ok(f"  [fork] 已创建并切换到: {path}", clear_tool_outputs=True)
+
+
+async def handle_rewind(ctx: CommandContext) -> CommandResult:
+    if ctx.rewind is None:
+        return _ok("  （对话级 rewind 未启用）")
+    arguments = ctx.request.arguments.strip()
+    if not arguments or arguments == "list":
+        return _ok(*ctx.rewind.timeline.render_lines())
+    parts = arguments.split(maxsplit=2)
+    if parts and parts[0] == "fork":
+        if len(parts) < 2:
+            return _ok("  用法: /rewind fork <n> [名称]")
+        try:
+            turn_index = int(parts[1])
+            title = parts[2] if len(parts) > 2 else ""
+        except ValueError:
+            return _ok("  turn 编号必须是正整数")
+        try:
+            result = ctx.rewind.fork_turn(turn_index, title)
+        except RewindError as exc:
+            return _ok(f"  [rewind fork] {exc}")
+        return _ok(
+            f"  [rewind fork] 已从 turn {result.source_turn} 创建并切换到: {result.path}",
+            "  仅分叉 history + plan；工作区文件保持当前状态",
+            clear_tool_outputs=True,
+        )
+    try:
+        turn_index = int(arguments)
+        result = ctx.rewind.rewind(turn_index)
+    except ValueError:
+        return _ok(
+            "  用法: /rewind [n|list] | /rewind fork <n> [名称]")
+    except RewindError as exc:
+        return _ok(f"  [rewind] {exc}")
+    files = result.files
+    detail = (
+        f"恢复 {len(files.restored)} 个文件、删除 {len(files.deleted)} 个新建文件"
+        if files.groups else "该范围没有可恢复的文件 checkpoint")
+    return _ok(
+        f"  [rewind] 已回到 turn {result.target_index} 开始前"
+        f"（{result.label}）；移除 {result.removed_turns} 轮",
+        f"  history + plan 已恢复；{detail}",
+        "  注意：run_command 造成的文件修改不在 checkpoint 追踪范围",
+        clear_tool_outputs=True,
+    )
 
 
 async def handle_rename(ctx: CommandContext) -> CommandResult:
@@ -162,4 +230,6 @@ async def handle_export(ctx: CommandContext) -> CommandResult:
 
 async def handle_reset(ctx: CommandContext) -> CommandResult:
     ctx.loop.reset()
+    if ctx.rewind is not None:
+        ctx.rewind.timeline.clear()
     return _ok("（历史已清空）", clear_tool_outputs=True)

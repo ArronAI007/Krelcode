@@ -90,6 +90,15 @@ class RuntimePermissionManager:
         self._sync_mode(target)
         return target
 
+    def restore_modes(
+        self,
+        mode: PermissionMode,
+        previous_mode: PermissionMode,
+    ) -> None:
+        """恢复一个历史边界的当前模式与 Plan 前模式（不改写规则仓库）。"""
+        self._sync_mode(mode)
+        self._previous_mode = previous_mode
+
     def _sync_mode(self, mode: PermissionMode) -> None:
         runtime = replace(
             self.loop.tool_context.runtime, permission_mode=mode)
@@ -129,6 +138,16 @@ class PlanSnapshot:
     explanation: str = ""
 
 
+@dataclass(frozen=True)
+class PlanCheckpoint:
+    """可随 turn 边界保存/恢复的计划与权限联合状态。"""
+
+    snapshot: PlanSnapshot
+    status: PlanApprovalStatus
+    permission_mode: PermissionMode
+    previous_permission_mode: PermissionMode
+
+
 class PlanApprovalCoordinator:
     """计划生成 → 待确认 → 批准执行/取消的会话级状态机。"""
 
@@ -140,6 +159,23 @@ class PlanApprovalCoordinator:
     @property
     def pending(self) -> bool:
         return self.status is PlanApprovalStatus.PENDING
+
+    def checkpoint(self) -> PlanCheckpoint:
+        return PlanCheckpoint(
+            snapshot=self.snapshot,
+            status=self.status,
+            permission_mode=self.permissions.mode,
+            previous_permission_mode=self.permissions.previous_mode,
+        )
+
+    def restore(self, checkpoint: PlanCheckpoint) -> None:
+        """恢复历史边界上的计划快照、审批状态与权限模式。"""
+        self.permissions.restore_modes(
+            checkpoint.permission_mode,
+            checkpoint.previous_permission_mode,
+        )
+        self.snapshot = checkpoint.snapshot
+        self.status = checkpoint.status
 
     def start_request(self, request: str) -> str:
         text = str(request or "").strip()

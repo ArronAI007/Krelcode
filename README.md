@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/ArronAI007/Krelcode/main/install.sh
 ./install.sh --no-modify-path         # 不修改 shell PATH
 ./install.sh --python /path/to/python3.12
 ./install.sh --python-mirror https://your-mirror.example/python-build-standalone
-./install.sh --tag v0.68.0
+./install.sh --tag v0.69.0
 ```
 
 对应环境变量为 `KRELCODE_PYTHON`、`KRELCODE_PYTHON_VERSION`、`KRELCODE_PYTHON_MIRROR`、`KRELCODE_INSTALL_ROOT` 和 `KRELCODE_BIN_DIR`。这些选项只用于 CI、离线或特殊网络环境；普通用户直接执行默认的一键安装即可。开发调试仍可使用 `pip install -e .`。
@@ -71,7 +71,7 @@ krelcode               # 进入 REPL
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（沙箱内 946 通过，2 个本地端口测试自动跳过）
+# 运行全部测试（沙箱内 957 通过，2 个本地端口测试自动跳过）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -96,7 +96,7 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --mode
 #   api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [名称]`、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp`（状态）、`/mcp reload`（热重载并重新发现 Prompt）、`/agents`（子代理状态）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>]`（查看/热重载本地插件）、`/compact`（立即压缩历史）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context`（上下文统计）、`/context refresh`（重采工作区上下文）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp`（状态）、`/mcp reload`（热重载并重新发现 Prompt）、`/agents`（子代理状态）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>]`（查看/热重载本地插件）、`/compact`（立即压缩历史）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context`（上下文统计）、`/context refresh`（重采工作区上下文）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
 
 所有命令由统一 `CommandRegistry` 发现：`/help`、slash 菜单、Tab 补全、运行态过滤和 InputProcessor 共用同一份 catalog。允许用户调用的 Skill 会自动显示为 `/<skill-name> [参数]`，MCP Prompt 会命名空间化为 `/mcp__<server>__<prompt> [参数]`；`/skills reload` 与 `/mcp reload` 会原地刷新对应来源，内置命令在命名冲突时保持最高优先级。
 
@@ -192,7 +192,7 @@ enabled = true
 
 ### 会话分支与交换
 
-每个会话 JSONL 现在包含 `session_start/session_meta`、用户输入、工具与计划审计事件、取消记录和完整 history 快照。`/sessions search` 搜索标题及历次用户输入；`/fork` 复制当前内存历史到新分支；`/rename` 写标题；`/delete` 二次确认后移入 `.archive`。`/export session.json` 生成可重新 `/resume session.json` 的 native JSON 快照，Markdown 导出仍适合分享。
+每个会话 JSONL 现在包含 `session_start/session_meta`、用户输入、工具与计划审计事件、取消记录、rewind 记录和完整 history 快照。`/sessions search` 搜索标题及历次用户输入；`/fork` 从当前历史分叉，`/fork --turn <n>` 或 `/rewind fork <n>` 可从任意已完成 turn 的 history + plan 分叉（不改变工作区）；`/rewind <n>` 则回到第 n 轮开始前并联合恢复 history、文件 checkpoint 与 plan/审批状态。`/rename` 写标题；`/delete` 二次确认后移入 `.archive`。`/export session.json` 生成可重新 `/resume session.json` 的 native JSON 快照，Markdown 导出仍适合分享。
 
 ### 代码评审
 
@@ -280,7 +280,7 @@ hooks 只能由用户在配置文件定义（`krelcode.toml` 与 `.krelcode/` �
 
 ### 检查点与回滚
 
-每轮对话自动为 write_file/edit_file 的目标文件做修改前快照（`<workspace>/.krelcode/checkpoints/`）。改坏了？`/undo` 一键恢复上一轮：改过的还原、本轮新建的删除；跨重启依然可用。`--no-checkpoint` 关闭。（注：run_command 的文件修改不在追踪范围。）
+每轮对话自动为 write_file/edit_file 的目标文件做修改前快照（`<workspace>/.krelcode/checkpoints/`）。`/undo` 恢复上一轮；`/rewind <n>` 回到任意第 n 轮开始前，按 checkpoint 逆序恢复该轮及之后的所有文件，并同步回退 history 与 plan/审批状态。checkpoint meta 带 session/turn 身份，跨重启仍可恢复，且不会误用其他会话的同名 turn。`--no-checkpoint` 关闭。（注：run_command 的文件修改不在追踪范围。）
 
 ### 子代理 / 后台任务
 

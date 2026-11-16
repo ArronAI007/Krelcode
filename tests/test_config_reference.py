@@ -40,7 +40,7 @@ def test_repl_commands_documented():
                     "/context",
                     "/compact", "/export", "/reset", "/stop", "/exit",
                     "/thinking", "/tool-output", "/plugins", "/fork",
-                    "/rename", "/delete"):
+                    "/rewind", "/rename", "/delete"):
         assert f"`{command}" in text, f"CONFIG.md 缺少 REPL 命令: {command}"
 
 

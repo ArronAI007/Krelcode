@@ -49,7 +49,7 @@ krelcode [子命令] [选项]
 | `--no-mcp` | — | 不启动配置中的 MCP 服务器 |
 | `--resume` | — | 恢复会话：裸旗=最新，`--resume <path>`=指定 |
 | `--no-session` | — | 关闭会话 JSONL 录制 |
-| `--no-checkpoint` | — | 关闭文件检查点（/undo） |
+| `--no-checkpoint` | — | 关闭文件检查点及 `/undo`、`/rewind` 的文件恢复 |
 | `--auto-commit` | — | 每轮有变更自动 git 提交 |
 | `--version` | — | 打印版本退出 |
 
@@ -76,7 +76,10 @@ krelcode [子命令] [选项]
 | `/compact` | 立即压缩历史（驱逐+LLM 摘要，不等预算） |
 | `/sessions` · `/sessions search <关键词>` | 列出/搜索会话标题与用户输入 |
 | `/resume <n\|latest\|path>` | 恢复会话并建立新分支（不覆盖源会话） |
-| `/fork [名称]` | 从当前历史创建并切换独立会话分支 |
+| `/fork [--turn <n>] [名称]` | 从当前历史或第 n 轮结束点创建并切换独立会话分支（不恢复工作区） |
+| `/rewind` · `/rewind list` | 列出当前进程内可回退的 turn |
+| `/rewind <n>` | 回到第 n 轮开始前，联合恢复 history + 文件 checkpoint + plan/审批/权限状态 |
+| `/rewind fork <n> [名称]` | 从第 n 轮结束后的 history + plan 分叉，工作区文件保持当前状态 |
 | `/rename <名称>` | 为当前会话设置可搜索标题 |
 | `/delete <n\|path> [--force]` | 二次确认后归档非活动会话到 `sessions/.archive` |
 | `/session` | 当前会话文件、标题、父会话与模型元数据 |
@@ -91,7 +94,7 @@ krelcode [子命令] [选项]
 | `/mcp` · `/mcp reload` | MCP 服务器状态 · 重读配置热重载 |
 | `/allow [add\|remove <程序名>]` | 旧版程序白名单兼容入口（持久化） |
 | `/stop` | 中止运行中任务（历史自动修复） |
-| `/reset` | 清空历史 |
+| `/reset` | 清空历史与当前 turn 时间线 |
 | `/exit` | 退出（Ctrl-D 同） |
 
 **权限快捷键**：`Shift-Tab` 按 `default → plan → read-only → auto-approve`
@@ -258,7 +261,7 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 .krelcode/
 ├── sessions/          会话 JSONL（session_start/session_meta + 审计事件流 + history）
 │   └── .archive/      /delete 的可恢复归档
-├── checkpoints/       文件快照（/undo 数据源，NNNN-<ts>/meta.json + files/）
+├── checkpoints/       文件快照（/undo、/rewind 数据源；meta 带 session/turn 身份）
 ├── tool_outputs/      超长工具输出全文（历史里留截断+路径引用）
 ├── exports/           /export 缺省输出目录
 ├── sandbox/            隔离 HOME/TMP/cache（命令与 Skill 脚本使用）
