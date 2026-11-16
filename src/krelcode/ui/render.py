@@ -25,12 +25,17 @@ from ..core.events import (
     LLMStreamDelta,
     LLMThinkingDelta,
     PermissionDenied,
+    PlanUpdated,
+    QueryPhaseChanged,
     RunFinished,
     RunStarted,
     SubagentFinished,
     SubagentSpawned,
     ToolCallCompleted,
     ToolCallStarted,
+    ToolOutputDelta,
+    ToolProgress,
+    UserInputRequested,
     UserSteered,
 )
 
@@ -297,9 +302,22 @@ class StreamRenderer:
             self.end_stream()
             self._register_tool_call(event.tool_call)
             self._render_tool_call(event)
+        elif isinstance(event, ToolOutputDelta):
+            self._append_tool_output(event)
         elif isinstance(event, ToolCallCompleted):
             self.end_stream()
             self._render_tool_result(event)
+        elif isinstance(event, ToolProgress):
+            # 短进度只进入 SessionViewState / 状态栏，避免污染正文。
+            return
+        elif isinstance(event, QueryPhaseChanged):
+            return
+        elif isinstance(event, PlanUpdated):
+            return
+        elif isinstance(event, UserInputRequested):
+            self.end_stream()
+            self._write(
+                f"  {self._mark(RESULT_MARK)}等待输入: {event.prompt}\n")
         elif isinstance(event, PermissionDenied):
             self.end_stream()
             self._write(
@@ -410,6 +428,16 @@ class StreamRenderer:
     @staticmethod
     def _tool_key(tool_call: ToolCall) -> str:
         return tool_call.id or f"object:{id(tool_call)}"
+
+    def _append_tool_output(self, event: ToolOutputDelta) -> None:
+        """缓存增量输出，但绝不自动展开或打印正文。"""
+        if not event.text:
+            return
+        record = self._tool_by_call_id.get(event.tool_call_id)
+        if record is None:
+            tool_call = ToolCall(event.tool_call_id, event.tool_name, {})
+            record = self._register_tool_call(tool_call)
+        record.content += self._redact(event.text)
 
     def _tool_status(self, record: ToolOutputRecord) -> str:
         if record.is_error is None:

@@ -20,6 +20,8 @@ from ..core.events import (
     LLMStreamDelta,
     LLMThinkingDelta,
     PermissionDenied,
+    PlanUpdated,
+    QueryPhaseChanged,
     RunCancelled,
     RunFinished,
     RunStarted,
@@ -28,6 +30,9 @@ from ..core.events import (
     SubagentSpawned,
     ToolCallCompleted,
     ToolCallStarted,
+    ToolOutputDelta,
+    ToolProgress,
+    UserInputRequested,
     UserSteered,
 )
 from ..core.messages import ImageRef, Message, ToolCall
@@ -114,6 +119,13 @@ class StreamJsonEncoder:
             }
         elif isinstance(event, StepStarted):
             payload = {"type": "step", "subtype": "started", "step": event.step}
+        elif isinstance(event, QueryPhaseChanged):
+            payload = {
+                "type": "query",
+                "subtype": "phase_changed",
+                "phase": event.phase,
+                "detail": event.detail,
+            }
         elif isinstance(event, LLMStreamDelta):
             payload = {
                 "type": "assistant",
@@ -138,6 +150,24 @@ class StreamJsonEncoder:
                 "type": "tool",
                 "subtype": "started",
                 "tool_call": _tool_call_payload(event.tool_call),
+            }
+        elif isinstance(event, ToolProgress):
+            payload = {
+                "type": "tool",
+                "subtype": "progress",
+                "tool_call_id": event.tool_call_id,
+                "tool_name": event.tool_name,
+                "message": event.message,
+                "data": dict(event.data),
+            }
+        elif isinstance(event, ToolOutputDelta):
+            payload = {
+                "type": "tool",
+                "subtype": "output_delta",
+                "tool_call_id": event.tool_call_id,
+                "tool_name": event.tool_name,
+                "text": event.text,
+                "stream": event.stream,
             }
         elif isinstance(event, ToolCallCompleted):
             payload = {
@@ -200,6 +230,21 @@ class StreamJsonEncoder:
                 "type": "user",
                 "subtype": "steered",
                 "content": event.text,
+            }
+        elif isinstance(event, PlanUpdated):
+            payload = {
+                "type": "plan",
+                "subtype": "updated",
+                "items": list(event.items),
+                "active_index": event.active_index,
+            }
+        elif isinstance(event, UserInputRequested):
+            payload = {
+                "type": "input",
+                "subtype": "requested",
+                "request_id": event.request_id,
+                "prompt": event.prompt,
+                "options": list(event.options),
             }
         elif isinstance(event, RunFinished):
             terminal_fields = {

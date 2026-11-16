@@ -27,12 +27,15 @@ from ..core.events import (
     LLMStreamDelta,
     LLMThinkingDelta,
     PermissionDenied,
+    QueryPhaseChanged,
     RunCancelled,
     RunFinished,
     RunStarted,
     StepStarted,
     ToolCallCompleted,
     ToolCallStarted,
+    ToolOutputDelta,
+    ToolProgress,
     UserSteered,
 )
 from ..core.textutil import truncate_middle
@@ -224,6 +227,8 @@ class AgentLoop:
             runtime=self._turn_tool_context.runtime,
         )
         await self._emit(RunStarted(user_input))
+        await self._emit(QueryPhaseChanged(
+            "awaiting_model", "等待模型响应"))
         await self.run_lifecycle_hook(
             "user_prompt_submit",
             {"prompt": user_input[:12_000]},
@@ -239,6 +244,8 @@ class AgentLoop:
                     await self._emit(RunFinished(text))
                     return text
                 await self._emit(StepStarted(step))
+                await self._emit(QueryPhaseChanged(
+                    "model", f"模型生成中（Step {step}）"))
                 llm_turn = await self._llm_turn()
                 assistant = llm_turn.message
                 finish_failure = finish_reason_failure(
@@ -579,9 +586,31 @@ class AgentLoop:
                 is_error=True,
             )
 
+        async def emit_progress(
+            message: str, data: Dict[str, object],
+        ) -> None:
+            safe_message = (
+                self.redactor.redact(message) if self.redactor else message)
+            safe_data = (
+                _redact_json(data, self.redactor.redact)
+                if self.redactor is not None else data)
+            await self._emit(ToolProgress(
+                tool_call.id, tool_call.name, safe_message, safe_data))
+
+        async def emit_output(text: str, stream: str) -> None:
+            if not text:
+                return
+            safe_text = (
+                self.redactor.redact(text) if self.redactor else text)
+            if safe_text:
+                await self._emit(ToolOutputDelta(
+                    tool_call.id, tool_call.name, safe_text, stream))
+
         execution_ctx = replace(
             self._turn_tool_context,
             tool_descriptor=pool.descriptor(tool_call.name),
+            progress_emitter=emit_progress,
+            output_emitter=emit_output,
         )
 
         # 2) 参数格式与 JSON Schema：坏参数不进入审批或工具实现。
@@ -617,6 +646,7 @@ class AgentLoop:
 
         # 3) 审批（策略看到的是已通过 schema 校验的参数）
         if self.policy is not None:
+            await execution_ctx.emit_progress("安全策略检查中")
             try:
                 decision = await self.policy.check(tool_call, execution_ctx)
             except Exception as e:  # 审批器自身出错 → 保守拒绝
@@ -630,6 +660,7 @@ class AgentLoop:
                 )
 
         # 4) 执行（异常 → is_error 结果回填，错误恢复原则）
+        await execution_ctx.emit_progress("开始执行")
         try:
             result = await tool.execute(args, execution_ctx)
         except Exception as e:

@@ -276,8 +276,9 @@ MCP stdio 子进程默认同样剥离宿主密钥，但 `[mcp_servers.*].env` �
 
 ## 7. 事件清单（EventBus，hooks/UI/审计的消费面）
 
-`RunStarted` · `StepStarted` · `LLMThinkingDelta` · `LLMStreamDelta` ·
-`LLMResponseReceived`(usage) · `ToolCallStarted` · `ToolCallCompleted`(is_error) ·
+`RunStarted` · `StepStarted` · `QueryPhaseChanged` · `LLMThinkingDelta` · `LLMStreamDelta` ·
+`LLMResponseReceived`(usage) · `ToolCallStarted` · `ToolProgress` · `ToolOutputDelta` ·
+`ToolCallCompleted`(is_error) · `PlanUpdated` · `UserInputRequested` ·
 `ApprovalRequested` · `PermissionDenied` · `ContextCompressed`(before/after) ·
 `HookTriggered` · `SubagentSpawned` · `SubagentFinished` · `UserSteered` ·
 `RunFinished` · `ErrorOccurred`
@@ -327,8 +328,9 @@ stdin 支持两种 user 形式：
 ```
 
 `subtype` 可为 `success` / `cancelled` / `error`。其他消息类型包括
-`system/turn_started`、`step/started`、`assistant/text_delta|thinking_delta|message`、
-`tool/started|completed`、`permission/requested|denied`、`context/compressed`、
+`system/turn_started`、`step/started`、`query/phase_changed`、
+`assistant/text_delta|thinking_delta|message`、`tool/started|progress|output_delta|completed`、
+`plan/updated`、`input/requested`、`permission/requested|denied`、`context/compressed`、
 `hook/triggered`、`subagent/started|finished`、`user/steered`、`error/occurred`；
 最后以 `system/session_end` 结束。所有事件都带 `turn_id`、单调 `sequence` 和
 `session_id`，user 对应的全部事件及 result 还带同一 `request_id`。

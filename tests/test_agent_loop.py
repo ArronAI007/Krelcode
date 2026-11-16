@@ -81,7 +81,11 @@ def test_plain_chat_no_tools():
     reply = asyncio.run(loop.run("hi"))
     assert reply == "hello!"
     assert [m.role for m in loop.history] == ["system", "user", "assistant"]
-    assert rec.types() == ["RunStarted", "StepStarted", "LLMStreamDelta", "LLMResponseReceived", "RunFinished"]
+    assert rec.types() == [
+        "RunStarted", "QueryPhaseChanged", "StepStarted",
+        "QueryPhaseChanged", "LLMStreamDelta",
+        "LLMResponseReceived", "RunFinished",
+    ]
     assert provider.tools_seen == [None]
 
 
@@ -111,9 +115,11 @@ def test_full_tool_call_cycle():
     # 事件序列完整
     # 第一轮 assistant 只有 tool_calls（无文本 delta），第二轮有文本 delta
     assert rec.types() == [
-        "RunStarted", "StepStarted", "LLMResponseReceived",
-        "ToolCallStarted", "ToolCallCompleted",
-        "StepStarted", "LLMStreamDelta", "LLMResponseReceived", "RunFinished",
+        "RunStarted", "QueryPhaseChanged", "StepStarted",
+        "QueryPhaseChanged", "LLMResponseReceived",
+        "ToolCallStarted", "ToolProgress", "ToolProgress",
+        "ToolCallCompleted", "StepStarted", "QueryPhaseChanged",
+        "LLMStreamDelta", "LLMResponseReceived", "RunFinished",
     ]
     completed = [e for e in rec.events if isinstance(e, ToolCallCompleted)][0]
     assert not completed.is_error

@@ -7,10 +7,13 @@ agent 循环只依赖本协议；具体工具在 builtin/ 下各自独立实现�
 from __future__ import annotations
 
 import asyncio
+import inspect
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, Optional, Protocol, Tuple
+from typing import (
+    Any, Awaitable, Callable, Dict, FrozenSet, Optional, Protocol, Tuple, Union,
+)
 
 from ..core.messages import (
     ImageBlock,
@@ -161,6 +164,10 @@ class TurnAbortSignal:
         await self._event.wait()
 
 
+ProgressEmitter = Callable[[str, Dict[str, object]], Union[None, Awaitable[None]]]
+OutputEmitter = Callable[[str, str], Union[None, Awaitable[None]]]
+
+
 @dataclass
 class ToolContext:
     """工具执行环境；默认自动创建运行时 Sandbox（fail-safe）。
@@ -176,12 +183,35 @@ class ToolContext:
     runtime: RuntimeSnapshot = field(default_factory=RuntimeSnapshot)
     services: ToolServices = field(default_factory=ToolServices)
     abort: TurnAbortSignal = field(default_factory=TurnAbortSignal)
+    progress_emitter: Optional[ProgressEmitter] = field(
+        default=None, repr=False)
+    output_emitter: Optional[OutputEmitter] = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not self.sandbox_enabled:
             self.sandbox = None
         elif self.sandbox is None:
             self.sandbox = ExecutionSandbox(self.workspace_root)
+
+    async def emit_progress(
+        self,
+        message: str,
+        data: Optional[Dict[str, object]] = None,
+    ) -> None:
+        """发布短进度；具体工具不直接依赖 EventBus 或 AgentLoop。"""
+        if self.progress_emitter is None:
+            return
+        pending = self.progress_emitter(message, dict(data or {}))
+        if inspect.isawaitable(pending):
+            await pending
+
+    async def emit_output(self, text: str, stream: str = "stdout") -> None:
+        """发布输出增量；空片段被静默忽略。"""
+        if not text or self.output_emitter is None:
+            return
+        pending = self.output_emitter(text, stream)
+        if inspect.isawaitable(pending):
+            await pending
 
 
 class Tool(Protocol):

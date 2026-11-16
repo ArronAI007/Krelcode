@@ -5,12 +5,12 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（v0.64.0 / Step 73）
+## 1. 项目统计（v0.65.0 / Step 74）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 19,771 行（Python，**零第三方运行时依赖**） |
-| 测试 | 15,641 行 / 89 个文件 / 882 个用例（离线 880 + 本地端口集成 2，提权环境 882/882 全绿） |
+| 源码 | 20,499 行（Python，**零第三方运行时依赖**） |
+| 测试 | 16,284 行 / 90 个文件 / 892 个用例（离线 890 + 本地端口集成 2，提权环境 892/892 全绿） |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 10 + 子代理 4 + MCP 远程动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
@@ -20,13 +20,13 @@
 源码按层分布：
 
 ```
-session 3286 · ui 2443 · agent 2302 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2258
-tools 2220 · llm 1762 · mcp 1652 · safety 1608 · skills 949 · subagent 620
-core 485 · entrypoints 190
+session 3905 · ui 2382 · agent 2333 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2259
+tools 2305 · llm 1762 · mcp 1652 · safety 1608 · skills 949 · subagent 620
+core 534 · entrypoints 190
 ```
 
-core 只有 485 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
-测试代码量约为源码的 79%（15,641 vs 19,771），覆盖协议、安全边界与端到端行为。
+core 只有 534 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
+测试代码量约为源码的 79%（16,284 vs 20,499），覆盖协议、安全边界与端到端行为。
 
 ## 2. 关键架构决策时间线
 
@@ -92,7 +92,7 @@ core 只有 485 行——内核保持极小、能力在边缘，正是当初对�
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 880 通过、2 skip，提权环境 882/882 全过。
+bind 探测自动 skip——沙箱内 890 通过、2 skip，提权环境 892/892 全过。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /

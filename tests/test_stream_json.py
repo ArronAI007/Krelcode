@@ -23,6 +23,8 @@ from krelcode.core.events import (
     LLMStreamDelta,
     LLMThinkingDelta,
     PermissionDenied,
+    PlanUpdated,
+    QueryPhaseChanged,
     RunCancelled,
     RunFinished,
     RunStarted,
@@ -31,6 +33,9 @@ from krelcode.core.events import (
     SubagentSpawned,
     ToolCallCompleted,
     ToolCallStarted,
+    ToolOutputDelta,
+    ToolProgress,
+    UserInputRequested,
     UserSteered,
 )
 from krelcode.core.messages import ImageRef, Message, ToolCall
@@ -154,6 +159,38 @@ def test_encoder_preserves_envelope_and_encodes_all_event_families():
         assert item["request_id"] == "req-1"
     assert encoded[14]["result"] == "finished"
     assert encoded[15]["result"] == "stopped"
+
+
+def test_encoder_encodes_query_progress_and_input_events():
+    encoder = StreamJsonEncoder(metadata())
+    events = [
+        QueryPhaseChanged("tool", "执行测试"),
+        ToolProgress("call-1", "run_command", "命令运行中", {"pid": 7}),
+        ToolOutputDelta("call-1", "run_command", "partial", "combined"),
+        PlanUpdated(("读取", "测试"), active_index=1),
+        UserInputRequested("input-1", "继续吗？", ("是", "否")),
+    ]
+
+    encoded = [encoder.encode(envelope(event, index))
+               for index, event in enumerate(events)]
+
+    assert encoded[0] == {
+        "type": "query",
+        "subtype": "phase_changed",
+        "phase": "tool",
+        "detail": "执行测试",
+        "turn_id": "turn-1",
+        "sequence": 0,
+        "session_id": "session-1",
+    }
+    assert encoded[1]["subtype"] == "progress"
+    assert encoded[1]["data"] == {"pid": 7}
+    assert encoded[2]["subtype"] == "output_delta"
+    assert encoded[2]["stream"] == "combined"
+    assert encoded[3]["type"] == "plan"
+    assert encoded[3]["items"] == ["读取", "测试"]
+    assert encoded[4]["type"] == "input"
+    assert encoded[4]["options"] == ["是", "否"]
 
 
 def test_terminal_fields_cannot_be_overwritten_by_extensions():

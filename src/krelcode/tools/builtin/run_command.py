@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import os
 import signal
 from typing import Any, Dict
@@ -91,24 +92,85 @@ class RunCommandTool:
         except OSError as e:
             return ToolResult(content=f"无法启动命令: {e}", is_error=True)
 
+        chunks: list[bytes] = []
+        emitted_chars = 0
+        overflow_notice_sent = False
+
+        async def consume_output() -> None:
+            nonlocal emitted_chars, overflow_notice_sent
+            decoder = codecs.getincrementaldecoder("utf-8")("replace")
+            assert proc.stdout is not None
+            while True:
+                ctx.abort.check()
+                chunk = await proc.stdout.read(4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                text = decoder.decode(chunk)
+                if not text:
+                    continue
+                remaining = max(0, MAX_OUTPUT_CHARS - emitted_chars)
+                if remaining:
+                    delta = text[:remaining]
+                    emitted_chars += len(delta)
+                    await ctx.emit_output(delta, "combined")
+                if len(text) > remaining and not overflow_notice_sent:
+                    overflow_notice_sent = True
+                    await ctx.emit_progress(
+                        "实时输出超过预览上限，完成时将继续按头尾截断",
+                        {"truncated": True},
+                    )
+            tail = decoder.decode(b"", final=True)
+            if tail:
+                remaining = max(0, MAX_OUTPUT_CHARS - emitted_chars)
+                if remaining:
+                    await ctx.emit_output(tail[:remaining], "combined")
+
         try:
-            raw, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            await ctx.emit_progress(
+                f"命令运行中（超时 {timeout:g}s）",
+                {"pid": proc.pid, "cwd": str(cwd), "timeout": timeout},
+            )
+            reader_task = asyncio.create_task(consume_output())
+            await asyncio.wait_for(reader_task, timeout=timeout)
+            await proc.wait()
         except asyncio.TimeoutError:
             _terminate_process_tree(proc)
             try:
                 await asyncio.wait_for(proc.wait(), timeout=5)
             except asyncio.TimeoutError:
                 pass
+            await ctx.emit_progress("命令超时，已终止整个进程组")
             return ToolResult(
                 content=f"命令超时（>{timeout:g}s），已终止进程组: {command}",
                 is_error=True,
                 data={"exit_code": None, "timed_out": True},
             )
+        except asyncio.CancelledError:
+            _terminate_process_tree(proc)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+            raise
+        except BaseException:
+            # EventBus/注入回调异常同样不能留下孤儿进程。
+            _terminate_process_tree(proc)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+            raise
 
+        raw = b"".join(chunks)
         output = raw.decode("utf-8", "replace")
         output = truncate_middle(output, MAX_OUTPUT_CHARS)
         exit_code = proc.returncode if proc.returncode is not None else -1
         content = f"exit_code: {exit_code}\n{output if output.strip() else '（无输出）'}"
+        await ctx.emit_progress(
+            f"命令结束（exit {exit_code}）",
+            {"exit_code": exit_code, "timed_out": False},
+        )
         return ToolResult(
             content=content,
             is_error=exit_code != 0,

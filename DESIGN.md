@@ -138,8 +138,9 @@ class EventBus:
 
 ## 事件清单（UI/会话/审计的消费面）
 
-RunStarted · StepStarted · LLMStreamDelta · LLMResponseReceived ·
-ToolCallStarted · ToolCallCompleted · PermissionDenied · RunFinished · ErrorOccurred
+RunStarted · StepStarted · QueryPhaseChanged · LLMStreamDelta · LLMResponseReceived ·
+ToolCallStarted · ToolProgress · ToolOutputDelta · ToolCallCompleted · PlanUpdated ·
+UserInputRequested · PermissionDenied · RunFinished · ErrorOccurred
 
 ## 主循环语义
 
@@ -635,13 +636,44 @@ AgentLoop ──EventBus(async handler)──> bounded QueryEvent queue(256)
 - `TerminalLineEditor` 将独立 `Esc`/`Ctrl-C` 转为非文本控制动作，将
   `Alt+Enter` 转为 `TerminalSubmission(queue_next=True)`，不会混入 prompt 文本。
   `InputProcessor` 仍负责附件和 Hook，最终用 `InputDelivery.STEER|QUEUE` 表达投递语义。
-- 主循环用同一个 `asyncio.wait` 协调输入、query task、renderer consumer 和审批
-  watcher。任务终态必须先 drain 全部 QueryEvent 并完成 renderer，才切回 IDLE；
-  QUEUE 消息在收尾后自动启动，STEER 消息注入当前 turn 的下一步。
+- `ReplSessionRunner` 独占 query、renderer consumer、审批 watcher 与下一条队列；
+  REPL 主循环只处理 stdin/编辑器和 UI 回调。任务终态必须先 drain 全部 QueryEvent
+  并完成 renderer，才切回 IDLE；QUEUE 消息在收尾后自动启动，STEER 消息注入当前
+  turn 的下一步。
 - `QueryEngine` 的 EventBus handler 是 async，并把事件放入有界队列，形成真实
   背压。完成标记由 task done callback 排在所有已产生事件之后，因此异常/取消
   也严格遵循“先 drain 事件，再传播终态”。消费者提前退出会取消 Agent task，
   避免孤儿查询。
+
+## 事件与前台架构（Step 74）
+
+第一阶段把“查询推进事实”与“终端表现”彻底分开：
+
+```
+AgentLoop ── EventBus ──> bounded QueryEvent
+                              │
+                              ├─ SessionEventReducer ──> SessionViewState
+                              ├─ StreamRenderer ───────> 正文/折叠缓存
+                              └─ ReplSessionRunner ────> query/approval/queue 生命周期
+                                                        │
+PromptWriter <── status callback/500ms ticker ──────────┘
+```
+
+- 新事件：`QueryPhaseChanged`（model/tool/finalizing）、`ToolProgress`（短状态）、
+  `ToolOutputDelta`（增量正文）、`PlanUpdated`、`UserInputRequested`。全部是纯数据
+  AgentEvent，并在 stream-json 中各有稳定 `type/subtype` 映射。
+- `ToolContext` 提供受控 `emit_progress/emit_output` 端口；具体工具不接触 EventBus。
+  AgentLoop 在每次工具调用时绑定 call id 并统一脱敏后再发布事件。
+- `run_command` 改为分块读取合并后的 stdout/stderr，首块到达即可推进状态栏与折叠
+  缓存；保留现有超时、进程组清理、输出上限与敏感环境变量剥离语义。
+- `SessionEventReducer` 是唯一 QueryEvent → ViewState 映射点。状态栏持续显示当前
+  阶段、Step、工具完成数/总数、实时输出字符与耗时。
+- `ReplSessionRunner` 位于 session 层，不导入 UI。REPL 注入 renderer/approval/status/
+  notice 回调；审批仍经 ApprovalBroker，runner 自身从不读取 stdin。
+- `PromptWriter` 用 suspend/resume 让输出临时占用终端但保留草稿、光标与 slash 菜单；
+  状态行参与整体重绘并受线程锁保护，避免输入线程和事件循环同时改光标。
+- 工具增量正文只更新 `ToolOutputRecord`，完成时仍默认折叠；用户通过
+  `/tool-output <编号>` 主动展开，防止实时输出重新污染正文。
 
 ## 进程入口分流
 

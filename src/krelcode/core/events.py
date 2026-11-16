@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Dict, List, Union
+from typing import Awaitable, Callable, Dict, List, Tuple, Union
 
 from .messages import Message, ToolCall, ToolResultBlock
 
@@ -50,8 +50,40 @@ class LLMResponseReceived(AgentEvent):
 
 
 @dataclass(frozen=True)
+class QueryPhaseChanged(AgentEvent):
+    """查询推进层进入了一个新的可观察阶段。
+
+    phase 是稳定机器标识（如 ``model`` / ``tool`` / ``finalizing``）；
+    detail 只用于前台状态栏，不参与控制流。
+    """
+
+    phase: str
+    detail: str = ""
+
+
+@dataclass(frozen=True)
 class ToolCallStarted(AgentEvent):
     tool_call: ToolCall
+
+
+@dataclass(frozen=True)
+class ToolProgress(AgentEvent):
+    """工具执行中的短状态；不包含大段正文。"""
+
+    tool_call_id: str
+    tool_name: str
+    message: str
+    data: Dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ToolOutputDelta(AgentEvent):
+    """工具输出的增量片段，供前台缓存/按需展开。"""
+
+    tool_call_id: str
+    tool_name: str
+    text: str
+    stream: str = "stdout"
 
 
 @dataclass(frozen=True)
@@ -98,6 +130,23 @@ class ContextCompressed(AgentEvent):
 class UserSteered(AgentEvent):
     """运行中用户插话被注入历史（Step 26 steering）。"""
     text: str
+
+
+@dataclass(frozen=True)
+class PlanUpdated(AgentEvent):
+    """执行计划快照；items 是有序的人类可读步骤。"""
+
+    items: Tuple[str, ...] = ()
+    active_index: int = -1
+
+
+@dataclass(frozen=True)
+class UserInputRequested(AgentEvent):
+    """工具/工作流请求前台补充输入。"""
+
+    request_id: str
+    prompt: str
+    options: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
