@@ -18,6 +18,7 @@ from .agent.compression import DEFAULT_MAX_TOKENS as DEFAULT_CONTEXT_BUDGET
 from .agent.compression import ContextManager
 from .agent.pricing import default_budget_for
 from .agent.context import (
+    CONTEXT_ENGINE_V3,
     ContextOptions,
     build_workspace_context_bundle,
 )
@@ -480,9 +481,12 @@ async def build_loop(
     skill_fragment = skills_fragment(skill_manager.prompt_index())
     if skill_fragment is not None:
         prompt_registry.register(skill_fragment)
-    memory_fragment = memory_store.fragment()
-    if memory_fragment is not None:
-        prompt_registry.register(memory_fragment)
+    # v3 keeps Memory out of the system Prompt Registry. It is assembled as a
+    # separate, untrusted knowledge layer at request time.
+    if context_options.engine != CONTEXT_ENGINE_V3:
+        memory_fragment = memory_store.fragment()
+        if memory_fragment is not None:
+            prompt_registry.register(memory_fragment)
     prompt_snapshot = prompt_registry.snapshot()
     directory_rules_enabled = (
         not args.no_context
@@ -495,8 +499,13 @@ async def build_loop(
     context_checkpoint_store = (
         None if args.no_checkpoint else ContextCheckpointStore(workspace_root))
     context_sources = default_context_sources(
-        rule_loader if directory_rules_enabled else None)
-    context_assembler = ContextAssembler(context_sources)
+        rule_loader if directory_rules_enabled else None,
+        working_context_store=working_context_store,
+        engine=context_options.engine,
+        memory_store=memory_store,
+    )
+    context_assembler = ContextAssembler(
+        context_sources, engine=context_options.engine)
     directory_rule_source = next(
         (source for source in context_sources
          if isinstance(source, DirectoryRulesContextSource)),
@@ -524,6 +533,7 @@ async def build_loop(
     loop.plugin_manager = plugin_manager
     loop.prompt_registry = prompt_registry
     loop.context_options = context_options
+    loop.context_engine = context_options.engine
     loop.context_enabled = not args.no_context
     loop.workspace_context = workspace_context
     loop.rule_loader = rule_loader

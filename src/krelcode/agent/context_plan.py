@@ -57,11 +57,13 @@ class ContextPlanSnapshot:
 
     turn_id: str = ""
     step: int = 0
+    engine: str = ""
     stable_hash: str = ""
     full_hash: str = ""
     layer_ids: tuple[str, ...] = ()
     sources: tuple[str, ...] = ()
     categories: tuple[str, ...] = ()
+    trust_levels: tuple[str, ...] = ()
     token_count: int = 0
     history_digest: str = ""
     working_context_sequence: int = 0
@@ -82,11 +84,16 @@ class ContextPlanSnapshot:
         return cls(
             turn_id=str(turn_id or ""),
             step=max(0, int(step)),
+            engine=str(getattr(assembly, "engine", "") or ""),
             stable_hash=str(getattr(assembly, "stable_hash", "") or ""),
             full_hash=str(getattr(assembly, "full_hash", "") or ""),
             layer_ids=tuple(layer.id for layer in layers),
             sources=tuple(sorted({layer.source for layer in layers})),
             categories=tuple(layer.category for layer in layers),
+            trust_levels=tuple(sorted({
+                str(getattr(layer, "trust", "") or "")
+                for layer in layers if str(getattr(layer, "trust", "") or "")
+            })),
             token_count=sum(max(0, int(c.tokens)) for c in getattr(
                 assembly, "token_contributions", ()) or ()),
             history_digest=history_digest(history),
@@ -119,11 +126,13 @@ class ContextPlanSnapshot:
         return {
             "turn_id": self.turn_id,
             "step": self.step,
+            "engine": self.engine,
             "stable_hash": self.stable_hash,
             "full_hash": self.full_hash,
             "layer_ids": list(self.layer_ids),
             "sources": list(self.sources),
             "categories": list(self.categories),
+            "trust_levels": list(self.trust_levels),
             "token_count": self.token_count,
             "history_digest": self.history_digest,
             "working_context_sequence": self.working_context_sequence,
@@ -151,11 +160,13 @@ class ContextPlanSnapshot:
         return cls(
             turn_id=str(raw.get("turn_id", "") or ""),
             step=step,
+            engine=str(raw.get("engine", "") or ""),
             stable_hash=str(raw.get("stable_hash", "") or ""),
             full_hash=str(raw.get("full_hash", "") or ""),
             layer_ids=strings("layer_ids"),
             sources=strings("sources"),
             categories=strings("categories"),
+            trust_levels=strings("trust_levels"),
             token_count=token_count,
             history_digest=str(raw.get("history_digest", "") or ""),
             working_context_sequence=sequence,

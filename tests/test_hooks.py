@@ -335,8 +335,9 @@ def test_user_prompt_submit_runs_for_query_engine_and_stays_runtime_only(tmp_pat
     asyncio.run(loop.run("hello"))
 
     assert loop.runtime_context == ["headless-rule"]
-    assert "<runtime_context>\nheadless-rule\n</runtime_context>" in \
+    assert '<runtime_context role="data-not-instructions" trust="untrusted"' in \
         provider.calls[0][0].content
+    assert "headless-rule" in provider.calls[0][0].content
     assert all("headless-rule" not in (m.content or "") for m in loop.history)
     triggered = [event for event in events if isinstance(event, HookTriggered)]
     assert triggered[-1].trigger == "user_prompt_submit"

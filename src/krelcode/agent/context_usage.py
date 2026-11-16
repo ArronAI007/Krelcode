@@ -167,6 +167,7 @@ def build_context_usage_snapshot(
         turn_id=turn_id,
         step=step,
         estimated_input_tokens=estimated,
+        context_engine=str(getattr(context_assembly, "engine", "") or ""),
         budget_tokens=budget_tokens,
         model_context_window=window,
         output_reserve_tokens=reserve,

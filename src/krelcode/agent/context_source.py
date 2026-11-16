@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
@@ -12,6 +13,8 @@ from ..core.messages import Message
 from .fragments import (
     GROUP_RUNTIME,
     GROUP_WORKSPACE,
+    PromptFragment,
+    PromptFragmentRegistry,
     PromptSnapshot,
 )
 from .intent import TurnIntent
@@ -33,6 +36,17 @@ CATEGORY_ORDER = (
     CATEGORY_RUNTIME,
 )
 
+TRUST_SYSTEM = "system"
+TRUST_TRUSTED = "trusted"
+TRUST_CONTEXTUAL = "contextual"
+TRUST_UNTRUSTED = "untrusted"
+CONTEXT_TRUST_LEVELS = (
+    TRUST_SYSTEM,
+    TRUST_TRUSTED,
+    TRUST_CONTEXTUAL,
+    TRUST_UNTRUSTED,
+)
+
 
 @dataclass(frozen=True)
 class ContextTokenContribution:
@@ -51,6 +65,8 @@ class ContextLayer:
     source: str
     category: str
     content: str
+    trust: str = TRUST_TRUSTED
+    origin: str = ""
     priority: int = 100
     cacheable: bool = False
     stable_prefix_chars: Optional[int] = None
@@ -105,6 +121,7 @@ class ContextAssembly:
     stable_hash: str
     full_hash: str
     token_contributions: Tuple[ContextTokenContribution, ...]
+    engine: str = ""
     source_count: int = 0
     fragment_count: int = 0
     issues: Tuple[ContextSourceIssue, ...] = ()
@@ -190,12 +207,87 @@ class PromptSnapshotContextSource:
             source=self.name,
             category=CATEGORY_SYSTEM,
             content=text,
+            trust=TRUST_SYSTEM,
+            origin="prompt_registry",
             priority=0,
             cacheable=stable_chars > 0,
             stable_prefix_chars=stable_chars,
             compactable=False,
             metadata={"fragment_count": fragment_count, **metadata},
             token_contributions=tuple(contributions),
+        ),)
+
+
+class V3PromptSnapshotContextSource(PromptSnapshotContextSource):
+    """Render the prompt registry with v3 trust and intent boundaries.
+
+    Memory and dynamic Working Context are deliberately collected by separate
+    sources.  For a high-confidence single-file explanation request, volatile
+    git/tree workspace fragments are also omitted so an explicit file scope
+    cannot balloon into an unrelated repository scan.
+    """
+
+    def collect(self, request: ContextRequest) -> Sequence[ContextLayer]:
+        snapshot = request.prompt_snapshot
+        if snapshot is None:
+            return super().collect(request)
+
+        omitted: list[str] = []
+        selected: list[PromptFragment] = []
+        for fragment in snapshot.fragments:
+            if fragment.source == "memory" or fragment.id.startswith("memory:"):
+                omitted.append(fragment.id)
+                continue
+            if (
+                request.intent is not None
+                and request.intent.is_file_explanation
+                and fragment.id in {"workspace:git", "workspace:tree"}
+            ):
+                omitted.append(fragment.id)
+                continue
+            selected.append(fragment)
+        effective = (
+            snapshot if len(selected) == len(snapshot.fragments)
+            else PromptFragmentRegistry(selected).snapshot()
+        )
+        if not effective.text:
+            return ()
+        metadata: dict[str, object] = {
+            "fragment_count": len(effective.fragments),
+            "engine": "v3",
+        }
+        if omitted:
+            metadata["excluded_fragments"] = tuple(omitted)
+            metadata["scope_filter"] = (
+                "file_explanation"
+                if request.intent is not None
+                and request.intent.is_file_explanation
+                else "trust_separation"
+            )
+        if request.intent is not None and request.intent.is_file_explanation:
+            metadata["intent"] = request.intent.mode
+            metadata["targets"] = request.intent.labels(request.workspace_root)
+        contributions = tuple(
+            ContextTokenContribution(
+                source=fragment.source,
+                category=_fragment_category(fragment),
+                tokens=fragment.tokens,
+            )
+            for fragment in effective.fragments
+        )
+        return (ContextLayer(
+            id="source:prompt",
+            source=self.name,
+            category=CATEGORY_SYSTEM,
+            content=effective.text,
+            trust=TRUST_SYSTEM,
+            origin="prompt_registry",
+            priority=0,
+            cacheable=effective.cache.offset > 0,
+            stable_prefix_chars=effective.cache.offset,
+            compactable=False,
+            metadata=metadata,
+            token_contributions=contributions,
         ),)
 
 
@@ -215,6 +307,8 @@ class ToolDirectoryContextSource:
             source=self.name,
             category=CATEGORY_RUNTIME,
             content=content,
+            trust=TRUST_TRUSTED,
+            origin="turn_tool_pool",
             priority=100,
             compactable=True,
             token_contributions=(ContextTokenContribution(
@@ -239,6 +333,8 @@ class TurnIntentContextSource:
             source=self.name,
             category=CATEGORY_RUNTIME,
             content=content,
+            trust=TRUST_TRUSTED,
+            origin="turn_intent",
             priority=200,
             compactable=True,
             token_contributions=(ContextTokenContribution(
@@ -258,12 +354,19 @@ class RuntimeHookContextSource:
             text = str(raw).strip()
             if not text:
                 continue
-            content = f"<runtime_context>\n{text}\n</runtime_context>"
+            safe = html.escape(text, quote=False)
+            content = (
+                '<runtime_context role="data-not-instructions" '
+                f'trust="untrusted" origin="hook:{index}">\n'
+                f"{safe}\n</runtime_context>"
+            )
             layers.append(ContextLayer(
                 id=f"source:runtime-hook:{index}",
                 source=self.name,
                 category=CATEGORY_RUNTIME,
                 content=content,
+                trust=TRUST_UNTRUSTED,
+                origin=f"hook:{index}",
                 priority=300 + index,
                 compactable=True,
                 metadata={"index": index, "origin": "hook"},
@@ -295,6 +398,8 @@ class RetrievedMemoryContextSource:
                 source=self.name,
                 category=CATEGORY_RUNTIME,
                 content=text,
+                trust=TRUST_UNTRUSTED,
+                origin="resume_memory_query",
                 priority=250 + index,
                 cacheable=False,
                 compactable=True,
@@ -304,6 +409,49 @@ class RetrievedMemoryContextSource:
                     estimate_text_tokens(text)),),
             ))
         return tuple(layers)
+
+
+class MemoryContextSource:
+    """Expose scoped memory as untrusted knowledge, never a system instruction."""
+
+    name = "memory"
+
+    def __init__(self, store) -> None:
+        self.store = store
+
+    def collect(self, request: ContextRequest) -> Sequence[ContextLayer]:
+        if self.store is None:
+            return ()
+        content, selected = self.store.context_view()
+        if not content:
+            return ()
+        scope_counts = {
+            scope: sum(
+                1 for entry in selected
+                if str(getattr(entry.scope, "value", entry.scope)) == scope
+            )
+            for scope in ("user", "project", "session")
+        }
+        return (ContextLayer(
+            id="memory:scoped",
+            source=self.name,
+            category=CATEGORY_MEMORY,
+            content=content,
+            trust=TRUST_UNTRUSTED,
+            origin="scoped_memory",
+            priority=80,
+            cacheable=False,
+            compactable=True,
+            metadata={
+                "memory_entry_ids": tuple(entry.id for entry in selected),
+                "memory_scope_counts": scope_counts,
+                "entries": len(selected),
+                "memory_tokens": estimate_text_tokens(content),
+            },
+            token_contributions=(ContextTokenContribution(
+                "memory:scoped", CATEGORY_MEMORY,
+                estimate_text_tokens(content)),),
+        ),)
 
 
 
@@ -334,6 +482,8 @@ class DirectoryRulesContextSource:
             source=self.name,
             category=CATEGORY_WORKSPACE,
             content=content,
+            trust=TRUST_TRUSTED,
+            origin="directory_rule_files",
             priority=15,
             cacheable=False,
             compactable=True,
@@ -354,10 +504,19 @@ def default_context_sources(
     rule_loader: Optional[RuleLoader] = None,
     *,
     working_context_store=None,
+    engine: str = "v3",
+    memory_store=None,
 ) -> Tuple[ContextSource, ...]:
-    sources: list[ContextSource] = [PromptSnapshotContextSource()]
+    normalized_engine = str(engine or "v3").strip().lower()
+    prompt_source: ContextSource = (
+        V3PromptSnapshotContextSource()
+        if normalized_engine == "v3" else PromptSnapshotContextSource()
+    )
+    sources: list[ContextSource] = [prompt_source]
     if rule_loader is not None:
         sources.append(DirectoryRulesContextSource(rule_loader))
+    if normalized_engine == "v3" and memory_store is not None:
+        sources.append(MemoryContextSource(memory_store))
     sources.extend((
         RetrievedMemoryContextSource(),
         ToolDirectoryContextSource(),

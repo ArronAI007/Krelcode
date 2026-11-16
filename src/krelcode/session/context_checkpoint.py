@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import html
 import json
 import os
 import subprocess
@@ -615,7 +616,7 @@ def render_memory_context(entries: Sequence[object]) -> str:
         if len(text) > 2_000:
             text = text[:2_000] + "…"
         lines.append(f"[{index}] scope={scope or '?'} kind={kind or '?'}")
-        lines.append(text)
+        lines.append(html.escape(text, quote=False))
     lines.append("</restored_memory>")
     return "\n".join(lines)
 

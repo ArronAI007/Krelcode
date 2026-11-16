@@ -8,6 +8,7 @@ as untrusted contextual data.
 
 from __future__ import annotations
 
+import html
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -106,7 +107,7 @@ def render_relevant_memory(entries: Sequence[object]) -> str:
         if len(text) > 2_000:
             text = text[:2_000] + "…"
         lines.append(f"[{index}] scope={scope or '?'} kind={kind or '?'}")
-        lines.append(text)
+        lines.append(html.escape(text, quote=False))
     lines.append("</subagent_memory>")
     return "\n".join(lines)
 

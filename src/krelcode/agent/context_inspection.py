@@ -116,7 +116,8 @@ class ContextInspectionService:
         memory_ids, memory_scopes, memory_tokens = self.memory_selection
         lines = [
             f"  [context] 最近请求 · {snapshot.turn_id or '(unknown turn)'}"
-            f" · Step {snapshot.step}",
+            f" · Step {snapshot.step}"
+            f" · engine {snapshot.context_engine or 'unknown'}",
             f"  输入 {snapshot.estimated_input_tokens} tokens"
             f" / 预算 {snapshot.budget_tokens or '未启用'}"
             f" · 使用率 {snapshot.usage_ratio:.1%}" if snapshot.usage_ratio is not None
@@ -165,7 +166,8 @@ class ContextInspectionService:
         categories, omitted_categories = _bounded(plan.categories, 30)
         lines = [
             f"  [context plan] {plan.turn_id or '(unknown turn)'}"
-            f" · Step {plan.step} · {plan.token_count} tokens",
+            f" · Step {plan.step} · {plan.token_count} tokens"
+            f" · engine {plan.engine or 'legacy/unknown'}",
             f"  stable hash {_short_hash(plan.stable_hash)}"
             f" · full hash {_short_hash(plan.full_hash)}",
             f"  history digest {_short_hash(plan.history_digest)}"
@@ -174,6 +176,7 @@ class ContextInspectionService:
             f"  layers {len(plan.layer_ids)} · sources {len(plan.sources)}"
             f" · categories {', '.join(categories) or '(none)'}"
             + (f" · 另有 {omitted_categories} 个类别" if omitted_categories else ""),
+            f"  trust: {', '.join(plan.trust_levels) or '(unknown)'}",
             "  layer ids: " + (", ".join(layers) or "(none)")
             + (f" · … 另有 {omitted_layers} 个" if omitted_layers else ""),
             "  sources: " + (", ".join(sources) or "(none)")
@@ -205,6 +208,7 @@ class ContextInspectionService:
             lines.extend([
                 f"  [context why] {layer.id}",
                 f"  source {layer.source} · category {layer.category}"
+                f" · trust {layer.trust} · origin {layer.origin or '(unspecified)'}"
                 f" · priority {layer.priority} · {layer.tokens} tokens",
                 f"  cache {'prefix' if layer.cacheable else 'dynamic'}"
                 f" · compactable {layer.compactable}"
@@ -247,6 +251,7 @@ class ContextInspectionService:
             f"  [sources] 最近装配: {len(assembly.layers)} layers"
             f" · {assembly.source_count} 个 source 有贡献"
             f" · {assembly.fragment_count} fragments"
+            f" · engine {assembly.engine or 'legacy/unknown'}"
             f" · cache {assembly.stable_prefix_chars} chars",
         ]
         shown, omitted = _bounded(assembly.layers, limit)
@@ -254,6 +259,7 @@ class ContextInspectionService:
             lines.append(
                 f"  [{layer.priority}] {layer.id} · {layer.source}"
                 f" · {layer.category} · {layer.tokens} tokens"
+                f" · trust={layer.trust}"
                 f" · {'cache-prefix' if layer.cacheable else 'dynamic'}")
         if omitted:
             lines.append(f"  … 另有 {omitted} 个 layer；使用 /context why <id> 定向查看")

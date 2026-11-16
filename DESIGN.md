@@ -34,7 +34,7 @@ src/krelcode/
 ├── agent/       # 执行推进层：只 import core/端口，不认识具体 UI/Provider
 │   ├── runtime.py    # AgentRuntime：turn/steering/cancel/close 统一门面
 │   ├── loop.py       # AgentLoop：单轮模型-工具循环
-│   ├── context.py    # Context v2：分层工作区上下文与 token 预算
+│   ├── context.py    # Context v3 配置：分层工作区上下文与 token 预算
 │   ├── tool_pool.py  # TurnToolPool：每轮工具快照与动态目录
 │   └── prompts.py    # 系统提示词组装
 ├── tools/       # 工具层（实现 Tool 端口）
@@ -180,13 +180,13 @@ run(user_input):
 
 卡死检测签名 = 工具名 + sort_keys 序列化的参数；成功即清零该签名计数。
 
-启动时上下文装配（agent/context.py，Context v2，失败安全）：
+启动时上下文装配（agent/context.py，Context v3 默认，失败安全）：
 规则、git 分支/porcelain 状态、目录树分别建模为 `ContextSection`，带 priority
 与来源元数据；统一受 `[context].max_tokens` 预算约束，默认规则(10) > git(20) >
 tree(50)，超限时先从低优先级内容截断/省略。最终包成 `<workspace_context>` 注入
-system prompt；`WorkspaceContext.summary_lines()` 提供来源与 token 统计，REPL
-`/context` 查看、`/context refresh` 重采。运行时 Hook 上下文使用临时 system hint，
-不写入持久历史。
+provider-bound context；`WorkspaceContext.summary_lines()` 提供来源与 token 统计，
+REPL `/context` 查看、`/context refresh` 重采。运行时 Hook、Memory 与 Working
+Context 使用显式 untrusted data 边界，不写入持久历史。
 
 错误恢复原则：工具抛异常/被拒绝/未知工具，都转成 `ToolResult(is_error=True)`
 回填给 LLM，让它自我修正，而不是中断循环。
@@ -1024,6 +1024,7 @@ AgentLoop._llm_turn(step)
 |--------|----------|------|
 | `prompt` | PromptSnapshot 的完整文本，按 Fragment 保留 token attribution；无 snapshot 时回退 system message | system |
 | `directory_rules` | 当前轮目标路径祖先目录中的 AGENTS.md/KRELCODE.md，按需读取并展开 @import | workspace |
+| `memory` | 三层 Memory 的 bounded 快照，trust=`untrusted`，绝不进入 system Prompt Registry | memory |
 | `tool_directory` | 本轮动态工具目录，不含完整 JSON Schema | runtime |
 | `turn_intent` | 高置信度“仅解释指定文件”等轮级约束 | runtime |
 | `runtime_hooks` | SessionStart/Compact 等 Hook 注入内容 | runtime |
@@ -1032,6 +1033,35 @@ AgentLoop._llm_turn(step)
 `/context sources` 展示注册来源、最近装配 layer、priority/category/cache 状态与 issue，不输出
 layer 正文。`ContextUsageSnapshot.source_count` 只统计实际贡献了非空 layer 的来源，token
 来源映射继续保留 Fragment/Hook 级别的细粒度归因。
+
+## Context v3 安全边界与默认切换（Step 94）
+
+Context v3 保留 ContextAssembler 为唯一装配入口，同时把“来源”和“信任”拆开：
+
+- `[context].engine` 默认 `v3`；`legacy`（别名 `v2`）只保留一个发布周期用于回退，
+  未知值 fail-safe 回落 v3。engine 写入 `ContextAssembly`、`ContextPlanSnapshot` 和
+  `ContextUsageSnapshot`，`/context` 与 stream-json 都可确认实际路径。
+- `ContextLayer` 在 `id/source/category/origin` 之外增加 `trust`。system prompt 与
+  项目规则使用 system/trusted；Memory、Working Context、Hook runtime context 使用
+  `role="data-not-instructions"` 和 `trust="untrusted"`，内容中的 XML-like 标签先转义，
+  不能提前关闭 envelope 或伪装成更高优先级来源。
+- Memory 在 v3 中不再注册到 PromptFragmentRegistry，而由 `MemoryContextSource` 每次
+  从 `MemoryStore.context_view()` 读取同一份选择结果并生成 memory layer。因此内存命中、
+  token attribution、entry IDs 与真正发送给模型的内容不会发生二次读取漂移。
+- 对高置信度“只解释明确文件”的请求，`V3PromptSnapshotContextSource` 过滤
+  `workspace:git` 与 `workspace:tree`；工具池仍只暴露 `read_file`，目录规则只加载目标
+  路径祖先。该约束发生在模型调用之前，而不是等模型误读后再拦截。
+- Working Context 若当前仅包含与最新 user 消息逐字相同的 goal，则不重复注入；一旦出现
+  文件、命令、错误或决策事实，仍以 volatile untrusted layer 进入请求。
+- Memory JSONL 读取跳过损坏行；project/session 路径拒绝 symlink 或 parent-directory
+  逃逸；checkpoint 文件 hash 只接受 workspace 内普通文件。规则加载继续拒绝越界 @import、
+  超大文件、循环和敏感路径。
+- compact 取消属于 `BaseException`，不会被摘要 fallback 吞掉；取消时 history 保持原样，
+  summary provider 失败或返回非法 JSON 时只生成确定性 Working Context/history fallback。
+
+Step 94 的离线验收覆盖 Prompt Injection、Memory Poisoning、symlink/path traversal、
+超大/损坏/权限错误文件、compact 取消与摘要失败、长会话 token、Memory 检索质量、跨项目
+隔离、Resume 现场刷新和完整请求 token 守恒。
 
 ## Memory 数据模型与作用域（Step 86）
 

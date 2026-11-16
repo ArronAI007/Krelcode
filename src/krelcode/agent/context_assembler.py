@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .context_source import (
     CATEGORY_ORDER,
+    CONTEXT_TRUST_LEVELS,
     ContextAssembly,
     ContextLayer,
     ContextRequest,
@@ -21,9 +22,16 @@ from .context_source import (
 class ContextAssembler:
     """Own the only path from ContextSources to the provider-bound system text."""
 
-    def __init__(self, sources: Iterable[ContextSource] = ()) -> None:
+    def __init__(
+        self,
+        sources: Iterable[ContextSource] = (),
+        *,
+        engine: str = "v3",
+    ) -> None:
         self._sources: List[ContextSource] = []
         self._names: Dict[str, ContextSource] = {}
+        normalized = str(engine or "v3").strip().lower()
+        self.engine = normalized if normalized in {"v3", "legacy"} else "v3"
         for source in sources:
             self.register(source)
 
@@ -114,6 +122,7 @@ class ContextAssembler:
             stable_hash=hashlib.sha256(stable_text.encode("utf-8")).hexdigest(),
             full_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
             token_contributions=contributions,
+            engine=self.engine,
             source_count=len(contributing_sources),
             fragment_count=fragment_count,
             issues=tuple(issues),
@@ -134,6 +143,10 @@ def _validate_layer(
         return "duplicate-id"
     if layer.category not in CATEGORY_ORDER:
         return "invalid-category"
+    if layer.trust not in CONTEXT_TRUST_LEVELS:
+        return "invalid-trust"
+    if not isinstance(layer.origin, str):
+        return "invalid-origin"
     if not isinstance(layer.content, str):
         return "invalid-content"
     if not isinstance(layer.priority, int) or isinstance(layer.priority, bool):

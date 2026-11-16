@@ -53,8 +53,9 @@ api_key_env = "GEMINI_API_KEY"
 # enabled = true                    # false 等价 --no-plugins
 # paths = ["./team-plugins"]       # 额外目录；相对路径基于工作区
 
-# ---- 工作区上下文预算（Context v2）----
+# ---- 工作区上下文预算（Context v3；legacy 仅保留一个版本用于回退）----
 # [context]
+# engine = "v3"                    # v3（默认，安全边界+来源归因）| legacy
 # max_tokens = 6000                # 规则 + git + 目录树总预算
 # include_rules = true
 # include_git = true

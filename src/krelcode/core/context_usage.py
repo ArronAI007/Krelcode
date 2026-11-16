@@ -39,6 +39,7 @@ class ContextUsageSnapshot:
     turn_id: str
     step: int
     estimated_input_tokens: int
+    context_engine: str = ""
     budget_tokens: Optional[int] = None
     model_context_window: Optional[int] = None
     output_reserve_tokens: int = 0
@@ -107,6 +108,7 @@ class ContextUsageSnapshot:
         return {
             "turn_id": self.turn_id,
             "step": self.step,
+            "context_engine": self.context_engine,
             "estimated_input_tokens": self.estimated_input_tokens,
             "budget_tokens": self.budget_tokens,
             "model_context_window": self.model_context_window,

@@ -212,7 +212,8 @@ paths = ["./team-skills", "/opt/shared-skills"]  # 额外目录，可相对工�
 enabled = true                       # false 等价 --no-plugins
 paths = ["./team-plugins", "/opt/shared-plugins"] # 额外目录，可相对工作区
 
-[context]                            # 启动时工作区上下文（Context v2）
+[context]                            # Context v3（legacy 仅保留一个版本用于回退）
+engine = "v3"                        # v3（默认）| legacy（兼容 v2）
 max_tokens = 6000                    # rules + git + tree 的统一 token 预算
 include_rules = true                 # ~/.krelcode/AGENTS.md + 项目根规则
 include_git = true                   # 分支与 porcelain 状态
@@ -243,6 +244,13 @@ tools = ["write_file", "edit_*"]     # 可选 glob；只影响工具型触发器
 timeout = 30
 enabled = true
 ```
+
+`engine = "v3"` 是默认装配路径：所有非 system 来源都带 `trust/origin`，Memory、
+Working Context 与 Hook runtime context 只作为 data-not-instructions 注入；高置信度
+“只解释指定文件”会过滤 git/tree 等无关 workspace 来源。缺少该键时仍使用 v3；
+`engine = "legacy"`（兼容别名 `v2`）仅用于一个发布周期的故障回退，未知值会安全回落
+到 v3。`/context`、`/context plan` 与 stream-json 的 `context_engine` 字段可确认当前
+请求实际使用的引擎。
 
 配置优先级：**显式 CLI 旗标 > TOML > 环境变量 > 内置默认**。
 未知键进 `extra` 透传（如 anthropic 的 prompt_cache/thinking_budget）。

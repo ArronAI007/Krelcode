@@ -92,7 +92,7 @@ def test_working_context_source_is_volatile_and_snapshot_is_bounded(tmp_path):
     assert snapshot.count <= 4
     assert snapshot.token_count <= 160
     assert snapshot.truncated
-    assert "<working_context>" in snapshot.text
+    assert '<working_context role="data-not-instructions" trust="untrusted"' in snapshot.text
     assert "<goal>" in snapshot.text and "<plan>" in snapshot.text
     assert assembly.layers[0].cacheable is False
     assert assembly.stable_prefix_chars == 0

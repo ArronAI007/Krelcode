@@ -80,6 +80,7 @@ from .context_plan import ContextPlanSnapshot
 from .context_source import (
     ContextAssembly,
     ContextRequest,
+    MemoryContextSource,
     RetrievedMemoryContextSource,
     default_context_sources,
 )
@@ -232,6 +233,8 @@ class AgentLoop:
                     WorkingContextSource(self.working_context_store))
             if "memory_retrieval" not in self.context_assembler.source_names:
                 self.context_assembler.register(RetrievedMemoryContextSource())
+        self.context_engine = str(
+            getattr(self.context_assembler, "engine", "v3") or "v3")
         self.last_context_assembly = None
         self.last_context_snapshot = None
         self.previous_context_snapshot = None
@@ -723,6 +726,13 @@ class AgentLoop:
         specs: list,
         tools,
     ):
+        memory_store = getattr(self, "memory_store", None)
+        if (
+            self.context_engine == "v3"
+            and memory_store is not None
+            and "memory" not in self.context_assembler.source_names
+        ):
+            self.context_assembler.register(MemoryContextSource(memory_store))
         base_message = (
             self.history[0]
             if self.history and self.history[0].role == "system" else None

@@ -33,6 +33,9 @@ TREE_MAX_ENTRIES = 150
 AGENTS_MD_MAX_CHARS = DEFAULT_RULES_MAX_CHARS
 GIT_STATUS_MAX_CHARS = 2_000
 DEFAULT_CONTEXT_MAX_TOKENS = 6_000
+CONTEXT_ENGINE_V3 = "v3"
+CONTEXT_ENGINE_LEGACY = "legacy"
+CONTEXT_ENGINES = (CONTEXT_ENGINE_V3, CONTEXT_ENGINE_LEGACY)
 MIN_SECTION_TOKENS = 24
 TRUNCATION_MARKER = "\n…[上下文已按 token 预算截断]"
 BUNDLE_OVERHEAD_TOKENS = estimate_text_tokens(
@@ -41,8 +44,24 @@ AGENTS_MD_NAMES = ("AGENTS.md", "KRELCODE.md")
 GLOBAL_RULES_RELPATH = Path(".krelcode") / "AGENTS.md"   # ~/.krelcode/AGENTS.md
 
 
+def normalize_context_engine(value: object) -> str:
+    """Return a supported engine name using the secure v3 default.
+
+    ``v2`` is accepted as a migration alias for one release so existing
+    configuration files keep working. Unknown values fail closed to v3 instead
+    of silently selecting an unmaintained assembly path.
+    """
+    normalized = str(value or "").strip().lower()
+    if normalized == "v2":
+        return CONTEXT_ENGINE_LEGACY
+    if normalized in CONTEXT_ENGINES:
+        return normalized
+    return CONTEXT_ENGINE_V3
+
+
 @dataclass(frozen=True)
 class ContextOptions:
+    engine: str = CONTEXT_ENGINE_V3
     max_tokens: int = DEFAULT_CONTEXT_MAX_TOKENS
     include_rules: bool = True
     include_git: bool = True
@@ -69,6 +88,7 @@ class ContextOptions:
             return max(minimum, min(parsed, maximum))
 
         return cls(
+            engine=normalize_context_engine(value.get("engine", CONTEXT_ENGINE_V3)),
             max_tokens=positive_int(
                 "max_tokens", DEFAULT_CONTEXT_MAX_TOKENS, 256, 100_000),
             include_rules=bool(value.get("include_rules", True)),

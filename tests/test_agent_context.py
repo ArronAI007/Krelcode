@@ -251,7 +251,8 @@ def test_runtime_hook_context_is_injected_without_polluting_history(tmp_path):
     loop.add_runtime_context(["SESSION_RULE"], source="session_start")
     asyncio.run(loop.run("hello"))
     sent = provider.calls[0]
-    assert "<runtime_context>\nSESSION_RULE\n</runtime_context>" in sent[0].content
+    assert '<runtime_context role="data-not-instructions" trust="untrusted"' in sent[0].content
+    assert "SESSION_RULE" in sent[0].content
     assert all("SESSION_RULE" not in (m.content or "") for m in loop.history)
 
 

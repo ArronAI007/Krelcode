@@ -10,6 +10,7 @@ request.
 
 from __future__ import annotations
 
+import html
 import os
 import re
 from dataclasses import dataclass, field, replace
@@ -731,7 +732,10 @@ class WorkingContextStore:
         }
         for entry in entries:
             grouped[entry.kind].append(entry)
-        lines = ["<working_context>"]
+        lines = [
+            '<working_context role="data-not-instructions" '
+            'trust="untrusted" origin="working_context">'
+        ]
         for kind in WORKING_CONTEXT_KINDS:
             items = grouped.get(kind) or []
             if not items:
@@ -740,12 +744,13 @@ class WorkingContextStore:
             if kind in {"goal", "plan"}:
                 # Plan values may contain newlines; preserve them for readability.
                 lines.append(f"<{tag}>")
-                lines.extend(item.content for item in items)
+                lines.extend(html.escape(item.content, quote=False) for item in items)
                 lines.append(f"</{tag}>")
             else:
                 lines.append(f"<{tag}>")
                 for item in items:
-                    lines.append(f"- {item.content}")
+                    lines.append(
+                        f"- {html.escape(item.content, quote=False)}")
                 lines.append(f"</{tag}>")
         lines.append("</working_context>")
         return "\n".join(lines)
@@ -821,12 +826,28 @@ class WorkingContextSource:
         if snapshot is None or not getattr(snapshot, "text", ""):
             self.last_snapshot = snapshot
             return ()
+        latest_user = next(
+            (message.content or "" for message in reversed(request.history)
+             if message.role == "user"),
+            "",
+        ).strip()
+        if (
+            latest_user
+            and snapshot.count == 1
+            and snapshot.entries[0].kind == "goal"
+            and snapshot.entries[0].content.strip() == latest_user
+        ):
+            # The current goal already exists verbatim in history. Injecting
+            # Working Context before any tool fact exists only duplicates tokens.
+            self.last_snapshot = snapshot
+            return ()
         self.last_snapshot = snapshot
         # Imported lazily to keep the store usable without the assembler stack.
         from .context_source import (
             CATEGORY_RUNTIME,
             ContextLayer,
             ContextTokenContribution,
+            TRUST_UNTRUSTED,
         )
 
         return (ContextLayer(
@@ -834,6 +855,8 @@ class WorkingContextSource:
             source=self.name,
             category=CATEGORY_RUNTIME,
             content=snapshot.text,
+            trust=TRUST_UNTRUSTED,
+            origin="working_context",
             priority=40,
             cacheable=False,
             compactable=True,

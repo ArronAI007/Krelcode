@@ -26,6 +26,7 @@ token 分项、来源 ID、裁剪项、缓存边界和哈希，不包含 Prompt�
 
 ```toml
 [context]
+engine = "v3"               # v3 / legacy(v2 为兼容别名)
 max_tokens = 6000
 include_rules = true
 include_git = true
@@ -44,6 +45,9 @@ suggest_threshold = 0.55
 auto_threshold = 0.80
 ```
 
+- `engine=v3`：默认装配路径；非 system 来源都带 `trust/origin`，Memory、Working Context
+  与 Hook runtime context 只作为 `data-not-instructions` 数据注入。`legacy`（别名 `v2`）仅保留
+  一个发布周期用于故障回退，未知值会安全回落到 v3。
 - `mode=off`：不提取 Auto Memory 候选。
 - `mode=suggest`：候选写入本地审核队列，不自动进入长期记忆；这是默认值。
 - `mode=auto`：置信度达到 `auto_threshold` 且不存在冲突时才写入 `project/knowledge`。
@@ -258,6 +262,12 @@ Compact checkpoint 保存 compact 前完整、脱敏的 history 与 Structured C
 供 `/rewind` 恢复；`context-checkpoint` 则保存 resume/fork/rewind 所需的任务现场引用。
 
 ## 9. 脱敏与安全
+
+Context v3 把来源和信任级别分开记录：system prompt 与项目规则为 trusted；Memory、
+Working Context 和 Hook runtime context 为 untrusted knowledge，只能进入
+`role="data-not-instructions"` envelope。XML-like 内容在封装前转义，不能提前闭合标签或
+伪装成更高优先级指令。`ContextPlan` 持久化 trust 汇总；`/context why` 还会显示
+每条 layer 的 source/origin。观测事件只保留来源、ID、token 与 hash，不携带正文。
 
 以下边界统一应用 `SecretRedactor` 和 Memory 自身的明显密钥过滤器：
 

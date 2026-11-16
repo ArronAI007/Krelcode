@@ -5,12 +5,12 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（v0.81.0 / Step 91）
+## 1. 项目统计（Step 94）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 36,110 行（Python，**零第三方运行时依赖**） |
-| 测试 | 22,674 行 / 109 个测试文件 / 1,113 个用例（离线 1,111 + 本地端口集成 2） |
+| 源码 | 39,707 行（Python，**零第三方运行时依赖**） |
+| 测试 | 24,379 行 / 112 个测试文件 / 1,148 个用例（离线 1,146 + 本地端口集成 2） |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 16 + 只读 `memory_search`（装配 MemoryStore 时）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
@@ -70,6 +70,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | v0.79 | Working Context 与 Tool Microcompact | 当前任务事实从长期 Memory 分离为 bounded/redacted session store；真实预算链路先做零 LLM 工具分级压缩，保护当前轮/错误/写编辑/计划，仍超限才摘要。工具结构化元数据可随会话恢复，微压缩事件贯通 UI/JSONL/stream-json |
 | v0.80 | Structured Compact v2 | compact 从自由摘要升级为严格 schema 的 goal/files/tests/handoff；失败时 Working Context 降级、旧摘要合并、turn 边界与高低水位控制，pre-compact history 持久化后由 Rewind 恢复。可观测元数据贯通 UI/JSONL/stream-json，避免历史和工具结果反复摘要 |
 | v0.81 | Auto Memory | 长期记忆写入改为候选流水线：显式“记住”、用户纠正、成功测试复用、架构重复确认和任务完成事实先进入 project-local 队列；统一脱敏、精确去重、证据累积、冲突检测与阈值晋级。默认 suggest，`/memory review` 人工审核，auto 只晋级高置信无冲突 knowledge；新增只读 `memory_search` 与 pin 检索优先 |
+| v0.82 | Context v3 默认与安全收口 | 不再把 v3 只当内部命名：engine/trust/origin 成为跨 assembly、plan、usage、命令和 stream-json 的可检查契约。Memory 从 system Prompt Registry 分离为 untrusted knowledge layer；Working/Runtime context 使用 data-not-instructions envelope 并转义标签；单文件解释过滤无关 git/tree，重复 goal 不注入。legacy/v2 保留一个版本回退，安全回归覆盖注入、路径逃逸、损坏输入、取消、长会话与隔离 |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -119,7 +120,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 1,131 通过、2 skip；本地端口可用时 1,133/1,133 全过。
+bind 探测自动 skip——沙箱内 1,146 通过、2 skip；本地端口可用时 1,148/1,148 全过。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /

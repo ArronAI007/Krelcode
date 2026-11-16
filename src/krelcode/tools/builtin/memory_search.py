@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 from ...session.memory import (
@@ -101,7 +102,7 @@ class MemorySearchTool:
         if not entries:
             return ToolResult(
                 content=(
-                    "<memory_search role=\"contextual_knowledge\">\n"
+                    "<memory_search role=\"contextual_knowledge\" trust=\"untrusted\">\n"
                     "No relevant reviewed memory found.\n"
                     "</memory_search>"
                 ),
@@ -132,5 +133,5 @@ class MemorySearchTool:
         label = "knowledge" if kind is MemoryKind.KNOWLEDGE else kind.value
         return (
             f"[{index}] scope=\"{scope.value}\" kind=\"{label}\" id=\"{entry.id}\"{marker}",
-            entry.text,
+            html.escape(entry.text, quote=False),
         )
