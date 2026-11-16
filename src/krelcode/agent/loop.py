@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass, replace
 from itertools import count
 from typing import Awaitable, Callable, Dict, Iterable, List, Optional
@@ -22,6 +23,7 @@ from ..core.events import (
     AgentEvent,
     ContextAssembled,
     ContextCompressed,
+    ContextMicrocompacted,
     ErrorOccurred,
     EventBus,
     HookTriggered,
@@ -75,6 +77,12 @@ from .pricing import match_context_window
 from .streaming_tools import StreamingToolExecutor
 from .tokens import estimate_history_tokens
 from .tool_pool import TurnToolPool
+from .tool_microcompact import MicrocompactReport, ToolMicrocompactor
+from .working_context import (
+    WorkingContextSource,
+    WorkingContextStore,
+    compact_tool_metadata,
+)
 from ..safety.policy import ApprovalPolicy
 from ..tools.base import RuntimeSnapshot, ToolContext, ToolResult, TurnAbortSignal
 from ..tools.registry import ToolRegistry
@@ -143,6 +151,8 @@ class AgentLoop:
         hook_port: Optional[HookPort] = None,
         user_input_port: Optional[UserInputPort] = None,
         step_gate: Optional[Callable[[], Awaitable[None]]] = None,
+        working_context_store: Optional[WorkingContextStore] = None,
+        tool_microcompactor: Optional[ToolMicrocompactor] = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -154,11 +164,43 @@ class AgentLoop:
         self.context_manager = context_manager
         self.tool_output_inline_limit = tool_output_inline_limit
         self.token_budget = token_budget
-        self.context_assembler = (
-            context_assembler or ContextAssembler(default_context_sources()))
+        self.redactor = redactor
+        self.working_context_store = (
+            working_context_store
+            or WorkingContextStore(
+                tool_context.workspace_root,
+                redactor=redactor,
+            )
+        )
+        if self.working_context_store.redactor is None and redactor is not None:
+            self.working_context_store.redactor = redactor
+        if tool_microcompactor is not None and context_manager is not None:
+            context_manager.microcompactor = tool_microcompactor
+        self.tool_microcompactor = (
+            tool_microcompactor
+            or (
+                context_manager.microcompactor
+                if context_manager is not None else None
+            )
+            or ToolMicrocompactor()
+        )
+        if context_assembler is None:
+            self.context_assembler = ContextAssembler(
+                default_context_sources(
+                    working_context_store=self.working_context_store))
+        else:
+            self.context_assembler = context_assembler
+            # An explicitly supplied store is an opt-in integration boundary;
+            # custom assemblers without it remain unchanged for compatibility.
+            if (
+                working_context_store is not None
+                and "working_context" not in self.context_assembler.source_names
+            ):
+                self.context_assembler.register(
+                    WorkingContextSource(self.working_context_store))
         self.last_context_assembly = None
         self.last_context_snapshot = None
-        self.redactor = redactor
+        self.last_microcompact_report: Optional[MicrocompactReport] = None
         self.runtime_snapshot_provider = runtime_snapshot_provider
         self.hook_port = hook_port
         self.user_input_port = user_input_port
@@ -190,6 +232,12 @@ class AgentLoop:
         self.history = self.history[:1] if self.history and self.history[0].role == "system" else []
         self.last_context_assembly = None
         self.last_context_snapshot = None
+        self.last_microcompact_report = None
+        self.working_context_store.clear()
+
+    def rebuild_working_context(self):
+        """Rebuild session-scoped working facts after resume/fork/rewind."""
+        return self.working_context_store.rebuild_from_history(self.history)
 
     def add_runtime_context(self, contents: Iterable[str], source: str = "hook") -> int:
         """注入不写入历史快照的运行时上下文（SessionStart/Compact Hook）。"""
@@ -294,6 +342,8 @@ class AgentLoop:
         self._token_total = 0
         self._turn_intent = infer_turn_intent(
             self.tool_context.workspace_root, user_input)
+        self.working_context_store.begin_turn(
+            self._current_turn_id, user_input)
         # 一轮只构建一次：后续每个模型 step 和每次工具执行共用同一份能力快照。
         self._active_tool_pool = TurnToolPool(
             self.registry,
@@ -320,6 +370,8 @@ class AgentLoop:
                 if self.token_budget is not None and self._token_total > self.token_budget:
                     text = (f"[krelcode] token 预算耗尽（已用 {self._token_total} > "
                             f"预算 {self.token_budget}），中止本轮。")
+                    self.working_context_store.record_error(
+                        text, source="budget")
                     self.history.append(Message.assistant(text))
                     await self._emit(RunFinished(
                         text, turn_id=self._current_turn_id))
@@ -348,6 +400,8 @@ class AgentLoop:
                     assistant.tool_calls, llm_turn.tool_results)
                 if abort_reason:
                     text = f"[krelcode] {abort_reason}，判定为循环，已中止本轮。"
+                    self.working_context_store.record_error(
+                        text, source="loop_guard")
                     self.history.append(Message.assistant(text))
                     await self._emit(RunFinished(
                         text, turn_id=self._current_turn_id))
@@ -360,6 +414,7 @@ class AgentLoop:
             raise
 
         text = max_steps_reached_text(self.max_steps)
+        self.working_context_store.record_error(text, source="max_steps")
         self.history.append(Message.assistant(text))
         await self._emit(RunFinished(
             text, turn_id=self._current_turn_id))
@@ -425,6 +480,31 @@ class AgentLoop:
                     Message.user(STEERING_PREFIX + text, images=images or None))
             await self._emit(UserSteered(text))
 
+    async def microcompact_tools(
+        self,
+        *,
+        trigger: str = "manual",
+    ) -> MicrocompactReport:
+        """Run the free tool-result tier before considering LLM compaction."""
+        report = self.tool_microcompactor.compact(
+            self.history,
+            trigger=trigger,
+            current_turn_id=self._current_turn_id,
+        )
+        self.last_microcompact_report = report
+        if report.changed:
+            await self._emit(ContextMicrocompacted(
+                trigger=report.trigger,
+                before_tokens=report.before_tokens,
+                after_tokens=report.after_tokens,
+                compacted_count=report.compacted_count,
+                preserved_count=report.preserved_count,
+                protected_count=report.protected_count,
+                summarized_count=report.summarized_count,
+                referenced_count=report.referenced_count,
+            ))
+        return report
+
     async def compress_context(
         self,
         force: bool = False,
@@ -432,8 +512,14 @@ class AgentLoop:
         request_tokens: Optional[int] = None,
         output_reserve_tokens: int = 0,
         model_context_window: Optional[int] = None,
+        pre_microcompacted: bool = False,
     ) -> bool:
-        """统一压缩入口：真实请求预算检查、Hook 与事件。"""
+        """统一压缩入口：真实请求预算检查、Hook 与事件。
+
+        ``pre_microcompacted`` is set by the exact-request path after it has
+        already run ``microcompact_tools``.  In that case this method skips a
+        duplicate scan and only performs the LLM-summary fallback if needed.
+        """
         if self.context_manager is None:
             return False
         history_tokens = estimate_history_tokens(self.history)
@@ -454,7 +540,26 @@ class AgentLoop:
             extra_tokens=extra_tokens,
             output_reserve_tokens=output_reserve_tokens,
             model_context_window=model_context_window,
+            microcompact=not pre_microcompacted,
+            current_turn_id=self._current_turn_id,
         )
+        report = self.context_manager.last_microcompact_report
+        if (
+            report is not None
+            and report.changed
+            and not pre_microcompacted
+        ):
+            self.last_microcompact_report = report
+            await self._emit(ContextMicrocompacted(
+                trigger=report.trigger,
+                before_tokens=report.before_tokens,
+                after_tokens=report.after_tokens,
+                compacted_count=report.compacted_count,
+                preserved_count=report.preserved_count,
+                protected_count=report.protected_count,
+                summarized_count=report.summarized_count,
+                referenced_count=report.referenced_count,
+            ))
         if not changed:
             return False
         after = estimate_history_tokens(self.history) + extra_tokens
@@ -495,6 +600,7 @@ class AgentLoop:
             tool_pool=self._current_tool_pool(),
             intent=self._turn_intent,
             runtime_context=tuple(self.runtime_context),
+            working_context=self.working_context_store.snapshot(),
         )
         context_assembly = await self.context_assembler.assemble(context_request)
         messages = context_assembly.messages_for(self.history)
@@ -547,20 +653,33 @@ class AgentLoop:
             step=step, specs=specs, messages=messages,
             context_assembly=context_assembly, prepared=prepared)
 
-        # 真实请求（含 system/tools/wire 开销与 output reserve）超预算时，
-        # 先 compact，再重新装配一次；绝不循环探测，避免压缩死循环。
+        # 真实请求（含 system/tools/wire 开销与 output reserve）超预算时：
+        # 1) 先做零成本 Tool Microcompact；2) 重新装配并确认是否已恢复；
+        # 3) 仍超限才进行一次完整 compact。绝不循环探测，避免压缩死循环。
         if self.context_manager is not None and not context_snapshot.input_fits:
-            changed = await self.compress_context(
-                request_tokens=context_snapshot.estimated_input_tokens,
-                output_reserve_tokens=context_snapshot.output_reserve_tokens,
-                model_context_window=context_snapshot.model_context_window,
-            )
-            if changed:
+            micro_report = await self.microcompact_tools(trigger="auto")
+            if micro_report.changed:
                 messages, context_assembly, prepared = await self._build_llm_request(
                     step=step, specs=specs, tools=tools)
                 context_snapshot = self._request_snapshot(
                     step=step, specs=specs, messages=messages,
                     context_assembly=context_assembly, prepared=prepared)
+            if not context_snapshot.input_fits:
+                changed = await self.compress_context(
+                    request_tokens=context_snapshot.estimated_input_tokens,
+                    output_reserve_tokens=context_snapshot.output_reserve_tokens,
+                    model_context_window=context_snapshot.model_context_window,
+                    # The deterministic pass has already run, even when all
+                    # eligible results were protected or too small.  Do not
+                    # rescan the same history during the summary fallback.
+                    pre_microcompacted=True,
+                )
+                if changed:
+                    messages, context_assembly, prepared = await self._build_llm_request(
+                        step=step, specs=specs, tools=tools)
+                    context_snapshot = self._request_snapshot(
+                        step=step, specs=specs, messages=messages,
+                        context_assembly=context_assembly, prepared=prepared)
 
         self.last_context_assembly = context_assembly
         self.last_context_snapshot = context_snapshot
@@ -624,6 +743,8 @@ class AgentLoop:
             else f"[krelcode] {failure}"
         )
         final_text = assistant.content
+        self.working_context_store.record_error(
+            failure, source="provider", metadata={"finish_reason": finish_reason or ""})
         await self._emit(ErrorOccurred(
             failure, f"finish_reason={finish_reason or 'unknown'}"))
         await self._emit(RunFinished(
@@ -651,12 +772,31 @@ class AgentLoop:
         返回 None 表示继续；返回字符串表示触发卡死检测，应中止本轮。
         """
         for tool_call, result in zip(tool_calls, results):
+            metadata = compact_tool_metadata(
+                tool_call.name,
+                result.data,
+                is_error=result.is_error,
+                turn_id=self._current_turn_id,
+                arguments=tool_call.arguments,
+                redactor=self.redactor.redact if self.redactor else None,
+            )
+            persisted_path = _persisted_output_path(result.content)
+            if persisted_path:
+                metadata["full_output_path"] = persisted_path
             self.history.append(
                 Message.tool_result(
                     tool_call.id,
                     result.content,
                     blocks=list(result.blocks) or None,
+                    tool_name=tool_call.name,
+                    is_error=result.is_error,
+                    metadata=metadata,
                 )
+            )
+            self.working_context_store.record_tool_result(
+                tool_call,
+                result,
+                turn_id=self._current_turn_id,
             )
             signature = _call_signature(tool_call)
             if result.is_error:
@@ -687,6 +827,7 @@ class AgentLoop:
         if self.redactor is not None:
             result.blocks = tuple(
                 self._redact_tool_block(block) for block in result.blocks)
+            result.data = _redact_json(result.data, self.redactor.redact)
         await self._emit(
             ToolCallCompleted(
                 tool_call,
@@ -821,6 +962,13 @@ class AgentLoop:
             explanation: str,
         ) -> None:
             redact = self.redactor.redact if self.redactor else (lambda text: text)
+            self.working_context_store.record_plan(
+                items,
+                statuses,
+                active_index=active_index,
+                explanation=redact(explanation),
+                turn_id=self._current_turn_id,
+            )
             await self._emit(PlanUpdated(
                 items=tuple(redact(item) for item in items),
                 active_index=active_index,
@@ -980,3 +1128,9 @@ def _redact_json(value, redact):
             for key, item in value.items()
         }
     return value
+
+
+def _persisted_output_path(content: str) -> str:
+    """Extract the safe on-disk reference added by ``_persist_large_output``."""
+    match = re.search(r"全文已存盘:\s*([^\]\n]+)", content or "")
+    return match.group(1).strip()[:1_000] if match else ""

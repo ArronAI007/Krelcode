@@ -71,7 +71,7 @@ krelcode [子命令] [选项]
 | `/tools` | 已注册工具（含 MCP 远程与子代理工具） |
 | `/model [provider/]model` | 查看/热切换模型（预算联动，失败不破坏现状） |
 | `/cost` | token 用量（本轮+累计）与估算成本 $ |
-| `/context` | 上下文统计、Fragment 来源/稳定性摘要与 cache 边界 |
+| `/context` | 上下文统计、Working Context、Tool Microcompact、Fragment 来源与 cache 边界 |
 | `/context sources` | 查看已注册 ContextSource、最近装配 layer 顺序、来源 token、cache 属性与有界错误诊断 |
 | `/context rules` | 查看 user/project/directory 规则入口、@import 来源、字符数与越界/循环/敏感文件问题 |
 | `/context fragments [source]` | 列出全部或指定来源的 Fragment、启停状态、group、tokens 与 cache 属性 |
@@ -83,8 +83,8 @@ krelcode [子命令] [选项]
 | `/memory scopes` | 显示各作用域条数与存储路径 |
 | `/memory add <user\|project\|session> <text>` | 写入指定作用域；user 跨工作区，session 跟随当前会话 |
 | `/memory remove <id>` | 删除指定记忆并重建 memory Fragment |
-| `/compact` | 立即压缩历史（驱逐+LLM 摘要，不等预算），完成后显示实际策略与边界 |
-| `/compact preview [--auto]` | 预览 compact 的 head/compact/keep 边界、驱逐数、预计 tokens 与待摘要消息；不改 history。`--auto` 仅在超预算时预览 |
+| `/compact` | 立即执行工具微压缩+LLM 摘要（不等预算），完成后显示实际策略与边界 |
+| `/compact preview [--auto]` | 预览工具微压缩与 compact 的 head/compact/keep 边界、条数、预计 tokens 与待摘要消息；不改 history。`--auto` 仅在超预算时预览 |
 | `/sessions` · `/sessions search <关键词>` | 列出/搜索会话标题与用户输入 |
 | `/resume <n\|latest\|path>` | 恢复会话并建立新分支（不覆盖源会话） |
 | `/fork [--turn <n>] [名称]` | 从当前历史或第 n 轮结束点创建并切换独立会话分支（不恢复工作区） |

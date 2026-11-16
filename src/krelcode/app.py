@@ -38,6 +38,7 @@ from .agent.fragments import (
 from .agent.rules import RuleLoader
 from .agent.runtime import AgentRuntime
 from .agent.usage import UsageTracker
+from .agent.working_context import WorkingContextStore
 from .config import load_config
 from .core.events import EventBus
 from .core.redact import SecretRedactor
@@ -427,6 +428,7 @@ async def build_loop(
         and context_options.include_rules
         and context_options.include_directory_rules
     )
+    working_context_store = WorkingContextStore(workspace_root)
     context_sources = default_context_sources(
         rule_loader if directory_rules_enabled else None)
     context_assembler = ContextAssembler(context_sources)
@@ -448,6 +450,7 @@ async def build_loop(
         token_budget=args.token_budget,
         context_assembler=context_assembler,
         user_input_port=user_input_port,
+        working_context_store=working_context_store,
     )
     # fork_context 数据源：getter 形式，/resume 重绑定 loop.history 后依然正确
     manager.get_parent_history = lambda: loop.history
@@ -595,6 +598,8 @@ async def async_main(args: argparse.Namespace) -> int:
     redactor = SecretRedactor()
     redactor.add(getattr(loop.llm, "api_key", None))
     loop.redactor = redactor
+    if getattr(loop, "working_context_store", None) is not None:
+        loop.working_context_store.redactor = redactor
     if getattr(loop, "memory_store", None) is not None:
         loop.memory_store.redactor = redactor
         sync_memory_fragment(loop, loop.memory_store)

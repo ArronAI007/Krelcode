@@ -37,6 +37,12 @@ def message_to_dict(m: Message) -> Dict[str, Any]:
         ]
     if m.tool_blocks:
         d["tool_blocks"] = [_block_to_dict(block) for block in m.tool_blocks]
+    if m.tool_name is not None:
+        d["tool_name"] = m.tool_name
+    if m.tool_is_error is not None:
+        d["tool_is_error"] = bool(m.tool_is_error)
+    if m.tool_meta:
+        d["tool_meta"] = m.tool_meta
     return d
 
 
@@ -60,6 +66,15 @@ def message_from_dict(d: Dict[str, Any]) -> Message:
         provider_meta=meta if isinstance(meta, dict) else None,
         images=_reload_images(d.get("images")),
         tool_blocks=_blocks_from_dict(d.get("tool_blocks")),
+        tool_name=d.get("tool_name") if isinstance(d.get("tool_name"), str) else None,
+        tool_is_error=(
+            bool(d.get("tool_is_error"))
+            if d.get("tool_is_error") is not None else None
+        ),
+        tool_meta=(
+            dict(d.get("tool_meta"))
+            if isinstance(d.get("tool_meta"), dict) else None
+        ),
     )
 
 

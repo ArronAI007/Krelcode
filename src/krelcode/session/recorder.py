@@ -22,6 +22,7 @@ from ..core.events import (
     AgentEvent,
     ContextAssembled,
     ContextCompressed,
+    ContextMicrocompacted,
     EventBus,
     HookTriggered,
     PlanUpdated,
@@ -181,6 +182,18 @@ class SessionRecorder:
                 "type": "context_assembled",
                 "ts": ts,
                 **event.snapshot.as_record(),
+            }
+        if isinstance(event, ContextMicrocompacted):
+            return {
+                "type": "context_microcompacted", "ts": ts,
+                "trigger": event.trigger,
+                "before_tokens": event.before_tokens,
+                "after_tokens": event.after_tokens,
+                "compacted_count": event.compacted_count,
+                "preserved_count": event.preserved_count,
+                "protected_count": event.protected_count,
+                "summarized_count": event.summarized_count,
+                "referenced_count": event.referenced_count,
             }
         if isinstance(event, ContextCompressed):
             return {"type": "context_compressed", "ts": ts,

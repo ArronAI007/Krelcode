@@ -836,6 +836,19 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         lines.append(
             f"  当前历史 {len(ctx.loop.history)} 条消息"
             f"（其中工具结果 {tool_messages} 条）")
+        working_store = getattr(ctx.loop, "working_context_store", None)
+        if working_store is not None:
+            working = working_store.snapshot()
+            lines.append(
+                f"  Working Context: {working.count} 条 · {working.token_count} tokens"
+                f" · {'已裁剪' if working.truncated else '完整'}")
+        micro = getattr(ctx.loop, "last_microcompact_report", None)
+        if micro is not None:
+            lines.append(
+                f"  Tool Microcompact: {micro.compacted_count} 条"
+                f" · {micro.before_tokens} → {micro.after_tokens} tokens"
+                f" · summary {micro.summarized_count}"
+                f" · reference {micro.referenced_count}")
         if snapshot.dropped_items:
             lines.append("  已裁剪: " + ", ".join(snapshot.dropped_items))
         bundle = getattr(ctx.loop, "workspace_context", None)
@@ -858,6 +871,18 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
     runtime_context = getattr(ctx.loop, "runtime_context", ())
     if runtime_context:
         lines.append(f"  运行时 Hook 上下文: {len(runtime_context)} 段")
+    working_store = getattr(ctx.loop, "working_context_store", None)
+    if working_store is not None:
+        working = working_store.snapshot()
+        lines.append(
+            f"  Working Context: {working.count} 条"
+            f" · {working.token_count} tokens"
+            f" · {'已裁剪' if working.truncated else '完整'}")
+    micro = getattr(ctx.loop, "last_microcompact_report", None)
+    if micro is not None:
+        lines.append(
+            f"  Tool Microcompact: {micro.compacted_count} 条"
+            f" · saved {micro.saved_tokens} tokens")
     if registry is not None:
         lines.extend(f"  {line}" for line in registry.snapshot().summary_lines())
     return _ok(*lines)
@@ -880,7 +905,8 @@ async def handle_compact(ctx: CommandContext) -> CommandResult:
     manager = ctx.loop.context_manager
     if preview_mode:
         preview = manager.preview_compact(
-            ctx.loop.history, force=not auto_mode)
+            ctx.loop.history, force=not auto_mode,
+            current_turn_id=getattr(ctx.loop, "_current_turn_id", ""))
         return _ok(*[
             f"  {line}" for line in preview.render().splitlines()
         ])

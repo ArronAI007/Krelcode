@@ -49,6 +49,7 @@ def restore_session(loop: AgentLoop, path: Path, log=print) -> bool:
     if history[0].role != "system":
         history.insert(0, Message.system(build_system_prompt()))
     loop.history = history
+    loop.rebuild_working_context()
     refresh_skill_system_prompt(loop)
     log(f"（已恢复会话 {path}，共 {len(history)} 条消息）")
     return True

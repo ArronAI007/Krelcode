@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Mapping, Optional, Protocol, Sequence, Tuple
+from typing import (
+    TYPE_CHECKING, Awaitable, Mapping, Optional, Protocol, Sequence, Tuple,
+)
 
 from ..core.messages import Message
 from .fragments import (
@@ -16,6 +18,9 @@ from .intent import TurnIntent
 from .rules import RuleBundle, RuleLoader, extract_rule_targets
 from .tokens import estimate_text_tokens
 from .tool_pool import TurnToolPool
+
+if TYPE_CHECKING:
+    from .working_context import WorkingContextSnapshot
 
 CATEGORY_SYSTEM = "system"
 CATEGORY_WORKSPACE = "workspace"
@@ -86,6 +91,7 @@ class ContextRequest:
     tool_pool: Optional[TurnToolPool] = None
     intent: Optional[TurnIntent] = None
     runtime_context: Tuple[str, ...] = ()
+    working_context: Optional["WorkingContextSnapshot"] = None
 
 
 @dataclass(frozen=True)
@@ -300,6 +306,8 @@ class DirectoryRulesContextSource:
 
 def default_context_sources(
     rule_loader: Optional[RuleLoader] = None,
+    *,
+    working_context_store=None,
 ) -> Tuple[ContextSource, ...]:
     sources: list[ContextSource] = [PromptSnapshotContextSource()]
     if rule_loader is not None:
@@ -309,6 +317,9 @@ def default_context_sources(
         TurnIntentContextSource(),
         RuntimeHookContextSource(),
     ))
+    if working_context_store is not None:
+        from .working_context import WorkingContextSource
+        sources.append(WorkingContextSource(working_context_store))
     return tuple(sources)
 
 

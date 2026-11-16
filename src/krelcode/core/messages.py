@@ -100,6 +100,12 @@ class Message:
     provider_meta: Optional[Dict[str, Any]] = None
     images: Optional[List[ImageRef]] = None      # 仅 user（多模态输入）
     tool_blocks: Optional[List[ToolResultBlock]] = None  # 仅 tool（富结果）
+    # Session-only structured facts about a tool result.  These are never
+    # serialized to provider wire requests; they let working-context and
+    # microcompaction logic preserve names/paths/exit codes after resume.
+    tool_name: Optional[str] = None
+    tool_is_error: Optional[bool] = None
+    tool_meta: Optional[Dict[str, Any]] = None
 
     # -- 便捷构造 -------------------------------------------------------------
 
@@ -131,12 +137,19 @@ class Message:
         tool_call_id: str,
         content: str,
         blocks: Optional[List[ToolResultBlock]] = None,
+        *,
+        tool_name: Optional[str] = None,
+        is_error: Optional[bool] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> "Message":
         return cls(
             role=ROLE_TOOL,
             content=content,
             tool_call_id=tool_call_id,
             tool_blocks=blocks,
+            tool_name=tool_name,
+            tool_is_error=is_error,
+            tool_meta=dict(metadata) if metadata else None,
         )
 
 

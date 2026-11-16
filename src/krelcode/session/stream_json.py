@@ -15,6 +15,7 @@ from ..core.events import (
     ApprovalRequested,
     ContextAssembled,
     ContextCompressed,
+    ContextMicrocompacted,
     ErrorOccurred,
     HookTriggered,
     LLMResponseReceived,
@@ -204,6 +205,19 @@ class StreamJsonEncoder:
                 "type": "context",
                 "subtype": "assembled",
                 "snapshot": event.snapshot.as_record(),
+            }
+        elif isinstance(event, ContextMicrocompacted):
+            payload = {
+                "type": "context",
+                "subtype": "microcompacted",
+                "trigger": event.trigger,
+                "before_tokens": event.before_tokens,
+                "after_tokens": event.after_tokens,
+                "compacted_count": event.compacted_count,
+                "preserved_count": event.preserved_count,
+                "protected_count": event.protected_count,
+                "summarized_count": event.summarized_count,
+                "referenced_count": event.referenced_count,
             }
         elif isinstance(event, ContextCompressed):
             payload = {

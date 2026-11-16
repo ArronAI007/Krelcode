@@ -277,6 +277,9 @@ class RewindCoordinator:
 
         self.loop.history = self._history_with_current_system(
             entry.history_before)
+        rebuild = getattr(self.loop, "rebuild_working_context", None)
+        if callable(rebuild):
+            rebuild()
         self.plan_manager.restore(entry.plan_before)
         self.timeline.truncate_before(turn_index)
 

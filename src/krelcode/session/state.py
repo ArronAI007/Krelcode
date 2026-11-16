@@ -21,6 +21,7 @@ from ..core.events import (
     ApprovalRequested,
     ContextAssembled,
     ContextCompressed,
+    ContextMicrocompacted,
     ErrorOccurred,
     LLMResponseReceived,
     LLMStreamDelta,
@@ -69,6 +70,8 @@ class SessionViewState:
     plan_explanation: str = ""
     plan_approval_status: str = "none"
     context_snapshot: Optional[ContextUsageSnapshot] = None
+    microcompact_count: int = 0
+    microcompact_saved_tokens: int = 0
     input_request_id: str = ""
     input_prompt: str = ""
     input_options: tuple[str, ...] = ()
@@ -116,6 +119,8 @@ class SessionViewState:
         self.plan_explanation = ""
         self.plan_approval_status = "none"
         self.context_snapshot = None
+        self.microcompact_count = 0
+        self.microcompact_saved_tokens = 0
         self.input_request_id = ""
         self.input_prompt = ""
         self.input_options = ()
@@ -243,6 +248,13 @@ class SessionEventReducer:
             state.progress = f"{event.tool_call.name} 权限被拒绝"
         elif isinstance(event, ContextAssembled):
             state.context_snapshot = event.snapshot
+        elif isinstance(event, ContextMicrocompacted):
+            state.microcompact_count += event.compacted_count
+            state.microcompact_saved_tokens += max(
+                0, event.before_tokens - event.after_tokens)
+            state.progress = (
+                f"工具输出已微压缩 {event.compacted_count} 条"
+                f" · {event.before_tokens} → {event.after_tokens} tokens")
         elif isinstance(event, ContextCompressed):
             state.progress = (
                 f"上下文已压缩 {event.before_tokens} → {event.after_tokens} tokens")

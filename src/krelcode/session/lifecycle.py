@@ -137,6 +137,9 @@ class SessionLifecycle:
         parent_id = self.session_path.stem if self.session_path else ""
         if history is not None:
             self.loop.history = list(history)
+        rebuild = getattr(self.loop, "rebuild_working_context", None)
+        if callable(rebuild):
+            rebuild()
         path = new_session_path(self.sessions_dir)
         self._activate(path, title=title, parent_id=parent_id)
         return path

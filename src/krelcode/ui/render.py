@@ -21,6 +21,7 @@ from ..core.events import (
     AgentEvent,
     ContextAssembled,
     ContextCompressed,
+    ContextMicrocompacted,
     ErrorOccurred,
     HookTriggered,
     LLMStreamDelta,
@@ -365,6 +366,9 @@ class StreamRenderer:
                 f"{event.status}{detail}\n")
         elif isinstance(event, ContextAssembled):
             # 仅由 /context、TUI 面板、recorder 与 SDK 消费，不污染正文。
+            return
+        elif isinstance(event, ContextMicrocompacted):
+            # Microcompaction is visible in panels/JSONL; keep the answer surface clean.
             return
         elif isinstance(event, ContextCompressed):
             self.end_stream()

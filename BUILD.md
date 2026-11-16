@@ -5,12 +5,12 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（v0.78.0 / Step 88）
+## 1. 项目统计（v0.79.0 / Step 89）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 31,325 行（Python，**零第三方运行时依赖**） |
-| 测试 | 21,179 行 / 106 个测试文件 / 1,064 个用例（离线 1,062 + 本地端口集成 2） |
+| 源码 | 32,796 行（Python，**零第三方运行时依赖**） |
+| 测试 | 21,944 行 / 107 个测试文件 / 1,077 个用例（离线 1,075 + 本地端口集成 2） |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 16（含 ask_user/update_plan + 4 个后台 Job 工具）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
@@ -67,6 +67,7 @@ core 只有 852 行——内核保持极小、能力在边缘，正是当初对�
 | v0.76 | Memory 分层作用域 | 记忆从单文件项目笔记升级为 user/project/session 三作用域结构化记录；文件位置决定 scope，旧 JSONL 原位兼容，session 生命周期跟随 setup/fork/resume，注入预算优先更具体作用域 |
 | v0.77 | 规则分层与按需加载 | user/project 规则进入稳定前缀，目录规则只按当前轮目标路径加载，避免 monorepo 全树扫描；@import 从提示词拼接中独立为有来源、有预算、可诊断的安全解析器，拒绝逃逸/敏感文件/循环，并明确规则与 Memory 的职责边界 |
 | v0.78 | 真实请求装配与预算 | Snapshot 不再只看统一 Message：Provider 先构造可复用的 PreparedRequest，再从最终 wire body 提取字节/token/hash/缓存段；压缩同时使用完整输入与真实输出预留，超限只重新装配一次。旧 Provider 通过 estimated 回退保持兼容 |
+| v0.79 | Working Context 与 Tool Microcompact | 当前任务事实从长期 Memory 分离为 bounded/redacted session store；真实预算链路先做零 LLM 工具分级压缩，保护当前轮/错误/写编辑/计划，仍超限才摘要。工具结构化元数据可随会话恢复，微压缩事件贯通 UI/JSONL/stream-json |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -79,7 +80,8 @@ core 只有 852 行——内核保持极小、能力在边缘，正是当初对�
 | 重试 | `llm/retry.py`（RetryingProvider 装饰器） |
 | 主循环/steering/取消修复 | `agent/loop.py` |
 | system prompt 来源/启停/cache 边界 | `agent/fragments.py` |
-| 压缩边界/预览与两道防线 | `agent/compression.py`（驱逐 + LLM 摘要） |
+| 压缩边界/预览与两道防线 | `agent/compression.py`（LLM 摘要）· `agent/tool_microcompact.py`（分级工具微压缩） |
+| 会话任务现场 | `agent/working_context.py`（goal/plan/files/commands/errors） |
 | token 估算/价目/窗口 | `agent/tokens.py` `agent/pricing.py` |
 | 请求级 Context 可观测性 | `core/context_usage.py` `agent/context_usage.py` |
 | 可插拔上下文来源/确定性装配 | `agent/context_source.py` `agent/context_assembler.py` |
@@ -115,7 +117,7 @@ core 只有 852 行——内核保持极小、能力在边缘，正是当初对�
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 1,062 通过、2 skip；本地端口可用时 1,064/1,064 全过。
+bind 探测自动 skip——沙箱内 1,075 通过、2 skip；本地端口可用时 1,077/1,077 全过。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /

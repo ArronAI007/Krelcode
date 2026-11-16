@@ -180,6 +180,12 @@ def build_panels(
                 f"{memory_tokens} tokens",
             ),
         )
+    if state.microcompact_count:
+        context_items += (PanelItem(
+            "context-microcompact",
+            f"microcompact · {state.microcompact_count}",
+            f"saved {state.microcompact_saved_tokens} tokens",
+        ),)
 
     memory_items: list[PanelItem] = []
     for index, entry in enumerate(memories):

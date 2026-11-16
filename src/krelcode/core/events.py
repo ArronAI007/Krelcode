@@ -123,6 +123,28 @@ class PermissionDenied(AgentEvent):
 
 
 @dataclass(frozen=True)
+class ContextMicrocompacted(AgentEvent):
+    """Old tool results were deterministically summarized/referenced.
+
+    The event carries only accounting metadata; no tool output or working
+    context text is exposed to recorder, stream-json or UI subscribers.
+    """
+
+    trigger: str = "manual"
+    before_tokens: int = 0
+    after_tokens: int = 0
+    compacted_count: int = 0
+    preserved_count: int = 0
+    protected_count: int = 0
+    summarized_count: int = 0
+    referenced_count: int = 0
+
+
+# Compatibility name used by early Step 89 integrations.
+ToolsMicrocompacted = ContextMicrocompacted
+
+
+@dataclass(frozen=True)
 class ContextCompressed(AgentEvent):
     """历史被摘要压缩（Step 7）。"""
     before_tokens: int

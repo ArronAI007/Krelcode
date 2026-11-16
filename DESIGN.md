@@ -241,10 +241,10 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
 
 - **token 估算**（core/tokens.py，agent/tokens.py 兼容转发）：CJK ≈ 1 token/字，其他 ≈ 4 字符/token，
   精度足够做预算决策；消息含 tool_calls 参数序列化
-- **两道防线**（Step 25）：超预算先做**工具结果驱逐**——只保留最近
-  keep_recent_tools（默认 6）条工具输出，更早的 content 替换为占位标记
-  （消息本身保留 → tool_call/result 配对永远完整；零 LLM 调用、幂等、
-  短于 200 字符的结果跳过）；驱逐后仍超预算（或 /compact 强制）才走 LLM 摘要
+- **两道防线**（Step 25 / Step 89）：超预算先做**Tool Microcompact**——最近
+  keep_recent_tools（默认 6）条、当前轮、错误、写入/编辑和 plan/ask_user 结果保护；
+  更早的大输出按结构摘要 → 单行引用分级（消息本身保留 → tool_call/result 配对永远完整；
+  零 LLM 调用、幂等、短于 200 字符的结果跳过）；仍超预算（或 /compact 强制）才走 LLM 摘要
 - **预算压缩**（agent/compression.py ContextManager）：超 `--context-tokens`（默认 10 万）时，
   把「中段历史」渲染后交给 LLM 摘要成一条 `[上下文摘要]` 消息，
   结构变为 `[system] + [摘要] + [最近 keep_recent 条]`；
@@ -271,7 +271,9 @@ persistent history
   → ContextUsageSnapshot
   → full-request budget check
       ├─ fits: stream_prepared(prepared)
-      └─ over: compact context once → rebuild → stream_prepared(final)
+      └─ over: tool microcompact → rebuild/recheck
+                ├─ fits: stream_prepared(final)
+                └─ still over: LLM compact once → rebuild → stream_prepared(final)
 ```
 
 - 输入预算与模型窗口分开约束：`request_input <= context_budget`，且
@@ -288,6 +290,52 @@ persistent history
   cache segments；TUI、`/context`、recorder、stream-json 和 SDK 共用 `as_record()` 安全记录。
 - 历史归档、token 统计与逻辑消息仍然是 wire-free 规范模型；真实 body 只在单次调用期间
   存在于 `PreparedLLMRequest`，不写入 history/session。
+
+## Working Context 与 Tool Microcompact（Step 89）
+
+Step 89 把“当前任务知道什么”和“长期记忆什么”彻底分开，并把工具输出压缩从
+粗暴驱逐升级为可解释的分级策略。
+
+```text
+WorkingContextStore (session-scoped, not memory)
+  entries: goal | plan | decision | file | command | error | observation | open_issue
+  upsert(id) + bounded content/metadata + provenance + sequence
+  ├─ begin_turn(user goal)
+  ├─ record_plan / decision / error
+  ├─ record_tool_result(ToolCall, ToolResult.data)
+  └─ snapshot() → max entries/chars/tokens, redacted, grouped XML-like text
+        ↓ volatile runtime layer (cacheable=false, priority < tool directory)
+ContextAssembler → provider-bound system message
+```
+
+- `WorkingContextStore` 生命周期属于当前 session；`/reset` 清空，`/resume`、
+  `/fork`、`/rewind` 从权威 history 重建。它不是 `MemoryStore`，不跨进程持久化，
+  不进入 stable prompt cache 前缀。
+- 条目按稳定 id 去重更新；文件使用 `file:<path>`，计划使用 `plan:current`，目标使用
+  `goal:current`。所有正文与 metadata 都经 SecretRedactor + 内部密钥形态兜底；快照按
+  kind 优先级丢弃低价值条目并显式报告 `truncated/dropped_entries`。
+- `ToolResult.data` 不再只给 UI。AgentLoop 只提取有界、脱敏的 `tool_name`、
+  `tool_is_error` 与 `tool_meta`（path/exit_code/count/bytes/…）写入 tool Message 元数据，
+  会话 codec 可恢复；provider wire 不读取这些字段。
+
+```text
+ToolMicrocompactor (zero LLM, in-place, pairing preserved)
+  recent keep_recent tools ────────────────► full text
+  current turn / error / write/edit / plan/user input ► protected
+  old large result (newer half) ───────────► structured summary + bounded preview
+  old large result (older half) ───────────► one-line reference + full-output path
+```
+
+- 小于阈值、已有全文落盘引用且压缩无收益的结果不处理；重复执行幂等。压缩旧结果时清除
+  会重复占用 wire 的 rich blocks，但保留 `全文已存盘` 路径供模型按需 `read_file`。
+- 真实请求超预算的顺序固定为：构建 prepared request → 计算完整预算 → microcompact →
+  重新装配/重算 → 仍超限才调用一次 LLM summary compact。这样大多数长工具会话无需摘要
+  模型调用，也不会因压缩策略重复循环。
+- `ContextMicrocompacted` 仅暴露 trigger、前后 token、保护/摘要/引用计数；不包含工具
+  正文。事件接入 `/context`、TUI Context 面板、JSONL recorder 与 stream-json
+  `context/microcompacted`，Renderer 不污染正文。
+- `/compact preview` 使用 deepcopy 执行同一 microcompact 预览，不修改 history；正式
+  `/compact` 仍是显式强制完整压缩入口。
 
 ## 交互与会话（Step 8）
 
@@ -942,6 +990,7 @@ AgentLoop._llm_turn(step)
 | `tool_directory` | 本轮动态工具目录，不含完整 JSON Schema | runtime |
 | `turn_intent` | 高置信度“仅解释指定文件”等轮级约束 | runtime |
 | `runtime_hooks` | SessionStart/Compact 等 Hook 注入内容 | runtime |
+| `working_context` | 当前目标、计划、文件/命令/错误/决策的 bounded 快照（Step 89） | runtime |
 
 `/context sources` 展示注册来源、最近装配 layer、priority/category/cache 状态与 issue，不输出
 layer 正文。`ContextUsageSnapshot.source_count` 只统计实际贡献了非空 layer 的来源，token
