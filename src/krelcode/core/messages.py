@@ -104,8 +104,13 @@ class Message:
     # -- 便捷构造 -------------------------------------------------------------
 
     @classmethod
-    def system(cls, content: str) -> "Message":
-        return cls(role=ROLE_SYSTEM, content=content)
+    def system(
+        cls,
+        content: str,
+        provider_meta: Optional[Dict[str, Any]] = None,
+    ) -> "Message":
+        return cls(
+            role=ROLE_SYSTEM, content=content, provider_meta=provider_meta)
 
     @classmethod
     def user(cls, content: str,

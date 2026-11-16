@@ -71,9 +71,14 @@ krelcode [子命令] [选项]
 | `/tools` | 已注册工具（含 MCP 远程与子代理工具） |
 | `/model [provider/]model` | 查看/热切换模型（预算联动，失败不破坏现状） |
 | `/cost` | token 用量（本轮+累计）与估算成本 $ |
-| `/context` | 上下文统计（消息数/估算 tokens/预算） |
-| `/context refresh` | 重采目录树/git/规则文件并重建 system prompt |
-| `/compact` | 立即压缩历史（驱逐+LLM 摘要，不等预算） |
+| `/context` | 上下文统计、Fragment 来源/稳定性摘要与 cache 边界 |
+| `/context fragments [source]` | 列出全部或指定来源的 Fragment、启停状态、group、tokens 与 cache 属性 |
+| `/context enable\|disable\|toggle <id\|source>` | 手动启停单个 Fragment 或整个来源；精确 id 设置优先于 source 设置 |
+| `/context reset` | 清除当前会话的全部手动启停设置 |
+| `/context cache` | 显示稳定前缀字符/token 数、稳定/动态 Fragment 列表与 SHA-256 哈希 |
+| `/context refresh` | 重采目录树/git/规则文件，原子替换 workspace Fragment 并重建 system prompt |
+| `/compact` | 立即压缩历史（驱逐+LLM 摘要，不等预算），完成后显示实际策略与边界 |
+| `/compact preview [--auto]` | 预览 compact 的 head/compact/keep 边界、驱逐数、预计 tokens 与待摘要消息；不改 history。`--auto` 仅在超预算时预览 |
 | `/sessions` · `/sessions search <关键词>` | 列出/搜索会话标题与用户输入 |
 | `/resume <n\|latest\|path>` | 恢复会话并建立新分支（不覆盖源会话） |
 | `/fork [--turn <n>] [名称]` | 从当前历史或第 n 轮结束点创建并切换独立会话分支（不恢复工作区） |
@@ -104,6 +109,11 @@ krelcode [子命令] [选项]
 | `/stop` | 中止运行中任务（历史自动修复） |
 | `/reset` | 清空历史与当前 turn 时间线 |
 | `/exit` | 退出（Ctrl-D 同） |
+
+Fragment 启停是**当前会话运行时状态**，不写入 TOML；重启后恢复默认全开。
+内置来源为 `core`（不可关闭的基础 system prompt）、`skills`（可用 Skill 索引）以及
+`workspace:rules|git|tree`。cacheable Fragment 会形成连续的稳定前缀；只有真正位于
+第一个动态 Fragment 之前的稳定内容会报告为 cache boundary。
 
 **权限快捷键**：`Shift-Tab` 按 `default → plan → read-only → auto-approve`
 循环切换，状态栏实时显示当前模式；切换会同步更新当前 turn 的策略快照和下一轮

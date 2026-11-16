@@ -5,12 +5,12 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（v0.71.0 / Step 81）
+## 1. 项目统计（v0.72.0 / Step 82）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 26,376 行（Python，**零第三方运行时依赖**） |
-| 测试 | 18,847 行 / 100 个文件 / 984 个用例（离线 982 + 本地端口集成 2，提权环境 984/984 全绿） |
+| 源码 | 27,178 行（Python，**零第三方运行时依赖**） |
+| 测试 | 19,263 行 / 101 个文件 / 999 个用例（离线 997 + 本地端口集成 2，提权环境 999/999 全绿） |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 16（含 ask_user/update_plan + 4 个后台 Job 工具）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
@@ -20,12 +20,12 @@
 源码按层分布：
 
 ```
-session 5925 · ui 2636 · tools 2813 · agent 2416 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2371
-safety 2287 · llm 1762 · mcp 1652 · subagent 1714 · skills 949 · core 638
+session 6085 · agent 2995 · tools 2813 · ui 2636 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 2387
+safety 2287 · llm 1806 · subagent 1714 · mcp 1652 · skills 949 · core 643
 jobs 582 · plugins 435 · entrypoints 194
 ```
 
-core 只有 638 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
+core 只有 643 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
 测试代码量约为源码的 71%，覆盖协议、安全边界与端到端行为。
 
 ## 2. 关键架构决策时间线
@@ -60,6 +60,7 @@ core 只有 638 行——内核保持极小、能力在边缘，正是当初对�
 | v0.69 | 历史分叉语义 | fork 只复制选定边界的 history + plan，不静默改工作区；“恢复文件”和“从旧对话另开分支”明确拆成 `/rewind` 与 `/rewind fork` 两个动作 |
 | v0.70 | 后台 Job 生命周期 | Job 刻意不绑定 turn abort，避免 dev server/watcher 被一轮结束误杀；由 runtime close 或显式 kill 回收。模型经 `job_output(after_sequence)` 游标轮询，UI/协议经事件实时观察，完整输出落有界脱敏日志而非塞回模型历史 |
 | v0.71 | 交互式子代理 | Feed、pause/resume、kill、Definition、sidechain 拆成独立组件；AgentLoop 只新增通用 step gate。Pause 不取消 Task，Kill 才取消；Definition 只能收缩工具集；sidechain 可审计但不自动注入父上下文或复活旧 Task |
+| v0.72 | Prompt Fragment Registry | system prompt 的唯一组装点从 `build_system_prompt` 迁移到来源化 Registry；cacheable 前缀、stable hash 与 provider cache offset 成为数据结构，而不是依赖拼接顺序。compact 同时拆成“只预览”和“唯一正式修改入口”，避免 UI 复制压缩逻辑 |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -71,7 +72,8 @@ core 只有 638 行——内核保持极小、能力在边缘，正是当初对�
 | 各 wire format 翻译 | `llm/providers/{openai,anthropic,gemini}.py` |
 | 重试 | `llm/retry.py`（RetryingProvider 装饰器） |
 | 主循环/steering/取消修复 | `agent/loop.py` |
-| 压缩两道防线 | `agent/compression.py`（驱逐 + LLM 摘要） |
+| system prompt 来源/启停/cache 边界 | `agent/fragments.py` |
+| 压缩边界/预览与两道防线 | `agent/compression.py`（驱逐 + LLM 摘要） |
 | token 估算/价目/窗口 | `agent/tokens.py` `agent/pricing.py` |
 | 工作区上下文注入 | `agent/context.py`（目录树/git/分层 AGENTS.md） |
 | 工具端口与注册表 | `tools/base.py` `tools/registry.py`；具体工具 `tools/builtin/`，交互工具 `tools/extension/` |
@@ -103,7 +105,7 @@ core 只有 638 行——内核保持极小、能力在边缘，正是当初对�
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 982 通过、2 skip，提权环境 984/984 全过。
+bind 探测自动 skip——沙箱内 997 通过、2 skip，提权环境 999/999 全过。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /
@@ -138,3 +140,4 @@ python scripts/real_acceptance.py --provider anthropic --keep
   其他 provider 无此要求
 - MCP 反向请求支持 sampling/roots/ping（Step 35）；elicitation 等更新的能力未实现
 - 上下文压缩的摘要质量依赖所用模型；小模型摘要可能丢细节（有占位兜底）
+- Fragment 手动启停是当前会话运行时状态，重启恢复默认；需要长期策略时应修改来源本身或后续增加持久化 overrides

@@ -129,6 +129,52 @@ def to_anthropic_request_messages(
     return system, wire
 
 
+def _system_cache_boundaries(
+    messages: Sequence[Message], merged_system: str,
+) -> List[int]:
+    """把 system 消息里的通用 boundary 元数据换算到合并后文本偏移。"""
+    boundaries: List[int] = []
+    cursor = 0
+    for message in messages:
+        if message.role != ROLE_SYSTEM or not message.content:
+            continue
+        if cursor:
+            cursor += 2  # to_anthropic_request_messages 使用 "\n\n" 合并
+        meta = message.provider_meta or {}
+        for raw in meta.get("prompt_cache_boundaries") or []:
+            try:
+                local = int(raw)
+            except (TypeError, ValueError):
+                continue
+            offset = cursor + max(0, min(local, len(message.content)))
+            boundaries.append(offset)
+        cursor += len(message.content)
+    return sorted({value for value in boundaries if 0 < value <= len(merged_system)})[:3]
+
+
+def _cached_system_blocks(system: str, boundaries: Sequence[int]) -> List[Dict[str, Any]]:
+    """在稳定前缀末尾打 cache_control，动态尾部保持为无断点 block。"""
+    if not boundaries:
+        return [{
+            "type": "text", "text": system,
+            "cache_control": {"type": "ephemeral"},
+        }]
+    blocks: List[Dict[str, Any]] = []
+    cursor = 0
+    for boundary in boundaries:
+        if boundary <= cursor:
+            continue
+        blocks.append({
+            "type": "text",
+            "text": system[cursor:boundary],
+            "cache_control": {"type": "ephemeral"},
+        })
+        cursor = boundary
+    if cursor < len(system):
+        blocks.append({"type": "text", "text": system[cursor:]})
+    return blocks
+
+
 def _tool_result_block(block: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(block, TextBlock):
         return {"type": "text", "text": block.text}
@@ -235,10 +281,8 @@ class AnthropicProvider:
         # 缓存命中部分按 ~10% 计价，长会话显著省钱；不足最小缓存长度时服务端自动忽略，无害。
         if system is not None:
             if self.prompt_cache:
-                payload["system"] = [{
-                    "type": "text", "text": system,
-                    "cache_control": {"type": "ephemeral"},
-                }]
+                boundaries = _system_cache_boundaries(messages, system)
+                payload["system"] = _cached_system_blocks(system, boundaries)
             else:
                 payload["system"] = system
         if tools:

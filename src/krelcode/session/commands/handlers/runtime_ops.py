@@ -7,8 +7,15 @@ import json
 import shlex
 
 from ....agent.context import build_workspace_context_bundle
+from ....agent.fragments import (
+    GROUP_WORKSPACE,
+    refresh_registry_snapshot,
+    skills_fragment,
+    workspace_fragments,
+)
 from ....agent.prompts import build_system_prompt
 from ....agent.tokens import estimate_history_tokens
+from ....core.messages import Message
 from ....safety.runtime import parse_permission_mode
 from ....safety.rules import RuleDecision, RuleScope
 from ..context import CommandContext
@@ -573,23 +580,126 @@ async def handle_cost(ctx: CommandContext) -> CommandResult:
 
 
 async def handle_context(ctx: CommandContext) -> CommandResult:
-    if ctx.request.arguments.strip() == "refresh":
+    raw = ctx.request.arguments.strip()
+    try:
+        parts = shlex.split(raw) if raw else []
+    except ValueError as exc:
+        return _ok(f"  [context] 参数解析失败: {exc}")
+    operation = parts[0].lower() if parts else "stats"
+    registry = getattr(ctx.loop, "prompt_registry", None)
+
+    if operation == "refresh" and len(parts) == 1:
         options = getattr(ctx.loop, "context_options", None)
         bundle = await build_workspace_context_bundle(
             ctx.workspace_root, options=options)
+        ctx.loop.workspace_context = bundle
+        manager = ctx.skills or getattr(ctx.loop, "skill_manager", None)
+        if registry is not None:
+            registry.replace_group(
+                GROUP_WORKSPACE, workspace_fragments(bundle))
+            if manager is not None:
+                skill_fragment = skills_fragment(manager.prompt_index())
+                if skill_fragment is None:
+                    registry.remove("skills:index")
+                else:
+                    registry.upsert(skill_fragment)
+            snapshot = refresh_registry_snapshot(ctx.loop)
+            lines = ["  [context] 工作区上下文已刷新"]
+            lines.extend(f"  {line}" for line in bundle.summary_lines())
+            if snapshot is not None:
+                lines.extend(f"  {line}" for line in snapshot.summary_lines())
+            return _ok(*lines)
+
+        # 兼容没有 Registry 的嵌入式 AgentLoop。
+        base_prompt = build_system_prompt(bundle.text)
+        ctx.loop.skill_base_prompt = base_prompt
+        prompt = (
+            manager.apply_to_prompt(base_prompt) if manager is not None
+            else base_prompt)
         if ctx.loop.history and ctx.loop.history[0].role == "system":
-            base_prompt = build_system_prompt(bundle.text)
-            ctx.loop.skill_base_prompt = base_prompt
-            ctx.loop.history[0].content = (
-                ctx.skills.apply_to_prompt(base_prompt)
-                if ctx.skills else base_prompt)
-            ctx.loop.workspace_context = bundle
-            details = bundle.summary_lines()
-            return _ok(
-                "  [context] 工作区上下文已刷新",
-                *[f"  {line}" for line in details],
-            )
-        return _ok("  [context] 历史中无 system 消息，未刷新")
+            ctx.loop.history[0] = Message.system(prompt)
+        else:
+            ctx.loop.history.insert(0, Message.system(prompt))
+        return _ok(
+            "  [context] 工作区上下文已刷新",
+            *[f"  {line}" for line in bundle.summary_lines()],
+        )
+
+    if operation == "fragments":
+        if registry is None:
+            return _ok("  （Prompt Fragment Registry 未启用）")
+        if len(parts) > 2:
+            return _ok("  用法: /context fragments [source]")
+        source = parts[1] if len(parts) == 2 else ""
+        fragments = registry.list(source=source)
+        enabled_count = sum(1 for item in fragments if registry.is_enabled(item))
+        label = f"source={source}" if source else "all sources"
+        lines = [
+            f"  [fragments] {enabled_count}/{len(fragments)} enabled"
+            f" · {label} · generation {registry.generation}",
+        ]
+        for item in fragments:
+            state = "on " if registry.is_enabled(item) else "off"
+            cache = "cache" if item.cacheable else "dynamic"
+            toggle = "" if item.toggleable else " · locked"
+            lines.append(
+                f"  [{state}] {item.id} · {item.source} · {item.group}"
+                f" · {item.tokens} tokens · {cache}{toggle} · {item.title}")
+        if not fragments:
+            lines.append("  （没有匹配的 fragment）")
+        return _ok(*lines)
+
+    if operation in {"enable", "disable", "toggle"} and len(parts) == 2:
+        if registry is None:
+            return _ok("  （Prompt Fragment Registry 未启用）")
+        target = parts[1]
+        try:
+            if operation == "toggle":
+                kind, count, enabled = registry.toggle(target)
+            else:
+                enabled = operation == "enable"
+                kind, count = registry.set_enabled(target, enabled)
+        except (KeyError, ValueError) as exc:
+            return _ok(f"  [fragments] {exc}")
+        snapshot = refresh_registry_snapshot(ctx.loop)
+        state = "enabled" if enabled else "disabled"
+        lines = [f"  [fragments] {state} {kind}: {target} ({count})"]
+        if snapshot is not None:
+            lines.extend(f"  {line}" for line in snapshot.summary_lines())
+        return _ok(*lines)
+
+    if operation == "reset" and len(parts) == 1:
+        if registry is None:
+            return _ok("  （Prompt Fragment Registry 未启用）")
+        registry.reset_overrides()
+        snapshot = refresh_registry_snapshot(ctx.loop)
+        lines = ["  [fragments] 已清除全部手动启停设置"]
+        if snapshot is not None:
+            lines.extend(f"  {line}" for line in snapshot.summary_lines())
+        return _ok(*lines)
+
+    if operation == "cache" and len(parts) == 1:
+        if registry is None:
+            return _ok("  （Prompt Fragment Registry 未启用）")
+        snapshot = registry.snapshot()
+        cache = snapshot.cache
+        lines = [
+            f"  [cache] stable prefix {cache.offset} chars"
+            f" · {cache.stable_tokens} tokens"
+            f" · generation {snapshot.generation}",
+            f"  stable fragments: {', '.join(cache.stable_fragments) or '(none)'}",
+            f"  volatile fragments: {', '.join(cache.volatile_fragments) or '(none)'}",
+            f"  stable hash: {cache.stable_hash}",
+            f"  full hash: {cache.full_hash}",
+        ]
+        return _ok(*lines)
+
+    if operation != "stats" or parts:
+        return _ok(
+            "  用法: /context | /context fragments [source] | "
+            "/context enable|disable|toggle <id|source> | /context reset | "
+            "/context cache | /context refresh")
+
     total = estimate_history_tokens(ctx.loop.history)
     budget = (ctx.loop.context_manager.max_tokens
               if ctx.loop.context_manager else "未启用压缩")
@@ -605,18 +715,47 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
     runtime_context = getattr(ctx.loop, "runtime_context", ())
     if runtime_context:
         lines.append(f"  运行时 Hook 上下文: {len(runtime_context)} 段")
+    if registry is not None:
+        lines.extend(f"  {line}" for line in registry.snapshot().summary_lines())
     return _ok(*lines)
 
 
 async def handle_compact(ctx: CommandContext) -> CommandResult:
     if ctx.loop.context_manager is None:
         return _ok("  （上下文压缩未启用：--no-compress）")
+    raw = ctx.request.arguments.strip()
+    try:
+        parts = shlex.split(raw) if raw else []
+    except ValueError as exc:
+        return _ok(f"  [compact] 参数解析失败: {exc}")
+    if parts and parts[0].lower() != "preview":
+        return _ok("  用法: /compact | /compact preview [--auto]")
+    preview_mode = bool(parts)
+    auto_mode = bool(parts and "--auto" in parts[1:])
+    if preview_mode and any(part != "--auto" for part in parts[1:]):
+        return _ok("  用法: /compact preview [--auto]")
+    manager = ctx.loop.context_manager
+    if preview_mode:
+        preview = manager.preview_compact(
+            ctx.loop.history, force=not auto_mode)
+        return _ok(*[
+            f"  {line}" for line in preview.render().splitlines()
+        ])
+
     before = estimate_history_tokens(ctx.loop.history)
     done = await ctx.loop.compress_context(force=True)
     after = estimate_history_tokens(ctx.loop.history)
+    preview = getattr(manager, "last_compact_preview", None)
+    details = (
+        preview.render(include_messages=False).splitlines()
+        if preview is not None else []
+    )
     if done:
-        return _ok(f"  [compact] 已压缩: {before} → {after} tokens")
-    return _ok(f"  [compact] 历史太短，无需压缩（当前约 {before} tokens）")
+        lines = [f"  [compact] 已压缩: {before} → {after} tokens"]
+    else:
+        lines = [f"  [compact] 未压缩（当前约 {before} tokens）"]
+    lines.extend(f"  {line}" for line in details)
+    return _ok(*lines)
 
 
 def _format_skill_details(skills, name: str) -> str:

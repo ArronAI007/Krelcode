@@ -484,8 +484,13 @@ class AgentLoop:
         if not hint:
             return self.history
         if self.history and self.history[0].role == "system":
-            base = self.history[0].content or ""
-            system = Message.system(base + "\n\n" + hint if base else hint)
+            first = self.history[0]
+            base = first.content or ""
+            system = Message(
+                role="system",
+                content=base + "\n\n" + hint if base else hint,
+                provider_meta=first.provider_meta,
+            )
             return [system, *self.history[1:]]
         return [Message.system(hint), *self.history]
 

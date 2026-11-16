@@ -110,14 +110,21 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
                   "/allow remove <程序名> 移除（持久化到工作区；审批中的\n"
                   "“始终允许此命令”只保存当前精确命令）")),
         CommandSpec(
-            "context", "查看或刷新上下文", argument_hint="[refresh]",
-            help="显示上下文统计；/context refresh 重新采集工作区上下文"),
+            "context", "查看、启停或刷新上下文档位",
+            argument_hint="[fragments|enable|disable|toggle|reset|cache|refresh]",
+            help=("显示上下文统计与 Fragment 来源；/context fragments [source] "
+                  "查看来源；/context enable|disable|toggle <id|source> 手动启停；\n"
+                  "/context reset 清除启停设置；/context cache 查看缓存边界；\n"
+                  "/context refresh 重新采集工作区上下文")),
         CommandSpec(
             "export", "导出当前会话", argument_hint="[路径]",
             help="导出 Markdown；路径以 .json 结尾时输出可 /resume 的 native 快照"),
         CommandSpec(
             "compact", "立即压缩历史",
-            help="立即压缩对话历史（LLM 摘要，不必等预算超限）"),
+            argument_hint="[preview [--auto]]",
+            help=("立即压缩对话历史（LLM 摘要，不必等预算超限）；\n"
+                  "/compact preview 预览 compact 边界与待摘要消息；"
+                  "/compact preview --auto 仅在超预算时预览")),
         CommandSpec(
             "stop", "中止正在运行的任务", kind=control,
             available_during_run=True,

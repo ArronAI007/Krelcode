@@ -16,11 +16,13 @@
 
 from __future__ import annotations
 
-from typing import List
+from copy import deepcopy
+from dataclasses import dataclass, replace
+from typing import List, Optional
 
 from ..core.messages import Message
 from ..llm.base import LLMProvider, collect
-from .tokens import estimate_history_tokens
+from .tokens import estimate_history_tokens, estimate_text_tokens
 
 SUMMARY_SYSTEM_PROMPT = (
     "You are a conversation summarizer for a coding agent. "
@@ -42,6 +44,63 @@ MIN_EVICT_CHARS = 200              # 短结果驱逐无收益，跳过
 EVICTION_MARKER = "[旧工具输出已驱逐：原 {n} 字符；如需细节请重新执行工具或 read_file]"
 
 
+@dataclass(frozen=True)
+class CompactBoundary:
+    """一次 compact 的 history 零基索引边界。"""
+
+    head_end: int
+    middle_start: int
+    middle_end: int
+    tail_start: int
+    tail_end: int
+    safe_adjusted: bool = False
+
+    def summary_line(self) -> str:
+        head = self.head_end
+        compact = max(0, self.middle_end - self.middle_start)
+        keep = max(0, self.tail_end - self.tail_start)
+        safe = " · 已回避孤立 tool 边界" if self.safe_adjusted else ""
+        return f"边界: head={head} · compact={compact} · keep={keep}{safe}"
+
+
+@dataclass(frozen=True)
+class CompactPreview:
+    force: bool
+    eligible: bool
+    reason: str
+    before_tokens: int
+    after_eviction_tokens: int
+    after_tokens: int
+    evicted_tools: int
+    strategy: str
+    boundary: Optional[CompactBoundary] = None
+    preview_text: str = ""
+
+    def render(
+        self,
+        *,
+        max_chars: int = 8_000,
+        include_messages: bool = True,
+    ) -> str:
+        lines = [
+            f"compact preview: {'force' if self.force else 'auto'}"
+            f" · before {self.before_tokens} → estimated {self.after_tokens} tokens",
+            f"eligible: {'yes' if self.eligible else 'no'} · strategy: {self.strategy}"
+            f" · evicted tools: {self.evicted_tools}",
+        ]
+        if self.reason:
+            lines.append(f"reason: {self.reason}")
+        if self.boundary is not None:
+            lines.append(self.boundary.summary_line())
+        if include_messages:
+            body = self.preview_text
+            if len(body) > max_chars:
+                body = body[:max_chars] + "\n…[compact preview truncated]"
+            if body:
+                lines.extend(["--- messages to compact ---", body])
+        return "\n".join(lines)
+
+
 class ContextManager:
     def __init__(
         self,
@@ -54,6 +113,7 @@ class ContextManager:
         self.max_tokens = max_tokens
         self.keep_recent = max(2, keep_recent)
         self.keep_recent_tools = max(1, keep_recent_tools)
+        self.last_compact_preview: Optional[CompactPreview] = None
 
     def over_budget(self, history: List[Message]) -> bool:
         return estimate_history_tokens(history) > self.max_tokens
@@ -81,31 +141,114 @@ class ContextManager:
             evicted += 1
         return evicted
 
+
+    def preview_compact(
+        self, history: List[Message], force: bool = True,
+    ) -> CompactPreview:
+        """非破坏性 preview：展示驱逐/摘要边界和待压缩消息。"""
+        before = estimate_history_tokens(history)
+        work = deepcopy(history)
+        evicted = self.evict_old_tool_results(work)
+        after_eviction = estimate_history_tokens(work)
+        head_count = 1 if work and work[0].role == "system" else 0
+        if not force and after_eviction <= self.max_tokens:
+            preview = CompactPreview(
+                force=False, eligible=False,
+                reason="历史在预算内，无需 compact",
+                before_tokens=before, after_eviction_tokens=after_eviction,
+                after_tokens=after_eviction, evicted_tools=evicted,
+                strategy="none")
+            self.last_compact_preview = preview
+            return preview
+        if len(work) - head_count < MIN_MESSAGES_TO_COMPRESS:
+            preview = CompactPreview(
+                force=force, eligible=False,
+                reason=(f"可压缩消息不足（需要至少 {MIN_MESSAGES_TO_COMPRESS} 条），"
+                        "工具结果驱逐可能已生效"),
+                before_tokens=before, after_eviction_tokens=after_eviction,
+                after_tokens=after_eviction, evicted_tools=evicted,
+                strategy="evict_tools" if evicted else "none")
+            self.last_compact_preview = preview
+            return preview
+        requested_cut = max(head_count, len(work) - self.keep_recent)
+        cut = _safe_cut(work, requested_cut, head_count)
+        if cut <= head_count:
+            preview = CompactPreview(
+                force=force, eligible=False,
+                reason="没有可压缩的中段消息",
+                before_tokens=before, after_eviction_tokens=after_eviction,
+                after_tokens=after_eviction, evicted_tools=evicted,
+                strategy="evict_tools" if evicted else "none")
+            self.last_compact_preview = preview
+            return preview
+        boundary = CompactBoundary(
+            head_end=head_count,
+            middle_start=head_count,
+            middle_end=cut,
+            tail_start=cut,
+            tail_end=len(work),
+            safe_adjusted=cut != requested_cut,
+        )
+        middle = work[head_count:cut]
+        projected = (
+            work[:head_count]
+            + [Message.user(SUMMARY_PREFIX + "[待生成摘要]")]
+            + work[cut:]
+        )
+        preview = CompactPreview(
+            force=force,
+            eligible=True,
+            reason="",
+            before_tokens=before,
+            after_eviction_tokens=after_eviction,
+            after_tokens=estimate_history_tokens(projected),
+            evicted_tools=evicted,
+            strategy="summarize",
+            boundary=boundary,
+            preview_text=render_messages(middle),
+        )
+        self.last_compact_preview = preview
+        return preview
+
     async def maybe_compress(self, history: List[Message], force: bool = False) -> bool:
         """超预算（或 force=True，即 REPL /compact）则原地压缩；返回是否压缩。
 
         顺序：先驱逐旧工具结果（免费），仍超预算（或 force）再 LLM 摘要。
         """
+        preview = self.preview_compact(history, force=force)
         if not force and not self.over_budget(history):
             return False
 
         evicted = self.evict_old_tool_results(history)
         if not force and not self.over_budget(history):
+            self.last_compact_preview = replace(
+                preview, after_tokens=estimate_history_tokens(history),
+                strategy="evict_tools" if evicted else preview.strategy,
+                boundary=None, preview_text="")
             return evicted > 0     # 驱逐已解决，无需摘要
 
         head_count = 1 if history and history[0].role == "system" else 0
         if len(history) - head_count < MIN_MESSAGES_TO_COMPRESS:
+            self.last_compact_preview = replace(
+                preview, after_tokens=estimate_history_tokens(history),
+                evicted_tools=evicted)
             return evicted > 0   # 摘要无料可压，但驱逐可能已生效
 
         cut = max(head_count, len(history) - self.keep_recent)
         cut = _safe_cut(history, cut, head_count)
         if cut <= head_count:
+            self.last_compact_preview = replace(
+                preview, after_tokens=estimate_history_tokens(history),
+                evicted_tools=evicted)
             return evicted > 0   # 没有可压缩的中段，同上
 
         middle = history[head_count:cut]
         summary_text = await self._summarize(middle)
         summary_message = Message.user(SUMMARY_PREFIX + summary_text)
         history[head_count:cut] = [summary_message]
+        self.last_compact_preview = replace(
+            preview, after_tokens=estimate_history_tokens(history),
+            evicted_tools=evicted, strategy="summarize")
         return True
 
     async def _summarize(self, middle: List[Message]) -> str:

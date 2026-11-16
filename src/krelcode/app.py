@@ -22,7 +22,14 @@ from .agent.context import (
     build_workspace_context_bundle,
 )
 from .agent.loop import DEFAULT_MAX_STEPS, AgentLoop
-from .agent.prompts import build_system_prompt
+from .agent.fragments import (
+    GROUP_WORKSPACE,
+    PromptFragmentRegistry,
+    apply_prompt_snapshot,
+    base_fragment,
+    skills_fragment,
+    workspace_fragments,
+)
 from .agent.runtime import AgentRuntime
 from .agent.usage import UsageTracker
 from .config import load_config
@@ -293,11 +300,9 @@ async def build_loop(
     workspace_root = Path(args.workspace).resolve()
     context_options = ContextOptions.from_config(config.get("context"))
     workspace_context = None
-    context = ""
     if not args.no_context:
         workspace_context = await build_workspace_context_bundle(
             workspace_root, options=context_options)
-        context = workspace_context.text
     bus = EventBus()
     llm = build_llm(args, config, log=log)
     skill_manager = build_skill_manager(args, config)
@@ -382,14 +387,21 @@ async def build_loop(
     for tool in manager.build_tools():
         registry.register(
             tool, ToolDescriptor.from_tool(tool, source=ToolSource.SUBAGENT))
-    skill_base_prompt = build_system_prompt(context)
+    prompt_registry = PromptFragmentRegistry([base_fragment()])
+    if workspace_context is not None:
+        prompt_registry.replace_group(
+            GROUP_WORKSPACE, workspace_fragments(workspace_context))
+    skill_fragment = skills_fragment(skill_manager.prompt_index())
+    if skill_fragment is not None:
+        prompt_registry.register(skill_fragment)
+    prompt_snapshot = prompt_registry.snapshot()
     loop = AgentLoop(
         llm=llm,
         registry=registry,
         tool_context=tool_context,
         policy=policy,
         bus=bus,
-        system_prompt=skill_manager.apply_to_prompt(skill_base_prompt),
+        system_prompt=prompt_snapshot.text,
         max_steps=args.max_steps,
         repeat_failure_limit=args.repeat_failure_limit,
         context_manager=context_manager,
@@ -400,9 +412,11 @@ async def build_loop(
     manager.get_parent_history = lambda: loop.history
     loop.skill_manager = skill_manager
     loop.plugin_manager = plugin_manager
-    loop.skill_base_prompt = skill_base_prompt
+    loop.prompt_registry = prompt_registry
     loop.context_options = context_options
+    loop.context_enabled = not args.no_context
     loop.workspace_context = workspace_context
+    apply_prompt_snapshot(loop, prompt_snapshot)
 
     async def reload_plugins():
         records = await plugin_manager.reload()

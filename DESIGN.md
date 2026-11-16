@@ -742,6 +742,53 @@ running ──pause()──> paused ──resume()──> running
   plan 模式或子代理不可递归限制；敏感 feed/history 在进入 UI、JSONL、stream-json
   before 全部经过 SecretRedactor；流式 Feed 暂存 secret 前缀尾块，覆盖跨 chunk 拆分。
 
+## Prompt/Context Fragment Registry（Step 82）
+
+system prompt 不再由 App、Skill 热重载和 `/context refresh` 各自拼接，而是统一经过
+`agent/fragments.py`。Registry 是唯一组装点，负责来源、稳定排序、手动启停、快照版本
+和缓存边界；AgentLoop 只消费最终文本与不透明的 `provider_meta`。
+
+```
+Fragment sources
+├─ core       → core:base                 locked · cacheable
+├─ skills     → skills:index              toggleable · cacheable
+└─ workspace  → workspace:rules           toggleable · cacheable
+                workspace:git / tree      toggleable · dynamic
+                         │
+                         ▼
+              PromptFragmentRegistry
+                ├─ source/id overrides（id 优先）
+                ├─ cacheable prefix first
+                ├─ atomic group/source replacement
+                └─ PromptSnapshot {text, generation, stable/full SHA-256}
+                         │
+             ┌───────────┴────────────┐
+             ▼                        ▼
+    history[0] system msg      provider_meta cache offset
+```
+
+- Fragment 有 `id/source/title/group/priority/cacheable/compactable/toggleable`。
+  `core:base` 为不可关闭安全底座；其他内置 Fragment 均可按精确 id 或 source 启停，
+  精确 id 覆盖 source 级设置，`/context reset` 清除运行时 overrides。
+- cacheable Fragment 被渲染为全局连续前缀，即使以后注册动态 system Fragment，也不会
+  阻断后续 workspace stable rules。`stable_hash` 只覆盖稳定前缀，因此 git 状态/目录树
+  变化会改变 `full_hash`，但不会使规则缓存失效。
+- snapshot 通过 `Message.provider_meta.prompt_cache_boundaries` 暴露字符 offset。
+  Anthropic adapter 把它换算为合并 system 的 block 边界：稳定 block 携带
+  `cache_control: ephemeral`，动态尾部不携带。OpenAI/DeepSeek 等兼容端点忽略该
+  adapter 私有元数据，但仍以相同稳定前缀受益于服务端自动前缀缓存。
+- App 启动、Skill 热重载、session restore 与 `/context refresh` 全部回到同一快照路径。
+  workspace group/source 替换先完整校验再提交，避免冲突时留下半更新状态。
+- `/context` 展示 Fragment/source 汇总；`/context enable|disable|toggle` 修改后立即重建
+  history[0]；`/context cache` 展示边界、稳定/动态 ids 与哈希。
+- compact 数据层新增 `CompactBoundary/CompactPreview`。预览先深拷贝 history，再执行同一
+  套工具结果驱逐和 `_safe_cut`，因此可看到 head/middle/tail、是否回避孤立 tool、预计
+  节省与待摘要正文，而真实历史完全不变。`/compact preview --auto` 对应自动预算判断，
+  `/compact preview` 对应强制压缩预演。
+- 正式 compact 仍由 `AgentLoop.compress_context()` 独占 Pre/PostCompact Hook、事件与
+  历史修改；`/compact` 只调用该入口，然后读取 `last_compact_preview` 回报实际
+  strategy、驱逐数与边界，不复制压缩逻辑。
+
 ## 统一输入处理管线（Step 67）
 
 借鉴 Claude Code 将 `processUserInput` 与 REPL 分开的思路，终端不再直接解释原始
