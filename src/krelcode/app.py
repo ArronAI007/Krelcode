@@ -46,6 +46,7 @@ from .session.interactions import UserInputBroker
 from .session.restore import refresh_skill_system_prompt, restore_session
 from .session.runner import run_session
 from .skills import SkillManager, build_skill_tools
+from .subagent.definition import AgentDefinitionManager
 from .subagent.manager import SUBAGENT_SYSTEM_PROMPT, SubagentManager
 from .tools.base import (
     PermissionMode,
@@ -80,7 +81,7 @@ from .ui.repl import run_repl
 
 
 def default_tools() -> List[Tool]:
-    """内置工具集（16 个 + 4 个子代理工具在 build_loop 注册）。
+    """内置工具集（16 个 + 9 个子代理工具在 build_loop 注册）。
     MCP 远程工具在运行时追加注册。"""
     return [
         GetTimeTool(), ReadFileTool(), WriteFileTool(), EditFileTool(),
@@ -360,6 +361,12 @@ async def build_loop(
     for tool in plugin_tools:
         registry.register(
             tool, ToolDescriptor.from_tool(tool, source=ToolSource.PLUGIN))
+    agent_definitions = AgentDefinitionManager(workspace_root)
+    if agent_definitions.list():
+        log("[agents] 已加载 Agent Definition: "
+            + ", ".join(item.name for item in agent_definitions.list()))
+    for issue in agent_definitions.issues:
+        log(f"[agents] 跳过无效定义: {issue.path}: {issue.message}")
     manager = SubagentManager(
         llm=llm,
         tool_factory=tool_factory,
@@ -370,6 +377,7 @@ async def build_loop(
         context_budget=context_budget,   # 子代理长任务同样受压缩保护
         system_prompt_provider=(
             lambda: skill_manager.apply_to_prompt(SUBAGENT_SYSTEM_PROMPT)),
+        definitions=agent_definitions,
     )
     for tool in manager.build_tools():
         registry.register(
@@ -530,6 +538,7 @@ async def async_main(args: argparse.Namespace) -> int:
     redactor.add(getattr(loop.llm, "api_key", None))
     loop.redactor = redactor
     subagents.redactor = redactor
+    subagents.sidechains.redactor = redactor
     if getattr(loop.tool_context, "shell_jobs", None) is not None:
         loop.tool_context.shell_jobs.redactor = redactor
     supervisor = MCPSupervisor(

@@ -99,7 +99,7 @@ RUNNING_SLASH_COMMANDS = tuple(
 
 
 def match_slash_commands(text: str, *, running: bool = False,
-                         limit: int = 8,
+                         limit: int = 9,
                          registry: Optional[CommandRegistry] = None
                          ) -> list[tuple[str, str]]:
     """返回与当前输入前缀匹配的 slash 命令；进入参数后不再弹菜单。"""

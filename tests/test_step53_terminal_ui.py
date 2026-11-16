@@ -100,7 +100,7 @@ def test_input_rule_spans_terminal_without_auto_wrap(monkeypatch):
 def test_slash_commands_filter_by_prefix():
     all_commands = match_slash_commands("/")
     assert all_commands[0][0] == "/help"
-    assert ("/mcp", "查看或重载 MCP") in all_commands or len(all_commands) == 8
+    assert ("/mcp", "查看或重载 MCP") in all_commands or len(all_commands) == 9
     assert match_slash_commands("/mo") == [
         ("/model", "查看或切换模型"),
     ]
@@ -117,6 +117,7 @@ def test_running_suggests_thinking_stop_and_exit():
         ("/plan", "查看当前执行计划"),
         ("/tool-output", "查看或展开工具输出"),
         ("/queue", "查看或管理下一条消息队列"),
+        ("/agents", "查看和控制子代理"),
         ("/jobs", "查看或控制后台 Shell 任务"),
         ("/permissions", "切换权限模式并管理会话/工作区规则"),
         ("/stop", "中止正在运行的任务"),

@@ -29,8 +29,10 @@ from ..core.events import (
     RunStarted,
     ShellJobFinished,
     ShellJobStarted,
+    SubagentFeedUpdated,
     SubagentFinished,
     SubagentSpawned,
+    SubagentStateChanged,
     ToolCallCompleted,
     ToolCallStarted,
     UserInputRequested,
@@ -157,7 +159,17 @@ class SessionRecorder:
                     "preview": event.preview[:600]}
         if isinstance(event, SubagentSpawned):
             return {"type": "subagent_spawned", "ts": ts,
-                    "agent_id": event.agent_id, "task": event.task[:200]}
+                    "agent_id": event.agent_id, "task": event.task[:200],
+                    "definition": event.definition}
+        if isinstance(event, SubagentFeedUpdated):
+            return {"type": "subagent_feed", "ts": ts,
+                    "agent_id": event.agent_id, "sequence": event.sequence,
+                    "kind": event.kind, "text": event.text[:2_000],
+                    "data": event.data}
+        if isinstance(event, SubagentStateChanged):
+            return {"type": "subagent_state", "ts": ts,
+                    "agent_id": event.agent_id, "status": event.status,
+                    "reason": event.reason[:300]}
         if isinstance(event, SubagentFinished):
             return {"type": "subagent_finished", "ts": ts,
                     "agent_id": event.agent_id, "status": event.status,

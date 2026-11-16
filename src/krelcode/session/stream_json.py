@@ -29,8 +29,10 @@ from ..core.events import (
     ShellJobOutput,
     ShellJobStarted,
     StepStarted,
+    SubagentFeedUpdated,
     SubagentFinished,
     SubagentSpawned,
+    SubagentStateChanged,
     ToolCallCompleted,
     ToolCallStarted,
     ToolOutputDelta,
@@ -222,6 +224,25 @@ class StreamJsonEncoder:
                 "subtype": "started",
                 "agent_id": event.agent_id,
                 "task": event.task,
+                "definition": event.definition,
+            }
+        elif isinstance(event, SubagentFeedUpdated):
+            payload = {
+                "type": "subagent",
+                "subtype": "feed",
+                "agent_id": event.agent_id,
+                "agent_sequence": event.sequence,
+                "kind": event.kind,
+                "text": event.text,
+                "data": event.data,
+            }
+        elif isinstance(event, SubagentStateChanged):
+            payload = {
+                "type": "subagent",
+                "subtype": "state",
+                "agent_id": event.agent_id,
+                "status": event.status,
+                "reason": event.reason,
             }
         elif isinstance(event, SubagentFinished):
             payload = {

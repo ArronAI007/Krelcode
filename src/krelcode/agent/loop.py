@@ -13,7 +13,7 @@ import asyncio
 import json
 from dataclasses import dataclass, replace
 from itertools import count
-from typing import Callable, Dict, Iterable, List, Optional
+from typing import Awaitable, Callable, Dict, Iterable, List, Optional
 
 from ..core.hooks import HookPort, HookResult
 from ..core.interactions import UserInputPort
@@ -134,6 +134,7 @@ class AgentLoop:
         ] = None,
         hook_port: Optional[HookPort] = None,
         user_input_port: Optional[UserInputPort] = None,
+        step_gate: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -149,6 +150,8 @@ class AgentLoop:
         self.runtime_snapshot_provider = runtime_snapshot_provider
         self.hook_port = hook_port
         self.user_input_port = user_input_port
+        # 通用协作式运行边界（子代理 pause 等）；主 Agent 默认为 None。
+        self.step_gate = step_gate
         self.runtime_context: List[str] = []
         self._token_total = 0
         self._failure_counts: Dict[str, int] = {}
@@ -248,6 +251,8 @@ class AgentLoop:
 
         try:
             for step in range(1, self.max_steps + 1):
+                if self.step_gate is not None:
+                    await self.step_gate()
                 await self._inject_steering()
                 if self.token_budget is not None and self._token_total > self.token_budget:
                     text = (f"[krelcode] token 预算耗尽（已用 {self._token_total} > "

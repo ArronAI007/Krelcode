@@ -684,6 +684,64 @@ job_start(command, cwd)
   不再 list/output/kill 它们。命令通过 `&` 自行派生的后台子进程若仍持有 pipe，主进程退出后
   manager 会结束残留进程组，因此正确用法是让目标命令在前台运行并由 `job_start` 托管。
 
+## 交互式子代理（Step 81）
+
+子代理不再只是 `spawn → wait` 的黑盒，而是有实时事件流、运行控制和可审计
+sidechain 的后台 Agent。实现刻意拆成四个与 manager 解耦的组件：
+
+```
+subagent/
+├── definition.py  AgentDefinitionManager：用户定义发现/覆盖/校验
+├── feed.py        AgentFeed：稳定 sequence、有界缓冲、脱敏
+├── control.py     AgentControl：协作式 pause/resume gate
+├── sidechain.py   SidechainStore/Writer：start/feed/state/message/history JSONL
+└── manager.py     生命周期 + child EventBus 适配 + 父工具/命令适配
+```
+
+`AgentLoop` 只新增一个通用 `step_gate: async () -> None` 端口；主 Agent 不传，
+子代理传 `control.wait_if_paused`。因此 pause 不取消模型调用或正在执行的工具，
+而是在当前原子操作结束、下一 step 开始前停住：
+
+```
+spawn(task, definition?)
+  ├─ Definition allowlist ∩ tool_factory() → child registry/runtime
+  ├─ child AgentLoop(step_gate=AgentControl.wait_if_paused)
+  ├─ child EventBus → AgentFeed → SubagentFeedUpdated(parent EventBus)
+  └─ SidechainWriter → .krelcode/sidechains/<run>/<agent>.jsonl
+
+running ──pause()──> paused ──resume()──> running
+   │                    │
+   └──── kill() ────────┴──> killed (Task.cancel)
+```
+
+- **Feed** 把 `RunStarted/Step/Phase/LLMStreamDelta/ThinkingDelta/ToolProgress/
+  ToolOutputDelta/ToolCallCompleted/RunFinished/Error` 映射为稳定 kind。sequence
+  单调递增；`after_sequence` 支持增量读取；内存默认 2,000 条、单条 24,000 字符，
+  超出后 `truncated=true`。分页 `next_sequence` 返回本页最后一条，绝不跳到全局最新。
+- **Pause/Resume** 保留同一个 Task、history、工具上下文和队列。暂停期间
+  `send_input` 入队，resume 后继续；`interrupt` 仍是取消当前轮并立即开新轮。
+- **Kill** 与 interrupt/shutdown 分离：设置 `kill_requested`、取消 Task、状态进入
+  `killed`，终态 `SubagentFinished(killed)` 只发一次；隔离 worktree 先存档到分支再回收，
+  之后拒绝追加任务。
+- **Definition** 从 `~/.krelcode/agents`、项目 `.krelcode/agents`、项目
+  `.agents/agents` 发现 Markdown；项目覆盖全局。frontmatter 提供 description、
+  allowed-tools、isolated、fork-context，正文是角色 system prompt。allowlist 只能
+  缩小默认工具池；未知工具、坏 frontmatter 或空正文 fail-closed/隔离。
+- **Sidechain** 记录 start、definition 元数据、初始/排队/打断消息、feed、状态转换、
+  每轮完整 history 快照、结果、branch/worktree。写入前递归脱敏；侧链不自动注入父
+  history，父 Agent 通过 `wait_agent` 或 `get_agent_feed` 主动消费。进程重启后可读取
+  审计，但不自动接管旧 Task。
+- 新增父级事件：`SubagentFeedUpdated(agent_id, sequence, kind, text, data)` 与
+  `SubagentStateChanged(agent_id, status, reason)`；recorder、hooks、renderer、
+  stream-json 都是旁路消费者。stream-json 用 `agent_sequence` 与 QueryEvent 外层
+  `sequence` 区分，避免覆盖 envelope 排序。
+- 父工具扩展为 `spawn_agent(definition=...)`、`get_agent_feed`、`pause_agent`、
+  `resume_agent`、`kill_agent`、`list_agent_definitions`，原四工具语义保持兼容。
+  `/agents` 在运行中可用，提供 list/feed/pause/resume/kill/definitions/sidechains。
+- 安全边界不变：Definition 是可信本地配置，但不能绕过审批、Sandbox、read-only/
+  plan 模式或子代理不可递归限制；敏感 feed/history 在进入 UI、JSONL、stream-json
+  before 全部经过 SecretRedactor；流式 Feed 暂存 secret 前缀尾块，覆盖跨 chunk 拆分。
+
 ## 统一输入处理管线（Step 67）
 
 借鉴 Claude Code 将 `processUserInput` 与 REPL 分开的思路，终端不再直接解释原始

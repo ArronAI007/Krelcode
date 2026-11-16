@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from ..tools.base import ToolContext, ToolResult
-from .manager import STATUS_RUNNING, SubagentManager
+from .manager import STATUS_PAUSED, STATUS_RUNNING, SubagentManager
 
 
 class SpawnAgentTool:
@@ -21,6 +21,7 @@ class SpawnAgentTool:
         "分支中工作（互不冲突，改动提交到 krelcode/agent-<id> 分支）。"
         "子任务依赖当前对话背景时，传 fork_context=true 让子代理继承你的对话历史。"
         "返回子代理 id；用 wait_agent 等待结果，list_agents 查看状态。"
+        "可传 definition 使用 ~/.krelcode/agents 或项目 .krelcode/agents 中的自定义定义。"
     )
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -30,6 +31,8 @@ class SpawnAgentTool:
                          "description": "true=在独立 git worktree 分支中执行（需工作区为 git 仓库）"},
             "fork_context": {"type": "boolean",
                              "description": "true=继承父对话历史（依赖型子任务；task 仍需说明要做什么）"},
+            "definition": {"type": "string",
+                           "description": "可选 Agent Definition 名称（自定义系统提示与工具范围）"},
         },
         "required": ["task"],
     }
@@ -44,20 +47,25 @@ class SpawnAgentTool:
         try:
             handle = await self.manager.spawn(
                 task.strip(),
-                isolated=bool(args.get("isolated", False)),
-                fork_context=bool(args.get("fork_context", False)),
+                isolated=(bool(args["isolated"]) if "isolated" in args else None),
+                fork_context=(bool(args["fork_context"]) if "fork_context" in args else None),
+                definition=(str(args["definition"]).strip()
+                            if args.get("definition") else None),
             )
-        except ValueError as e:
+        except (ValueError, RuntimeError) as e:
             return ToolResult(content=str(e), is_error=True)
         extra = (f"，隔离分支 {handle.branch}（worktree: {handle.worktree}）"
                  if handle.branch else "")
+        if handle.definition:
+            extra += f"，定义 {handle.definition}"
         if handle.forked:
             extra += "，已继承当前对话上下文"
         return ToolResult(
             content=f"已启动子代理 {handle.id}（后台运行）{extra}。"
                     f"用 wait_agent(agent_id=\"{handle.id}\") 等待结果。",
             data={"agent_id": handle.id, "branch": handle.branch,
-                  "forked": handle.forked},
+                  "forked": handle.forked, "definition": handle.definition,
+                  "sidechain": str(handle.sidechain_path or "")},
         )
 
 
@@ -98,16 +106,17 @@ class WaitAgentTool:
                 handles = [await self.manager.wait(agent_ids[0], timeout=timeout)]
             else:
                 handles = await self.manager.wait_many(agent_ids, timeout=timeout)
-        except KeyError as e:
+        except (KeyError, RuntimeError) as e:
             return ToolResult(content=str(e), is_error=True)
 
         sections = []
         all_completed = True
         for handle in handles:
-            if handle.status == STATUS_RUNNING:
+            if handle.status in (STATUS_RUNNING, STATUS_PAUSED):
                 all_completed = False
+                label = "已暂停" if handle.status == STATUS_PAUSED else "仍在运行"
                 sections.append(
-                    f"[{handle.id}] 仍在运行（等待 {timeout:g}s 超时）。可稍后再次 wait_agent。")
+                    f"[{handle.id}] {label}（等待 {timeout:g}s 超时）。可稍后再次 wait_agent。")
             else:
                 body = handle.result if handle.status == "completed" else (handle.error or "")
                 if handle.status != "completed":
@@ -119,7 +128,7 @@ class WaitAgentTool:
         if len(agent_ids) == 1:
             # 单 id：保持与旧版完全一致的内容格式
             handle = handles[0]
-            if handle.status == STATUS_RUNNING:
+            if handle.status in (STATUS_RUNNING, STATUS_PAUSED):
                 return ToolResult(content=sections[0],
                                   data={"status": handle.status})
             return ToolResult(
@@ -161,7 +170,7 @@ class SendToAgentTool:
         try:
             handle, action = await self.manager.send_input(
                 agent_id, message.strip(), interrupt=bool(args.get("interrupt", False)))
-        except KeyError as e:
+        except (KeyError, RuntimeError) as e:
             return ToolResult(content=str(e), is_error=True)
         if action == "queued":
             return ToolResult(
@@ -179,6 +188,134 @@ class SendToAgentTool:
             content=f"已向子代理 {handle.id} 追加任务（后台运行），用 wait_agent 等待。",
             data={"agent_id": handle.id, "action": action},
         )
+
+
+class GetAgentFeedTool:
+    read_only = True
+    name = "get_agent_feed"
+    description = (
+        "读取子代理实时事件流的增量。after_sequence 使用上次返回的 "
+        "next_sequence；所有文本已脱敏，sequence 单调递增。"
+    )
+    parameters: Dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "agent_id": {"type": "string"},
+            "after_sequence": {"type": "integer", "description": "只返回此游标之后的事件"},
+            "limit": {"type": "integer", "description": "最多返回条数（默认 100）"},
+        },
+        "required": ["agent_id"],
+    }
+
+    def __init__(self, manager: SubagentManager) -> None:
+        self.manager = manager
+
+    async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
+        agent_id = str(args.get("agent_id", ""))
+        try:
+            after = max(0, int(args.get("after_sequence", 0)))
+            limit = max(1, min(int(args.get("limit", 100)), 500))
+            page = self.manager.feed(agent_id, after_sequence=after, limit=limit)
+        except (KeyError, ValueError, TypeError) as exc:
+            return ToolResult(content=str(exc), is_error=True)
+        return ToolResult(
+            content=page.render(),
+            data={
+                "agent_id": page.agent_id,
+                "next_sequence": page.next_sequence,
+                "latest_sequence": page.latest_sequence,
+                "truncated": page.truncated,
+            },
+        )
+
+
+class PauseAgentTool:
+    name = "pause_agent"
+    description = "在下一个安全 step 边界暂停子代理；保留 Task、上下文和消息队列。"
+    parameters: Dict[str, Any] = {
+        "type": "object",
+        "properties": {"agent_id": {"type": "string"}},
+        "required": ["agent_id"],
+    }
+
+    def __init__(self, manager: SubagentManager) -> None:
+        self.manager = manager
+
+    async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
+        try:
+            handle = await self.manager.pause(str(args.get("agent_id", "")))
+        except (KeyError, ValueError) as exc:
+            return ToolResult(content=str(exc), is_error=True)
+        return ToolResult(
+            content=f"子代理 {handle.id} 已请求暂停（将在安全边界停止推进）。",
+            data={"agent_id": handle.id, "status": handle.status},
+        )
+
+
+class ResumeAgentTool:
+    name = "resume_agent"
+    description = "恢复已暂停的子代理；从原上下文和暂停点继续，不重建历史。"
+    parameters: Dict[str, Any] = {
+        "type": "object",
+        "properties": {"agent_id": {"type": "string"}},
+        "required": ["agent_id"],
+    }
+
+    def __init__(self, manager: SubagentManager) -> None:
+        self.manager = manager
+
+    async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
+        try:
+            handle = await self.manager.resume(str(args.get("agent_id", "")))
+        except (KeyError, ValueError) as exc:
+            return ToolResult(content=str(exc), is_error=True)
+        return ToolResult(
+            content=f"子代理 {handle.id} 已恢复运行。",
+            data={"agent_id": handle.id, "status": handle.status},
+        )
+
+
+class KillAgentTool:
+    name = "kill_agent"
+    description = (
+        "终止整个子代理（与 interrupt 不同：不会继续处理原任务）。"
+        "已有 history/feed/sidechain 会保留。"
+    )
+    parameters: Dict[str, Any] = {
+        "type": "object",
+        "properties": {"agent_id": {"type": "string"}},
+        "required": ["agent_id"],
+    }
+
+    def __init__(self, manager: SubagentManager) -> None:
+        self.manager = manager
+
+    async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
+        try:
+            handle = await self.manager.kill(str(args.get("agent_id", "")))
+        except (KeyError, ValueError) as exc:
+            return ToolResult(content=str(exc), is_error=True)
+        return ToolResult(
+            content=(f"子代理 {handle.id} 已终止；sidechain: "
+                     f"{handle.sidechain_path or '-'}"),
+            data={"agent_id": handle.id, "status": handle.status},
+        )
+
+
+class ListAgentDefinitionsTool:
+    read_only = True
+    name = "list_agent_definitions"
+    description = "列出用户自定义 Agent Definition（名称、来源、工具范围）。"
+    parameters: Dict[str, Any] = {"type": "object", "properties": {}}
+
+    def __init__(self, manager: SubagentManager) -> None:
+        self.manager = manager
+
+    async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
+        lines = self.manager.definition_lines()
+        if not lines:
+            return ToolResult(content="（未发现 Agent Definition）")
+        return ToolResult(content="\n".join(lines), data={"count": len(lines)})
 
 
 class ListAgentsTool:
@@ -203,4 +340,9 @@ def build_subagent_tools(manager: SubagentManager) -> List[Any]:
         WaitAgentTool(manager),
         SendToAgentTool(manager),
         ListAgentsTool(manager),
+        GetAgentFeedTool(manager),
+        PauseAgentTool(manager),
+        ResumeAgentTool(manager),
+        KillAgentTool(manager),
+        ListAgentDefinitionsTool(manager),
     ]

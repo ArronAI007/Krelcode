@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 import shlex
 
 from ....agent.context import build_workspace_context_bundle
@@ -49,11 +50,89 @@ async def handle_mcp(ctx: CommandContext) -> CommandResult:
 
 
 async def handle_agents(ctx: CommandContext) -> CommandResult:
-    if ctx.subagents is None:
+    manager = ctx.subagents
+    if manager is None:
         return _ok("  （子代理未启用）")
-    lines = ctx.subagents.status_lines()
-    return _ok("\n".join(f"  {line}" for line in lines)
-               if lines else "  （暂无子代理）")
+    raw = ctx.request.arguments.strip()
+    try:
+        parts = shlex.split(raw) if raw else []
+    except ValueError as exc:
+        return _ok(f"  [agents] 参数解析失败: {exc}")
+    operation = parts[0].lower() if parts else "list"
+
+    if operation == "list":
+        lines = manager.status_lines()
+        if not lines:
+            return _ok("  （暂无子代理）",
+                       "  用法: /agents feed <id> [after] | pause/resume/kill <id>",
+                       "  /agents definitions | sidechains | sidechain <id>")
+        return _ok("\n".join(f"  {line}" for line in lines))
+
+    if operation == "definitions":
+        lines = manager.definition_lines()
+        return _ok(*[f"  {line}" for line in lines]) if lines else _ok(
+            "  （未发现 Agent Definition）",
+            "  创建 ~/.krelcode/agents/<name>.md 或 .krelcode/agents/<name>.md")
+
+    if operation == "feed":
+        if len(parts) < 2:
+            return _ok("  用法: /agents feed <id> [after-sequence] [--limit N]")
+        after = 0
+        limit = 200
+        try:
+            index = 2
+            if index < len(parts) and not parts[index].startswith("--"):
+                after = max(0, int(parts[index]))
+                index += 1
+            if index < len(parts) and parts[index] == "--limit":
+                limit = max(1, min(int(parts[index + 1]), 1000))
+            elif index < len(parts):
+                raise ValueError("多余参数")
+            page = manager.feed(parts[1], after_sequence=after, limit=limit)
+        except (KeyError, ValueError, TypeError, IndexError) as exc:
+            return _ok(f"  [agents] {exc}")
+        return _ok("\n".join(
+            f"  {line}" for line in page.render().splitlines()))
+
+    if operation in {"pause", "resume", "kill"}:
+        if len(parts) != 2:
+            return _ok(f"  用法: /agents {operation} <id>")
+        try:
+            handle = await getattr(manager, operation)(parts[1])
+        except (KeyError, ValueError) as exc:
+            return _ok(f"  [agents] {exc}")
+        return _ok(f"  [agents] {handle.id} 状态: {handle.status}")
+
+    if operation == "sidechains":
+        limit = 50
+        if len(parts) > 1:
+            try:
+                limit = max(1, min(int(parts[1]), 500))
+            except ValueError:
+                return _ok("  用法: /agents sidechains [limit]")
+        lines = manager.sidechain_lines(limit=limit)
+        return _ok(*[f"  {line}" for line in lines]) if lines else _ok(
+            "  （暂无 sidechain）")
+
+    if operation == "sidechain":
+        if len(parts) != 2:
+            return _ok("  用法: /agents sidechain <agent-id|run/path>")
+        try:
+            path, records = manager.read_sidechain(parts[1])
+        except (OSError, ValueError) as exc:
+            return _ok(f"  [agents] {exc}")
+        output = [f"  sidechain: {path}", f"  records: {len(records)}"]
+        for record in records[-200:]:
+            compact = json.dumps(record, ensure_ascii=False, sort_keys=True)
+            if len(compact) > 500:
+                compact = compact[:500] + "…"
+            output.append(f"  {compact}")
+        return _ok(*output)
+
+    return _ok(
+        "  用法: /agents list | definitions | sidechains | sidechain <id>",
+        "  /agents feed <id> [after-sequence] [--limit N]",
+        "  /agents pause|resume|kill <id>")
 
 
 async def handle_jobs(ctx: CommandContext) -> CommandResult:

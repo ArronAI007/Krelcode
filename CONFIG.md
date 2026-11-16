@@ -85,7 +85,12 @@ krelcode [子命令] [选项]
 | `/session` | 当前会话文件、标题、父会话与模型元数据 |
 | `/export [路径]` | 导出 Markdown；`.json` 路径输出可重新 `/resume` 的 native 快照 |
 | `/undo` · `/undo list` | 回滚上一轮文件改动 · 查看检查点栈 |
-| `/agents` | 子代理状态（含排队深度） |
+| `/agents` · `/agents list` | 子代理状态（定义、轮数、排队深度、feed 游标） |
+| `/agents feed <id> [after] [--limit N]` | 按稳定 sequence 读取子代理实时事件增量 |
+| `/agents pause <id>` · `/agents resume <id>` | 在 step 安全边界暂停/恢复，保留 Task 与上下文 |
+| `/agents kill <id>` | 终止整个子代理（区别于 interrupt） |
+| `/agents definitions` | 列出用户自定义 Agent Definition 与加载问题 |
+| `/agents sidechains` · `/agents sidechain <id>` | 列出或读取持久化 sidechain JSONL |
 | `/jobs` · `/jobs list` | 列出当前进程管理的后台 Shell 任务、PID、状态、exit code、sequence 与日志 |
 | `/jobs output <id> [after] [--wait 秒]` | 按游标读取任务增量输出；wait 最多 30 秒 |
 | `/jobs kill <id>` | 终止任务及其整个进程组 |
@@ -196,7 +201,7 @@ enabled = true
 - 会话/输入：`session_start`、`user_input`、`user_prompt_submit`、`session_end`
 - 工具：`pre_tool_use`、`post_tool_use`、`tool_completed`、`tool_failed`、`file_edited`
 - 上下文：`pre_compact`、`post_compact`
-- 子代理：`subagent_started`、`subagent_finished`
+- 子代理：`subagent_started`、`subagent_feed`、`subagent_state`、`subagent_finished`
 - 后台 Job：`shell_job_started`、`shell_job_finished`（实时 output 走事件/协议与 job 日志，不逐块无限写会话审计）
 - 轮次：`run_finished`
 
@@ -268,6 +273,7 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 ├── checkpoints/       文件快照（/undo、/rewind 数据源；meta 带 session/turn 身份）
 ├── tool_outputs/      超长工具输出全文（历史里留截断+路径引用）
 ├── jobs/              后台 Shell 任务脱敏日志（每任务 output.log，默认 10 MiB 上限）
+├── sidechains/        子代理 JSONL（按 manager run-id 分目录；定义/feed/状态/history/结果）
 ├── exports/           /export 缺省输出目录
 ├── sandbox/            隔离 HOME/TMP/cache（命令与 Skill 脚本使用）
 └── allow_rules.json   审批规则（旧版 allow_programs/allow_commands + rules[]，仅用户可改）
@@ -275,6 +281,24 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 
 全局：`~/.krelcode/config.toml`（配置）、`~/.krelcode/AGENTS.md`（全局规则，
 与项目级 `AGENTS.md`/`KRELCODE.md` 分层注入，项目规则在后=更具体者优先）。
+
+Agent Definition 发现目录（后者覆盖前者同名项）：`~/.krelcode/agents/*.md`、
+`<workspace>/.krelcode/agents/*.md`、`<workspace>/.agents/agents/*.md`。格式：
+
+```markdown
+---
+name: reviewer
+description: 只读代码审查
+allowed-tools: [read_file, grep, glob, repo_map]
+fork-context: true     # 可选；默认继承父对话
+isolated: false        # 可选；true=独立 git worktree
+---
+你是严格的代码审查员，只报告可复现的问题并给出文件路径与行号。
+```
+
+`allowed-tools`（也接受 `tools`）只能缩小默认工具池；未知工具会让该定义在 spawn 时
+fail-closed。Definition frontmatter/正文属于用户显式配置，但不会绕过审批、Sandbox、
+只读模式或子代理防递归边界。单个坏定义只记录 issue，不阻断主 Agent。
 
 Skill 发现目录（后者覆盖前者同名项）：`~/.agents/skills`、`~/.krelcode/skills`、
 `<workspace>/.agents/skills`、`<workspace>/.krelcode/skills`，再追加
@@ -358,12 +382,13 @@ MCP stdio 子进程默认同样剥离宿主密钥，但 `[mcp_servers.*].env` �
 `LLMResponseReceived`(usage) · `ToolCallStarted` · `ToolProgress` · `ToolOutputDelta` ·
 `ToolCallCompleted`(is_error) · `PlanUpdated` · `UserInputRequested` ·
 `ApprovalRequested` · `PermissionDenied` · `ContextCompressed`(before/after) ·
-`HookTriggered` · `SubagentSpawned` · `SubagentFinished` ·
+`HookTriggered` · `SubagentSpawned` · `SubagentFeedUpdated` · `SubagentStateChanged` · `SubagentFinished` ·
 `ShellJobStarted` · `ShellJobOutput` · `ShellJobFinished` · `UserSteered` ·
 `RunFinished` · `ErrorOccurred`
 
 JSONL 审计记录类型：`user_input` `tool_call` `tool_result` `permission_denied`
-`hook_triggered` `context_compressed` `subagent_spawned` `subagent_finished`
+`hook_triggered` `context_compressed` `subagent_spawned` `subagent_feed` `subagent_state`
+`subagent_finished`
 `shell_job_started` `shell_job_finished` `user_steered`
 `run_finished` `history`(快照)。
 
@@ -376,6 +401,20 @@ read-only/plan 模式禁止 start/kill，但仍允许读取已有任务输出。
 preview 全部经过 SecretRedactor；跨 read 边界的 secret 也会通过前缀尾巴暂存后统一脱敏。
 Job 不随 turn abort，进程退出时由 manager 回收进程组；应用退出由 `AgentRuntime.close()`
 统一 `shutdown()`。重启 Krelcode 不会接管旧 OS 进程，也不会静默恢复工作区文件。
+
+## 7.2 交互式子代理安全边界
+
+Pause 不取消 Task，而是在 `AgentLoop` 每个 step 开始前等待 gate；当前模型调用或
+工具执行完成到安全点后才真正停住。Kill 是独立语义：取消整个 Task、状态进入
+`killed`，之后拒绝 `send_to_agent`；Interrupt 仍只取消当前轮以便立即处理新指令。
+Resume 沿用原 history、工具上下文和队列，不重建子代理。
+
+Definition 只能从默认工具池中做 allowlist 收缩，不能授予父 Agent 没有的能力。
+Feed 和 sidechain 在进入内存、父 EventBus、stream-json、recorder 或磁盘前统一脱敏；
+流式文本会暂存可能构成 secret 前缀的尾部，避免密钥被 chunk 拆分后绕过替换；
+feed 有界（默认 2,000 条 / 单条 24,000 字符），sidechain 保存 start/feed/state/message/
+history，可重启后审计，但当前进程不会自动接管或复活旧子代理 Task。Sidechain 不自动加入
+父 Agent 上下文，父代理必须通过 `wait_agent` / `get_agent_feed` 主动读取。
 
 ## 8. JSON 输出模式（`-m --output-format json`）
 
@@ -423,9 +462,10 @@ stdin 支持两种 user 形式：
 `plan/updated`（含 `items/statuses/active_index/explanation`）、
 `input/requested|resolved`（含 `request_id/options/allow_free_text`；resolved 只表示是否已回答，
 不回传答案正文）、`permission/requested|denied`、`context/compressed`、
-`hook/triggered`、`subagent/started|finished`、`job/started|output_delta|finished`、
+`hook/triggered`、`subagent/started|feed|state|finished`、`job/started|output_delta|finished`、
 `user/steered`、`error/occurred`；job 事件独立于 turn，因此不带 turn_id，但带
 `session_id`；`job/output_delta` 的 `sequence` 可直接作为 `after_sequence` 游标；
+`subagent/feed` 的 agent cursor 是 `agent_sequence`（外层 `sequence` 仍是 QueryEvent 顺序）；
 最后以 `system/session_end` 结束。turn 内事件都带 `turn_id`、单调 `sequence` 和
 `session_id`，user 对应的全部事件及 result 还带同一 `request_id`；后台 job 是跨 turn
 长生命周期事件，使用自己的 `job_id` 与游标。

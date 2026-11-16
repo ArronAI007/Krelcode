@@ -31,8 +31,10 @@ from .core.events import (
     AgentEvent,
     EventBus,
     RunFinished,
+    SubagentFeedUpdated,
     SubagentFinished,
     SubagentSpawned,
+    SubagentStateChanged,
     ToolCallCompleted,
 )
 from .core.hooks import HookResult
@@ -51,6 +53,8 @@ SUPPORTED_TRIGGERS = (
     "pre_compact",
     "post_compact",
     "subagent_started",
+    "subagent_feed",
+    "subagent_state",
     "subagent_finished",
     "run_finished",
     "session_end",
@@ -181,6 +185,22 @@ class HookRunner:
                 **base,
                 "agent_id": event.agent_id,
                 "task": event.task[:OUTPUT_PREVIEW],
+                "definition": event.definition,
+            })]
+        if isinstance(event, SubagentFeedUpdated):
+            return [("subagent_feed", {
+                **base,
+                "agent_id": event.agent_id,
+                "sequence": event.sequence,
+                "kind": event.kind,
+                "text": event.text[:OUTPUT_PREVIEW],
+            })]
+        if isinstance(event, SubagentStateChanged):
+            return [("subagent_state", {
+                **base,
+                "agent_id": event.agent_id,
+                "status": event.status,
+                "reason": event.reason[:OUTPUT_PREVIEW],
             })]
         if isinstance(event, SubagentFinished):
             return [("subagent_finished", {

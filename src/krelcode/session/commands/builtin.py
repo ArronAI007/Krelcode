@@ -67,8 +67,11 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             "mcp", "查看或重载 MCP", argument_hint="[reload]",
             help="查看 MCP 服务器状态；/mcp reload 重读配置并热重启"),
         CommandSpec(
-            "agents", "查看子代理状态",
-            help="列出子代理（后台任务）状态"),
+            "agents", "查看和控制子代理",
+            argument_hint="[list|feed|pause|resume|kill|definitions|sidechains]",
+            available_during_run=True,
+            help=("查看子代理；/agents feed <id> [after] 读取事件流；\n"
+                  "/agents pause|resume|kill <id>；/agents definitions 查看自定义定义")),
         CommandSpec(
             "jobs", "查看或控制后台 Shell 任务",
             argument_hint="[list|output <id> [after]|kill <id>]",

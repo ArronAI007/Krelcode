@@ -31,6 +31,7 @@ from ..core.events import (
     RunStarted,
     SubagentFinished,
     SubagentSpawned,
+    SubagentStateChanged,
     ToolCallCompleted,
     ToolCallStarted,
     ToolOutputDelta,
@@ -343,8 +344,18 @@ class StreamRenderer:
         elif isinstance(event, SubagentSpawned):
             self.end_stream()
             task = event.task if len(event.task) <= 60 else event.task[:60] + "…"
+            definition = f" [{event.definition}]" if event.definition else ""
             self._write(
-                f"  {self._mark(ASSISTANT_MARK)}agent {event.agent_id} 启动: {task}\n")
+                f"  {self._mark(ASSISTANT_MARK)}agent {event.agent_id}"
+                f"{definition} 启动: {task}\n")
+        elif isinstance(event, SubagentStateChanged):
+            # 终态由 SubagentFinished 单独渲染，避免同一状态打印两遍。
+            if event.status in {"paused", "running"}:
+                self.end_stream()
+                reason = f": {event.reason}" if event.reason else ""
+                self._write(
+                    f"  {self._mark(RESULT_MARK)}agent {event.agent_id} "
+                    f"{event.status}{reason}\n")
         elif isinstance(event, SubagentFinished):
             self.end_stream()
             detail = f": {event.preview}" if event.preview else ""

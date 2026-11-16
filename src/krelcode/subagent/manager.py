@@ -1,41 +1,15 @@
-"""SubagentManager：子代理生命周期管理。
+"""子代理生命周期、交互式控制、实时 feed 与 sidechain 持久化。
 
-每个子代理 = 一个独立 AgentLoop（自己的历史/事件总线/工具注册表），
-共享父级的 provider、ToolContext（工作区）与审批策略。
-后台执行用 asyncio.Task；父代理经 spawn/wait/send/list 四个工具驱动。
-
-Step 23 增强（对齐 Codex multi_agent 语义）：
-- **消息队列**：子代理运行中收到 send_input → 入队，当前任务完成后自动续跑，
-  同一 Task 内排空队列（wait 的语义 = 队列排空）
-- **interrupt**：取消当前 Task → 历史消毒（见 _sanitize_history）→ 立即
-  开新 Task 处理打断消息；队列中未处理的消息保留
-- **wait_many**：一次等多个子代理（asyncio.wait，超时不取消任务）
-
-Step 41 增强——**git worktree 隔离**（isolated=True）：
-- 子代理在独立 worktree（分支 krelcode/agent-<id>，位于
-  <workspace>/.krelcode/worktrees/<id>）中工作，文件写入被路径沙箱
-  天然限制在 worktree 内——多个子代理并行写同名文件互不干扰
-- 任务排空后未提交变更自动 commit 到隔离分支（带 -c 身份兜底，
-  不依赖用户 git config）；shutdown 回收 worktree，**分支保留**供
-  merge/cherry-pick；主工作区全程不受影响
-- 基于当前 HEAD 建分支（不含主工作区未提交改动）；要求工作区是
-  git 仓库，否则 spawn 抛 ValueError（工具层转 is_error）
-
-Step 42 增强——**fork_context**（依赖型子任务）：
-- spawn(task, fork_context=True) 把父对话历史深拷贝进子代理
-  （去掉父 system，换上子代理 system；子代理由此"看得见"任务背景）
-- 尾部消毒：spawn 发生在父轮执行中，历史尾部必然是悬挂的
-  assistant(tool_calls)（spawn 调用本身）→ sanitize_history 弹掉；
-  若消毒后尾部是未答完的 user 消息（正是触发委派的那句），弹出并
-  与子任务合并——既保上下文又保 user/assistant 严格交替（Anthropic 要求）
-
-防递归：子代理的工具集由 tool_factory 提供（app 里 = default_tools()，
-不含 spawn 系工具），委派深度硬限制为 1 层。
+每个子代理拥有独立 AgentLoop、history、ToolRegistry 和 child EventBus，共享
+父级 provider、工作区与审批策略。Pause 是协作式的 step 边界暂停，Kill 才
+取消 Task；Feed 使用稳定 sequence 供 UI/SDK 游标读取，sidechain 独立落盘。
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -44,13 +18,43 @@ from ..agent.compression import ContextManager
 from ..agent.context import _git
 from ..agent.loop import DEFAULT_MAX_STEPS, AgentLoop
 from ..agent.prompts import build_system_prompt
-from ..session.autocommit import ensure_local_exclude, git_is_repo
-from ..core.events import EventBus, SubagentFinished, SubagentSpawned
+from ..core.events import (
+    ContextCompressed,
+    ErrorOccurred,
+    EventBus,
+    LLMStreamDelta,
+    LLMThinkingDelta,
+    QueryPhaseChanged,
+    RunCancelled,
+    RunFinished,
+    RunStarted,
+    StepStarted,
+    SubagentFeedUpdated,
+    SubagentFinished,
+    SubagentSpawned,
+    SubagentStateChanged,
+    ToolCallCompleted,
+    ToolCallStarted,
+    ToolOutputDelta,
+    ToolProgress,
+    UserSteered,
+)
+from ..core.messages import Message, sanitize_history
 from ..core.redact import SecretRedactor
 from ..llm.base import LLMProvider
 from ..safety.policy import AllowAllPolicy
+from ..session.autocommit import ensure_local_exclude, git_is_repo
 from ..tools.base import RunMode, Tool, ToolContext, TurnAbortSignal
 from ..tools.registry import ToolRegistry
+from .control import AgentControl
+from .definition import AgentDefinition, AgentDefinitionManager
+from .feed import AgentFeed, AgentFeedPage
+from .sidechain import (
+    AgentSidechainWriter,
+    SidechainInfo,
+    SidechainStore,
+    read_sidechain,
+)
 
 SUBAGENT_SYSTEM_PROMPT = build_system_prompt(
     "You are a Krelcode SUBAGENT working on a delegated subtask.\n"
@@ -63,9 +67,15 @@ SUBAGENT_SYSTEM_PROMPT = build_system_prompt(
 PREVIEW_CHARS = 160
 
 STATUS_RUNNING = "running"
+STATUS_PAUSED = "paused"
 STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
+STATUS_KILLED = "killed"
+
+TERMINAL_STATUSES = frozenset({
+    STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED, STATUS_KILLED,
+})
 
 INTERRUPT_MARKER = "\n[被打断，用户新指示] "
 
@@ -81,21 +91,21 @@ class AgentHandle:
     turns: int = 0
     queue: List[str] = field(default_factory=list)
     task_obj: Optional[asyncio.Task] = field(default=None, repr=False)
-    # 隔离模式（Step 41）：worktree 路径与分支名；非隔离为 None
     worktree: Optional[Path] = None
     branch: Optional[str] = None
-    forked: bool = False   # Step 42：是否继承了父对话上下文
+    forked: bool = False
+    definition: str = ""
+    feed: Optional[AgentFeed] = field(default=None, repr=False)
+    control: AgentControl = field(default_factory=AgentControl, repr=False)
+    sidechain_path: Optional[Path] = None
+    sidechain: Optional[AgentSidechainWriter] = field(default=None, repr=False)
+    kill_requested: bool = field(default=False, repr=False)
 
     def preview(self) -> str:
         text = self.result or self.error or ""
         if len(text) > PREVIEW_CHARS:
             text = text[:PREVIEW_CHARS] + "…"
         return text.replace("\n", " ")
-
-
-# sanitize_history 已下沉到 core.messages（主代理取消修复与子代理打断共用）；
-# 此处 re-export 保持既有导入路径兼容
-from ..core.messages import Message, sanitize_history  # noqa: E402,F401
 
 
 class SubagentManager:
@@ -111,6 +121,10 @@ class SubagentManager:
         redactor: Optional[SecretRedactor] = None,
         system_prompt_provider: Optional[Callable[[], str]] = None,
         hook_port=None,
+        definitions: Optional[AgentDefinitionManager] = None,
+        sidechain_store: Optional[SidechainStore] = None,
+        feed_max_entries: int = 2_000,
+        feed_max_entry_chars: int = 24_000,
     ) -> None:
         self.llm = llm
         self.tool_factory = tool_factory
@@ -118,30 +132,71 @@ class SubagentManager:
         self.policy = policy or AllowAllPolicy()
         self.bus = bus or EventBus()
         self.max_steps = max_steps
-        # 子代理同样需要上下文管理：长任务（多轮工具调用）历史会膨胀，
-        # 无压缩将超出模型窗口导致 provider 400。None=不启用（向后兼容）。
         self.context_budget = context_budget
         self.redactor = redactor
         self.system_prompt_provider = system_prompt_provider
         self.hook_port = hook_port
+        self.definitions = definitions or AgentDefinitionManager(
+            tool_context.workspace_root)
+        self.sidechains = sidechain_store or SidechainStore(
+            tool_context.workspace_root, redactor=redactor)
+        if self.sidechains.redactor is None and redactor is not None:
+            self.sidechains.redactor = redactor
+        self.feed_max_entries = feed_max_entries
+        self.feed_max_entry_chars = feed_max_entry_chars
         self._handles: Dict[str, AgentHandle] = {}
         self._counter = 0
-        # fork_context 数据源：app 组装根注入 lambda: loop.history
-        # （用 getter 而非直接引用，/resume 重绑定 loop.history 后依然正确）
+        self._exclude_checked = False
         self.get_parent_history: Optional[Callable[[], List[Message]]] = None
+        self._closed = False
 
-    # -- 生命周期 ---------------------------------------------------------------------
+    # -- 生命周期 -----------------------------------------------------------------
 
-    async def spawn(self, task: str, isolated: bool = False,
-                    fork_context: bool = False) -> AgentHandle:
-        """创建一个后台子代理并立即开始执行任务。
+    async def spawn(
+        self,
+        task: str,
+        isolated: Optional[bool] = None,
+        fork_context: Optional[bool] = None,
+        *,
+        definition: Optional[str] = None,
+    ) -> AgentHandle:
+        """创建并启动后台子代理。
 
-        isolated=True：在独立 git worktree（分支 krelcode/agent-<id>）中执行，
-        并行写文件互不干扰；完成后变更自动提交到分支。
-        要求主工作区是 git 仓库，否则抛 ValueError。
-
-        fork_context=True：深拷贝父对话历史进子代理（依赖型子任务用）。
+        definition 指向用户定义文件；未传 isolated/fork_context 时使用定义中
+        的默认值。Definition allowlist 仅缩小工具集合，不改变审批与 Sandbox。
         """
+        if self._closed:
+            raise RuntimeError("SubagentManager 已关闭")
+        if self.sidechains.redactor is None and self.redactor is not None:
+            self.sidechains.redactor = self.redactor
+        if not self._exclude_checked:
+            self._exclude_checked = True
+            if await git_is_repo(self.tool_context.workspace_root):
+                await ensure_local_exclude(
+                    self.tool_context.workspace_root, ".krelcode/")
+        definition_obj: Optional[AgentDefinition] = None
+        if definition:
+            try:
+                definition_obj = self.definitions.get(definition)
+            except KeyError as exc:
+                raise ValueError(str(exc)) from exc
+        if isolated is None:
+            isolated = definition_obj.default_isolated if definition_obj else False
+        if fork_context is None:
+            fork_context = (
+                definition_obj.default_fork_context if definition_obj else False)
+
+        tools = list(self.tool_factory())
+        if definition_obj is not None and definition_obj.allowed_tools:
+            available = {tool.name for tool in tools}
+            missing = sorted(set(definition_obj.allowed_tools) - available)
+            if missing:
+                raise ValueError(
+                    f"Agent Definition {definition_obj.name!r} 引用了未知工具: "
+                    + ", ".join(missing))
+            allowed = set(definition_obj.allowed_tools)
+            tools = [tool for tool in tools if tool.name in allowed]
+
         self._counter += 1
         agent_id = f"a{self._counter}"
         worktree_path: Optional[Path] = None
@@ -150,6 +205,11 @@ class SubagentManager:
             self.tool_context.runtime,
             run_mode=RunMode.SUBAGENT,
             turn_id=None,
+            tool_allowlist=(
+                frozenset(definition_obj.allowed_tools)
+                if definition_obj is not None and definition_obj.allowed_tools
+                else self.tool_context.runtime.tool_allowlist
+            ),
         )
         tool_context = replace(
             self.tool_context,
@@ -168,70 +228,130 @@ class SubagentManager:
                 services=self.tool_context.services,
                 shell_jobs=getattr(self.tool_context, "shell_jobs", None),
             )
+
+        control = AgentControl()
         child_bus = EventBus()
         child_hook_port = self.hook_port
         if child_hook_port is not None and hasattr(child_hook_port, "rebind"):
             child_hook_port = child_hook_port.rebind(tool_context.workspace_root)
+
+        base_prompt = (
+            self.system_prompt_provider()
+            if self.system_prompt_provider is not None
+            else SUBAGENT_SYSTEM_PROMPT
+        )
+        system_prompt = (
+            definition_obj.system_prompt_with_base(base_prompt)
+            if definition_obj is not None else base_prompt
+        )
         loop = AgentLoop(
             llm=self.llm,
-            registry=ToolRegistry(self.tool_factory()),
+            registry=ToolRegistry(tools),
             tool_context=tool_context,
             policy=self.policy,
             bus=child_bus,
-            system_prompt=(
-                self.system_prompt_provider()
-                if self.system_prompt_provider is not None
-                else SUBAGENT_SYSTEM_PROMPT
-            ),
+            system_prompt=system_prompt,
             max_steps=self.max_steps,
-            # spawn 时以当时的 self.llm 建压缩器（/model 热切换后新建的子代理自动用新模型）
             context_manager=(ContextManager(self.llm, max_tokens=self.context_budget)
                              if self.context_budget else None),
             redactor=self.redactor,
             hook_port=child_hook_port,
+            step_gate=control.wait_if_paused,
         )
+
         effective_task = task
         forked = False
         if fork_context and self.get_parent_history is not None:
             forked_history, pending_user = self._fork_parent_history()
             if pending_user is not None:
-                # 触发委派的未答完 user 消息与子任务合并（保角色交替）
                 effective_task = f"{pending_user}\n\n[委派的子任务] {task}".strip()
             loop.history.extend(forked_history)
             forked = True
-        handle = AgentHandle(id=agent_id, task=task, loop=loop,
-                             worktree=worktree_path, branch=branch, forked=forked)
+
+        feed = AgentFeed(
+            agent_id,
+            redactor=self.redactor,
+            max_entries=self.feed_max_entries,
+            max_entry_chars=self.feed_max_entry_chars,
+        )
+        sidechain = self.sidechains.create(agent_id, {
+            "task": task,
+            "definition": definition_obj.name if definition_obj else "",
+            "definition_source": definition_obj.source if definition_obj else "",
+            "definition_path": str(definition_obj.path) if definition_obj and definition_obj.path else "",
+            "allowed_tools": list(definition_obj.allowed_tools) if definition_obj else [],
+            "isolated": bool(isolated),
+            "fork_context": bool(fork_context),
+            "worktree": str(worktree_path) if worktree_path else "",
+            "branch": branch or "",
+        })
+        handle = AgentHandle(
+            id=agent_id,
+            task=task,
+            loop=loop,
+            worktree=worktree_path,
+            branch=branch,
+            forked=forked,
+            definition=definition_obj.name if definition_obj else "",
+            feed=feed,
+            control=control,
+            sidechain_path=sidechain.path,
+            sidechain=sidechain,
+        )
         self._handles[agent_id] = handle
+        child_bus.subscribe(
+            lambda event, current=handle: self._on_child_event(current, event))
+        sidechain.append_message("user", effective_task, source="initial_task")
+        sidechain.append_state(STATUS_RUNNING, reason="spawn")
         handle.task_obj = asyncio.create_task(self._run(handle, effective_task))
-        await self.bus.emit(SubagentSpawned(agent_id, task))
+        await self.bus.emit(SubagentSpawned(
+            agent_id, task, definition=handle.definition))
         return handle
 
     def _fork_parent_history(self) -> Tuple[List[Message], Optional[str]]:
-        """深拷贝父历史（去父 system、尾部消毒）。
-
-        返回 (forked_messages, pending_user_text)：消毒后若尾部是未答完的
-        user 消息则弹出并作为第二返回值（调用方与子任务合并，避免连续 user）。
-        """
         source = self.get_parent_history() or []
         start = 1 if source and source[0].role == "system" else 0
         forked = [
             replace(m, tool_calls=list(m.tool_calls) if m.tool_calls else None)
             for m in source[start:]
         ]
-        sanitize_history(forked)   # 弹掉悬挂的 assistant(tool_calls)/tool 尾部
+        sanitize_history(forked)
         pending_user: Optional[str] = None
         if forked and forked[-1].role == "user":
             pending_user = forked.pop().content or ""
         return forked, pending_user
 
-    # -- git worktree 隔离（Step 41）---------------------------------------------------
+    # -- child feed ---------------------------------------------------------------
+
+    async def _on_child_event(self, handle: AgentHandle, event) -> None:
+        if handle.feed is None:
+            return
+        now = time.time()
+        if isinstance(event, (ToolCallCompleted, RunFinished, RunCancelled,
+                              ErrorOccurred)):
+            await self._publish_feed_entries(handle, handle.feed.flush_all(ts=now))
+        mapped = _feed_event(event)
+        if mapped is None:
+            return
+        kind, text, data = mapped
+        entry = handle.feed.add(kind, text, ts=now, data=data)
+        if entry is not None:
+            await self._publish_feed_entries(handle, (entry,))
+
+    async def _publish_feed_entries(self, handle: AgentHandle, entries) -> None:
+        for entry in entries:
+            if handle.sidechain is not None:
+                handle.sidechain.append_feed(entry)
+            await self.bus.emit(SubagentFeedUpdated(
+                handle.id, entry.sequence, entry.kind, entry.text, entry.data))
+
+    # -- git worktree 隔离 --------------------------------------------------------
 
     async def _create_worktree(self, agent_id: str) -> Tuple[Path, str]:
         ws = self.tool_context.workspace_root
         if not await git_is_repo(ws):
             raise ValueError(
                 "隔离子代理要求工作区是 git 仓库（先 git init，或不用 isolated）")
-        # worktree 位于 .krelcode/ 下：确保本地 exclude，不污染主仓库 status
         await ensure_local_exclude(ws, ".krelcode/")
         branch = f"krelcode/agent-{agent_id}"
         path = ws / ".krelcode" / "worktrees" / agent_id
@@ -242,7 +362,6 @@ class SubagentManager:
         return path, branch
 
     async def _finalize_isolated(self, handle: AgentHandle) -> None:
-        """把 worktree 中未提交的变更存档提交到隔离分支（幂等）。"""
         wt = handle.worktree
         if wt is None or not wt.is_dir():
             return
@@ -251,48 +370,75 @@ class SubagentManager:
             return
         await _git(wt, "add", "-A")
         label = handle.task.strip().replace("\n", " ")[:60]
-        # -c 身份兜底：不依赖用户 git config user.*
         await _git(wt,
                    "-c", "user.name=krelcode",
                    "-c", "user.email=agent@krelcode.local",
                    "commit", "-m", f"krelcode({handle.id}): {label}")
 
     async def _remove_worktree(self, handle: AgentHandle) -> None:
-        """回收 worktree（分支保留，供 merge/cherry-pick）。"""
         if handle.worktree is None:
             return
         ws = self.tool_context.workspace_root
         await _git(ws, "worktree", "remove", "--force", str(handle.worktree))
         await _git(ws, "worktree", "prune")
 
+    # -- 运行状态机 ---------------------------------------------------------------
+
+    async def _set_state(self, handle: AgentHandle, status: str, reason: str = "") -> None:
+        if handle.status == status:
+            return
+        handle.status = status
+        if handle.sidechain is not None:
+            handle.sidechain.append_state(
+                status, reason=reason, turns=handle.turns,
+                result=handle.result, error=handle.error)
+        await self.bus.emit(SubagentStateChanged(handle.id, status, reason))
+
+    async def _emit_finished(self, handle: AgentHandle) -> None:
+        if handle.sidechain is not None:
+            handle.sidechain.append_history(handle.loop.history, turn=handle.turns)
+        await self.bus.emit(SubagentFinished(
+            handle.id, handle.status, handle.preview()))
+
     async def _run(self, handle: AgentHandle, message: str) -> None:
-        """执行一条消息；完成后若队列非空则继续排空（同一 Task）。"""
+        """执行一条消息；队列非空时在同一 Task 内继续排空。"""
         while True:
-            handle.status = STATUS_RUNNING
             handle.result = None
             handle.error = None
+            await self._set_state(handle, STATUS_RUNNING, "执行任务")
             try:
                 result = await handle.loop.run(message)
                 handle.result = result
-                handle.status = STATUS_COMPLETED
                 handle.turns += 1
+                await self._set_state(handle, STATUS_COMPLETED, "本轮完成")
             except asyncio.CancelledError:
-                handle.status = STATUS_CANCELLED
-                handle.error = "任务被打断/取消"
-                await self.bus.emit(
-                    SubagentFinished(handle.id, handle.status, handle.preview()))
+                killed = handle.kill_requested
+                handle.status = STATUS_KILLED if killed else STATUS_CANCELLED
+                handle.error = "用户终止子代理" if killed else "任务被打断/取消"
+                if handle.sidechain is not None:
+                    handle.sidechain.append_state(
+                        handle.status, reason=handle.error, turns=handle.turns,
+                        error=handle.error)
+                    handle.sidechain.append_history(
+                        handle.loop.history, turn=handle.turns)
+                await self.bus.emit(SubagentStateChanged(
+                    handle.id, handle.status, handle.error))
+                await self.bus.emit(SubagentFinished(
+                    handle.id, handle.status, handle.preview()))
                 raise
-            except Exception as e:
-                handle.status = STATUS_FAILED
-                handle.error = f"{type(e).__name__}: {e}"
+            except Exception as exc:
+                handle.error = f"{type(exc).__name__}: {exc}"
                 handle.turns += 1
-            await self.bus.emit(
-                SubagentFinished(handle.id, handle.status, handle.preview()))
+                await self._set_state(handle, STATUS_FAILED, handle.error)
+            await self._emit_finished(handle)
+
             if handle.queue:
                 message = handle.queue.pop(0)
+                if handle.sidechain is not None:
+                    handle.sidechain.append_message(
+                        "user", message, source="queue")
                 continue
             if handle.worktree is not None:
-                # 队列排空：把隔离分支上的工作存档（失败/完成都保留成果）
                 await self._finalize_isolated(handle)
             return
 
@@ -302,91 +448,160 @@ class SubagentManager:
     def is_running(self, handle: AgentHandle) -> bool:
         return handle.task_obj is not None and not handle.task_obj.done()
 
-    # -- 交互：send / interrupt -----------------------------------------------------------
+    # -- 交互：send / pause / resume / kill --------------------------------------
 
     async def send_input(
         self, agent_id: str, message: str, interrupt: bool = False
     ) -> Tuple[AgentHandle, str]:
-        """给子代理发消息。返回 (handle, action)。
-
-        action ∈ started（空闲，立即开跑）/ queued（运行中，排队）/
-        interrupted（打断当前任务，立即处理本消息）。
-        """
-        handle = self._handles.get(agent_id)
-        if handle is None:
-            raise KeyError(f"未知子代理: {agent_id}")
+        handle = self._require_handle(agent_id)
+        if handle.status == STATUS_KILLED:
+            raise RuntimeError(f"子代理 {agent_id} 已被终止，不能追加任务")
 
         if not self.is_running(handle):
+            handle.kill_requested = False
             handle.task = message
+            if handle.sidechain is not None:
+                handle.sidechain.append_message("user", message, source="input")
             handle.task_obj = asyncio.create_task(self._run(handle, message))
             return handle, "started"
 
         if not interrupt:
             handle.queue.append(message)
+            if handle.sidechain is not None:
+                handle.sidechain.append_message("user", message, source="queued")
             return handle, "queued"
 
-        # interrupt：取消当前 Task → 消毒历史 → 立即处理新消息
+        if handle.control.paused:
+            handle.control.resume()
         handle.task_obj.cancel()
         await asyncio.gather(handle.task_obj, return_exceptions=True)
         sanitize_history(handle.loop.history)
-        # 历史尾部若是未答完的 user 消息，把打断指示合并进去
-        # （避免连续两条 user 消息——Anthropic 要求角色交替）；
-        # 合并后先弹出，_run→loop.run() 会把它作为新 user 消息重新追加
         if handle.loop.history and handle.loop.history[-1].role == "user":
             first = ((handle.loop.history[-1].content or "")
                      + INTERRUPT_MARKER + message)
             handle.loop.history.pop()
         else:
             first = message
+        handle.kill_requested = False
         handle.task = message
+        if handle.sidechain is not None:
+            handle.sidechain.append_message("user", message, source="interrupt")
         handle.task_obj = asyncio.create_task(self._run(handle, first))
         return handle, "interrupted"
 
-    # -- 等待 -----------------------------------------------------------------------------
+    async def pause(self, agent_id: str) -> AgentHandle:
+        handle = self._require_handle(agent_id)
+        if not self.is_running(handle):
+            raise ValueError(f"子代理 {agent_id} 当前未运行，无法暂停")
+        if handle.control.pause():
+            await self._set_state(handle, STATUS_PAUSED, "用户暂停")
+        return handle
+
+    async def resume(self, agent_id: str) -> AgentHandle:
+        handle = self._require_handle(agent_id)
+        if not handle.control.paused:
+            raise ValueError(f"子代理 {agent_id} 当前未暂停")
+        handle.control.resume()
+        await self._set_state(handle, STATUS_RUNNING, "用户恢复")
+        return handle
+
+    async def kill(self, agent_id: str) -> AgentHandle:
+        handle = self._require_handle(agent_id)
+        if not self.is_running(handle):
+            raise ValueError(f"子代理 {agent_id} 当前未运行，无法终止")
+        handle.kill_requested = True
+        handle.control.resume()
+        await self._set_state(handle, STATUS_KILLED, "用户终止")
+        assert handle.task_obj is not None
+        handle.task_obj.cancel()
+        await asyncio.gather(handle.task_obj, return_exceptions=True)
+        if handle.worktree is not None:
+            await self._finalize_isolated(handle)
+            await self._remove_worktree(handle)
+        return handle
+
+    # -- 等待 ---------------------------------------------------------------------
 
     async def wait(self, agent_id: str, timeout: Optional[float] = None) -> AgentHandle:
-        """等待单个子代理队列排空；超时返回当前状态（不取消任务）。"""
-        handle = self._handles.get(agent_id)
-        if handle is None:
-            raise KeyError(f"未知子代理: {agent_id}")
+        handle = self._require_handle(agent_id)
         await self._wait_handles([handle], timeout)
         return handle
 
     async def wait_many(
         self, agent_ids: List[str], timeout: Optional[float] = None
     ) -> List[AgentHandle]:
-        """一次等待多个子代理；任一未知 id 抛 KeyError。"""
-        handles = []
-        for agent_id in agent_ids:
-            handle = self._handles.get(agent_id)
-            if handle is None:
-                raise KeyError(f"未知子代理: {agent_id}")
-            handles.append(handle)
+        handles = [self._require_handle(agent_id) for agent_id in agent_ids]
         await self._wait_handles(handles, timeout)
         return handles
 
     @staticmethod
     async def _wait_handles(handles: List[AgentHandle], timeout: Optional[float]) -> None:
-        tasks = [h.task_obj for h in handles if h.task_obj is not None and not h.task_obj.done()]
-        if not tasks:
-            return
-        # asyncio.wait 超时不取消任务（与 shield 语义一致且支持多任务）
-        await asyncio.wait(tasks, timeout=timeout)
+        tasks = [h.task_obj for h in handles
+                 if h.task_obj is not None and not h.task_obj.done()]
+        if tasks:
+            await asyncio.wait(tasks, timeout=timeout)
 
     async def shutdown(self) -> None:
-        """取消所有运行中的子代理并回收隔离 worktree（分支保留）。"""
-        running = [h for h in self._handles.values() if self.is_running(h)]
-        for handle in running:
+        """取消所有运行/暂停子代理，存档 worktree 并关闭 sidechain。"""
+        if self._closed:
+            return
+        self._closed = True
+        active = [h for h in self._handles.values() if self.is_running(h)]
+        for handle in active:
+            assert handle.task_obj is not None
             handle.task_obj.cancel()
-        if running:
+        if active:
             await asyncio.gather(
-                *(h.task_obj for h in running), return_exceptions=True)
+                *(h.task_obj for h in active), return_exceptions=True)
         for handle in self._handles.values():
             if handle.worktree is not None:
-                await self._finalize_isolated(handle)   # 被取消的也存档已有成果
+                await self._finalize_isolated(handle)
                 await self._remove_worktree(handle)
+            if handle.sidechain is not None:
+                handle.sidechain.append_state(
+                    handle.status, reason="manager_shutdown",
+                    turns=handle.turns, result=handle.result, error=handle.error)
+                handle.sidechain.append_history(
+                    handle.loop.history, turn=handle.turns)
+                handle.sidechain.close()
 
-    # -- 观测 -------------------------------------------------------------------------
+    # -- Feed / Definition / Sidechain --------------------------------------------
+
+    def feed(
+        self, agent_id: str, after_sequence: int = 0, limit: int = 200,
+    ) -> AgentFeedPage:
+        handle = self._require_handle(agent_id)
+        if handle.feed is None:
+            raise ValueError(f"子代理 {agent_id} 没有 feed")
+        return handle.feed.page(after_sequence, limit)
+
+    def definition_lines(self) -> List[str]:
+        lines = list(self.definitions.status_lines())
+        lines.extend(
+            f"! 跳过无效定义 {issue.path}: {issue.message}"
+            for issue in self.definitions.issues)
+        return lines
+
+    def sidechain_lines(self, limit: int = 50) -> List[str]:
+        return [
+            f"{info.agent_id} [{info.status or '-'}] run={info.run_id} "
+            f"records={info.records} · {info.task[:60]} · {info.path}"
+            for info in self.sidechains.list(limit=limit)
+        ]
+
+    def read_sidechain(self, value: str) -> Tuple[Path, Tuple[dict, ...]]:
+        path = self.sidechains.resolve(value)
+        if path is None:
+            raise ValueError(f"未找到 sidechain: {value}")
+        return path, read_sidechain(path)
+
+    # -- 观测 ---------------------------------------------------------------------
+
+    def _require_handle(self, agent_id: str) -> AgentHandle:
+        handle = self._handles.get(agent_id)
+        if handle is None:
+            raise KeyError(f"未知子代理: {agent_id}")
+        return handle
 
     def status_lines(self) -> List[str]:
         lines = []
@@ -397,9 +612,11 @@ class SubagentManager:
             queued = f" · 排队 {len(handle.queue)}" if handle.queue else ""
             branch = f" · 分支 {handle.branch}" if handle.branch else ""
             branch += " · 继承上下文" if handle.forked else ""
-            line = (f"{handle.id} [{handle.status}] {handle.turns} 轮{queued}{branch} · "
-                    f"任务: {task_preview.replace(chr(10), ' ')}")
-            if handle.status in (STATUS_COMPLETED, STATUS_FAILED):
+            definition = f" · 定义 {handle.definition}" if handle.definition else ""
+            sequence = f" · feed {handle.feed.latest_sequence}" if handle.feed else ""
+            line = (f"{handle.id} [{handle.status}] {handle.turns} 轮{queued}{branch}"
+                    f"{definition}{sequence} · 任务: {task_preview.replace(chr(10), ' ')}")
+            if handle.status in TERMINAL_STATUSES:
                 line += f" · 结果: {handle.preview()}"
             lines.append(line)
         return lines
@@ -407,3 +624,57 @@ class SubagentManager:
     def build_tools(self) -> List[Tool]:
         from .tools import build_subagent_tools
         return build_subagent_tools(self)
+
+
+def _feed_event(event) -> Optional[Tuple[str, str, Dict[str, object]]]:
+    if isinstance(event, RunStarted):
+        return "user_message", event.user_input, {
+            "turn_id": event.turn_id, "session_id": event.session_id}
+    if isinstance(event, StepStarted):
+        return "step_started", f"step {event.step}", {"step": event.step}
+    if isinstance(event, QueryPhaseChanged):
+        return "phase", event.detail or event.phase, {"phase": event.phase}
+    if isinstance(event, LLMStreamDelta):
+        return "assistant_delta", event.text, {}
+    if isinstance(event, LLMThinkingDelta):
+        return "thinking_delta", event.text, {}
+    if isinstance(event, ToolCallStarted):
+        args = json.dumps(event.tool_call.arguments, ensure_ascii=False, sort_keys=True)
+        return "tool_started", f"{event.tool_call.name} {args}", {
+            "tool_call_id": event.tool_call.id,
+            "tool_name": event.tool_call.name,
+            "arguments": event.tool_call.arguments,
+        }
+    if isinstance(event, ToolProgress):
+        return "tool_progress", event.message, {
+            "tool_call_id": event.tool_call_id,
+            "tool_name": event.tool_name,
+            **dict(event.data),
+        }
+    if isinstance(event, ToolOutputDelta):
+        return "tool_output", event.text, {
+            "tool_call_id": event.tool_call_id,
+            "tool_name": event.tool_name,
+            "stream": event.stream,
+        }
+    if isinstance(event, ToolCallCompleted):
+        return "tool_completed", event.content, {
+            "tool_call_id": event.tool_call.id,
+            "tool_name": event.tool_call.name,
+            "is_error": event.is_error,
+            **dict(event.data),
+        }
+    if isinstance(event, RunFinished):
+        return "run_finished", event.final_text, {"turn_id": event.turn_id}
+    if isinstance(event, RunCancelled):
+        return "run_cancelled", event.reason, {"turn_id": event.turn_id}
+    if isinstance(event, UserSteered):
+        return "user_steered", event.text, {}
+    if isinstance(event, ContextCompressed):
+        return "context_compressed", "history compressed", {
+            "before_tokens": event.before_tokens,
+            "after_tokens": event.after_tokens,
+        }
+    if isinstance(event, ErrorOccurred):
+        return "error", event.error, {"context": event.context}
+    return None

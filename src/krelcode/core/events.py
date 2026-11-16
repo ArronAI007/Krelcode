@@ -200,14 +200,33 @@ class ShellJobFinished(AgentEvent):
 
 @dataclass(frozen=True)
 class SubagentSpawned(AgentEvent):
-    """子代理创建并开始后台执行（Step 13）。"""
+    """子代理创建并开始后台执行。"""
     agent_id: str
     task: str
+    definition: str = ""
+
+
+@dataclass(frozen=True)
+class SubagentFeedUpdated(AgentEvent):
+    """子代理 feed 新增一条已脱敏的有序事件。"""
+    agent_id: str
+    sequence: int
+    kind: str
+    text: str
+    data: Dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SubagentStateChanged(AgentEvent):
+    """子代理运行状态变化；terminal 仍由 SubagentFinished 收口。"""
+    agent_id: str
+    status: str
+    reason: str = ""
 
 
 @dataclass(frozen=True)
 class SubagentFinished(AgentEvent):
-    """子代理到达终态：completed / failed / cancelled。"""
+    """子代理一轮或整个运行到达终态：completed / failed / cancelled / killed。"""
     agent_id: str
     status: str
     preview: str
