@@ -72,6 +72,7 @@ from .editor import (
     sanitize_pasted_text,
 )
 from .render import CYAN, DIM, RESET, StreamRenderer, auto_color
+from .status_line import StatusLineRenderer, read_git_branch
 from .tui.controller import PanelController
 from .tui.mouse import (
     MOUSE_DISABLE,
@@ -1146,6 +1147,10 @@ async def run_repl(
         prompt.set_panels(layout.lines)
 
     print_banner(loop, tool_names, session_path=session_path)
+    status_renderer = getattr(loop, "status_line_renderer", None)
+    if not isinstance(status_renderer, StatusLineRenderer):
+        status_renderer = StatusLineRenderer()
+    status_branch = read_git_branch(workspace_root)
     raw_inbox: asyncio.Queue = asyncio.Queue()
     action_queue: asyncio.Queue = asyncio.Queue()
     job_notifications: asyncio.Queue = asyncio.Queue()
@@ -1174,6 +1179,32 @@ async def run_repl(
         prompt, suggest, color=use_color, history=input_history,
         panels=panel_controller)
 
+    def render_status(view: SessionViewState) -> str:
+        """Build a status line without touching disk on every redraw."""
+        progress = view.status_text()
+        if not progress and controller.plan_manager.pending:
+            progress = "计划待确认 · /plan approve 执行"
+        tokens = estimate_history_tokens(loop.history)
+        manager = getattr(loop, "context_manager", None)
+        budget = getattr(manager, "max_tokens", None)
+        context = f"ctx {tokens}/{budget}" if budget else f"ctx {tokens}"
+        provider = str(getattr(loop.llm, "name", "") or "")
+        model = str(getattr(loop.llm, "model", "") or "")
+        session = (
+            Path(session_path).stem if session_path else "")
+        return status_renderer.render(
+            provider=provider,
+            model=model,
+            permission=(
+                f"权限 {controller.permission_manager.mode.value}"),
+            session=session,
+            cwd=str(workspace_root),
+            status=progress,
+            tokens=str(tokens),
+            context=context,
+            branch=status_branch,
+        )
+
     def refresh_status(
         current: Optional[SessionViewState] = None,
         *,
@@ -1185,16 +1216,7 @@ async def run_repl(
         if not force and now - last_status_draw < 0.15:
             return
         view = current or state
-        status = view.status_text()
-        permission = f"权限 {controller.permission_manager.mode.value}"
-        if status:
-            status = f"{status} · {permission}"
-        elif controller.plan_manager.pending:
-            status = (
-                "计划待确认 · /plan approve 执行 · "
-                f"{permission} · Shift-Tab 切换")
-        else:
-            status = f"{permission} · Shift-Tab 切换 · Ctrl-O 面板"
+        status = render_status(view)
         if status != status_cache:
             status_cache = status
             prompt.set_status(status)
@@ -1210,16 +1232,7 @@ async def run_repl(
     def restore_prompt() -> None:
         nonlocal status_cache, last_status_draw
         refresh_panels(queue_size=len(runner.queue))
-        status_cache = state.status_text()
-        permission = f"权限 {controller.permission_manager.mode.value}"
-        if status_cache:
-            status_cache = f"{status_cache} · {permission}"
-        elif controller.plan_manager.pending:
-            status_cache = (
-                "计划待确认 · /plan approve 执行 · "
-                f"{permission} · Shift-Tab 切换")
-        else:
-            status_cache = f"{permission} · Shift-Tab 切换 · Ctrl-O 面板"
+        status_cache = render_status(state)
         prompt.set_status(status_cache)
         prompt.resume_or_show(current_prompt())
         last_status_draw = time.monotonic()

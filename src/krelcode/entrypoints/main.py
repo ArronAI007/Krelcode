@@ -55,6 +55,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="禁用 Agent Skills 发现、索引与相关工具")
     p.add_argument("--skills-dir", action="append", default=[],
                    help="额外 skill 根目录（可重复；优先级高于项目/全局目录）")
+    p.add_argument("--output-style", default=None,
+                   help="当前 Output Style 名称（覆盖 [output_styles].active）")
+    p.add_argument("--output-style-dir", action="append", default=[],
+                   help="额外 Output Style 文件或目录（可重复）")
+    p.add_argument("--no-output-styles", action="store_true",
+                   help="禁用 Output Styles 发现与注入")
+    p.add_argument("--no-web", action="store_true",
+                   help="禁用内置 WebFetch/WebSearch 工具")
     p.add_argument("--no-plugins", action="store_true",
                    help="禁用本地目录插件发现与插件工具")
     p.add_argument("--plugins-dir", action="append", default=[],

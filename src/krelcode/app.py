@@ -46,6 +46,10 @@ from .core.errors import ConfigError
 from .core.redact import SecretRedactor
 from .extensions import ExtensionRegistry, replace_runtime_extensions
 from .hooks import HookRunner, parse_hooks
+from .lsp.manager import LSPManager, LSPOptions
+from .lsp.tools import build_lsp_tools
+from .output_styles import OutputStyleConfig, OutputStyleManager
+from .web.tools import WebOptions, WebRuntime
 from .jobs import ShellJobManager
 from .core.messages import Message, ToolCall
 from .llm.base import LLMProvider, collect
@@ -116,9 +120,15 @@ from .tools.extension.update_plan import UpdatePlanTool
 from .tools.registry import ToolRegistry
 from .ui.approval import ApprovalBroker
 from .ui.repl import run_repl
+from .ui.status_line import StatusLineOptions, StatusLineRenderer
 
 
-def default_tools(memory_store: Optional[MemoryStore] = None) -> List[Tool]:
+def default_tools(
+    memory_store: Optional[MemoryStore] = None,
+    *,
+    lsp_manager: Optional[LSPManager] = None,
+    web_runtime: Optional[WebRuntime] = None,
+) -> List[Tool]:
     """内置工具集（16 个 + 9 个子代理工具在 build_loop 注册）。
     MCP 远程工具在运行时追加注册；传入 MemoryStore 时额外暴露只读
     ``memory_search``。"""
@@ -130,6 +140,10 @@ def default_tools(memory_store: Optional[MemoryStore] = None) -> List[Tool]:
     ]
     if memory_store is not None:
         tools.append(MemorySearchTool(memory_store))
+    if lsp_manager is not None and lsp_manager.enabled:
+        tools.extend(build_lsp_tools(lsp_manager))
+    if web_runtime is not None and web_runtime.options.enabled:
+        tools.extend(web_runtime.build_tools())
     return tools
 
 
@@ -544,10 +558,29 @@ async def build_loop(
     shell_jobs = ShellJobManager(bus, workspace_root=workspace_root)
     tool_context.shell_jobs = shell_jobs
     policy = build_policy(args, workspace_root, bus, approver=approver)
-    builtin_tools = default_tools(memory_store)
+    lsp_manager = LSPManager(
+        workspace_root, options=LSPOptions.from_config(config.get("lsp")))
+    web_options = WebOptions.from_config(
+        config.get("web"), config.get("web_search"))
+    if getattr(args, "no_web", False):
+        web_options = WebOptions(
+            enabled=False, search_enabled=False,
+            max_bytes=web_options.max_bytes, timeout=web_options.timeout,
+            max_redirects=web_options.max_redirects,
+            max_chars=web_options.max_chars,
+            allowed_ports=web_options.allowed_ports,
+            allow_private=web_options.allow_private,
+            search_provider=web_options.search_provider,
+            search_api_key_env=web_options.search_api_key_env,
+            search_endpoint=web_options.search_endpoint,
+            search_max_results=web_options.search_max_results,
+        )
+    web_runtime = WebRuntime.from_options(web_options)
+    builtin_tools = default_tools(
+        memory_store, lsp_manager=lsp_manager, web_runtime=web_runtime)
     def child_tool_factory() -> List[Tool]:
         tools = (
-            default_tools(memory_store)
+            default_tools(memory_store, lsp_manager=lsp_manager, web_runtime=web_runtime)
             + skill_tools
             + list(extra_tools or [])
             + list(plugin_manager.tools)
@@ -607,6 +640,18 @@ async def build_loop(
     for tool in manager.build_tools():
         registry.register(
             tool, ToolDescriptor.from_tool(tool, source=ToolSource.SUBAGENT))
+    output_style_config = OutputStyleConfig.from_config(
+        config.get("output_styles"),
+        workspace=workspace_root,
+        cli_paths=getattr(args, "output_style_dir", ()) or (),
+        cli_active=getattr(args, "output_style", None),
+    )
+    if getattr(args, "no_output_styles", False):
+        output_style_config = OutputStyleConfig(
+            enabled=False, active="", paths=output_style_config.paths,
+            home=output_style_config.home)
+    output_style_manager = OutputStyleManager(
+        workspace_root, config=output_style_config)
     prompt_registry = PromptFragmentRegistry([base_fragment()])
     if workspace_context is not None:
         prompt_registry.replace_group(
@@ -620,6 +665,7 @@ async def build_loop(
         memory_fragment = memory_store.fragment()
         if memory_fragment is not None:
             prompt_registry.register(memory_fragment)
+    output_style_manager.apply_to_registry(prompt_registry)
     prompt_snapshot = prompt_registry.snapshot()
     directory_rules_enabled = (
         not args.no_context
@@ -676,6 +722,11 @@ async def build_loop(
     loop.rule_loader = rule_loader
     loop.directory_rule_source = directory_rule_source
     loop.memory_store = memory_store
+    loop.lsp_manager = lsp_manager
+    loop.output_style_manager = output_style_manager
+    loop.web_runtime = web_runtime
+    loop.status_line_renderer = StatusLineRenderer(
+        StatusLineOptions.from_config(config.get("status_line")))
     loop.context_checkpoint_store = context_checkpoint_store
     if context_checkpoint_store is not None:
         context_coordinator = ContextCheckpointCoordinator(
@@ -1065,6 +1116,8 @@ async def async_main(args: argparse.Namespace) -> int:
             approval_broker.close()
         if input_broker is not None:
             input_broker.close()
+        if getattr(loop, "lsp_manager", None) is not None:
+            await loop.lsp_manager.close()
         await runtime.close()
 
 

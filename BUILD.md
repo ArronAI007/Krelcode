@@ -109,6 +109,10 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | 诊断/脚手架 | `doctor.py` `scaffold.py` |
 | 组装根（唯一认识所有具体类的地方） | `app.py` |
 | Stream JSON 协议 / 持久运行器 / Python SDK | `session/stream_json.py` `session/stream_json_runner.py` `sdk.py` |
+| LSP 客户端与管理器 | `lsp/client.py` `lsp/manager.py` `lsp/tools.py` |
+| Output Styles / Status Line | `output_styles.py` `ui/status_line.py` |
+| WebFetch / WebSearch | `web/http.py` `web/tools.py` |
+| TypeScript SDK | `typescript-sdk/src/index.ts` |
 | 全局安装/升级/卸载 | `install.sh` |
 
 ## 4. 测试方法论
@@ -124,8 +128,9 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | input | ScriptedInput / TimedInput | REPL 全命令 + steering 时序 |
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
-两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 1,174 通过、2 skip；本地端口可用时 1,176/1,176 全过。
+P2 新增测试使用 fake LSP stdio server、注入 resolver/transport、临时样式目录与
+Node 内置测试运行器；LSP/Web 测试不要求本机安装语言服务器或发起真实网络请求。
+SSE/Streamable 的真实 http.server 集成用 socket bind 探测自动 skip。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /
@@ -162,3 +167,14 @@ python scripts/real_acceptance.py --provider anthropic --keep
 - MCP 交互式 OAuth 使用本机回调端口（默认 `8765`，可配置）；端口被占用时需改用可用端口，token endpoint/client 必须接受对应 redirect URI
 - Structured Compact 的模型摘要仍依赖模型能力；失败或 schema 非法时使用 Working Context/history 降级，宁可保留结构化事实也不阻断主循环
 - Fragment 手动启停是当前会话运行时状态，重启恢复默认；需要长期策略时应修改来源本身或后续增加持久化 overrides
+
+## P2 验证命令
+
+```bash
+PYTHONPATH=src pytest -q tests/test_lsp.py tests/test_output_styles.py \
+  tests/test_status_line.py tests/test_web_tools.py
+PYTHONPATH=src node --experimental-strip-types --test typescript-sdk/tests/sdk.test.ts
+```
+
+TypeScript SDK 的 `npm run typecheck` 需要本机已有 `typescript` 与 `@types/node`；
+没有网络依赖时仍可运行上面的 Node type-stripping 测试。

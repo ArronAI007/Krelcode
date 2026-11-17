@@ -14,7 +14,7 @@ from krelcode.session.commands import (
 
 def test_builtin_catalog_has_expected_commands_and_run_subset():
     registry = builtin_command_registry()
-    assert len(registry.specs) == 33
+    assert len(registry.specs) == 36
     assert [spec.name for spec in registry.list(running=True)] == [
         "thinking", "plan", "tool-output", "queue", "agents", "jobs", "permissions",
         "stop", "exit",
@@ -23,6 +23,9 @@ def test_builtin_catalog_has_expected_commands_and_run_subset():
     assert registry.resolve("/stop").kind is CommandKind.CONTROL
     assert registry.resolve("/cost").kind is CommandKind.COMMAND
     assert registry.resolve("/memory").kind is CommandKind.COMMAND
+    assert registry.resolve("/lsp").kind is CommandKind.COMMAND
+    assert registry.resolve("/web").kind is CommandKind.COMMAND
+    assert registry.resolve("/output-style").kind is CommandKind.COMMAND
 
 
 def test_resolution_accepts_slash_alias_and_case_insensitive_name():

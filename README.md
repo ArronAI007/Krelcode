@@ -98,7 +98,7 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --mode
 #   api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp [reload|auth <server>]`（状态、热重载、OAuth + PKCE 授权）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>|install|update|enable|disable|remove ...]`（插件生命周期）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|fragments|enable|disable|toggle|reset|cache|refresh]`（请求 token 分项、来源归因、Fragment 启停、缓存边界与工作区重采）、`/memory [list [scope]|show|add <text> --scope|search|pin|unpin|forget|mode|review|migrate]`（分层记忆、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp [reload|auth <server>]`（状态、热重载、OAuth + PKCE 授权）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>|install|update|enable|disable|remove ...]`（插件生命周期）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/lsp`（语言服务器状态）、`/web`（网页工具安全配置）、`/output-style [list|show <name>|reload|off|<name>]`（声明式输出样式）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|fragments|enable|disable|toggle|reset|cache|refresh]`（请求 token 分项、来源归因、Fragment 启停、缓存边界与工作区重采）、`/memory [list [scope]|show|add <text> --scope|search|pin|unpin|forget|mode|review|migrate]`（分层记忆、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
 
 所有命令由统一 `CommandRegistry` 发现：`/help`、slash 菜单、Tab 补全、运行态过滤和 InputProcessor 共用同一份 catalog。来源优先级为 `builtin > custom > skill > plugin > MCP`。用户/项目 Markdown Command 来自 `~/.krelcode/commands/*.md`、`<workspace>/.krelcode/commands/*.md`、`<workspace>/.commands/*.md` 与 `[commands].paths`；`$ARGUMENTS` / `${ARGUMENTS}` 渲染参数，`allowed-tools` 只能收窄工具集。允许用户调用的 Skill 会自动显示为 `/<skill-name> [参数]`，MCP Prompt 会命名空间化为 `/mcp__<server>__<prompt> [参数]`；`/skills reload`、`/mcp reload` 与 `/plugins reload` 会原地刷新对应来源，内置命令在命名冲突时保持最高优先级。
 
@@ -160,6 +160,27 @@ transport = "sse"
 内置 `repo_map` 工具：Python 用 ast 精确提取类/函数/方法+行号（零依赖，不引 tree-sitter），JS/TS 用正则，20K 字符预算，LLM 可按行号接 `read_file` 精读。
 
 默认工具 16 个：文件/检索与执行工具（`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`、`repo_map`、`find_refs`、`check_syntax` 等）、`get_time`、`ask_user`、`update_plan`，以及 `job_start/job_output/job_list/job_kill`。另注册 9 个子代理工具：`spawn_agent`、`wait_agent`、`send_to_agent`、`list_agents`、`get_agent_feed`、`pause_agent`、`resume_agent`、`kill_agent`、`list_agent_definitions`。启用 Skills 时另加 5 个 Skill 工具，并叠加 MCP 远程工具和插件工具。
+
+### P2：差异化能力
+
+- **LSP 客户端**：配置 `[lsp].enabled = true` 后，按扩展名懒启动语言服务器；提供
+  `lsp_diagnostics`、`lsp_hover`、`lsp_definition`、`lsp_references` 四个只读工具。
+  LSP 使用 stdio `Content-Length` framing，工作区外文件、敏感文件和超限消息会在
+  发送给服务器前拒绝；单个服务器崩溃不会阻断主 Agent。
+- **Output Styles**：从 `~/.krelcode/output-styles/*.md`、
+  `<workspace>/.krelcode/output-styles/*.md` 与 `[output_styles].paths` 发现样式。
+  样式只是带 frontmatter 的 Markdown 指令，不执行代码；项目同名覆盖用户样式，
+  `/output-style <name>` 热切换，`/output-style off` 恢复默认。
+- **可配置 Status Line**：`[status_line].template` 只支持
+  `{provider} {model} {permission} {session} {cwd} {status} {tokens} {context} {branch}`；
+  不执行 shell，高频刷新不扫描磁盘。
+- **WebFetch/WebSearch**：内置安全 HTTP 客户端拒绝 localhost、私网、非公网 DNS、
+  非 http/https、异常端口、敏感 Header 与超大响应；重定向逐跳复检。WebSearch
+  通过 `SearchBackend` 解耦，默认 Brave，密钥只从 `[web_search].api_key_env` 读取。
+  `--no-web` 完全关闭网页工具。
+- **TypeScript SDK**：`typescript-sdk/` 提供零运行时依赖的 Node/TypeScript 客户端，
+  复用 `stream-json` v1；支持并发 `requestId` 路由、流式 `query()`、`run()`、
+  `interrupt()`、环境变量密钥与有界 stderr 脱敏。见 `typescript-sdk/README.md`。
 
 ### Agent Skills
 

@@ -41,6 +41,10 @@ krelcode [子命令] [选项]
 | `--skills-dir <路径>` | — | 追加 Skill 根目录，可重复；也支持 TOML `[skills].paths` |
 | `--no-plugins` | — | 关闭本地目录插件发现与插件工具 |
 | `--plugins-dir <路径>` | — | 追加插件根目录，可重复；也支持 TOML `[plugins].paths` |
+| `--output-style <名称>` | — | 覆盖当前 Output Style；也可用 `[output_styles].active` |
+| `--output-style-dir <路径>` | — | 追加 Output Style 文件或目录，可重复 |
+| `--no-output-styles` | — | 禁用 Output Styles |
+| `--no-web` | — | 禁用 WebFetch/WebSearch |
 | `--auto-approve` | — | ASK 级操作自动批准（DENY 级仍拒绝） |
 | `--permission-mode default\|read-only\|auto-approve\|plan` | 配置/`default` | 工具权限模式；`read-only`/`plan` 只暴露只读工具 |
 | `--sandbox-backend auto\|static\|seatbelt\|bubblewrap` | auto | 运行时隔离后端；显式后端不可用则启动失败 |
@@ -124,6 +128,9 @@ krelcode [子命令] [选项]
 | `/skill <name> [参数]` | 用户主动加载并执行 Skill；参数替换 `$ARGUMENTS` |
 | `/plugins [reload\|show <name>\|install\|update\|enable\|disable\|remove ...]` | 查看状态、热重载和 Plugin v2 基础生命周期 |
 | `/extensions [kind] [source]` | 统一列出 Plugin/Tool/Skill/Agent/Command/Hook/MCP 的来源、scope、启停与冲突 |
+| `/lsp` | 查看语言服务器配置、按需启动状态与加载问题（不启动未使用的服务器） |
+| `/web` | 查看 WebFetch/WebSearch 网络边界、搜索后端与密钥环境变量是否就绪（不发起请求） |
+| `/output-style [list\|show <name>\|reload\|off\|<name>]` | 查看、切换或重载声明式 Output Style |
 | `/mcp` · `/mcp reload` | MCP 状态（含 Resource/Template/OAuth 统计）· 重读配置热重载 |
 | `/mcp auth <server>` | 对 HTTP MCP 服务器执行 authorization code + PKCE OAuth 授权并重连 |
 | `/allow [add\|remove <程序名>]` | 旧版程序白名单兼容入口（持久化） |
@@ -268,6 +275,42 @@ include_directory_rules = true       # 按当前轮目标路径加载祖先目�
 rules_imports = true                 # 展开独立行 @相对路径
 rules_import_max_depth = 5
 rules_import_max_files = 32
+
+[lsp]                                # 语言服务器（默认关闭，按扩展名懒启动）
+enabled = false
+startup_timeout_ms = 10000
+request_timeout_ms = 5000
+
+[lsp.servers.python]
+command = "pyright-langserver"
+args = ["--stdio"]
+extensions = [".py"]
+language_id = "python"
+
+[output_styles]                      # Markdown 只读指令；项目同名覆盖用户
+enabled = true
+active = ""                          # 空=默认输出
+paths = ["./output-styles"]
+
+[status_line]                        # 仅模板变量，不执行 shell
+enabled = true
+template = "{provider}/{model} · {permission} · {context} · {branch}"
+max_length = 160
+
+[web]                                # WebFetch 安全网络边界
+enabled = true
+timeout = 15
+max_bytes = 2097152
+max_redirects = 5
+max_chars = 20000
+allowed_ports = [80, 443]
+
+[web_search]                         # SearchBackend；密钥只从环境变量读取
+enabled = true
+provider = "brave"
+api_key_env = "BRAVE_SEARCH_API_KEY"
+endpoint = "https://api.search.brave.com/res/v1/web/search"
+max_results = 5
 
 [mcp_servers.fetch]                  # stdio 传输
 command = "uvx"
@@ -741,3 +784,30 @@ Hooks、权限模式和 Sandbox 完全一致。常用选项与 CLI 同名；`ext
 新增旗标，禁止覆盖 `-m/--message/--input-format/--output-format`。API key 不应
 写入 `extra_args` 或 user 消息，应继续使用 `[providers.*].api_key_env`。
 `stderr_tail()` 和进程异常中的诊断文本也会做二次密钥脱敏。
+
+## 11. TypeScript SDK
+
+`typescript-sdk/` 是零运行时依赖的 Node/TypeScript 客户端，不复制 Python
+Agent 逻辑，而是复用同一 `stream-json` v1 子进程协议：
+
+```ts
+import { KrelcodeClient } from "@krelcode/sdk";
+
+const client = await KrelcodeClient.start({
+  workspace: ".",
+  mock: true,
+  noSession: true,
+  noContext: true,
+  noMcp: true,
+});
+try {
+  console.log(await client.run("解释 README"));
+} finally {
+  await client.close();
+}
+```
+
+可通过 `KRELCODE_PYTHON` 指定能运行 `python -m krelcode` 的解释器；API key
+继续通过 `options.env` 或宿主环境注入，不会进入 `argv`。Node 24 可直接运行
+`npm test`，测试使用内置 TypeScript stripping；`npm run typecheck` 需要本机
+安装开发依赖 `typescript` 与 `@types/node`。

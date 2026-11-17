@@ -98,6 +98,43 @@ api_key_env = "GEMINI_API_KEY"
 # resource = "https://mcp.example.com/mcp"
 # redirect_port = 8765
 
+# ---- P2：语言服务器 / Output Styles / Status Line / Web ----
+# [lsp]
+# enabled = false                   # 按需启动配置的 LSP server
+# startup_timeout_ms = 10000
+# request_timeout_ms = 5000
+# max_message_bytes = 16777216
+# [lsp.servers.python]
+# command = "pyright-langserver"
+# args = ["--stdio"]
+# extensions = [".py"]
+# language_id = "python"
+#
+# [output_styles]                   # 只注入 Markdown 指令，不执行代码
+# enabled = true
+# active = ""                       # 例如 "concise"；空表示默认
+# paths = ["./output-styles"]       # 额外文件/目录
+#
+# [status_line]                     # 安全模板，不执行 shell
+# enabled = true
+# template = "{provider}/{model} · {permission} · {context} · {branch}"
+# max_length = 160
+#
+# [web]                             # WebFetch 的 SSRF/size/time 边界
+# enabled = true
+# timeout = 15
+# max_bytes = 2097152
+# max_redirects = 5
+# max_chars = 20000
+# allowed_ports = [80, 443]
+#
+# [web_search]
+# enabled = true
+# provider = "brave"                # 或通过自定义 SearchBackend 注入
+# api_key_env = "BRAVE_SEARCH_API_KEY"
+# endpoint = "https://api.search.brave.com/res/v1/web/search"
+# max_results = 5
+
 # ---- 事件钩子 ----
 # [[hooks]]
 # on = "file_edited"    # 生命周期触发器，完整列表见 CONFIG.md

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import shlex
 
 from ....agent.context import build_workspace_context_bundle
@@ -631,6 +632,75 @@ async def handle_undo(ctx: CommandContext) -> CommandResult:
     label = f"（{result.label}）" if result.label else ""
     detail = "；".join(details) if details else "无文件变化"
     return _ok(f"  [undo] 已回滚上一轮{label}: {detail}")
+
+
+async def handle_lsp(ctx: CommandContext) -> CommandResult:
+    manager = getattr(ctx.loop, "lsp_manager", None)
+    if manager is None:
+        return _ok("  （LSP 不可用）")
+    return _ok(*manager.status_lines())
+
+
+async def handle_web(ctx: CommandContext) -> CommandResult:
+    runtime = getattr(ctx.loop, "web_runtime", None)
+    options = getattr(runtime, "options", None)
+    if options is None or not options.enabled:
+        return _ok("  WebFetch/WebSearch 已禁用（--no-web 或 [web].enabled=false）")
+    key_env = getattr(options, "search_api_key_env", "")
+    configured = bool(os.environ.get(key_env)) if key_env else False
+    return _ok(
+        f"  WebFetch: enabled · timeout {options.timeout:g}s"
+        f" · max {options.max_bytes} bytes · private={'allow' if options.allow_private else 'deny'}",
+        f"  允许端口: {', '.join(str(port) for port in options.allowed_ports)}",
+        f"  WebSearch: {'enabled' if options.search_enabled else 'disabled'}"
+        f" · provider={options.search_provider}"
+        f" · key_env={key_env or '（无）'}"
+        f" · configured={'yes' if configured else 'no'}",
+    )
+
+
+async def handle_output_style(ctx: CommandContext) -> CommandResult:
+    manager = getattr(ctx.loop, "output_style_manager", None)
+    if manager is None:
+        return _ok("  （Output Styles 不可用）")
+    parts = ctx.request.arguments.split(maxsplit=1)
+    operation = parts[0].strip().lower() if parts else ""
+    argument = parts[1].strip() if len(parts) > 1 else ""
+    if not operation:
+        return _ok(*manager.status_lines())
+    if operation == "list":
+        return _ok(*manager.status_lines())
+    if operation == "reload":
+        manager.reload()
+        manager.apply_to_registry(ctx.loop.prompt_registry)
+        refresh_registry_snapshot(ctx.loop)
+        return _ok("  Output Styles 已重载", *manager.status_lines())
+    if operation in {"show", "info"}:
+        if not argument:
+            return _ok("  用法: /output-style show <name>")
+        style = manager.get(argument)
+        if style is None:
+            return _ok(f"  未找到 Output Style: {argument}")
+        return _ok(
+            f"  {style.name} [{style.scope}] {style.description}".rstrip(),
+            f"  来源: {style.path or style.source}",
+            style.content.rstrip())
+    if operation in {"off", "none", "default"}:
+        manager.select("off")
+        manager.apply_to_registry(ctx.loop.prompt_registry)
+        refresh_registry_snapshot(ctx.loop)
+        return _ok("  已恢复默认输出样式")
+    style = manager.select(operation)
+    if style is None:
+        return _ok(
+            f"  未找到 Output Style: {operation}",
+            "  可用样式: " + (", ".join(item.name for item in manager.styles)
+                              if manager.styles else "（无）"))
+    manager.apply_to_registry(ctx.loop.prompt_registry)
+    refresh_registry_snapshot(ctx.loop)
+    return _ok(
+        f"  已切换 Output Style: {style.name} [{style.scope}]",
+        f"  来源: {style.path or style.source}")
 
 
 async def handle_model(ctx: CommandContext) -> CommandResult:

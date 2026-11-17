@@ -1501,3 +1501,22 @@ agent.QueryEngine / AgentRuntime / EventBus
   SDK 对 stderr 异常尾部再做一次模式脱敏。API key 永不进入 argv。
 - `result` 携带本轮/累计 usage、成本、LLM 调用数、耗时和 `duration_ms`；
   `success/cancelled/error` 都是可机器判定的唯一终态。
+
+## P2 差异化能力的边界（Step 97）
+
+- **LSP**：`lsp/client.py` 只负责 JSON-RPC framing、请求/通知和进程生命周期；
+  `lsp/manager.py` 负责按扩展名懒启动与文档同步；`lsp/tools.py` 暴露窄的只读
+  diagnostics/hover/definition/references。服务端 stdout/stderr 都有界，单服务器
+  失败隔离，LSP 工具不直接写文件。
+- **Output Styles**：样式是带 frontmatter 的 Markdown 指令包，来源固定为 user /
+  project / configured；合并规则同名后写入覆盖前者。活动样式只替换一个带 source
+  的 `style:output` PromptFragment，不改变 base prompt，也不进入可执行 Hook 链。
+- **Status Line**：`ui/status_line.py` 是纯模板渲染器，变量白名单固定，控制字符被
+  清理；REPL 每 150ms 只使用内存快照，Git 分支在会话启动时读取一次。
+- **Web**：`web/http.py` 先解析 DNS 并对全部地址做公网校验，再用已验证 IP 建立
+  连接并保留 TLS SNI；重定向逐跳重新校验，限制端口、Content-Type、Content-Length
+  和解压后大小。`web/tools.py` 将网页内容包在 untrusted envelope 中，搜索由
+  `SearchBackend` 协议解耦，密钥只从环境变量读取并放在内部 Header。
+- **TypeScript SDK**：与 Python SDK 共享 `krelcode.stream-json` v1 子进程边界；
+  负责 JSONL 路由、request_id 队列、中断、超时和 stderr 脱敏，不复制 Agent
+  业务实现。

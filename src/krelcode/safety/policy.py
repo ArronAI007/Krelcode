@@ -60,6 +60,7 @@ READONLY_TOOLS = {
     "find_refs", "repo_map", "check_syntax",
     "ask_user", "update_plan", "job_output", "job_list",
     "list_skills", "load_skill", "list_skill_resources", "read_skill_resource",
+    "web_fetch", "web_search",
 }
 WORKSPACE_WRITE_TOOLS = {"write_file", "edit_file"}
 SHELL_TOOLS = {"run_command", "run_skill_script", "job_start"}

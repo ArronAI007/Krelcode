@@ -87,6 +87,22 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             "plugins", "查看或重载插件", argument_hint="[reload|show <name>]",
             help="列出目录插件与加载问题；/plugins reload 热重载"),
         CommandSpec(
+            "lsp", "查看 LSP 客户端状态",
+            argument_hint="[status]",
+            help="查看配置的语言服务器、按需启动状态与加载问题"),
+        CommandSpec(
+            "web", "查看 WebFetch/WebSearch 安全配置",
+            argument_hint="[status]",
+            help="查看网页工具是否启用、网络边界和搜索后端配置（不发起网络请求）"),
+        CommandSpec(
+            "output-style", "查看、切换或重载 Output Style",
+            argument_hint="[list|show <name>|reload|off]",
+            help=("查看当前 Output Style；/output-style <name> 切换；"
+                  "/output-style list 列出可用样式；"
+                  "/output-style show <name> 查看正文；"
+                  "/output-style reload 重载 user/project/config 文件；"
+                  "/output-style off 恢复默认输出。")),
+        CommandSpec(
             "extensions", "查看统一扩展目录与来源",
             argument_hint="[kind] [source]",
             help=("列出插件、工具、Skill、Agent、Command、Hook 与 MCP 的来源；\n"
