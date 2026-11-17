@@ -7,13 +7,28 @@ MCPClient 只面对本端口；stdio（子进程管道）与 SSE（HTTP 长连�
 
 from __future__ import annotations
 
-from typing import Callable, Dict, Any, Protocol
+from typing import Callable, Dict, Any, Optional, Protocol
 
 from ..core.errors import KrelcodeError
 
 
 class MCPError(KrelcodeError):
     """MCP 通信/协议错误（client 与各 transport 共用同一类型）。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: Optional[int] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.headers = dict(headers or {})
+
+
+class MCPAuthRequired(MCPError):
+    """HTTP OAuth challenge；client 可刷新 token 后重试一次。"""
 
 
 class MCPTransport(Protocol):

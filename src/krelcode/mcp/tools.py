@@ -2,6 +2,7 @@
 
 - MCPTool: 远程 tools/call
 - 资源工具: <server>__list_resources / <server>__read_resource（capabilities.resources）
+- 资源模板: <server>__list_resource_templates（resources/templates/list）
 - 提示词工具: <server>__list_prompts / <server>__get_prompt（capabilities.prompts）
 全部注册进同一 ToolRegistry，AgentLoop 对"远程/本地"零感知。
 """
@@ -196,6 +197,41 @@ class MCPReadResourceTool:
         )
 
 
+class MCPListResourceTemplatesTool:
+    read_only = True
+
+    def __init__(self, client: MCPClient) -> None:
+        self.client = client
+        self.name = sanitize_tool_name(client.name, "list_resource_templates")
+        self.description = (
+            f"列出 MCP 服务器 {client.name} 的动态资源模板"
+            "（uriTemplate/名称/类型；展开模板后用 read_resource 读取）。")
+        self.parameters: Dict[str, Any] = {
+            "type": "object", "properties": {}}
+
+    async def execute(self, args, ctx) -> ToolResult:
+        try:
+            templates = await self.client.list_resource_templates()
+        except MCPError as e:
+            return _error(e)
+        if not templates:
+            return ToolResult(content="（无资源模板）", data={"count": 0})
+        lines = []
+        for template in templates:
+            uri = template.get("uriTemplate") or template.get("uri")
+            name = template.get("name") or "(未命名)"
+            mime = template.get("mimeType") or "?"
+            description = template.get("description")
+            line = f"{name} [{mime}] {uri}"
+            if description:
+                line += f" — {description}"
+            lines.append(line)
+        return ToolResult(
+            content="\n".join(lines),
+            data={"count": len(templates), "templates": templates},
+        )
+
+
 class MCPListPromptsTool:
     read_only = True
     def __init__(self, client: MCPClient) -> None:
@@ -267,6 +303,7 @@ async def discover_tools(client: MCPClient) -> List[Any]:
     if client.supports("resources"):
         tools.append(MCPListResourcesTool(client))
         tools.append(MCPReadResourceTool(client))
+        tools.append(MCPListResourceTemplatesTool(client))
     if client.supports("prompts"):
         tools.append(MCPListPromptsTool(client))
         tools.append(MCPGetPromptTool(client))

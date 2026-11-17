@@ -12,7 +12,7 @@ import json
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..agent.compression import ContextManager
 from ..agent.context import _git
@@ -50,7 +50,7 @@ from ..session.context_checkpoint import (
     ContextCheckpointCoordinator,
     ContextCheckpointStore,
 )
-from ..tools.base import RunMode, Tool, ToolContext, TurnAbortSignal
+from ..tools.base import PermissionMode, RunMode, Tool, ToolContext, TurnAbortSignal
 from ..tools.registry import ToolRegistry
 from .control import AgentControl
 from .definition import AgentDefinition, AgentDefinitionManager
@@ -109,6 +109,10 @@ class AgentHandle:
     context_checkpoint_id: str = ""
     inherited_memory_ids: Tuple[str, ...] = field(default_factory=tuple)
     instruction_layers: Tuple[str, ...] = field(default_factory=tuple)
+    model: str = ""
+    provider: str = ""
+    permission_mode: str = ""
+    mcp_servers: Tuple[str, ...] = field(default_factory=tuple)
     kill_requested: bool = field(default=False, repr=False)
 
     def preview(self) -> str:
@@ -136,6 +140,8 @@ class SubagentManager:
         feed_max_entries: int = 2_000,
         feed_max_entry_chars: int = 24_000,
         memory_store=None,
+        llm_resolver: Optional[Callable[[str], LLMProvider]] = None,
+        mcp_servers_provider: Optional[Callable[[], Iterable[str]]] = None,
     ) -> None:
         self.llm = llm
         self.tool_factory = tool_factory
@@ -156,6 +162,8 @@ class SubagentManager:
         self.feed_max_entries = feed_max_entries
         self.feed_max_entry_chars = feed_max_entry_chars
         self.memory_store = memory_store
+        self.llm_resolver = llm_resolver
+        self.mcp_servers_provider = mcp_servers_provider
         self._handles: Dict[str, AgentHandle] = {}
         self._counter = 0
         self._exclude_checked = False
@@ -198,7 +206,32 @@ class SubagentManager:
             fork_context = (
                 definition_obj.default_fork_context if definition_obj else False)
 
+        child_llm = self.llm
+        if definition_obj is not None and definition_obj.model:
+            if self.llm_resolver is None:
+                raise ValueError(
+                    f"Agent Definition {definition_obj.name!r} 配置了独立 model，"
+                    "但当前运行环境没有 provider resolver")
+            child_llm = self.llm_resolver(definition_obj.model)
+
         tools = list(self.tool_factory())
+        selected_mcp: Optional[set[str]] = None
+        if definition_obj is not None and definition_obj.mcp_servers is not None:
+            available_mcp = set(self.mcp_servers_provider() if
+                                self.mcp_servers_provider is not None else ())
+            available_mcp.update(
+                item for item in (_mcp_server_name(tool) for tool in tools) if item)
+            requested = set(definition_obj.mcp_servers)
+            if "*" not in requested:
+                missing = sorted(requested - available_mcp)
+                if missing:
+                    raise ValueError(
+                        f"Agent Definition {definition_obj.name!r} 引用了未知 MCP 服务器: "
+                        + ", ".join(missing))
+                selected_mcp = requested
+            elif requested == {"*"}:
+                selected_mcp = available_mcp
+            tools = _restrict_mcp_tools(tools, selected_mcp)
         memory_entries = self._relevant_memory(task)
         memory_ids = tuple(str(entry.id) for entry in memory_entries)
         tools = self._restrict_memory_tools(tools, memory_ids)
@@ -214,6 +247,12 @@ class SubagentManager:
 
         self._counter += 1
         agent_id = f"a{self._counter}"
+        permission_mode = (
+            PermissionMode(definition_obj.permission_mode)
+            if definition_obj is not None and definition_obj.permission_mode
+            else self.tool_context.runtime.permission_mode
+        )
+        mcp_servers = tuple(sorted(selected_mcp or ()))
         worktree_path: Optional[Path] = None
         branch: Optional[str] = None
         child_runtime = replace(
@@ -225,6 +264,16 @@ class SubagentManager:
                 frozenset(definition_obj.allowed_tools)
                 if definition_obj is not None and definition_obj.allowed_tools
                 else self.tool_context.runtime.tool_allowlist
+            ),
+            permission_mode=permission_mode,
+            alive_mcp_servers=(
+                frozenset(mcp_servers)
+                if selected_mcp is not None
+                else self.tool_context.runtime.alive_mcp_servers
+            ),
+            mcp_health_known=(
+                True if selected_mcp is not None
+                else self.tool_context.runtime.mcp_health_known
             ),
         )
         tool_context = replace(
@@ -267,14 +316,14 @@ class SubagentManager:
         own_working_context = WorkingContextStore(
             tool_context.workspace_root, redactor=self.redactor)
         loop = AgentLoop(
-            llm=self.llm,
+            llm=child_llm,
             registry=ToolRegistry(tools),
             tool_context=tool_context,
             policy=self.policy,
             bus=child_bus,
             system_prompt=system_prompt,
             max_steps=self.max_steps,
-            context_manager=(ContextManager(self.llm, max_tokens=self.context_budget)
+            context_manager=(ContextManager(child_llm, max_tokens=self.context_budget)
                              if self.context_budget else None),
             redactor=self.redactor,
             hook_port=child_hook_port,
@@ -324,6 +373,11 @@ class SubagentManager:
             "definition_source": definition_obj.source if definition_obj else "",
             "definition_path": str(definition_obj.path) if definition_obj and definition_obj.path else "",
             "allowed_tools": list(definition_obj.allowed_tools) if definition_obj else [],
+            "model": definition_obj.model if definition_obj else "",
+            "resolved_model": str(getattr(child_llm, "model", "") or ""),
+            "provider": str(getattr(child_llm, "name", "") or ""),
+            "permission_mode": permission_mode.value,
+            "mcp_servers": list(mcp_servers),
             "isolated": bool(isolated),
             "fork_context": bool(fork_context),
             "worktree": str(worktree_path) if worktree_path else "",
@@ -347,6 +401,10 @@ class SubagentManager:
             inherited_memory_ids=memory_ids,
             instruction_layers=tuple(
                 layer.kind for layer in instruction_bundle.layers),
+            model=str(getattr(child_llm, "model", "") or ""),
+            provider=str(getattr(child_llm, "name", "") or ""),
+            permission_mode=permission_mode.value,
+            mcp_servers=mcp_servers,
         )
         self._handles[agent_id] = handle
         child_bus.subscribe(
@@ -708,8 +766,17 @@ class SubagentManager:
                 f" · Memory {len(handle.inherited_memory_ids)}"
                 if handle.inherited_memory_ids else "")
             sequence = f" · feed {handle.feed.latest_sequence}" if handle.feed else ""
+            runtime_parts = []
+            if handle.model:
+                runtime_parts.append(f"model={handle.model}")
+            if handle.permission_mode:
+                runtime_parts.append(f"permission={handle.permission_mode}")
+            if handle.mcp_servers:
+                runtime_parts.append(f"mcp={','.join(handle.mcp_servers)}")
+            runtime = " · " + " · ".join(runtime_parts) if runtime_parts else ""
             line = (f"{handle.id} [{handle.status}] {handle.turns} 轮{queued}{branch}"
-                    f"{definition}{memory}{sequence} · 任务: {task_preview.replace(chr(10), ' ')}")
+                    f"{definition}{runtime}{memory}{sequence} · 任务: "
+                    f"{task_preview.replace(chr(10), ' ')}")
             if handle.status in TERMINAL_STATUSES:
                 line += f" · 结果: {handle.preview()}"
             lines.append(line)
@@ -718,6 +785,21 @@ class SubagentManager:
     def build_tools(self) -> List[Tool]:
         from .tools import build_subagent_tools
         return build_subagent_tools(self)
+
+
+def _mcp_server_name(tool: Tool) -> str:
+    client = getattr(tool, "client", None)
+    return str(getattr(client, "name", "") or "")
+
+
+def _restrict_mcp_tools(tools: List[Tool], allowed: set[str]) -> List[Tool]:
+    restricted: List[Tool] = []
+    for tool in tools:
+        server = _mcp_server_name(tool)
+        if server and server not in allowed:
+            continue
+        restricted.append(tool)
+    return restricted
 
 
 def _feed_event(event) -> Optional[Tuple[str, str, Dict[str, object]]]:

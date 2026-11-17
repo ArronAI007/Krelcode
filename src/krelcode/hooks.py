@@ -23,9 +23,12 @@ import os
 import re
 import shlex
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from .core.events import (
     AgentEvent,
@@ -76,16 +79,31 @@ MAX_INPUT_HOOK_PROMPT = 12_000
 MAX_INPUT_HOOK_CONTEXT = 4_000
 MAX_HOOK_SYSTEM_MESSAGE = 4_000
 _TEMPLATE_VARIABLE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_ENV_VARIABLE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_URL_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+HOOK_KINDS = frozenset({"command", "http", "prompt"})
 
 
 @dataclass(frozen=True)
 class HookSpec:
     on: str
-    command: str
+    command: str = ""
     timeout: float = DEFAULT_TIMEOUT
     tools: tuple[str, ...] = ()
     source: str = "config"
     plugin_root: str = ""
+    kind: str = "command"
+    url: str = ""
+    prompt: str = ""
+    headers: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def target(self) -> str:
+        if self.kind == "http":
+            return self.url
+        if self.kind == "prompt":
+            return "prompt"
+        return self.command
 
     def matches_tool(self, tool_name: str) -> bool:
         if not self.tools:
@@ -103,8 +121,42 @@ def parse_hooks(config: Dict[str, Any]) -> List[HookSpec]:
         if not isinstance(item, dict) or item.get("enabled", True) is False:
             continue
         on = str(item.get("on", "")).strip()
+        if on not in SUPPORTED_TRIGGERS:
+            continue
+        kind = str(item.get("type") or item.get("kind") or "command").strip().lower()
+        if kind not in HOOK_KINDS:
+            continue
         command = item.get("command")
-        if on not in SUPPORTED_TRIGGERS or not isinstance(command, str) or not command.strip():
+        prompt = item.get("prompt")
+        http_config = item.get("http")
+        if not isinstance(http_config, dict):
+            http_config = {}
+        url = item.get("url", http_config.get("url"))
+        headers_raw = item.get("headers", http_config.get("headers", {}))
+        if isinstance(headers_raw, dict):
+            headers = tuple(
+                (str(key), str(value)) for key, value in headers_raw.items())
+        elif isinstance(headers_raw, list):
+            headers = tuple(
+                (str(pair[0]), str(pair[1]))
+                for pair in headers_raw
+                if isinstance(pair, (list, tuple)) and len(pair) == 2
+            )
+        else:
+            headers = ()
+        if kind == "command" and (
+            not isinstance(command, str) or not command.strip()
+        ):
+            continue
+        if kind == "http" and (
+            not isinstance(url, str)
+            or not url.strip()
+            or not _valid_http_url_template(url)
+        ):
+            continue
+        if kind == "prompt" and (
+            not isinstance(prompt, str) or not prompt.strip()
+        ):
             continue
         raw_tools = item.get("tools", item.get("tool", ()))
         if isinstance(raw_tools, str):
@@ -119,9 +171,16 @@ def parse_hooks(config: Dict[str, Any]) -> List[HookSpec]:
         except (TypeError, ValueError):
             timeout = DEFAULT_TIMEOUT
         specs.append(HookSpec(
-            on=on, command=command, timeout=timeout, tools=tools,
+            on=on,
+            command=str(command or ""),
+            timeout=timeout,
+            tools=tools,
             source=str(item.get("_source") or "config"),
             plugin_root=str(item.get("_plugin_root") or ""),
+            kind=kind,
+            url=str(url or ""),
+            prompt=str(prompt or ""),
+            headers=headers,
         ))
     return specs
 
@@ -137,11 +196,15 @@ class HookRunner:
         *,
         executions: Optional[List[Dict[str, Any]]] = None,
         redactor=None,
+        prompt_runner: Optional[
+            Callable[[str, Dict[str, Any]], Awaitable[str]]
+        ] = None,
     ) -> None:
         self.root = Path(workspace_root)
         self.specs = list(specs)
         self._log = log
         self._redactor = redactor
+        self._prompt_runner = prompt_runner
         self.executions: List[Dict[str, Any]] = (
             executions if executions is not None else []
         )
@@ -158,7 +221,14 @@ class HookRunner:
             log=self._log,
             executions=self.executions,
             redactor=self._redactor,
+            prompt_runner=self._prompt_runner,
         )
+
+    def set_prompt_runner(
+        self,
+        runner: Optional[Callable[[str, Dict[str, Any]], Awaitable[str]]],
+    ) -> None:
+        self._prompt_runner = runner
 
     def attach(self, bus: EventBus) -> None:
         bus.subscribe(self.on_event)
@@ -302,51 +372,32 @@ class HookRunner:
         tool_call: Optional[ToolCall] = None,
         plaintext_context: bool = False,
     ) -> HookResult:
-        command = self.render(spec.command, variables)
         payload = self._payload(trigger, variables, tool_call=tool_call)
         started = time.monotonic()
         record: Dict[str, Any] = {
             "trigger": trigger,
-            "command": self._redact(command),
+            "kind": spec.kind,
+            "target": self._diagnostic_target(spec, variables),
             "tools": list(spec.tools),
             "source": spec.source,
         }
+        if spec.kind == "command":
+            record["command"] = self._redact(self.render(spec.command, variables))
         stdout = ""
         stderr = ""
         rc: Optional[int] = None
         try:
-            env = scrub_environment(os.environ)
-            env.update({
-                "KRELCODE_HOOK_EVENT": trigger,
-                "KRELCODE_WORKSPACE": str(self.root),
-                "KRELCODE_HOOK_SOURCE": spec.source,
-            })
-            if spec.plugin_root:
-                env["KRELCODE_PLUGIN_ROOT"] = spec.plugin_root
-            if tool_call is not None:
-                env["KRELCODE_TOOL"] = tool_call.name
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                cwd=str(self.root),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-                start_new_session=True,
-            )
-            try:
-                raw_out, raw_err = await asyncio.wait_for(
-                    proc.communicate(
-                        json.dumps(payload, ensure_ascii=False).encode("utf-8")),
-                    timeout=spec.timeout,
-                )
-                rc = proc.returncode
-                stdout = raw_out.decode("utf-8", "replace")[:MAX_HOOK_STDOUT]
-                stderr = raw_err.decode("utf-8", "replace")[:MAX_HOOK_STDERR]
-            except asyncio.TimeoutError:
-                _terminate(proc)
-                await proc.wait()
-                stderr = f"超时（>{spec.timeout:g}s），已终止"
+            if spec.kind == "command":
+                rc, stdout, stderr = await self._execute_command_hook(
+                    spec, trigger, variables, payload, tool_call)
+            elif spec.kind == "http":
+                rc, stdout, stderr = await self._execute_http_hook(
+                    spec, payload)
+            elif spec.kind == "prompt":
+                rc, stdout, stderr = await self._execute_prompt_hook(
+                    spec, variables, payload)
+            else:
+                raise ValueError(f"未知 Hook 类型: {spec.kind}")
         except Exception as exc:
             stderr = f"Hook 执行失败: {type(exc).__name__}: {exc}"
 
@@ -374,8 +425,114 @@ class HookRunner:
             f"{output.strip()[:120]}")
         return result
 
+    async def _execute_command_hook(
+        self,
+        spec: HookSpec,
+        trigger: str,
+        variables: Dict[str, str],
+        payload: Dict[str, Any],
+        tool_call: Optional[ToolCall],
+    ) -> tuple[Optional[int], str, str]:
+        command = self.render(spec.command, variables)
+        env = scrub_environment(os.environ)
+        env.update({
+            "KRELCODE_HOOK_EVENT": trigger,
+            "KRELCODE_WORKSPACE": str(self.root),
+            "KRELCODE_HOOK_SOURCE": spec.source,
+        })
+        if spec.plugin_root:
+            env["KRELCODE_PLUGIN_ROOT"] = spec.plugin_root
+        if tool_call is not None:
+            env["KRELCODE_TOOL"] = tool_call.name
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            cwd=str(self.root),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            start_new_session=True,
+        )
+        try:
+            raw_out, raw_err = await asyncio.wait_for(
+                proc.communicate(
+                    json.dumps(payload, ensure_ascii=False).encode("utf-8")),
+                timeout=spec.timeout,
+            )
+            return (
+                proc.returncode,
+                raw_out.decode("utf-8", "replace")[:MAX_HOOK_STDOUT],
+                raw_err.decode("utf-8", "replace")[:MAX_HOOK_STDERR],
+            )
+        except asyncio.TimeoutError:
+            _terminate(proc)
+            await proc.wait()
+            return None, "", f"超时（>{spec.timeout:g}s），已终止"
+
+    async def _execute_http_hook(
+        self, spec: HookSpec, payload: Dict[str, Any],
+    ) -> tuple[Optional[int], str, str]:
+        url = _ENV_VARIABLE.sub(
+            lambda match: os.environ.get(match.group(1), ""), spec.url)
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("HTTP Hook 只允许 http/https URL")
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/plain",
+        }
+        for key, raw in spec.headers:
+            value = _ENV_VARIABLE.sub(
+                lambda match: os.environ.get(match.group(1), ""), raw)
+            if value:
+                headers[key] = value
+                if self._redactor is not None:
+                    self._redactor.add(value)
+                    _scheme, _, credential = value.partition(" ")
+                    self._redactor.add(credential.strip())
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        return await asyncio.to_thread(
+            _post_hook_http, url, headers, body, spec.timeout)
+
+    async def _execute_prompt_hook(
+        self,
+        spec: HookSpec,
+        variables: Dict[str, str],
+        payload: Dict[str, Any],
+    ) -> tuple[Optional[int], str, str]:
+        if self._prompt_runner is None:
+            raise RuntimeError("Prompt Hook 未配置模型执行器")
+        probe = self._render_prompt(spec.prompt, variables)
+        prompt = (
+            f"{probe.rstrip()}\n\n"
+            "<hook_input>\n"
+            f"{json.dumps(payload, ensure_ascii=False, sort_keys=True)}\n"
+            "</hook_input>\n"
+            "Return only the Hook decision as JSON, or the additional context text."
+        )
+        response = await self._prompt_runner(prompt, payload)
+        return 0, str(response)[:MAX_HOOK_STDOUT], ""
+
+    def _render_prompt(self, prompt: str, variables: Dict[str, str]) -> str:
+        def replace(match: re.Match[str]) -> str:
+            key = match.group(1)
+            return str(variables.get(key, match.group(0)))
+
+        return _TEMPLATE_VARIABLE.sub(replace, prompt)
+
     def _redact(self, text: str) -> str:
         return self._redactor.redact(text) if self._redactor is not None else text
+
+    def _diagnostic_target(
+        self, spec: HookSpec, variables: Dict[str, str],
+    ) -> str:
+        if spec.kind == "http":
+            url = _ENV_VARIABLE.sub(
+                lambda match: os.environ.get(match.group(1), ""), spec.url)
+            return self._redact(_safe_http_target(url))
+        if spec.kind == "prompt":
+            return "prompt"
+        return self._redact(self.render(spec.command, variables))
 
     async def _run_matching(
         self,
@@ -479,6 +636,61 @@ class HookRunner:
             context=tuple(self._redact(context) for context in contexts),
             system_message=self._redact(system_message),
         )
+
+
+def _post_hook_http(
+    url: str,
+    headers: Dict[str, str],
+    body: bytes,
+    timeout: float,
+) -> tuple[Optional[int], str, str]:
+    request = urllib.request.Request(
+        url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read(MAX_HOOK_STDOUT + 1)
+            stdout = raw[:MAX_HOOK_STDOUT].decode("utf-8", "replace")
+            return 0, stdout, ""
+    except urllib.error.HTTPError as exc:
+        try:
+            raw = exc.read(MAX_HOOK_STDOUT + 1)
+        except Exception:
+            raw = b""
+        stdout = raw[:MAX_HOOK_STDOUT].decode("utf-8", "replace")
+        return 1, stdout, f"HTTP Hook 返回 {exc.code}"
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return None, "", f"HTTP Hook 执行失败: {exc}"
+
+
+def _valid_http_url_template(url: str) -> bool:
+    raw = str(url or "").strip()
+    match = _URL_SCHEME.match(raw)
+    if match is not None and match.group(0).lower() not in {"http:", "https:"}:
+        return False
+    if _ENV_VARIABLE.match(raw):
+        # The complete origin may be supplied at runtime; execution validates
+        # the expanded URL again before any request is sent.
+        return True
+    expanded = _ENV_VARIABLE.sub("placeholder", raw)
+    parsed = urllib.parse.urlsplit(expanded)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _safe_http_target(url: str) -> str:
+    """Keep scheme/host/path for diagnostics; drop userinfo/query/fragment."""
+    parsed = urllib.parse.urlsplit(str(url or ""))
+    if not parsed.scheme or not parsed.hostname:
+        return "<invalid-http-url>"
+    host = parsed.hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    netloc = f"{host}:{port}" if port is not None else host
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, netloc, parsed.path or "/", "", ""))
 
 
 def _terminate(proc: asyncio.subprocess.Process) -> None:

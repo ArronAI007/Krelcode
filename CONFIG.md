@@ -124,11 +124,41 @@ krelcode [子命令] [选项]
 | `/skill <name> [参数]` | 用户主动加载并执行 Skill；参数替换 `$ARGUMENTS` |
 | `/plugins [reload\|show <name>\|install\|update\|enable\|disable\|remove ...]` | 查看状态、热重载和 Plugin v2 基础生命周期 |
 | `/extensions [kind] [source]` | 统一列出 Plugin/Tool/Skill/Agent/Command/Hook/MCP 的来源、scope、启停与冲突 |
-| `/mcp` · `/mcp reload` | MCP 服务器状态 · 重读配置热重载 |
+| `/mcp` · `/mcp reload` | MCP 状态（含 Resource/Template/OAuth 统计）· 重读配置热重载 |
+| `/mcp auth <server>` | 对 HTTP MCP 服务器执行 authorization code + PKCE OAuth 授权并重连 |
 | `/allow [add\|remove <程序名>]` | 旧版程序白名单兼容入口（持久化） |
 | `/stop` | 中止运行中任务（历史自动修复） |
 | `/reset` | 清空历史与当前 turn 时间线 |
 | `/exit` | 退出（Ctrl-D 同） |
+
+### Custom / Plugin CommandSource
+
+命令目录按 user → project → configured 顺序扫描，后扫描的项目/显式目录覆盖同名用户命令：
+
+```text
+~/.krelcode/commands/*.md
+<workspace>/.krelcode/commands/*.md
+<workspace>/.commands/*.md
+[commands].paths                 # 相对路径基于 workspace
+```
+
+```markdown
+---
+name: review-api
+description: Review API changes with project rules
+argument-hint: <path>
+allowed-tools: [read_file, grep, glob]
+---
+Review $ARGUMENTS. Check compatibility and cite file:line.
+```
+
+- `name` 必须匹配 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`，正文不能为空；frontmatter 缺失、
+  路径逃逸/越界 symlink、大于 256 KB 或单个坏文件只记录 issue。
+- `$ARGUMENTS` / `${ARGUMENTS}` 替换用户参数；没有占位符时参数追加到正文末尾。
+  执行时以 `<custom_command>` envelope 进入正常 AgentLoop。
+- `allowed-tools` 只能收窄当前工具集，仍需经过权限、Hook、审批与 Sandbox。
+- 来源优先级：`builtin > custom > skill > plugin > MCP`。Plugin Markdown Command
+  保留独立 `CommandSource.PLUGIN` 与 `/plugin__<plugin>__<command>` 名称。
 
 Fragment 启停是**当前会话运行时状态**，不写入 TOML；重启后恢复默认全开。
 内置来源为 `core`（不可关闭的基础 system prompt）、`skills`（可用 Skill 索引）以及
@@ -222,6 +252,9 @@ paths = ["./team-skills", "/opt/shared-skills"]  # 额外目录，可相对工�
 enabled = true                       # false 等价 --no-plugins
 paths = ["./team-plugins", "/opt/shared-plugins"] # 额外目录，可相对工作区
 
+[commands]                           # 自定义 Markdown slash command
+paths = ["./team-commands", "/opt/shared-commands"]
+
 [context]                            # Context v3（legacy 仅保留一个版本用于回退）
 engine = "v3"                        # v3（默认）| legacy（兼容 v2）
 max_tokens = 6000                    # rules + git + tree 的统一 token 预算
@@ -245,7 +278,21 @@ timeout = 30
 [mcp_servers.remote]                 # HTTP 传输
 url = "http://localhost:3000/mcp"    # 默认 streamable-http（2025-03-26）
 transport = "sse"                    # 显式回退旧 HTTP+SSE（2024-11-05）
-headers = { Authorization = "Bearer ..." }
+headers = { Authorization = "Bearer ${MCP_TOKEN}" }
+
+[mcp_servers.remote.oauth]           # 可选；静态/刷新/客户端凭据/交互授权
+access_token = "${MCP_ACCESS_TOKEN}" # 可选；也可由 /mcp auth 写入缓存
+refresh_token = "${MCP_REFRESH_TOKEN}"
+token_url = "https://auth.example.com/token"
+authorization_url = "https://auth.example.com/authorize"
+client_id = "krelcode"
+client_secret = "${MCP_CLIENT_SECRET}"
+scopes = ["mcp.read"]
+resource = "https://mcp.example.com/mcp"
+redirect_port = 8765
+# grant_type = "client_credentials"  # 机器到机器时可显式选择
+# token_endpoint_auth_method = "client_secret_basic" # 或 client_secret_post
+# resource_metadata_url / authorization_server / registration_url / redirect_uri
 
 [[hooks]]
 on = "file_edited"                   # 触发器见下文
@@ -265,6 +312,22 @@ Working Context 与 Hook runtime context 只作为 data-not-instructions 注入�
 配置优先级：**显式 CLI 旗标 > TOML > 环境变量 > 内置默认**。
 未知键进 `extra` 透传（如 anthropic 的 prompt_cache/thinking_budget）。
 
+MCP 远程能力：
+
+- `tools/list`、`resources/list`、`resources/templates/list`、`prompts/list` 都自动
+  跟随 `nextCursor`；单个列表最多 100 页，重复 cursor/非法结构 fail-closed。
+- resources capability 自动注册 `list_resources`、`read_resource` 和
+  `list_resource_templates`；Prompt 继续映射到 `/mcp__<server>__<prompt>`。
+- `notifications/tools/list_changed`、`notifications/resources/list_changed`、
+  `notifications/prompts/list_changed` 会按服务器串行刷新。工具替换先验证重复/命名
+  冲突再原子替换；刷新失败保留旧目录，不影响主 Agent 和其他服务器。
+- OAuth 支持 Bearer、refresh token、client credentials、protected-resource
+  metadata、authorization-server metadata、动态客户端注册与 authorization code +
+  PKCE。首次交互授权执行 `/mcp auth <server>`；401/403 会刷新 token 后重试一次。
+- HTTP Header 值和 OAuth 字符串字段支持 `${ENV_VAR}` 展开，建议 secret 不直接写入
+  TOML。OAuth token cache 位于 `~/.krelcode/mcp-oauth.json`：以 server/url 哈希隔离，
+  原子写入并尽力设置为 `0600`；缓存含 bearer/refresh token，不应提交或分享。
+
 ### Hooks 协议（Hooks v2）
 
 支持的触发器：
@@ -279,7 +342,27 @@ Working Context 与 Hook runtime context 只作为 data-not-instructions 注入�
 `user_input` 在输入预处理层执行，保留给附件展开前的原始提示；
 `user_prompt_submit` 在查询引擎入口执行，因此 REPL、headless 与子代理都会触发。
 
-每次执行都会把 JSON payload 从 stdin 传给 Hook：
+三类 Hook 共用同一触发器和决策协议：
+
+- `command`（默认）：从 stdin 接收 JSON payload；
+- `http`：向 `http/https` URL POST 同一 JSON，Header 支持 `${ENV_VAR}`；
+- `prompt`：把 Hook 指令与结构化 payload 交给当前 LLM，输出走同一解释器。
+
+```toml
+[[hooks]]
+on = "pre_tool_use"
+type = "http"
+url = "${HOOK_ENDPOINT}"
+headers = { Authorization = "Bearer ${HOOK_TOKEN}" }
+timeout = 10
+
+[[hooks]]
+on = "user_prompt_submit"
+type = "prompt"
+prompt = "Apply the repository policy to: {prompt}"
+```
+
+每次 command/http/prompt 执行都使用同一 payload：
 
 ```json
 {
@@ -295,10 +378,12 @@ Working Context 与 Hook runtime context 只作为 data-not-instructions 注入�
 }
 ```
 
-同时提供 `KRELCODE_HOOK_EVENT`、`KRELCODE_WORKSPACE`、`KRELCODE_TOOL`
-环境变量。Hook 子进程使用净化环境，不继承 API key/token/proxy/SSH agent。
-Hook 命令来自用户配置，视为显式信任，不进入工具审批链；stdout 日志、注入
-上下文、用户提示与执行审计记录仍统一经过 `SecretRedactor` 脱敏。
+command Hook 同时提供 `KRELCODE_HOOK_EVENT`、`KRELCODE_WORKSPACE`、
+`KRELCODE_TOOL` 环境变量。Hook 子进程使用净化环境，不继承 API key/token/proxy/
+SSH agent。Hook 来自用户配置或可信插件，视为显式信任，不进入工具审批链；HTTP
+诊断目标会去掉 userinfo/query/fragment，不记录 Header 或 Prompt 正文，解析后的
+Header 凭据会动态加入 `SecretRedactor`。stdout 日志、注入上下文、用户提示与执行
+审计记录仍统一脱敏。
 
 模板变量包括 `{workspace}`、`{prompt}`、`{tool}`、`{path}`、`{arguments}`、
 `{reply}`、`{error}`、`{is_error}`、`{before_tokens}`、`{after_tokens}` 等；
@@ -353,6 +438,7 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 ```
 
 全局插件启停状态：`~/.krelcode/plugin-state.json`（按 `scope:name` 隔离）。
+全局 MCP OAuth token cache：`~/.krelcode/mcp-oauth.json`（`0600`，含 token，属于敏感文件）。
 
 全局：`~/.krelcode/config.toml`（配置）、`~/.krelcode/AGENTS.md`（全局规则，
 与项目级 `AGENTS.md`/`KRELCODE.md` 分层注入，项目规则在后=更具体者优先）、
@@ -378,14 +464,19 @@ Agent Definition 发现目录（后者覆盖前者同名项）：`~/.krelcode/ag
 name: reviewer
 description: 只读代码审查
 allowed-tools: [read_file, grep, glob, repo_map]
+model: deepseek/deepseek-flash  # 可选；provider/model 或沿用父 provider 的 model
+permission-mode: read-only      # default / plan / read-only / auto-approve
+mcp-servers: [github, docs]     # 省略=继承全部；*=全部；[]=不使用 MCP
 fork-context: true     # 可选；默认继承父对话
 isolated: false        # 可选；true=独立 git worktree
 ---
 你是严格的代码审查员，只报告可复现的问题并给出文件路径与行号。
 ```
 
-`allowed-tools`（也接受 `tools`）只能缩小默认工具池；未知工具会让该定义在 spawn 时
-fail-closed。Definition frontmatter/正文属于用户显式配置，但不会绕过审批、Sandbox、
+`allowed-tools`（也接受 `tools`）与 `mcp-servers` 只能缩小默认工具池；未知工具/
+MCP 服务器会让该定义在 spawn 时 fail-closed。`model` 只影响该子代理，不改变父级
+或 `/model` 当前选择；`permission-mode` 写入子代理独立 ToolContext，与审批/Sandbox
+共同生效。Definition frontmatter/正文属于用户显式配置，但不会绕过审批、Sandbox、
 只读模式或子代理防递归边界。单个坏定义只记录 issue，不阻断主 Agent。
 
 Skill 发现目录（后者覆盖前者同名项）：`~/.agents/skills`、`~/.krelcode/skills`、
@@ -428,6 +519,8 @@ paths = ["mcp.toml"]
 命名为 `plugin__<plugin>__<server>`。`/extensions` 展示统一来源与冲突，`/plugins reload`
 会原子刷新 Tool/Skill/Agent/Command/Hook/MCP。`install/update/remove/enable/disable`
 会持久化生命周期状态；安装限制 5000 文件 / 100 MiB，remove 移到 `.trash`。
+插件 `hooks.toml` 与用户 Hook 使用相同 `command/http/prompt` schema，并自动带来源
+`plugin:<name>@<version>` 与 `KRELCODE_PLUGIN_ROOT`。
 
 ### 运行时权限与规则示例
 

@@ -55,6 +55,11 @@ api_key_env = "GEMINI_API_KEY"
 # enabled = true                    # false 等价 --no-plugins
 # paths = ["./team-plugins"]       # 额外目录；相对路径基于工作区
 
+# ---- 用户/项目 Markdown slash commands ----
+# [commands]
+# paths = ["./team-commands"]      # 额外目录；相对路径基于工作区
+# 还会自动发现 ~/.krelcode/commands、.krelcode/commands、.commands
+
 # ---- 工作区上下文预算（Context v3；legacy 仅保留一个版本用于回退）----
 # [context]
 # engine = "v3"                    # v3（默认，安全边界+来源归因）| legacy
@@ -80,6 +85,18 @@ api_key_env = "GEMINI_API_KEY"
 # transport = "sse"                        # 旧规范时显式指定
 # listener_retries = 3                     # GET 监听流断线重连次数（0=不重连）
 # listener_retry_delay = 1.0               # 基础退避秒数（指数增长）
+# headers = { Authorization = "Bearer ${MCP_TOKEN}" }
+#
+# [mcp_servers.remote.oauth]               # 可选；先用 /mcp auth <server> 交互授权
+# access_token = "${MCP_ACCESS_TOKEN}"     # 静态 token 可选
+# refresh_token = "${MCP_REFRESH_TOKEN}"
+# token_url = "https://auth.example.com/token"
+# authorization_url = "https://auth.example.com/authorize"
+# client_id = "krelcode"
+# client_secret = "${MCP_CLIENT_SECRET}"
+# scopes = ["mcp.read"]
+# resource = "https://mcp.example.com/mcp"
+# redirect_port = 8765
 
 # ---- 事件钩子 ----
 # [[hooks]]
@@ -88,6 +105,17 @@ api_key_env = "GEMINI_API_KEY"
 # tools = ["write_file", "edit_*"]   # 可选工具 glob 匹配
 # timeout = 30
 # enabled = true
+#
+# [[hooks]]
+# on = "pre_tool_use"
+# type = "http"
+# url = "${HOOK_ENDPOINT}"
+# headers = { Authorization = "Bearer ${HOOK_TOKEN}" }
+#
+# [[hooks]]
+# on = "user_prompt_submit"
+# type = "prompt"
+# prompt = "Review this request against project policy: {prompt}"
 '''
 
 AGENTS_TEMPLATE = '''# 项目规则

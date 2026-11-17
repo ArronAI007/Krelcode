@@ -8,9 +8,11 @@ from .builtin import (
 from .context import CommandContext
 from .registry import CommandConflict, CommandRegistry, normalize_token
 from .sources import (
+    custom_command_specs,
     mcp_prompt_command_specs,
     plugin_command_specs,
     skill_command_specs,
+    sync_custom_commands,
     sync_mcp_prompt_commands,
     sync_plugin_commands,
     sync_skill_commands,
@@ -34,11 +36,13 @@ __all__ = [
     "CommandSpec",
     "builtin_command_registry",
     "builtin_command_specs",
+    "custom_command_specs",
     "normalize_token",
     "render_help",
     "mcp_prompt_command_specs",
     "plugin_command_specs",
     "skill_command_specs",
+    "sync_custom_commands",
     "sync_mcp_prompt_commands",
     "sync_plugin_commands",
     "sync_skill_commands",

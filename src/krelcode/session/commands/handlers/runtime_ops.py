@@ -44,17 +44,35 @@ async def handle_mcp(ctx: CommandContext) -> CommandResult:
     if ctx.mcp_supervisor is None:
         return _ok("  （MCP 未启用）")
     output: list[str] = []
-    if ctx.request.arguments.strip() == "reload":
+    arguments = ctx.request.arguments.strip()
+    if arguments == "reload":
         restarted = await ctx.mcp_reload() if ctx.mcp_reload else []
         note = f"，重启: {', '.join(restarted)}" if restarted else ""
         output.append(f"  [mcp] 配置已同步{note}")
         sync_mcp_prompt_commands(ctx.command_registry, ctx.mcp_supervisor)
+    elif arguments.startswith("auth "):
+        name = arguments.partition(" ")[2].strip()
+        if not name:
+            return _ok("  用法: /mcp auth <server>")
+        try:
+            await ctx.mcp_supervisor.authorize(name)
+        except Exception as exc:
+            return _ok(
+                f"  [mcp:oauth] {name} 授权失败: "
+                f"{type(exc).__name__}: {exc}")
+        sync_mcp_prompt_commands(ctx.command_registry, ctx.mcp_supervisor)
+        output.append(f"  [mcp:oauth] {name} 授权成功，服务器已刷新")
+    elif arguments and arguments not in {"status", "list"}:
+        return _ok("  用法: /mcp [reload|auth <server>]")
     status = ctx.mcp_supervisor.status()
     for item in status:
         state = "在线" if item["alive"] else "已断开"
+        oauth = " · OAuth" if item.get("oauth") else ""
         output.append(
             f"  {item['name']}（{item['server']}，{item['transport']}）"
-            f"{state}，{item['tools']} 个工具，{item.get('prompts', 0)} 个 Prompt")
+            f"{state}，{item['tools']} 个工具，{item.get('prompts', 0)} 个 Prompt，"
+            f"{item.get('resources', 0)} 个 Resource，"
+            f"{item.get('resource_templates', 0)} 个 Template{oauth}")
     if not status:
         output.append("  （没有配置 MCP 服务器；在 krelcode.toml 的 "
                       "[mcp_servers.*] 里声明）")
@@ -138,7 +156,8 @@ async def handle_agents(ctx: CommandContext) -> CommandResult:
             compact = json.dumps(record, ensure_ascii=False, sort_keys=True)
             if len(compact) > 500:
                 compact = compact[:500] + "…"
-            output.append(f"  {compact}")
+            record_type = str(record.get("type") or "record")
+            output.append(f"  [{record_type}] {compact}")
         return _ok(*output)
 
     return _ok(
@@ -447,6 +466,25 @@ async def handle_plugin_command(ctx: CommandContext) -> CommandResult:
     return CommandResult(
         handled=True,
         output=(f"  [plugin] 已加载并执行: {command.plugin_name}/{command.local_name}",),
+        run_prompt=prompt,
+        tool_allowlist=command.allowed_tools or None,
+    )
+
+
+async def handle_custom_command(ctx: CommandContext) -> CommandResult:
+    """Execute a user/project Markdown command."""
+    manager = getattr(ctx.loop, "custom_command_manager", None)
+    command = manager.get(ctx.request.name) if manager is not None else None
+    if command is None:
+        return _ok(f"  （Custom Command 不可用: /{ctx.request.name}）")
+    try:
+        prompt = command.render(ctx.request.arguments)
+    except Exception as exc:
+        return _ok(
+            f"  [custom] Command 渲染失败: {type(exc).__name__}: {exc}")
+    return CommandResult(
+        handled=True,
+        output=(f"  [custom:{command.source}] 已加载并执行: {command.name}",),
         run_prompt=prompt,
         tool_allowlist=command.allowed_tools or None,
     )

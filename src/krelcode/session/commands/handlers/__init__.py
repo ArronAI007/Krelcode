@@ -12,6 +12,7 @@ from .runtime_ops import (
     handle_allow,
     handle_compact,
     handle_context,
+    handle_custom_command,
     handle_cost,
     handle_extensions,
     handle_mcp,
@@ -78,6 +79,8 @@ async def execute_prompt_command(ctx: CommandContext) -> CommandResult:
     spec = ctx.command_registry.resolve(ctx.request.name)
     if spec is not None and spec.source is CommandSource.SKILL:
         return await handle_skill_command(ctx)
+    if spec is not None and spec.source is CommandSource.CUSTOM:
+        return await handle_custom_command(ctx)
     if spec is not None and spec.source is CommandSource.PLUGIN:
         return await handle_plugin_command(ctx)
     if spec is not None and spec.source is CommandSource.MCP:

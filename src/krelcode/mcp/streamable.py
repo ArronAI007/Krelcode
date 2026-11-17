@@ -28,7 +28,7 @@ from typing import Any, Callable, Dict, Optional
 
 from .http_connector import HTTPConnector, UrllibHTTPConnector
 from .sseparse import SSEEventParser
-from .transport import MCPError
+from .transport import MCPAuthRequired, MCPError
 
 ACCEPT_BOTH = "application/json, text/event-stream"
 
@@ -112,6 +112,10 @@ class StreamableHTTPTransport:
         if version:
             self.protocol_version = str(version)
 
+    def set_headers(self, headers: Optional[Dict[str, str]]) -> None:
+        """Replace dynamic headers (for example an OAuth bearer token)."""
+        self.headers = dict(headers or {})
+
     # -- POST 往返（线程内） -------------------------------------------------------------
 
     def _sync_roundtrip(self, payload: Dict[str, Any]) -> None:
@@ -133,6 +137,12 @@ class StreamableHTTPTransport:
                 return  # 通知：无响应体
             if not 200 <= status < 300:
                 err = resp.read().decode("utf-8", "replace")
+                if status in (401, 403):
+                    raise MCPAuthRequired(
+                        f"streamable-http POST 需要 OAuth（HTTP {status}）: {err[:300]}",
+                        status=status,
+                        headers=resp.headers,
+                    )
                 raise MCPError(f"streamable-http POST 失败 HTTP {status}: {err[:300]}")
 
             ctype = (resp.headers.get("content-type") or "").lower()

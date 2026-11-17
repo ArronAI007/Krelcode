@@ -39,6 +39,8 @@ class FakeClient:
         return cap in self.capabilities
     async def list_tools(self):
         return [{"name": "t", "inputSchema": {"type": "object"}}]
+    async def list_resource_templates(self):
+        return [{"uriTemplate": "fake://{id}", "name": "template"}]
 
 
 def test_discover_tools_gated_by_capabilities():
@@ -57,7 +59,8 @@ def test_discover_all_capabilities():
         return sorted(t.name for t in tools)
     names = run(go())
     assert names == ["fake__get_prompt", "fake__list_prompts",
-                     "fake__list_resources", "fake__read_resource", "fake__t"]
+                     "fake__list_resource_templates", "fake__list_resources",
+                     "fake__read_resource", "fake__t"]
 
 
 # -- stub 集成：supervisor 注册全部 7 个工具 ----------------------------------------------
@@ -71,9 +74,9 @@ def test_supervisor_registers_capability_tools():
             names = registry.names()
             assert names == [
                 "stub__add", "stub__boom", "stub__echo", "stub__get_prompt",
-                "stub__list_prompts", "stub__list_resources", "stub__list_roots",
-                "stub__probe_ping", "stub__probe_unknown", "stub__read_resource",
-                "stub__sample_me",
+                "stub__list_prompts", "stub__list_resource_templates",
+                "stub__list_resources", "stub__list_roots", "stub__probe_ping",
+                "stub__probe_unknown", "stub__read_resource", "stub__sample_me",
             ]
         finally:
             await sup.close_all()

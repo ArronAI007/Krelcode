@@ -72,6 +72,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | v0.81 | Auto Memory | 长期记忆写入改为候选流水线：显式“记住”、用户纠正、成功测试复用、架构重复确认和任务完成事实先进入 project-local 队列；统一脱敏、精确去重、证据累积、冲突检测与阈值晋级。默认 suggest，`/memory review` 人工审核，auto 只晋级高置信无冲突 knowledge；新增只读 `memory_search` 与 pin 检索优先 |
 | v0.82 | Context v3 默认与安全收口 | 不再把 v3 只当内部命名：engine/trust/origin 成为跨 assembly、plan、usage、命令和 stream-json 的可检查契约。Memory 从 system Prompt Registry 分离为 untrusted knowledge layer；Working/Runtime context 使用 data-not-instructions envelope 并转义标签；单文件解释过滤无关 git/tree，重复 goal 不注入。legacy/v2 保留一个版本回退，安全回归覆盖注入、路径逃逸、损坏输入、取消、长会话与隔离 |
 | v0.83 | 扩展生态 P0 | Plugin v1 的单一 Tool 适配器升级为统一扩展平面：ExtensionRegistry 追踪 Plugin/Tool/Skill/Agent/Command/Hook/MCP 来源；Plugin v2 单包声明六类组件并保持 v1 兼容；install/update/remove/enable/disable 带原子替换、路径/symlink/体积校验和 scope 隔离状态；配置改为 user → project → local → managed 合并，managed fail-closed，`--config` 保持独占 |
+| v0.84 | 生产可用性 P1 | MCP 四类列表分页、`list_changed` 串行原子刷新、Resource Templates 与 OAuth（refresh/client credentials/metadata discovery/动态注册/PKCE/401 retry/`0600` cache）；新增 `CommandSource.CUSTOM` 和 Plugin/Custom 统一优先级；Hook 升级为 command/http/prompt 三执行器并强化 URL/Header 脱敏；Subagent Definition 支持独立 model/provider、permission-mode 和 MCP 集合。单组件失败继续隔离，所有新元数据不保存 Prompt 正文、Hook Header 或 MCP headers |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -95,11 +96,12 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | 工具端口与注册表 | `tools/base.py` `tools/registry.py`；具体工具 `tools/builtin/`，交互工具 `tools/extension/` |
 | 命令风险分级/审批/写保护 | `safety/commands.py` `safety/policy.py` `safety/rules.py` |
 | 运行时权限/Plan 审批状态机 | `safety/runtime.py` |
-| MCP 客户端/传输/热重载 | `mcp/client.py` `mcp/{stdio,sse}_transport.py` `mcp/streamable.py` `mcp/supervisor.py` |
+| MCP 客户端/传输/OAuth/热重载 | `mcp/client.py` `mcp/{stdio,sse}_transport.py` `mcp/streamable.py` `mcp/oauth.py` `mcp/supervisor.py` |
 | 子代理 | `subagent/manager.py`（生命周期/控制）`subagent/{definition,feed,control,sidechain}.py` `subagent/tools.py` |
 | 后台 Shell 进程/实时输出/日志 | `jobs/shell.py`；模型工具 `tools/builtin/job_tools.py` |
 | 会话录制/恢复/分支/导出/检查点/回退 | `session/{recorder,manager,lifecycle,restore,export,checkpoint,rewind}.py` |
 | 插件发现/隔离加载/热重载 | `plugins/{manifest,loader,manager}.py` |
+| Custom Markdown Command | `session/commands/custom.py` `session/commands/sources.py` |
 | 流式渲染/审批/用户输入/@引用 | `ui/render.py` `ui/approval.py` `session/interactions.py` `ui/atfiles.py` `ui/repl.py` |
 | 终端 Panel Dock / 键鼠导航 / Shell+Memory 快捷模式 | `ui/tui/{model,layout,controller,mouse,panels}.py` `session/memory.py` `agent/loop.py:execute_direct_tool` |
 | Memory 模型/作用域/存储与命令 | `session/memory.py` `session/memory_candidates.py` `session/commands/handlers/memory_ops.py` `tools/builtin/memory_search.py` |
@@ -123,7 +125,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 1,157 通过、2 skip；本地端口可用时 1,159/1,159 全过。
+bind 探测自动 skip——沙箱内 1,174 通过、2 skip；本地端口可用时 1,176/1,176 全过。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /
@@ -157,5 +159,6 @@ python scripts/real_acceptance.py --provider anthropic --keep
   thinking 块（含签名/redacted）经 Message.provider_meta 完整回传（Step 34），
   其他 provider 无此要求
 - MCP 反向请求支持 sampling/roots/ping（Step 35）；elicitation 等更新的能力未实现
+- MCP 交互式 OAuth 使用本机回调端口（默认 `8765`，可配置）；端口被占用时需改用可用端口，token endpoint/client 必须接受对应 redirect URI
 - Structured Compact 的模型摘要仍依赖模型能力；失败或 schema 非法时使用 Working Context/history 降级，宁可保留结构化事实也不阻断主循环
 - Fragment 手动启停是当前会话运行时状态，重启恢复默认；需要长期策略时应修改来源本身或后续增加持久化 overrides

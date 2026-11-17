@@ -26,6 +26,7 @@ from .commands import (
     builtin_command_registry,
     normalize_token,
     render_help,
+    sync_custom_commands,
     sync_mcp_prompt_commands,
     sync_plugin_commands,
     sync_skill_commands,
@@ -114,6 +115,10 @@ class SessionController:
             )
         )
         self.command_registry = command_registry or builtin_command_registry()
+        sync_custom_commands(
+            self.command_registry,
+            getattr(self.loop, "custom_command_manager", None),
+        )
         sync_skill_commands(self.command_registry, self.skills)
         sync_plugin_commands(self.command_registry, self.plugins)
         sync_mcp_prompt_commands(self.command_registry, self.mcp_supervisor)

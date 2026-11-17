@@ -8,6 +8,32 @@ from .registry import CommandRegistry
 from .types import CommandKind, CommandSource, CommandSpec
 
 
+def custom_command_specs(manager: Any) -> tuple[CommandSpec, ...]:
+    """Expose user/project Markdown commands with provenance metadata."""
+    if manager is None or not hasattr(manager, "list"):
+        return ()
+    specs: list[CommandSpec] = []
+    for command in manager.list():
+        specs.append(CommandSpec(
+            name=command.name,
+            description=command.description,
+            kind=CommandKind.PROMPT,
+            source=CommandSource.CUSTOM,
+            argument_hint=command.argument_hint,
+            help=f"[{command.source}] {command.description}",
+            metadata={
+                "source": command.source,
+                "path": str(command.path),
+                "allowed_tools": tuple(command.allowed_tools),
+            },
+        ))
+    return tuple(specs)
+
+
+def sync_custom_commands(registry: CommandRegistry, manager: Any) -> None:
+    registry.replace_source(CommandSource.CUSTOM, custom_command_specs(manager))
+
+
 def skill_command_specs(skills: Any) -> tuple[CommandSpec, ...]:
     """仅把允许用户调用的 Skill 暴露为 slash command。"""
     if skills is None or not getattr(skills, "enabled", False):

@@ -448,6 +448,13 @@ high watermark reached
   未变保持连接、变更先停后启、移除即注销）；check_and_restart() 复活崩溃
   服务器并重注册工具；工具注销走 registry.unregister_prefix("<server>__")；
   REPL /mcp 查看状态、/mcp reload 重读配置触发同步
+- **生产协议补齐（Step 96）**：tools/resources/resourceTemplates/prompts 列表统一
+  分页（100 页上限、重复 cursor fail-closed）；notifications/*/list_changed 按服务器
+  `asyncio.Lock` 串行刷新，工具目录先验证重复/命名冲突再原子替换；Resource Template
+  注册为只读 `list_resource_templates` 工具。HTTP OAuth 在标准库内实现 token cache、
+  refresh/client-credentials、protected-resource 与 authorization-server 发现、动态客户端
+  注册及 authorization code + PKCE；401/403 刷新后仅重试一次。`~/.krelcode/mcp-oauth.json`
+  按 server/url 哈希隔离并原子写为 `0600`，Header/OAuth 值支持 `${ENV_VAR}`。
 
 ## 子代理/后台任务（Step 13）
 
@@ -673,6 +680,25 @@ Krelcode 仍保持“pi 式分层 + 轻量事件总线”，但把 Plugin v1 的
 6. **配置分层**：默认配置按 `user → project → local → managed` 合并。字典递归合并，数组/标量由高层替换；`--config` 保持显式独占。managed 损坏 fail-closed，普通层损坏由 doctor 报告但不阻断其余可信层。`krelcode.local.toml` 被写保护且默认不提交。
 
 安全边界：插件代码仍是用户显式安装的本地可信 Python，不等同于 MCP 远程工具的 readOnlyHint；其读写/命令能力继续经过 Tool 实现、权限模式、审批与 Sandbox。当前不自动安装插件依赖，也不提供不可信代码的进程级沙箱。
+
+## 生产可用性 P1（Step 96）
+
+P1 不新增第二套运行时，而是在既有扩展平面上补齐可运维能力：
+
+1. **MCP 协议面**：所有 list API 统一分页；`list_changed` 通知只触发所属服务器的
+   元数据刷新，失败保留旧工具/命令池；Resource Templates 通过专用只读工具暴露。
+   OAuth token 获取与 JSON-RPC 传输解耦，`MCPClient` 只在收到 401/403 challenge 时
+   刷新并重试一次，避免凭据逻辑侵入每个远程 Tool。
+2. **命令来源**：新增 `CommandSource.CUSTOM`，从 user/project/configured Markdown 目录
+   发现命令并支持 frontmatter、参数替换和 `allowed-tools`；`PLUGIN` 继续保留独立来源。
+   固定优先级 `builtin > custom > skill > plugin > MCP`，所有前端继续消费同一 Registry。
+3. **Hook 执行器**：`command/http/prompt` 共用 trigger、payload、decision 与脱敏管线。
+   HTTP Hook 只允许 http/https，Header 从环境展开；诊断目标去除 userinfo/query/fragment，
+   动态 Header 凭据加入 SecretRedactor。Plugin Hook 走同一 parser，并保留 source/root。
+4. **Subagent Definition**：`model` 通过延迟 resolver 创建独立 Provider，不改变父级
+   `/model`；`permission-mode` 写入独立 ToolContext；`mcp-servers` 在 spawn 前与活/配置
+   服务器求交合并，省略=继承、`*`=全部、`[]`=禁用。任何未知 provider/server/tool 均
+   fail-closed，sidechain/status 记录实际 model/provider/permission/MCP 集。
 
 ## 会话生命周期与交换（Step 77）
 
@@ -1217,7 +1243,9 @@ raw input (terminal / API / IDE)
 ```
 Command sources
   ├─ builtin (22)
+  ├─ custom/user/project Markdown
   ├─ user-invocable Skills
+  ├─ plugin Markdown
   └─ MCP prompts
         ↓
 CommandRegistry
@@ -1230,20 +1258,21 @@ CommandSpec.kind
   ├─ COMMAND    → SessionController dispatcher → isolated handler
   ├─ UI_COMMAND → REPL renderer
   ├─ CONTROL    → frontend fast-path
-  └─ PROMPT     → Skill / MCP prompt → run_prompt
+  └─ PROMPT     → Custom / Skill / Plugin / MCP prompt → run_prompt
 ```
 
 - `CommandSpec` 统一携带 `name/aliases/description/argument_hint/kind/source/
   available_during_run/source metadata`。帮助、补全、运行态白名单和执行解析均从同一
   registry 派生，不再复制命令清单。
-- 来源优先级固定为 `builtin > skill > MCP`；冲突会记录到 `registry.conflicts`，
+- 来源优先级固定为 `builtin > custom > skill > plugin > MCP`；冲突会记录到 `registry.conflicts`，
   低优先级命令不会覆盖内置命令。Skill 保留 `/skill <name>` 兜底，同时自动暴露为
   `/<skill-name>`；MCP Prompt 强制使用 `/mcp__<server>__<prompt>` 命名空间。
 - `SessionController` 已从巨型条件分支收敛为解析器和 dispatcher；18 个业务命令由
   `commands/handlers` 中的独立函数实现。UI 命令和浏览器式终端状态仍留在 `ui/repl`。
-- `/skills reload` 原子替换 SKILL 来源；`/mcp reload` 重新拉取 `prompts/list` 并
-  原子替换 MCP 来源。MCP Prompt 的单参数整体传递，多参数支持 `key=value` 或按声明
-  顺序的位置参数。
+- `/skills reload` 原子替换 SKILL 来源；Plugin reload 刷新 PLUGIN；`/mcp reload`
+  重新拉取分页 `prompts/list` 并原子替换 MCP 来源。Custom Command 由
+  `CustomCommandManager` 重扫目录并在 SessionController/REPL 原地同步。
+  MCP Prompt 的单参数整体传递，多参数支持 `key=value` 或按声明顺序的位置参数。
 - registry、InputProcessor 与 REPL 共享同一可变 catalog，因此重载后补全、帮助与执行
   立即一致，无需重启会话。
 

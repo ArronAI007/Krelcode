@@ -21,7 +21,7 @@ import urllib.request
 from typing import Any, Callable, Dict, Iterator, Optional, Protocol, Tuple
 
 from .sseparse import SSEEventParser
-from .transport import MCPError
+from .transport import MCPAuthRequired, MCPError
 
 Headers = Dict[str, str]
 
@@ -117,6 +117,9 @@ class SSETransport:
         status, _, lines = await asyncio.to_thread(
             self._connector.open_stream, self.url, self.headers, self.timeout)
         if status != 200:
+            if status in (401, 403):
+                raise MCPAuthRequired(
+                    f"SSE 连接需要 OAuth（HTTP {status}）", status=status)
             raise MCPError(f"SSE 连接被拒绝: HTTP {status}")
         self._reader_thread = threading.Thread(
             target=self._reader, args=(lines, on_message, on_disconnect),
@@ -133,6 +136,9 @@ class SSETransport:
         status, resp_body = await asyncio.to_thread(
             self._connector.post, self._endpoint, self.headers, body, self.timeout)
         if status not in (200, 202, 204):
+            if status in (401, 403):
+                raise MCPAuthRequired(
+                    f"SSE POST 需要 OAuth（HTTP {status}）", status=status)
             raise MCPError(f"SSE POST 失败 HTTP {status}: {resp_body[:500]!r}")
 
     async def close(self) -> None:
@@ -143,6 +149,10 @@ class SSETransport:
             self._connector.close_stream()
         except Exception:
             pass
+
+    def set_headers(self, headers: Optional[Headers]) -> None:
+        """Replace dynamic headers; reconnect is required by the caller."""
+        self.headers = dict(headers or {})
 
     @property
     def alive(self) -> bool:

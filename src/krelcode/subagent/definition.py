@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Tuple
 
+from ..safety.runtime import parse_permission_mode
 from ..skills.parser import SkillParseError, parse_skill_document, split_allowed_tools
 
 MAX_AGENT_DEFINITION_BYTES = 256_000
@@ -29,14 +30,26 @@ class AgentDefinition:
     path: Optional[Path] = None
     default_isolated: bool = False
     default_fork_context: bool = False
+    model: str = ""
+    permission_mode: str = ""
+    mcp_servers: Optional[Tuple[str, ...]] = None
 
     def system_prompt_with_base(self, base: str) -> str:
         tools = ", ".join(self.allowed_tools) if self.allowed_tools else "（继承默认工具池）"
+        runtime = []
+        if self.model:
+            runtime.append(f"Model: {self.model}")
+        if self.permission_mode:
+            runtime.append(f"Permission mode: {self.permission_mode}")
+        if self.mcp_servers is not None:
+            mcp = ", ".join(self.mcp_servers) if self.mcp_servers else "（无）"
+            runtime.append(f"MCP servers: {mcp}")
+        runtime_text = ("\n" + "\n".join(runtime)) if runtime else ""
         return (
             f"{base.rstrip()}\n\n"
             f'<agent_definition name="{self.name}">\n'
             f"Description: {self.description}\n"
-            f"Allowed tools: {tools}\n\n"
+            f"Allowed tools: {tools}{runtime_text}\n\n"
             f"{self.system_prompt.strip()}\n"
             "</agent_definition>"
         )
@@ -140,6 +153,23 @@ class AgentDefinitionManager:
             raise ValueError("Agent Definition 正文（system prompt）为空")
         tools = split_allowed_tools(
             metadata.get("allowed-tools", metadata.get("tools")))
+        raw_permission = metadata.get(
+            "permission-mode", metadata.get("permission_mode", ""))
+        permission_mode = ""
+        if raw_permission not in (None, ""):
+            try:
+                permission_mode = parse_permission_mode(
+                    str(raw_permission)).value
+            except ValueError as exc:
+                raise ValueError(
+                    f"非法 permission-mode: {raw_permission!r}") from exc
+        raw_mcp = metadata.get("mcp-servers", metadata.get("mcp_servers"))
+        if raw_mcp is None:
+            mcp_servers = None
+        elif str(raw_mcp).strip() == "*":
+            mcp_servers = ("*",)
+        else:
+            mcp_servers = split_allowed_tools(raw_mcp)
         return AgentDefinition(
             name=name,
             description=description,
@@ -150,6 +180,9 @@ class AgentDefinitionManager:
             default_isolated=bool(metadata.get("isolated", False)),
             default_fork_context=bool(
                 metadata.get("fork-context", metadata.get("fork_context", False))),
+            model=str(metadata.get("model") or "").strip(),
+            permission_mode=permission_mode,
+            mcp_servers=mcp_servers,
         )
 
     def get(self, name: str) -> AgentDefinition:
@@ -170,7 +203,16 @@ class AgentDefinitionManager:
         lines = []
         for definition in self.list():
             tools = ", ".join(definition.allowed_tools) or "默认"
+            runtime = []
+            if definition.model:
+                runtime.append(f"model={definition.model}")
+            if definition.permission_mode:
+                runtime.append(f"permission={definition.permission_mode}")
+            if definition.mcp_servers is not None:
+                mcp = ",".join(definition.mcp_servers) or "none"
+                runtime.append(f"mcp={mcp}")
+            runtime_text = " · " + " · ".join(runtime) if runtime else ""
             lines.append(
                 f"{definition.name} [{definition.source}] {definition.description} "
-                f"· tools: {tools} · {definition.path}")
+                f"· tools: {tools}{runtime_text} · {definition.path}")
         return tuple(lines)

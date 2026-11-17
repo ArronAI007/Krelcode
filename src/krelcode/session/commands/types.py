@@ -20,6 +20,7 @@ class CommandKind(str, Enum):
 
 class CommandSource(str, Enum):
     BUILTIN = "builtin"
+    CUSTOM = "custom"
     SKILL = "skill"
     PLUGIN = "plugin"
     MCP = "mcp"

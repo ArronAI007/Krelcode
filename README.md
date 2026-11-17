@@ -72,7 +72,7 @@ krelcode               # 进入 REPL
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（沙箱内 1157 通过，2 个本地端口测试自动跳过）
+# 运行全部测试（沙箱内 1174 通过，2 个本地端口测试自动跳过）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -98,9 +98,9 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --mode
 #   api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp`（状态）、`/mcp reload`（热重载并重新发现 Prompt）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>|install|update|enable|disable|remove ...]`（插件生命周期）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|fragments|enable|disable|toggle|reset|cache|refresh]`（请求 token 分项、来源归因、Fragment 启停、缓存边界与工作区重采）、`/memory [list [scope]|show|add <text> --scope|search|pin|unpin|forget|mode|review|migrate]`（分层记忆、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp [reload|auth <server>]`（状态、热重载、OAuth + PKCE 授权）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>|install|update|enable|disable|remove ...]`（插件生命周期）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|fragments|enable|disable|toggle|reset|cache|refresh]`（请求 token 分项、来源归因、Fragment 启停、缓存边界与工作区重采）、`/memory [list [scope]|show|add <text> --scope|search|pin|unpin|forget|mode|review|migrate]`（分层记忆、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
 
-所有命令由统一 `CommandRegistry` 发现：`/help`、slash 菜单、Tab 补全、运行态过滤和 InputProcessor 共用同一份 catalog。允许用户调用的 Skill 会自动显示为 `/<skill-name> [参数]`，MCP Prompt 会命名空间化为 `/mcp__<server>__<prompt> [参数]`；`/skills reload` 与 `/mcp reload` 会原地刷新对应来源，内置命令在命名冲突时保持最高优先级。
+所有命令由统一 `CommandRegistry` 发现：`/help`、slash 菜单、Tab 补全、运行态过滤和 InputProcessor 共用同一份 catalog。来源优先级为 `builtin > custom > skill > plugin > MCP`。用户/项目 Markdown Command 来自 `~/.krelcode/commands/*.md`、`<workspace>/.krelcode/commands/*.md`、`<workspace>/.commands/*.md` 与 `[commands].paths`；`$ARGUMENTS` / `${ARGUMENTS}` 渲染参数，`allowed-tools` 只能收窄工具集。允许用户调用的 Skill 会自动显示为 `/<skill-name> [参数]`，MCP Prompt 会命名空间化为 `/mcp__<server>__<prompt> [参数]`；`/skills reload`、`/mcp reload` 与 `/plugins reload` 会原地刷新对应来源，内置命令在命名冲突时保持最高优先级。
 
 **运行中交互**：`Enter` 提交 Steering（当前 turn 的下一步看到）；`Alt+Enter` 将输入排为下一条独立消息，当前 turn 完成后自动发送；`Shift-Tab` 按 `default → plan → read-only → auto-approve` 快速轮换权限模式；`Esc` / `Ctrl-C` 中止当前任务（历史自动修复，可立即续聊）。空闲时 `Ctrl-C` 只清空当前输入，`Ctrl-D` 或 `/exit` 退出。审批请求由 REPL 前台异步接管，不会与字符级输入 reader 抢占 stdin；`/thinking`、`/plan`、`/permissions`、`/tool-output`、`/queue`、`/agents`、`/jobs` 在任务运行中仍可访问。
 
@@ -133,17 +133,26 @@ timeout = 30
 
 [mcp_servers.remote]         # Streamable HTTP（2025-03-26 规范，url 默认）
 url = "http://localhost:3000/mcp"
-headers = { Authorization = "Bearer ..." }
+headers = { Authorization = "Bearer ${MCP_TOKEN}" }
 # listener_retries = 3       # GET 监听流断线重连次数（0=不重连）
 # listener_retry_delay = 1.0 # 基础退避秒数（指数增长）
+
+[mcp_servers.remote.oauth]    # 可选：Bearer/refresh/client credentials/交互授权
+refresh_token = "${MCP_REFRESH_TOKEN}"
+token_url = "https://auth.example.com/token"
+client_id = "krelcode"
+client_secret = "${MCP_CLIENT_SECRET}"
+# access_token / authorization_url / scopes / resource / redirect_port ...
 
 [mcp_servers.legacy]         # 旧 HTTP+SSE 规范：显式 transport = "sse"
 url = "http://localhost:3001/sse"
 transport = "sse"
 ```
 
-- 按服务器 capabilities 自动注册：远程工具 + `list_resources`/`read_resource` + `list_prompts`/`get_prompt`
-- 热重载：REPL 内 `/mcp` 查看状态，`/mcp reload` 重读配置（增/删/改 diff 同步）；崩溃的服务器自动重启并重注册工具
+- 按服务器 capabilities 自动注册：远程工具 + `list_resources`/`read_resource` + `list_resource_templates` + `list_prompts`/`get_prompt`
+- `tools/list`、`resources/list`、`resources/templates/list`、`prompts/list` 全部自动跟随 `nextCursor` 分页；`notifications/*/list_changed` 会原子刷新当前服务器工具、Resource Template 或 Prompt 命令，单服务器失败不破坏旧目录
+- OAuth 支持 token cache、refresh token、client credentials、protected-resource / authorization-server 元数据发现、动态客户端注册和 authorization code + PKCE。先配置再运行 `/mcp auth <server>`；HTTP 401/403 会刷新 token 并重试一次。缓存位于 `~/.krelcode/mcp-oauth.json`（目录和文件按用户私有权限写入，最终文件 `0600`）
+- 热重载：REPL 内 `/mcp` 查看状态，`/mcp reload` 重读配置（增/删/改 diff 同步）；崩溃的服务器自动重启并重注册工具；配置中的 `${ENV_VAR}` 会在 HTTP Header/OAuth 字段中按环境变量展开，建议凭据只放环境变量或权限受限的本机配置
 - `--no-mcp` 跳过启动；单服务器失败只警告不阻断
 
 ### repo_map
@@ -317,9 +326,21 @@ command = "osascript -e 'display notification \"任务完成\"'"
 [[hooks]]
 on = "pre_tool_use"
 command = "python3 .krelcode/hooks/check_write.py"
+
+[[hooks]]
+on = "pre_tool_use"
+type = "http"
+url = "${HOOK_ENDPOINT}"
+headers = { Authorization = "Bearer ${HOOK_TOKEN}" }
+timeout = 10
+
+[[hooks]]
+on = "user_prompt_submit"
+type = "prompt"
+prompt = "Review this request against the project policy: {prompt}"
 ```
 
-hooks 只能由用户在配置文件定义（`krelcode.toml` 与 `.krelcode/` 已列入写保护，agent 无法自我注入）。每次执行从 stdin 接收结构化 JSON（事件、工作区、工具名/参数），可用 `additional_context` 注入上下文、`system_message` 提示用户；`pre_tool_use` 可返回 `decision="block"` 或退出码 `2` 阻止工具。模板变量只展开一次并经 shell-quote；Hook 子进程不继承 API key/token/proxy，输出、注入上下文与审计记录同样经过密钥脱敏，失败/超时默认 fail-open。完整协议见 [CONFIG.md](CONFIG.md#hooks-协议hooks-v2)。
+三种 Hook 共用同一决策管线：`command` 从 stdin 接收结构化 JSON；`http` 向仅限 `http/https` 的 URL POST JSON，Header 支持 `${ENV_VAR}`；`prompt` 复用当前 LLM 输出同样的 JSON decision/context。Plugin 的 `hooks.toml` 使用相同 schema，并自动继承 `_source/_plugin_root`。hooks 只能由用户配置或可信插件定义（`krelcode.toml` 与 `.krelcode/` 已列入写保护，agent 无法自我注入）。可用 `additional_context` 注入上下文、`system_message` 提示用户；`pre_tool_use` 可返回 `decision="block"` 或命令退出码 `2` 阻止工具。模板变量只展开一次并经 shell-quote；诊断记录不保存 Hook Header/Prompt 正文，HTTP URL 去除 userinfo/query/fragment，动态 Header 值会加入 SecretRedactor，输出、注入上下文与审计记录同样脱敏，失败/超时默认 fail-open。完整协议见 [CONFIG.md](CONFIG.md#hooks-协议hooks-v2)。
 
 ### git 自动提交（可选）
 
@@ -336,6 +357,7 @@ LLM 可用 `spawn_agent` 把自包含子任务委派给后台子代理（独立�
 - **Agent Feed**：`get_agent_feed(agent_id, after_sequence)` 按稳定游标读取 assistant/thinking/tool/state 增量；内存有界，所有文本先脱敏。
 - **Pause / Resume / Kill**：`pause_agent` 在每个 step 安全边界协作式暂停并保留 Task/历史，`resume_agent` 从原位置继续，`kill_agent` 才取消整个 Task；`send_to_agent` 在暂停期间仍可排队。
 - **用户定义**：在 `~/.krelcode/agents/<name>.md` 或 `<workspace>/.krelcode/agents/<name>.md` 放置 frontmatter Markdown；项目级同名定义覆盖全局。`spawn_agent(definition="reviewer", task="...")` 会应用定义中的 system prompt 和 `allowed-tools`（只能缩小工具集，不能绕过审批/Sandbox）。
+- **独立运行策略**：Definition 可用 `model: provider/model` 创建独立 Provider，用 `permission-mode: default|plan|read-only|auto-approve` 固定子代理权限，并用 `mcp-servers` 选择 MCP 工具集合；省略表示继承全部，`["*"]` 显式全选，`[]` 表示不使用 MCP。未知 provider/server/tool 在启动前 fail-closed。
 - **Sidechain**：每个子代理写入 `.krelcode/sidechains/<run-id>/<agent-id>.jsonl`，包含定义、任务、消息、feed、状态、history 快照、结果和 worktree/分支信息。它不会自动污染父 Agent history。
 - **REPL**：`/agents` 查看状态；`/agents feed <id> [after] --limit N` 读取增量；`/agents pause|resume|kill <id>` 控制；`/agents definitions` 查看定义；`/agents sidechains` / `sidechain <id>` 审计持久化记录。
 
@@ -346,6 +368,9 @@ Definition 示例：
 name: reviewer
 description: 只读代码审查
 allowed-tools: [read_file, grep, glob, repo_map]
+model: deepseek/deepseek-flash  # 可选；省略则跟随父代理当前 provider/model
+permission-mode: read-only     # 可选；独立于父代理
+mcp-servers: [github, docs]    # 可选；* = 全部，[] = 不使用 MCP
 fork-context: true
 ---
 你是严格的代码审查员，只报告可复现的问题并给出文件路径与行号。

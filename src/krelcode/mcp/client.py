@@ -10,19 +10,22 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
 
 from .. import __version__
 from .stdio_transport import StdioTransport
 from .sse_transport import SSETransport
 from .streamable import StreamableHTTPTransport
-from .transport import MCPError, MCPTransport
+from .oauth import MCPOAuthRequired, OAuthTokenManager
+from .transport import MCPAuthRequired, MCPError, MCPTransport
 
 # url 型服务器的传输选择（config: transport = "..."）
 TRANSPORT_STREAMABLE = "streamable-http"
 TRANSPORT_SSE = "sse"
 
 PROTOCOL_VERSION = "2025-03-26"
+MAX_LIST_PAGES = 100
 
 
 @dataclass(frozen=True)
@@ -31,10 +34,11 @@ class MCPServerConfig:
     # stdio 传输
     command: Optional[str] = None
     args: List[str] = field(default_factory=list)
-    env: Dict[str, str] = field(default_factory=dict)
+    env: Dict[str, str] = field(default_factory=dict, repr=False)
     # HTTP 传输（url 优先于 command）
     url: Optional[str] = None
-    headers: Dict[str, str] = field(default_factory=dict)
+    headers: Dict[str, str] = field(default_factory=dict, repr=False)
+    oauth: Dict[str, Any] = field(default_factory=dict, repr=False)
     # "streamable-http"（默认，2025-03-26 规范）或 "sse"（旧 2024-11-05 规范）
     transport: Optional[str] = None
     # streamable-http GET 监听流重连（0 = 不重连）
@@ -69,6 +73,11 @@ class MCPClient:
         transport: Optional[MCPTransport] = None,
         sampler: Optional[Any] = None,
         roots: Optional[List[Dict[str, Any]]] = None,
+        on_notification: Optional[
+            Callable[[str, Dict[str, Any]], Any]
+        ] = None,
+        oauth_token_path: Optional[Path] = None,
+        log: Optional[Callable[[str], None]] = None,
     ) -> None:
         """sampler: async (messages, params) -> {"text": str, "model": str}，
         服务器发起 sampling/createMessage 时回调（通常由共享 LLM 实现）；
@@ -78,6 +87,8 @@ class MCPClient:
         self._transport: MCPTransport = transport or config.create_transport()
         self._sampler = sampler
         self._roots = list(roots or [])
+        self._on_notification = on_notification
+        self._log = log or (lambda _message: None)
         self._next_id = 0
         self._pending: Dict[int, asyncio.Future] = {}
         self._started = False
@@ -86,10 +97,22 @@ class MCPClient:
         self.server_info: Dict[str, Any] = {}
         self.capabilities: Dict[str, Any] = {}
         self.server_protocol_version: Optional[str] = None
+        self.oauth: Optional[OAuthTokenManager] = None
+        if self.config.url and self.config.oauth:
+            candidate = OAuthTokenManager(
+                self.name,
+                self.config.url,
+                self.config.oauth,
+                token_path=oauth_token_path,
+                log=self._log,
+            )
+            if candidate.config.configured:
+                self.oauth = candidate
 
     # -- 生命周期 ---------------------------------------------------------------
 
     async def start(self) -> None:
+        await self._apply_auth_headers()
         await self._transport.connect(self._dispatch, self._on_disconnect)
         self._started = True
         client_caps: Dict[str, Any] = {}
@@ -129,29 +152,64 @@ class MCPClient:
 
     # -- JSON-RPC 核心 --------------------------------------------------------------
 
+    async def _apply_auth_headers(self, *, force_refresh: bool = False) -> None:
+        if self.oauth is None:
+            return
+        headers = {
+            **self.config.headers,
+            **(await self.oauth.headers(force_refresh=force_refresh)),
+        }
+        setter = getattr(self._transport, "set_headers", None)
+        if setter is None:
+            raise MCPError("当前 MCP 传输不支持 OAuth Header")
+        setter(headers)
+
     async def _request(self, method: str, params: Optional[dict] = None) -> Any:
         if self._closed or not self._started:
             raise MCPError(f"MCP 服务器 {self.name!r} 未连接")
         if not self._transport.alive:
             raise MCPError(
                 f"MCP 服务器 {self.name!r} 连接已断开（{self._disconnect_reason}）")
-        self._next_id += 1
-        rid = self._next_id
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._pending[rid] = future
-        payload = {"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}}
-        try:
-            await self._transport.send(payload)
-        except MCPError:
-            self._pending.pop(rid, None)
-            raise
-        try:
-            return await asyncio.wait_for(future, timeout=self.config.timeout)
-        except asyncio.TimeoutError:
-            self._pending.pop(rid, None)
-            raise MCPError(
-                f"MCP 服务器 {self.name!r} 响应超时（{self.config.timeout:g}s, method={method}）"
-            ) from None
+        auth_retry = False
+        while True:
+            self._next_id += 1
+            rid = self._next_id
+            future: asyncio.Future = asyncio.get_running_loop().create_future()
+            self._pending[rid] = future
+            payload = {
+                "jsonrpc": "2.0", "id": rid, "method": method,
+                "params": params or {},
+            }
+            try:
+                await self._transport.send(payload)
+            except MCPAuthRequired as exc:
+                self._pending.pop(rid, None)
+                if self.oauth is None or auth_retry:
+                    raise
+                self.oauth.note_challenge(exc.headers)
+                try:
+                    await self._apply_auth_headers(force_refresh=True)
+                except MCPOAuthRequired as auth_exc:
+                    raise auth_exc
+                except MCPError:
+                    raise MCPAuthRequired(
+                        f"{exc}；运行 /mcp auth {self.name} 完成授权",
+                        status=exc.status,
+                        headers=exc.headers,
+                    ) from exc
+                auth_retry = True
+                continue
+            except MCPError:
+                self._pending.pop(rid, None)
+                raise
+            try:
+                return await asyncio.wait_for(future, timeout=self.config.timeout)
+            except asyncio.TimeoutError:
+                self._pending.pop(rid, None)
+                raise MCPError(
+                    f"MCP 服务器 {self.name!r} 响应超时"
+                    f"（{self.config.timeout:g}s, method={method}）"
+                ) from None
 
     async def _notify(self, method: str, params: Optional[dict] = None) -> None:
         """发送通知并等待写盘完成。
@@ -180,7 +238,13 @@ class MCPClient:
                 pass  # 无运行循环（已关闭）
             return
         if rid is None:
-            return  # 服务器通知：忽略
+            if method is not None:
+                try:
+                    asyncio.get_running_loop().create_task(
+                        self._handle_notification(str(method), msg.get("params") or {}))
+                except RuntimeError:
+                    pass
+            return
         future = self._pending.pop(rid, None)
         if future is None or future.done():
             return
@@ -190,6 +254,18 @@ class MCPClient:
                 MCPError(f"MCP {self.name!r} 错误 {err.get('code')}: {err.get('message')}"))
         else:
             future.set_result(msg.get("result"))
+
+    async def _handle_notification(self, method: str, params: Dict[str, Any]) -> None:
+        if self._on_notification is None:
+            return
+        try:
+            pending = self._on_notification(method, params)
+            if asyncio.iscoroutine(pending):
+                await pending
+        except Exception as exc:
+            self._log(
+                f"[mcp] {self.name} 通知处理失败 {method}: "
+                f"{type(exc).__name__}: {exc}")
 
     # -- 服务器 → 客户端 请求处理 -------------------------------------------------
 
@@ -251,9 +327,32 @@ class MCPClient:
 
     # -- MCP 高层 API --------------------------------------------------------------
 
+    async def _list_paginated(self, method: str, key: str) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        cursor: Optional[str] = None
+        seen: set[str] = set()
+        for _ in range(MAX_LIST_PAGES):
+            params = {"cursor": cursor} if cursor else {}
+            result = await self._request(method, params)
+            if result is not None and not isinstance(result, dict):
+                raise MCPError(
+                    f"MCP 服务器 {self.name!r} 返回了非法 {method} 结果")
+            payload = result or {}
+            items.extend(_as_list(payload.get(key), self.name, key))
+            raw_cursor = payload.get("nextCursor")
+            if raw_cursor in (None, ""):
+                return items
+            next_cursor = str(raw_cursor)
+            if next_cursor in seen:
+                raise MCPError(
+                    f"MCP 服务器 {self.name!r} 的 {method} 分页 cursor 重复")
+            seen.add(next_cursor)
+            cursor = next_cursor
+        raise MCPError(
+            f"MCP 服务器 {self.name!r} 的 {method} 超过 {MAX_LIST_PAGES} 页")
+
     async def list_tools(self) -> List[Dict[str, Any]]:
-        result = await self._request("tools/list")
-        return _as_list((result or {}).get("tools"), self.name, "tools")
+        return await self._list_paginated("tools/list", "tools")
 
     async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         result = await self._request("tools/call", {"name": name, "arguments": arguments})
@@ -262,8 +361,11 @@ class MCPClient:
         return result
 
     async def list_resources(self) -> List[Dict[str, Any]]:
-        result = await self._request("resources/list")
-        return _as_list((result or {}).get("resources"), self.name, "resources")
+        return await self._list_paginated("resources/list", "resources")
+
+    async def list_resource_templates(self) -> List[Dict[str, Any]]:
+        return await self._list_paginated(
+            "resources/templates/list", "resourceTemplates")
 
     async def read_resource(self, uri: str) -> Dict[str, Any]:
         result = await self._request("resources/read", {"uri": uri})
@@ -272,8 +374,7 @@ class MCPClient:
         return result
 
     async def list_prompts(self) -> List[Dict[str, Any]]:
-        result = await self._request("prompts/list")
-        return _as_list((result or {}).get("prompts"), self.name, "prompts")
+        return await self._list_paginated("prompts/list", "prompts")
 
     async def get_prompt(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         result = await self._request(

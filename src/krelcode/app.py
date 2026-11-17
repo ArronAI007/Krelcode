@@ -11,7 +11,7 @@ import argparse
 import asyncio
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from . import __version__
 from .agent.compression import DEFAULT_MAX_TOKENS as DEFAULT_CONTEXT_BUDGET
@@ -48,7 +48,7 @@ from .extensions import ExtensionRegistry, replace_runtime_extensions
 from .hooks import HookRunner, parse_hooks
 from .jobs import ShellJobManager
 from .core.messages import Message, ToolCall
-from .llm.base import LLMProvider
+from .llm.base import LLMProvider, collect
 from .llm.providers.mock import MockProvider
 from .llm.registry import create_provider, resolve_settings
 from .llm.retry import RetryPolicy, RetryingProvider
@@ -64,10 +64,12 @@ from .session.context_checkpoint import (
     ContextCheckpointStore,
 )
 from .session.commands import (
+    sync_custom_commands,
     sync_mcp_prompt_commands,
     sync_plugin_commands,
     sync_skill_commands,
 )
+from .session.commands.custom import CustomCommandManager
 from .session.input import InputProcessor
 from .session.interactions import UserInputBroker
 from .session.memory import MemoryStore, sync_memory_fragment
@@ -368,6 +370,18 @@ def build_plugin_manager(
     )
 
 
+def build_custom_command_manager(
+    config: Dict[str, Any], workspace_root: Path,
+) -> CustomCommandManager:
+    section = config.get("commands") or {}
+    if not isinstance(section, dict):
+        section = {}
+    configured = section.get("paths") or []
+    if isinstance(configured, str):
+        configured = [configured]
+    return CustomCommandManager(workspace_root, extra_paths=configured)
+
+
 def compose_mcp_config(
     config: Dict[str, Any],
     plugin_servers: Dict[str, Any],
@@ -391,6 +405,52 @@ def compose_hook_specs(
     return parse_hooks({
         "hooks": [*raw_hooks, *plugin_hooks],
     })
+
+
+def build_subagent_llm_resolver(
+    args: argparse.Namespace,
+    config: Dict[str, Any],
+    parent: LLMProvider | Callable[[], LLMProvider],
+    redactor: Optional[SecretRedactor] = None,
+) -> Callable[[str], LLMProvider]:
+    """Resolve Definition.model without changing the parent's provider."""
+    def resolve(spec: str) -> LLMProvider:
+        parent_provider = parent() if callable(parent) else parent
+        raw = str(spec or "").strip()
+        if not raw:
+            return parent_provider
+        if "/" in raw:
+            provider_name, model_name = raw.split("/", 1)
+        else:
+            provider_name, model_name = getattr(
+                parent_provider, "name", "openai"), raw
+        if provider_name == "mock":
+            raise ValueError("mock provider 不支持 Agent Definition 独立模型")
+        settings = resolve_settings(
+            provider=provider_name,
+            model=model_name,
+            base_url=args.base_url,
+            config=config,
+        )
+        inner = create_provider(settings)
+        if getattr(inner, "api_key", None) is None:
+            raise ValueError(
+                f"Agent Definition 模型 {provider_name}/{model_name} 缺少 API key")
+        provider: LLMProvider = inner
+        if args.retries > 0:
+            provider = RetryingProvider(
+                inner,
+                RetryPolicy(max_retries=args.retries),
+                on_retry=lambda attempt, delay, error: print(
+                    f"[retry:subagent] LLM 调用失败"
+                    f"（{type(error).__name__}），第 {attempt} 次重试，"
+                    f"{delay:g}s 后…"),
+            )
+        if redactor is not None:
+            redactor.add(getattr(inner, "api_key", None))
+        return provider
+
+    return resolve
 
 
 async def build_loop(
@@ -432,6 +492,7 @@ async def build_loop(
     llm = build_llm(args, config, log=log)
     memory_store = MemoryStore(workspace_root)
     base_skill_paths = configured_skill_paths(args, config)
+    custom_commands = build_custom_command_manager(config, workspace_root)
     plugin_manager = build_plugin_manager(args, config, workspace_root)
     await plugin_manager.load()
     plugin_tools = list(plugin_manager.tools)
@@ -484,12 +545,22 @@ async def build_loop(
     tool_context.shell_jobs = shell_jobs
     policy = build_policy(args, workspace_root, bus, approver=approver)
     builtin_tools = default_tools(memory_store)
-    tool_factory = lambda: (
-        default_tools(memory_store)
-        + skill_tools
-        + list(extra_tools or [])
-        + list(plugin_manager.tools)
-    )
+    def child_tool_factory() -> List[Tool]:
+        tools = (
+            default_tools(memory_store)
+            + skill_tools
+            + list(extra_tools or [])
+            + list(plugin_manager.tools)
+        )
+        # MCP is registered asynchronously after loop construction; resolve it
+        # lazily so spawned agents see the current connected server catalogue.
+        for name in registry.names():
+            descriptor = registry.descriptor(name)
+            if descriptor is not None and descriptor.source is ToolSource.MCP:
+                tool = registry.get(name)
+                if tool is not None:
+                    tools.append(tool)
+        return tools
     registry = ToolRegistry(builtin_tools)
     for tool in skill_tools:
         registry.register(
@@ -513,9 +584,11 @@ async def build_loop(
             + ", ".join(item.name for item in agent_definitions.list()))
     for issue in agent_definitions.issues:
         log(f"[agents] 跳过无效定义: {issue.path}: {issue.message}")
+    redactor = SecretRedactor()
+    redactor.add(getattr(llm, "api_key", None))
     manager = SubagentManager(
         llm=llm,
-        tool_factory=tool_factory,
+        tool_factory=child_tool_factory,
         tool_context=tool_context,
         policy=policy,
         bus=bus,
@@ -525,6 +598,11 @@ async def build_loop(
             lambda: skill_manager.apply_to_prompt(SUBAGENT_SYSTEM_PROMPT)),
         definitions=agent_definitions,
         memory_store=memory_store,
+        llm_resolver=build_subagent_llm_resolver(
+            args, config, lambda: manager.llm, redactor),
+        mcp_servers_provider=lambda: tuple(
+            compose_mcp_config(config, dict(plugin_manager.mcp_servers))
+        ),
     )
     for tool in manager.build_tools():
         registry.register(
@@ -582,10 +660,12 @@ async def build_loop(
         working_context_store=working_context_store,
         compact_checkpoint_store=compact_checkpoint_store,
     )
+    loop.redactor = redactor
     # fork_context 数据源：getter 形式，/resume 重绑定 loop.history 后依然正确
     manager.get_parent_history = lambda: loop.history
     loop.skill_manager = skill_manager
     loop.plugin_manager = plugin_manager
+    loop.custom_command_manager = custom_commands
     loop.agent_definitions = agent_definitions
     loop.base_skill_paths = tuple(base_skill_paths)
     loop.prompt_registry = prompt_registry
@@ -793,7 +873,8 @@ async def async_main(args: argparse.Namespace) -> int:
     except SandboxError as e:
         print(f"Sandbox 配置错误: {e}", file=sys.stderr)
         return 2
-    redactor = SecretRedactor()
+    custom_commands = loop.custom_command_manager
+    redactor = getattr(loop, "redactor", None) or SecretRedactor()
     redactor.add(getattr(loop.llm, "api_key", None))
     loop.redactor = redactor
     if getattr(loop, "working_context_store", None) is not None:
@@ -870,7 +951,8 @@ async def async_main(args: argparse.Namespace) -> int:
         if hooks is None:
             hooks = HookRunner(
                 loop.tool_context.workspace_root, specs, log=note,
-                redactor=redactor)
+                redactor=redactor,
+                prompt_runner=run_prompt_hook)
             hooks.attach(loop.bus)
         else:
             hooks.replace_specs(specs)
@@ -879,6 +961,12 @@ async def async_main(args: argparse.Namespace) -> int:
         if specs:
             note(f"[hooks] 已加载 {len(specs)} 个钩子: "
                  + ", ".join(sorted({h.on for h in specs})))
+
+    async def run_prompt_hook(
+        prompt: str, _payload: Dict[str, Any],
+    ) -> str:
+        finished = await collect(loop.llm, [Message.user(prompt)])
+        return finished.message.content or ""
 
     ensure_hooks(merged_hook_specs())
 
@@ -892,6 +980,7 @@ async def async_main(args: argparse.Namespace) -> int:
         hook_context_provider=collect_hook_context,
     )
     loop.command_registry = input_processor.command_registry
+    sync_custom_commands(input_processor.command_registry, custom_commands)
     sync_plugin_commands(input_processor.command_registry, loop.plugin_manager)
     sync_skill_commands(input_processor.command_registry, loop.skill_manager)
     sync_mcp_prompt_commands(input_processor.command_registry, supervisor)
@@ -910,6 +999,11 @@ async def async_main(args: argparse.Namespace) -> int:
         )
 
     loop.extension_refresh = refresh_extensions
+    async def refresh_mcp_prompt_commands() -> None:
+        sync_mcp_prompt_commands(input_processor.command_registry, supervisor)
+        refresh_extensions()
+
+    supervisor.on_prompts_changed = refresh_mcp_prompt_commands
     refresh_extensions()
 
     def reload_skills():
@@ -918,6 +1012,14 @@ async def async_main(args: argparse.Namespace) -> int:
         sync_skill_commands(input_processor.command_registry, loop.skill_manager)
         refresh_extensions()
         return report
+
+    def reload_custom_commands():
+        custom_commands.reload()
+        sync_custom_commands(input_processor.command_registry, custom_commands)
+        refresh_extensions()
+        return custom_commands
+
+    loop.custom_commands_reload = reload_custom_commands
 
     base_plugin_reload = loop.plugin_reload
 

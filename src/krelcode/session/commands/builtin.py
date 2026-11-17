@@ -64,8 +64,10 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             "delete", "归档一个非活动会话", argument_hint="<n|path> [--force]",
             help="删除前要求二次确认；文件移入 sessions/.archive 可手动恢复"),
         CommandSpec(
-            "mcp", "查看或重载 MCP", argument_hint="[reload]",
-            help="查看 MCP 服务器状态；/mcp reload 重读配置并热重启"),
+            "mcp", "查看、授权或重载 MCP",
+            argument_hint="[reload|auth <server>]",
+            help=("查看 MCP 状态与 Resource/Template 统计；/mcp reload 重读配置并热重启；"
+                  "/mcp auth <server> 执行 OAuth + PKCE 授权")),
         CommandSpec(
             "agents", "查看和控制子代理",
             argument_hint="[list|feed|pause|resume|kill|definitions|sidechains]",
