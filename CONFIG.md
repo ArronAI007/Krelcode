@@ -25,7 +25,7 @@ krelcode [子命令] [选项]
 | `--mock` | — | 等价 `--provider mock`（含演示脚本），无需 API key |
 | `--model` | 配置/env/provider 默认 | 模型名 |
 | `--base-url` | provider 默认 | 任意兼容端点（DeepSeek/Kimi/Ollama 等） |
-| `--config` | 自动探测 | TOML 配置路径 |
+| `--config` | 自动探测 | 独占 TOML 配置路径；不参与默认层合并 |
 | `--workspace` | `.` | 工作区根（所有路径约束与状态目录的锚点） |
 | `-m`, `--message` | — | 单次提问模式，执行完退出 |
 | `--output-format` | text | `text` 普通输出；`json` 单行结果（配合 `-m`）；`stream-json` JSONL 事件流（配合 `-m` 或 stream-json stdin） |
@@ -122,7 +122,8 @@ krelcode [子命令] [选项]
 | `/skills reload` | 重读全部 Skill 目录并刷新 system prompt 索引 |
 | `/skills show <name>` | 查看元数据、资源与完整 `SKILL.md` |
 | `/skill <name> [参数]` | 用户主动加载并执行 Skill；参数替换 `$ARGUMENTS` |
-| `/plugins [reload\|show <name>]` | 查看插件状态/问题 · 热重载 · 查看单个 manifest |
+| `/plugins [reload\|show <name>\|install\|update\|enable\|disable\|remove ...]` | 查看状态、热重载和 Plugin v2 基础生命周期 |
+| `/extensions [kind] [source]` | 统一列出 Plugin/Tool/Skill/Agent/Command/Hook/MCP 的来源、scope、启停与冲突 |
 | `/mcp` · `/mcp reload` | MCP 服务器状态 · 重读配置热重载 |
 | `/allow [add\|remove <程序名>]` | 旧版程序白名单兼容入口（持久化） |
 | `/stop` | 中止运行中任务（历史自动修复） |
@@ -162,7 +163,16 @@ Memory 面板。`Ctrl-O` 聚焦面板，面板内用方向键切换/选择，Ent
 
 ## 3. TOML 配置
 
-探测顺序：`--config` 显式 > `./krelcode.toml` > `~/.krelcode/config.toml`。
+默认配置按低到高优先级深合并：
+
+```text
+~/.krelcode/config.toml
+<workspace>/krelcode.toml
+<workspace>/krelcode.local.toml
+KRELCODE_MANAGED_CONFIG 或平台 managed 路径
+```
+
+字典递归合并；数组与标量由高层整体替换。`--config <path>` 是显式独占模式，只读取该文件，不与默认层合并。`krelcode.local.toml` 已在 `.gitignore` 中且被写保护。managed 配置损坏时 fail-closed；普通 user/project/local 层的解析错误会由 `doctor` 明确报告，并继续使用其余可信层。
 
 ```toml
 default_provider = "openai"          # openai / anthropic / gemini / mock
@@ -342,6 +352,8 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 └── allow_rules.json   审批规则（旧版 allow_programs/allow_commands + rules[]，仅用户可改）
 ```
 
+全局插件启停状态：`~/.krelcode/plugin-state.json`（按 `scope:name` 隔离）。
+
 全局：`~/.krelcode/config.toml`（配置）、`~/.krelcode/AGENTS.md`（全局规则，
 与项目级 `AGENTS.md`/`KRELCODE.md` 分层注入，项目规则在后=更具体者优先）、
 `~/.krelcode/memory/entries.jsonl`（跨工作区 user 记忆，权限与隐私由本机用户边界保护）。
@@ -383,8 +395,39 @@ Skill 发现目录（后者覆盖前者同名项）：`~/.agents/skills`、`~/.k
 Plugin 发现目录（后者覆盖前者同名插件）：`~/.krelcode/plugins`、
 `<workspace>/.krelcode/plugins`，再追加 `[plugins].paths` / `--plugins-dir`。
 每个插件是包含 `plugin.toml` 的目录；插件代码按本地可信代码处理，单插件加载失败
-只记录 issue，不影响主 Agent。插件工具统一命名空间为
-`plugin__<plugin-name>__<tool-name>`。
+只记录 issue，不影响主 Agent。
+
+Plugin v2 可用一个 manifest 同时声明 Tool、Skill、Agent、Command、Hook、MCP：
+
+```toml
+manifest_version = 2
+name = "demo"
+version = "1.0.0"
+
+[tools]
+entrypoint = "plugin:tools"
+
+[skills]
+paths = ["skills"]
+
+[agents]
+paths = ["agents"]
+
+[commands]
+paths = ["commands"]
+
+[hooks]
+paths = ["hooks.toml"]
+
+[mcp]
+paths = ["mcp.toml"]
+```
+
+所有组件路径必须是插件内相对路径，拒绝绝对路径、`..` 与越界 symlink。工具命名空间为
+`plugin__<plugin>__<tool>`，Command 为 `/plugin__<plugin>__<command>`；MCP 服务器默认
+命名为 `plugin__<plugin>__<server>`。`/extensions` 展示统一来源与冲突，`/plugins reload`
+会原子刷新 Tool/Skill/Agent/Command/Hook/MCP。`install/update/remove/enable/disable`
+会持久化生命周期状态；安装限制 5000 文件 / 100 MiB，remove 移到 `.trash`。
 
 ### 运行时权限与规则示例
 

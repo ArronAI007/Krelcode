@@ -9,8 +9,10 @@ from .context import CommandContext
 from .registry import CommandConflict, CommandRegistry, normalize_token
 from .sources import (
     mcp_prompt_command_specs,
+    plugin_command_specs,
     skill_command_specs,
     sync_mcp_prompt_commands,
+    sync_plugin_commands,
     sync_skill_commands,
 )
 from .types import (
@@ -35,7 +37,9 @@ __all__ = [
     "normalize_token",
     "render_help",
     "mcp_prompt_command_specs",
+    "plugin_command_specs",
     "skill_command_specs",
     "sync_mcp_prompt_commands",
+    "sync_plugin_commands",
     "sync_skill_commands",
 ]

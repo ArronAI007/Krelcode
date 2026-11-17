@@ -72,7 +72,7 @@ krelcode               # 进入 REPL
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（沙箱内 1131 通过，2 个本地端口测试自动跳过）
+# 运行全部测试（沙箱内 1157 通过，2 个本地端口测试自动跳过）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -84,20 +84,21 @@ export DEEPSEEK_API_KEY=sk-...
 PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider openai \
   --base-url https://api.deepseek.com/v1 --model deepseek-flash
 # 建议写进 krelcode.toml（krelcode init 生成的模板里有现成注释示例），之后直接运行 krelcode
+# 配置按 user → project → local → managed 深合并；krelcode.local.toml 适合本机覆盖且默认不提交
 
 # 真实模式：统一 Provider 机制，--provider openai / anthropic / gemini
 export OPENAI_API_KEY=sk-...          # 或 ANTHROPIC_API_KEY / GEMINI_API_KEY
 PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider openai -m "现在纽约几点？"
 PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --model claude-sonnet-4-5
 
-# 也可以用 TOML 配置（./krelcode.toml 或 ~/.krelcode/config.toml）
+# 也可以用分层 TOML 配置：~/.krelcode/config.toml → ./krelcode.toml → ./krelcode.local.toml → managed
 #   default_provider = "anthropic"
 #   [providers.anthropic]
 #   model = "claude-sonnet-4-5"
 #   api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp`（状态）、`/mcp reload`（热重载并重新发现 Prompt）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>]`（查看/热重载本地插件）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|fragments|enable|disable|toggle|reset|cache|refresh]`（请求 token 分项、来源归因、Fragment 启停、缓存边界与工作区重采）、`/memory [list [scope]|show|add <text> --scope|search|pin|unpin|forget|mode|review|migrate]`（分层记忆、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp`（状态）、`/mcp reload`（热重载并重新发现 Prompt）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>|install|update|enable|disable|remove ...]`（插件生命周期）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|fragments|enable|disable|toggle|reset|cache|refresh]`（请求 token 分项、来源归因、Fragment 启停、缓存边界与工作区重采）、`/memory [list [scope]|show|add <text> --scope|search|pin|unpin|forget|mode|review|migrate]`（分层记忆、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
 
 所有命令由统一 `CommandRegistry` 发现：`/help`、slash 菜单、Tab 补全、运行态过滤和 InputProcessor 共用同一份 catalog。允许用户调用的 Skill 会自动显示为 `/<skill-name> [参数]`，MCP Prompt 会命名空间化为 `/mcp__<server>__<prompt> [参数]`；`/skills reload` 与 `/mcp reload` 会原地刷新对应来源，内置命令在命名冲突时保持最高优先级。
 
@@ -181,25 +182,60 @@ Read $SKILL_DIR/references/format.md, inspect changes, and generate notes for $A
 - **热重载**：新增或修改 Skill 后执行 `/skills reload`，当前主代理和新子代理立即使用最新索引；`--no-skills` 完全关闭。
 - **用户直调**：`/skill release-notes v0.55.0` 保留为通用兜底；每个 `user-invocable` Skill 也会自动注册为 `/release-notes v0.55.0`，直接加载完整指令并进入主循环。
 
-### 轻量插件生态
+### 扩展生态与 Plugin v2
 
-插件是显式目录中的本地可信 Python 代码，复用现有 `Tool` / `ToolResult` 协议，不引入第二套运行时。Krelcode 发现 `~/.krelcode/plugins`、`<workspace>/.krelcode/plugins`，再追加 `[plugins].paths` / `--plugins-dir`；后扫描目录覆盖同名插件。
+Krelcode 用统一的 `ExtensionRegistry` 追踪 Plugin、Tool、Skill、Agent、Command、Hook 与 MCP 的来源、scope、版本及同名冲突；`/extensions` 可查看实时快照。插件仍是显式安装的本地可信扩展，不引入第二套执行协议。
 
 ```text
 .krelcode/plugins/demo/
 ├── plugin.toml
-└── plugin.py
+├── plugin.py
+├── skills/review/SKILL.md
+├── agents/helper.md
+├── commands/deploy.md
+├── hooks.toml
+└── mcp.toml
 ```
 
 ```toml
+manifest_version = 2
 name = "demo"
 version = "1.0.0"
-entrypoint = "plugin:tools"
-description = "Project-specific tools"
-enabled = true
+description = "Project extension bundle"
+
+[tools]
+entrypoint = "plugin:tools"       # 兼容既有 Tool 协议
+
+[skills]
+paths = ["skills"]
+
+[agents]
+paths = ["agents"]
+
+[commands]
+paths = ["commands"]
+
+[hooks]
+paths = ["hooks.toml"]
+
+[mcp]
+paths = ["mcp.toml"]
 ```
 
-`entrypoint` 返回一个 Tool、Tool 列表或同步工厂。工具自动注册为 `plugin__demo__<tool>`，`/plugins` 查看状态和问题，`/plugins reload` 热重载；单个插件的 manifest/import/执行注册失败只影响自身，不阻断 Agent。插件代码按本地可信代码处理，敏感能力仍应通过现有审批与 Sandbox 边界执行。
+Plugin v1 的 `entrypoint = "plugin:tools"` 继续兼容。插件工具命名为 `plugin__<plugin>__<tool>`，Markdown Command 命名为 `/plugin__<plugin>__<command>`；插件 Skill/Agent 进入现有管理器，Hook 带 `KRELCODE_HOOK_SOURCE` 与 `KRELCODE_PLUGIN_ROOT`，MCP 服务器默认命名空间化且显式配置可覆盖。
+
+生命周期命令：
+
+```text
+/plugins install <path> [--scope user|project]
+/plugins update  <path> [--scope user|project]
+/plugins enable|disable <name>
+/plugins remove <name>
+/plugins reload
+/extensions [plugin|tool|skill|agent|command|hook|mcp] [source]
+```
+
+安装会拒绝 symlink、路径逃逸、超大/超量包并原子替换；remove 移入插件目录的 `.trash`。启用状态持久化到 `~/.krelcode/plugin-state.json`，作用域键为 `user:<name>` / `project:<name>`，避免同名项目互相影响。单个 manifest/import/组件失败只影响该插件，不阻断主 Agent。
 
 ### 会话分支与交换
 

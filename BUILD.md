@@ -71,6 +71,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | v0.80 | Structured Compact v2 | compact 从自由摘要升级为严格 schema 的 goal/files/tests/handoff；失败时 Working Context 降级、旧摘要合并、turn 边界与高低水位控制，pre-compact history 持久化后由 Rewind 恢复。可观测元数据贯通 UI/JSONL/stream-json，避免历史和工具结果反复摘要 |
 | v0.81 | Auto Memory | 长期记忆写入改为候选流水线：显式“记住”、用户纠正、成功测试复用、架构重复确认和任务完成事实先进入 project-local 队列；统一脱敏、精确去重、证据累积、冲突检测与阈值晋级。默认 suggest，`/memory review` 人工审核，auto 只晋级高置信无冲突 knowledge；新增只读 `memory_search` 与 pin 检索优先 |
 | v0.82 | Context v3 默认与安全收口 | 不再把 v3 只当内部命名：engine/trust/origin 成为跨 assembly、plan、usage、命令和 stream-json 的可检查契约。Memory 从 system Prompt Registry 分离为 untrusted knowledge layer；Working/Runtime context 使用 data-not-instructions envelope 并转义标签；单文件解释过滤无关 git/tree，重复 goal 不注入。legacy/v2 保留一个版本回退，安全回归覆盖注入、路径逃逸、损坏输入、取消、长会话与隔离 |
+| v0.83 | 扩展生态 P0 | Plugin v1 的单一 Tool 适配器升级为统一扩展平面：ExtensionRegistry 追踪 Plugin/Tool/Skill/Agent/Command/Hook/MCP 来源；Plugin v2 单包声明六类组件并保持 v1 兼容；install/update/remove/enable/disable 带原子替换、路径/symlink/体积校验和 scope 隔离状态；配置改为 user → project → local → managed 合并，managed fail-closed，`--config` 保持独占 |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -88,6 +89,8 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | token 估算/价目/窗口 | `agent/tokens.py` `agent/pricing.py` |
 | 请求级 Context 可观测性 | `core/context_usage.py` `agent/context_usage.py` |
 | 可插拔上下文来源/确定性装配 | `agent/context_source.py` `agent/context_assembler.py` |
+| 扩展来源目录/配置分层 | `extensions.py` `config.py` |
+| Plugin v2 六类组件/生命周期 | `plugins/{manifest,components,manager,loader}.py` |
 | 工作区上下文注入 | `agent/context.py`（目录树/git/分层 AGENTS.md） |
 | 工具端口与注册表 | `tools/base.py` `tools/registry.py`；具体工具 `tools/builtin/`，交互工具 `tools/extension/` |
 | 命令风险分级/审批/写保护 | `safety/commands.py` `safety/policy.py` `safety/rules.py` |
@@ -120,7 +123,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | sleep / approver / log / write | 假函数/收集器 | 重试退避、审批链、渲染、hooks |
 
 两个「真环境」测试（SSE/Streamable 的真实 http.server 集成）用 socket
-bind 探测自动 skip——沙箱内 1,146 通过、2 skip；本地端口可用时 1,148/1,148 全过。
+bind 探测自动 skip——沙箱内 1,157 通过、2 skip；本地端口可用时 1,159/1,159 全过。
 
 **行为级验收**：`tests/test_acceptance.py` 用与 app 相同的组件装配全栈，
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /

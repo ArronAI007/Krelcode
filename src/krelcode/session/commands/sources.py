@@ -60,3 +60,29 @@ def sync_mcp_prompt_commands(
     registry: CommandRegistry, supervisor: Any,
 ) -> None:
     registry.replace_source(CommandSource.MCP, mcp_prompt_command_specs(supervisor))
+
+
+def plugin_command_specs(manager: Any) -> tuple[CommandSpec, ...]:
+    """Expose Plugin v2 Markdown commands with package namespacing."""
+    if manager is None or not getattr(manager, "enabled", False):
+        return ()
+    specs: list[CommandSpec] = []
+    for command in getattr(manager, "commands", ()):
+        specs.append(CommandSpec(
+            name=command.name,
+            description=command.description,
+            kind=CommandKind.PROMPT,
+            source=CommandSource.PLUGIN,
+            argument_hint=command.argument_hint,
+            help=f"[plugin:{command.plugin_name}] {command.description}",
+            metadata={
+                "plugin": command.plugin_name,
+                "command": command.name,
+                "path": str(command.path),
+            },
+        ))
+    return tuple(specs)
+
+
+def sync_plugin_commands(registry: CommandRegistry, manager: Any) -> None:
+    registry.replace_source(CommandSource.PLUGIN, plugin_command_specs(manager))

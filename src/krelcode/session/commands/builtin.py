@@ -85,6 +85,11 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             "plugins", "查看或重载插件", argument_hint="[reload|show <name>]",
             help="列出目录插件与加载问题；/plugins reload 热重载"),
         CommandSpec(
+            "extensions", "查看统一扩展目录与来源",
+            argument_hint="[kind] [source]",
+            help=("列出插件、工具、Skill、Agent、Command、Hook 与 MCP 的来源；\n"
+                  "/extensions plugin|tool|skill|agent|command|hook|mcp")),
+        CommandSpec(
             "skill", "调用指定 Skill", argument_hint="<name> [参数]",
             help="用户主动加载并执行一个 Skill"),
         CommandSpec(

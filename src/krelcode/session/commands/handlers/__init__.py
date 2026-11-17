@@ -13,8 +13,10 @@ from .runtime_ops import (
     handle_compact,
     handle_context,
     handle_cost,
+    handle_extensions,
     handle_mcp,
     handle_mcp_prompt_command,
+    handle_plugin_command,
     handle_model,
     handle_permissions,
     handle_jobs,
@@ -57,6 +59,7 @@ BUILTIN_HANDLERS: dict[str, CommandHandler] = {
     "jobs": handle_jobs,
     "skills": handle_skills,
     "plugins": handle_plugins,
+    "extensions": handle_extensions,
     "skill": handle_skill,
     "undo": handle_undo,
     "cost": handle_cost,
@@ -75,6 +78,8 @@ async def execute_prompt_command(ctx: CommandContext) -> CommandResult:
     spec = ctx.command_registry.resolve(ctx.request.name)
     if spec is not None and spec.source is CommandSource.SKILL:
         return await handle_skill_command(ctx)
+    if spec is not None and spec.source is CommandSource.PLUGIN:
+        return await handle_plugin_command(ctx)
     if spec is not None and spec.source is CommandSource.MCP:
         return await handle_mcp_prompt_command(ctx)
     return CommandResult(

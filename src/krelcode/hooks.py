@@ -84,6 +84,8 @@ class HookSpec:
     command: str
     timeout: float = DEFAULT_TIMEOUT
     tools: tuple[str, ...] = ()
+    source: str = "config"
+    plugin_root: str = ""
 
     def matches_tool(self, tool_name: str) -> bool:
         if not self.tools:
@@ -116,7 +118,11 @@ def parse_hooks(config: Dict[str, Any]) -> List[HookSpec]:
                 0.1, min(float(item.get("timeout", DEFAULT_TIMEOUT)), 600.0))
         except (TypeError, ValueError):
             timeout = DEFAULT_TIMEOUT
-        specs.append(HookSpec(on=on, command=command, timeout=timeout, tools=tools))
+        specs.append(HookSpec(
+            on=on, command=command, timeout=timeout, tools=tools,
+            source=str(item.get("_source") or "config"),
+            plugin_root=str(item.get("_plugin_root") or ""),
+        ))
     return specs
 
 
@@ -139,6 +145,10 @@ class HookRunner:
         self.executions: List[Dict[str, Any]] = (
             executions if executions is not None else []
         )
+
+    def replace_specs(self, specs: List[HookSpec]) -> None:
+        """Atomically replace hook declarations after extension reload."""
+        self.specs = list(specs)
 
     def rebind(self, workspace_root: Path) -> "HookRunner":
         """为子代理 worktree 创建同配置、共享审计记录的执行器。"""
@@ -299,6 +309,7 @@ class HookRunner:
             "trigger": trigger,
             "command": self._redact(command),
             "tools": list(spec.tools),
+            "source": spec.source,
         }
         stdout = ""
         stderr = ""
@@ -308,7 +319,10 @@ class HookRunner:
             env.update({
                 "KRELCODE_HOOK_EVENT": trigger,
                 "KRELCODE_WORKSPACE": str(self.root),
+                "KRELCODE_HOOK_SOURCE": spec.source,
             })
+            if spec.plugin_root:
+                env["KRELCODE_PLUGIN_ROOT"] = spec.plugin_root
             if tool_call is not None:
                 env["KRELCODE_TOOL"] = tool_call.name
             proc = await asyncio.create_subprocess_shell(

@@ -661,29 +661,18 @@ Skill 是用户可安装的指令包，不是 Python 插件；Krelcode 只解析
 指令/代码；脚本仍必须审批。模型不能借资源 reader 越过 Skill 根目录，也不应
 把 Skill 当作任意文件的通用读取后门。
 
-## 轻量插件生态（Step 76）
+## 扩展生态基础（Step 95）
 
-Krelcode 延续“pi 式分层 + 轻量事件总线”，不实现插件微内核。插件只是把已有
-Tool 协议从显式目录组装进来的边界适配器：
+Krelcode 仍保持“pi 式分层 + 轻量事件总线”，但把 Plugin v1 的单一 Tool 适配器升级为可观测的扩展平面。专用注册表继续负责执行，`ExtensionRegistry` 只保存跨切面元数据，不复制 Prompt、Hook 命令、MCP headers 或 Tool schema。
 
-1. **发现**：`PluginManager` 扫描 `~/.krelcode/plugins`、项目
-   `.krelcode/plugins`、`[plugins].paths` / `--plugins-dir`；每个目录一个
-   `plugin.toml`，后者同名覆盖前者。
-2. **隔离加载**：manifest 严格校验 name/version/entrypoint/enabled；入口模块用
-   唯一 synthetic package 名加载，保留包内相对导入且避免同名模块污染。单插件
-   manifest/import/工厂/工具校验失败只记录 issue，不阻断主 Agent。
-3. **统一协议**：入口返回一个 `Tool`、Tool 列表或同步工厂；不新增 execute 参数、
-   第二套 schema 或插件专属上下文。工具被包装为
-   `plugin__<plugin>__<tool>`，原 Tool 仍接收现有 `ToolUseContext`。
-4. **动态工具池**：插件工具携带 `ToolSource.PLUGIN + plugin_name`，与内置、Skill、
-   Subagent、MCP 工具进入同一个 `ToolRegistry/TurnToolPool`，继续受权限模式、
-   allowlist、run mode 与 disabled_tools 过滤。
-5. **生命周期**：`/plugins` 显示 loaded/disabled/error 与 issue；`/plugins reload`
-   重扫目录并原子替换 `plugin__` 前缀工具。主代理与后续子代理共享同一 manager。
+1. **来源追踪**：统一登记 Plugin、Tool、Skill、Agent、Command、Hook、MCP 的 source/scope/origin/version/plugin/enabled/priority。同名项按确定性优先级保留，并记录被遮蔽来源；`/extensions` 可过滤查看。
+2. **Plugin v2 manifest**：同一 `plugin.toml` 可声明 `[tools]`、`[skills]`、`[agents]`、`[commands]`、`[hooks]`、`[mcp]`。组件路径只允许插件内相对路径，拒绝 `..`、绝对路径、越界 symlink；单插件失败隔离。
+3. **组件复用现有端口**：Tool 继续返回 `ToolResult` 并接收统一 `ToolContext`；Skill/Agent 进入现有文件系统管理器；Markdown Command 走 `CommandSource.PLUGIN`；Hook 继承现有结构化 I/O、脱敏和审批旁路规则；MCP 进入 `MCPSupervisor`。插件不获得第二套运行时。
+4. **生命周期**：`install/update/remove/enable/disable/reload` 由 `PluginManager` 管理。安装先校验清单、文件数/体积和 symlink，再 staging + 原子替换；remove 移入 `.trash`；启停状态写入 `~/.krelcode/plugin-state.json`，键包含 scope，避免 user/project 同名泄漏。
+5. **热重载一致性**：一次 reload 原子刷新 Plugin Tool、Skill roots、Agent Definition roots、Plugin Commands、Hook specs、MCP 配置和 ExtensionRegistry。显式 TOML MCP 配置覆盖插件默认；配置/Plugin Hook 合并。
+6. **配置分层**：默认配置按 `user → project → local → managed` 合并。字典递归合并，数组/标量由高层替换；`--config` 保持显式独占。managed 损坏 fail-closed，普通层损坏由 doctor 报告但不阻断其余可信层。`krelcode.local.toml` 被写保护且默认不提交。
 
-安全边界：插件代码是用户显式安装的本地可信 Python，不等同于 MCP 远程工具的
-readOnlyHint；其读写/命令能力仍走现有 Tool 实现、审批策略和 Sandbox。当前不为插件
-提供自动依赖安装、进程级故障隔离或不可信代码沙箱。
+安全边界：插件代码仍是用户显式安装的本地可信 Python，不等同于 MCP 远程工具的 readOnlyHint；其读写/命令能力继续经过 Tool 实现、权限模式、审批与 Sandbox。当前不自动安装插件依赖，也不提供不可信代码的进程级沙箱。
 
 ## 会话生命周期与交换（Step 77）
 

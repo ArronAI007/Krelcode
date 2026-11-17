@@ -89,6 +89,15 @@ class AgentDefinitionManager:
             roots.append(_Root(resolved, root.source))
         return tuple(roots)
 
+    def set_extra_paths(
+        self, paths: Iterable[str | Path], *, reload: bool = True,
+    ) -> None:
+        """Replace plugin-provided Agent Definition roots."""
+        self.extra_paths = tuple(Path(p).expanduser() for p in paths)
+        self._roots = self._build_roots()
+        if reload:
+            self.reload()
+
     def reload(self) -> None:
         found: Dict[str, AgentDefinition] = {}
         issues = []

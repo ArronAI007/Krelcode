@@ -40,9 +40,11 @@ from .agent.rules import RuleLoader
 from .agent.runtime import AgentRuntime
 from .agent.usage import UsageTracker
 from .agent.working_context import WorkingContextStore
-from .config import load_config
+from .config import load_config_layers
 from .core.events import EventBus
+from .core.errors import ConfigError
 from .core.redact import SecretRedactor
+from .extensions import ExtensionRegistry, replace_runtime_extensions
 from .hooks import HookRunner, parse_hooks
 from .jobs import ShellJobManager
 from .core.messages import Message, ToolCall
@@ -60,6 +62,11 @@ from .session.compact_checkpoint import CompactCheckpointStore
 from .session.context_checkpoint import (
     ContextCheckpointCoordinator,
     ContextCheckpointStore,
+)
+from .session.commands import (
+    sync_mcp_prompt_commands,
+    sync_plugin_commands,
+    sync_skill_commands,
 )
 from .session.input import InputProcessor
 from .session.interactions import UserInputBroker
@@ -307,18 +314,32 @@ def build_execution_sandbox(
         workspace_root, backend=str(backend), network=network)
 
 
-def build_skill_manager(args: argparse.Namespace, config: Dict[str, Any]) -> SkillManager:
-    """按配置和 CLI 构建 SkillManager；CLI 路径最后扫描、同名覆盖配置路径。"""
+def configured_skill_paths(
+    args: argparse.Namespace, config: Dict[str, Any],
+) -> list[Any]:
+    """Return explicit Skill roots ordered below plugin/CLI overrides."""
     skill_config = config.get("skills") or {}
-    enabled = (not getattr(args, "no_skills", False)
-               and bool(skill_config.get("enabled", True)))
     configured = skill_config.get("paths") or []
     if isinstance(configured, str):
         configured = [configured]
     cli_paths = getattr(args, "skills_dir", None) or []
+    return list(configured) + list(cli_paths)
+
+
+def build_skill_manager(
+    args: argparse.Namespace,
+    config: Dict[str, Any],
+    *,
+    plugin_paths: Optional[List[Any]] = None,
+) -> SkillManager:
+    """Build SkillManager with plugin roots before explicit CLI/project roots."""
+    skill_config = config.get("skills") or {}
+    enabled = (not getattr(args, "no_skills", False)
+               and bool(skill_config.get("enabled", True)))
+    explicit_paths = configured_skill_paths(args, config)
     return SkillManager(
         Path(args.workspace).resolve(),
-        extra_paths=list(configured) + list(cli_paths),
+        extra_paths=list(plugin_paths or ()) + explicit_paths,
         enabled=enabled,
     )
 
@@ -345,6 +366,31 @@ def build_plugin_manager(
         extra_paths=list(configured) + list(cli_paths),
         enabled=enabled,
     )
+
+
+def compose_mcp_config(
+    config: Dict[str, Any],
+    plugin_servers: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Merge plugin MCP defaults with explicit layered configuration."""
+    merged = dict(plugin_servers)
+    configured = config.get("mcp_servers") or {}
+    if isinstance(configured, dict):
+        merged.update(configured)
+    return merged
+
+
+def compose_hook_specs(
+    config: Dict[str, Any],
+    plugin_hooks: tuple[Dict[str, Any], ...],
+):
+    """Merge layered config hooks with plugin-provided hook declarations."""
+    raw_hooks = config.get("hooks") or []
+    if not isinstance(raw_hooks, list):
+        raw_hooks = []
+    return parse_hooks({
+        "hooks": [*raw_hooks, *plugin_hooks],
+    })
 
 
 async def build_loop(
@@ -385,11 +431,13 @@ async def build_loop(
     bus = EventBus()
     llm = build_llm(args, config, log=log)
     memory_store = MemoryStore(workspace_root)
-    skill_manager = build_skill_manager(args, config)
-    skill_tools = build_skill_tools(skill_manager) if skill_manager.enabled else []
+    base_skill_paths = configured_skill_paths(args, config)
     plugin_manager = build_plugin_manager(args, config, workspace_root)
     await plugin_manager.load()
     plugin_tools = list(plugin_manager.tools)
+    skill_manager = build_skill_manager(
+        args, config, plugin_paths=list(plugin_manager.skill_paths))
+    skill_tools = build_skill_tools(skill_manager) if skill_manager.enabled else []
     if skill_manager.enabled:
         if skill_manager.list():
             log("[skills] 已加载 "
@@ -447,12 +495,19 @@ async def build_loop(
         registry.register(
             tool, ToolDescriptor.from_tool(tool, source=ToolSource.SKILL))
     for tool in extra_tools or []:
-        registry.register(
-            tool, ToolDescriptor.from_tool(tool, source=ToolSource.PLUGIN))
+        try:
+            registry.register(
+                tool, ToolDescriptor.from_tool(tool, source=ToolSource.PLUGIN))
+        except ValueError as exc:
+            log(f"[plugins] 工具注册失败，已隔离: {getattr(tool, 'name', '?')}: {exc}")
     for tool in plugin_tools:
-        registry.register(
-            tool, ToolDescriptor.from_tool(tool, source=ToolSource.PLUGIN))
-    agent_definitions = AgentDefinitionManager(workspace_root)
+        try:
+            registry.register(
+                tool, ToolDescriptor.from_tool(tool, source=ToolSource.PLUGIN))
+        except ValueError as exc:
+            log(f"[plugins] 工具注册失败，已隔离: {tool.name}: {exc}")
+    agent_definitions = AgentDefinitionManager(
+        workspace_root, extra_paths=plugin_manager.agent_paths)
     if agent_definitions.list():
         log("[agents] 已加载 Agent Definition: "
             + ", ".join(item.name for item in agent_definitions.list()))
@@ -531,6 +586,8 @@ async def build_loop(
     manager.get_parent_history = lambda: loop.history
     loop.skill_manager = skill_manager
     loop.plugin_manager = plugin_manager
+    loop.agent_definitions = agent_definitions
+    loop.base_skill_paths = tuple(base_skill_paths)
     loop.prompt_registry = prompt_registry
     loop.context_options = context_options
     loop.context_engine = context_options.engine
@@ -566,16 +623,44 @@ async def build_loop(
     auto_memory.attach(bus)
     loop.auto_memory = auto_memory
 
+    extension_registry = ExtensionRegistry()
+    loop.extension_registry = extension_registry
+
+    def refresh_extensions_basic():
+        return replace_runtime_extensions(
+            extension_registry,
+            plugins=plugin_manager,
+            skills=skill_manager,
+            agents=agent_definitions,
+            tools=registry,
+        )
+
+    refresh_extensions_basic()
+
     async def reload_plugins():
+        old_tool_names = {tool.name for tool in plugin_manager.tools}
         records = await plugin_manager.reload()
-        registry.unregister_prefix("plugin__")
+        for name in old_tool_names:
+            registry.unregister(name)
         for plugin_tool in plugin_manager.tools:
-            registry.register(
-                plugin_tool,
-                ToolDescriptor.from_tool(
-                    plugin_tool, source=ToolSource.PLUGIN))
+            try:
+                registry.register(
+                    plugin_tool,
+                    ToolDescriptor.from_tool(
+                        plugin_tool, source=ToolSource.PLUGIN))
+            except ValueError as exc:
+                log(f"[plugins] 工具注册失败，已隔离: {plugin_tool.name}: {exc}")
+        skill_manager.set_extra_paths(
+            [*plugin_manager.skill_paths, *loop.base_skill_paths],
+            reload=True,
+        )
+        agent_definitions.set_extra_paths(
+            plugin_manager.agent_paths, reload=True)
+        refresh_skill_system_prompt(loop)
+        refresh_extensions_basic()
         return records
 
+    loop.extension_refresh = refresh_extensions_basic
     loop.plugin_reload = reload_plugins
     return loop, manager
 
@@ -673,8 +758,20 @@ async def async_main(args: argparse.Namespace) -> int:
         and args.output_format in {"json", "stream-json"}
     ) or input_format == "stream-json"
     note = (lambda msg: print(msg, file=sys.stderr)) if quiet else print
-    config_path = Path(args.config) if args.config else None
-    config = load_config(config_path)
+    config_path = Path(args.config).expanduser() if args.config else None
+    try:
+        config_bundle = load_config_layers(
+            workspace=Path(args.workspace),
+            explicit_path=config_path,
+        )
+    except ConfigError as exc:
+        print(f"配置错误: {exc}", file=sys.stderr)
+        return 2
+    if config_path is not None and not config_bundle.sources:
+        print(f"配置错误: 指定的配置文件不存在: {config_path}", file=sys.stderr)
+        return 2
+    config = config_bundle.data
+    current_config = config
     approval_broker = (
         ApprovalBroker()
         if resolve_run_mode(args) is RunMode.REPL and not getattr(args, "no_sandbox", False)
@@ -722,15 +819,28 @@ async def async_main(args: argparse.Namespace) -> int:
         loop.registry, log=note,
         sampler=build_mcp_sampler(loop.llm),
         roots=build_mcp_roots(loop.tool_context.workspace_root))
+    def merged_mcp_config(source: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        active = current_config if source is None else source
+        return compose_mcp_config(
+            active, dict(loop.plugin_manager.mcp_servers))
+
     if not args.no_mcp:
-        await supervisor.sync(config.get("mcp_servers") or {})
+        await supervisor.sync(merged_mcp_config())
 
     async def reload_mcp():
-        """REPL /mcp reload：重读配置 → diff 同步 → 重启已断开的服务器。"""
-        new_config = load_config(config_path)
-        await supervisor.sync(new_config.get("mcp_servers") or {})
+        """REPL /mcp reload：重读分层配置 → diff 同步 → 刷新 Prompt。"""
+        nonlocal current_config
+        new_bundle = load_config_layers(
+            workspace=Path(args.workspace),
+            explicit_path=config_path,
+        )
+        current_config = new_bundle.data
+        await supervisor.sync(merged_mcp_config(new_bundle.data))
         restarted = await supervisor.check_and_restart()
         await supervisor.refresh_prompts()
+        refresh = getattr(loop, "extension_refresh", None)
+        if refresh is not None:
+            refresh()
         return restarted
 
     runtime = AgentRuntime(
@@ -748,27 +858,81 @@ async def async_main(args: argparse.Namespace) -> int:
     model_switch = build_model_switcher(
         args, config, loop, usage, subagents=subagents, redactor=redactor)
 
+    def merged_hook_specs(source: Optional[Dict[str, Any]] = None) -> list[Any]:
+        active = current_config if source is None else source
+        return compose_hook_specs(
+            active, loop.plugin_manager.hook_definitions)
+
+    hooks = None
+
+    def ensure_hooks(specs: list[Any]) -> None:
+        nonlocal hooks
+        if hooks is None:
+            hooks = HookRunner(
+                loop.tool_context.workspace_root, specs, log=note,
+                redactor=redactor)
+            hooks.attach(loop.bus)
+        else:
+            hooks.replace_specs(specs)
+        loop.hook_port = hooks
+        subagents.hook_port = hooks
+        if specs:
+            note(f"[hooks] 已加载 {len(specs)} 个钩子: "
+                 + ", ".join(sorted({h.on for h in specs})))
+
+    ensure_hooks(merged_hook_specs())
+
+    async def collect_hook_context(prompt: str) -> tuple[str, ...]:
+        if hooks is None:
+            return ()
+        return await hooks.collect_input_context(prompt)
+
+    input_processor = InputProcessor(
+        loop.tool_context.workspace_root,
+        hook_context_provider=collect_hook_context,
+    )
+    loop.command_registry = input_processor.command_registry
+    sync_plugin_commands(input_processor.command_registry, loop.plugin_manager)
+    sync_skill_commands(input_processor.command_registry, loop.skill_manager)
+    sync_mcp_prompt_commands(input_processor.command_registry, supervisor)
+
+    def refresh_extensions():
+        return replace_runtime_extensions(
+            loop.extension_registry,
+            plugins=loop.plugin_manager,
+            skills=loop.skill_manager,
+            agents=loop.agent_definitions,
+            tools=loop.registry,
+            commands=input_processor.command_registry,
+            hooks=hooks,
+            mcp_servers=merged_mcp_config(),
+            mcp_supervisor=supervisor,
+        )
+
+    loop.extension_refresh = refresh_extensions
+    refresh_extensions()
+
     def reload_skills():
         report = loop.skill_manager.reload()
         refresh_skill_system_prompt(loop)
+        sync_skill_commands(input_processor.command_registry, loop.skill_manager)
+        refresh_extensions()
         return report
-    hook_specs = parse_hooks(config)
-    hooks = None
-    if hook_specs:
-        hooks = HookRunner(
-            loop.tool_context.workspace_root, hook_specs, log=note,
-            redactor=redactor)
-        hooks.attach(loop.bus)
-        loop.hook_port = hooks
-        subagents.hook_port = hooks
-        note(f"[hooks] 已加载 {len(hook_specs)} 个钩子: "
-             + ", ".join(sorted({h.on for h in hook_specs})))
-    input_processor = InputProcessor(
-        loop.tool_context.workspace_root,
-        hook_context_provider=(
-            hooks.collect_input_context if hooks is not None else None
-        ),
-    )
+
+    base_plugin_reload = loop.plugin_reload
+
+    async def reload_plugins():
+        records = await base_plugin_reload()
+        ensure_hooks(merged_hook_specs())
+        if not args.no_mcp:
+            await supervisor.sync(merged_mcp_config())
+            await supervisor.refresh_prompts()
+        sync_plugin_commands(input_processor.command_registry, loop.plugin_manager)
+        sync_mcp_prompt_commands(input_processor.command_registry, supervisor)
+        refresh_extensions()
+        return records
+
+    loop.plugin_reload = reload_plugins
     if args.auto_commit:
         committer = AutoCommitter(loop.tool_context.workspace_root)
         if await committer.is_git_repo():

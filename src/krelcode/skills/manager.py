@@ -82,6 +82,14 @@ class SkillManager:
             unique.append(_Root(resolved, root.label))
         return unique
 
+    def set_extra_paths(
+        self, paths: Iterable[str | Path], *, reload: bool = True,
+    ) -> SkillReloadReport | None:
+        """Replace dynamic roots such as plugin-provided Skill directories."""
+        self.extra_paths = tuple(Path(p).expanduser() for p in paths)
+        self._roots = self._build_roots()
+        return self.reload() if reload else None
+
     def reload(self) -> SkillReloadReport:
         if not self.enabled:
             self._skills = {}

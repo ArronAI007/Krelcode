@@ -16,6 +16,7 @@ from pathlib import Path
 from krelcode import __version__
 from krelcode.agent.compression import DEFAULT_MAX_TOKENS as DEFAULT_CONTEXT_BUDGET
 from krelcode.agent.loop import DEFAULT_MAX_STEPS
+from krelcode.core.errors import ConfigError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -107,12 +108,25 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run_doctor(args: argparse.Namespace) -> int:
-    from krelcode.config import load_config
+    from krelcode.config import load_config_layers
+    from krelcode.core.errors import ConfigError
     from krelcode.doctor import exit_code, format_report, run_all_checks
 
-    config_path = Path(args.config) if args.config else None
-    config = load_config(config_path if config_path and config_path.is_file() else None)
-    results = run_all_checks(Path(args.workspace).resolve(), config, config_path)
+    config_path = Path(args.config).expanduser() if args.config else None
+    try:
+        bundle = load_config_layers(
+            workspace=Path(args.workspace),
+            explicit_path=config_path,
+        )
+    except ConfigError as exc:
+        print(f"配置错误: {exc}")
+        return 1
+    results = run_all_checks(
+        Path(args.workspace).resolve(),
+        bundle.data,
+        config_path,
+        config_bundle=bundle,
+    )
     print(format_report(results))
     return exit_code(results)
 
@@ -151,6 +165,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except KeyboardInterrupt:
         # asyncio.run() has already cancelled the task and cleaned resources.
         return 130
+    except ConfigError as exc:
+        print(f"配置错误: {exc}")
+        return 2
 
 
 if __name__ == "__main__":

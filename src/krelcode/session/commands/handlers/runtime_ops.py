@@ -20,7 +20,11 @@ from ....core.messages import Message
 from ....safety.runtime import parse_permission_mode
 from ....safety.rules import RuleDecision, RuleScope
 from ..context import CommandContext
-from ..sources import sync_mcp_prompt_commands, sync_skill_commands
+from ..sources import (
+    sync_mcp_prompt_commands,
+    sync_plugin_commands,
+    sync_skill_commands,
+)
 from ..types import CommandResult
 
 
@@ -264,27 +268,111 @@ async def handle_skills(ctx: CommandContext) -> CommandResult:
     return _ok(*output)
 
 
+async def _refresh_plugin_runtime(ctx: CommandContext) -> None:
+    """Refresh every extension surface after a package lifecycle change."""
+    callback = ctx.plugins_reload
+    if callback is not None:
+        result = callback()
+        if hasattr(result, "__await__"):
+            await result
+    elif ctx.plugins is not None:
+        result = ctx.plugins.reload()
+        if hasattr(result, "__await__"):
+            await result
+    sync_plugin_commands(ctx.command_registry, ctx.plugins)
+
+
+def _plugin_lifecycle_args(raw: str) -> tuple[list[str], str]:
+    try:
+        tokens = shlex.split(raw) if raw.strip() else []
+    except ValueError as exc:
+        raise ValueError(f"参数解析失败: {exc}") from exc
+    scope = "user"
+    filtered: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--scope":
+            if index + 1 >= len(tokens):
+                raise ValueError("--scope 需要 user 或 project")
+            scope = tokens[index + 1].strip().lower()
+            index += 2
+            continue
+        if token.startswith("--scope="):
+            scope = token.split("=", 1)[1].strip().lower()
+            index += 1
+            continue
+        filtered.append(token)
+        index += 1
+    if scope not in {"user", "project"}:
+        raise ValueError("scope 必须是 user 或 project")
+    return filtered, scope
+
+
 async def handle_plugins(ctx: CommandContext) -> CommandResult:
     manager = ctx.plugins
     if manager is None:
         return _ok("  （插件系统未启用）")
     if not getattr(manager, "enabled", False):
         return _ok("  （插件已禁用：移除 --no-plugins 或设置 plugins.enabled=true）")
-    parts = ctx.request.arguments.split(maxsplit=1)
-    sub = parts[0].strip() if parts else ""
+    raw = ctx.request.arguments.strip()
+    try:
+        parts = shlex.split(raw) if raw else []
+    except ValueError as exc:
+        return _ok(f"  [plugins] 参数解析失败: {exc}")
+    operation = parts[0].lower() if parts else "list"
     output: list[str] = []
-    if sub == "reload":
-        if ctx.plugins_reload is not None:
-            result = ctx.plugins_reload()
-            if hasattr(result, "__await__"):
-                await result
-        else:
-            result = manager.reload()
-            if hasattr(result, "__await__"):
-                await result
-        output.append("  [plugins] 已重新扫描插件目录")
-    elif sub == "show":
-        if len(parts) < 2 or not parts[1].strip():
+
+    if operation in {"install", "update"}:
+        try:
+            filtered, scope = _plugin_lifecycle_args(raw)
+        except ValueError as exc:
+            return _ok(f"  [plugins] {exc}")
+        if len(filtered) != 2:
+            return _ok(
+                f"  用法: /plugins {operation} <path> "
+                "[--scope user|project]")
+        source = filtered[1]
+        try:
+            action = (manager.update(source, scope=scope)
+                      if operation == "update"
+                      else manager.install(source, scope=scope))
+            result = await action
+            await _refresh_plugin_runtime(ctx)
+        except Exception as exc:
+            return _ok(
+                f"  [plugins] {operation} 失败: {type(exc).__name__}: {exc}")
+        output.append(f"  [plugins] {result.message} · scope={result.scope}")
+    elif operation in {"enable", "disable"}:
+        if len(parts) != 2:
+            return _ok(f"  用法: /plugins {operation} <name>")
+        try:
+            result = await manager.set_enabled(parts[1], operation == "enable")
+            await _refresh_plugin_runtime(ctx)
+        except Exception as exc:
+            return _ok(
+                f"  [plugins] {operation} 失败: {type(exc).__name__}: {exc}")
+        output.append(f"  [plugins] {result.message} · scope={result.scope}")
+    elif operation == "remove":
+        if len(parts) != 2:
+            return _ok("  用法: /plugins remove <name>")
+        try:
+            result = await manager.remove(parts[1])
+            await _refresh_plugin_runtime(ctx)
+        except Exception as exc:
+            return _ok(
+                f"  [plugins] remove 失败: {type(exc).__name__}: {exc}")
+        output.append(
+            f"  [plugins] 已移除 {result.name}（移入 {result.path}）")
+    elif operation == "reload":
+        try:
+            await _refresh_plugin_runtime(ctx)
+        except Exception as exc:
+            return _ok(
+                f"  [plugins] reload 失败: {type(exc).__name__}: {exc}")
+        output.append("  [plugins] 已重新扫描插件目录并刷新扩展")
+    elif operation == "show":
+        if len(parts) != 2 or not parts[1].strip():
             return _ok("  用法: /plugins show <name>")
         name = parts[1].strip()
         record = next(
@@ -294,20 +382,74 @@ async def handle_plugins(ctx: CommandContext) -> CommandResult:
         output.extend((
             f"  [plugin] {record.name}@{record.version} [{record.status}]",
             f"  位置: {record.path}",
+            f"  scope: {record.scope or 'custom'} · manifest v{record.manifest_version}",
             f"  入口: {record.entrypoint or '（无）'}",
-            f"  工具: {record.tools_count}",
+            f"  组件: tool={record.tools_count} skill={record.skills_count} "
+            f"agent={record.agents_count} command={record.commands_count} "
+            f"hook={record.hooks_count} mcp={record.mcp_servers_count}",
         ))
         if record.description:
             output.append(f"  描述: {record.description}")
         if record.error:
             output.append(f"  错误: {record.error}")
-    else:
+    elif operation == "list":
         output.extend(manager.status_lines())
+    else:
+        return _ok(
+            "  用法: /plugins | /plugins show <name> | /plugins reload",
+            "  /plugins install <path> [--scope user|project]",
+            "  /plugins update <path> [--scope user|project]",
+            "  /plugins enable|disable <name> | /plugins remove <name>")
     for issue in manager.issues:
         line = f"  ! {issue.path}: {issue.message}"
         if line not in output:
             output.append(line)
     return _ok(*output)
+
+
+async def handle_extensions(ctx: CommandContext) -> CommandResult:
+    """Show the unified extension catalogue with live provenance refresh."""
+    callback = getattr(ctx.loop, "extension_refresh", None)
+    if callback is not None:
+        result = callback()
+        if hasattr(result, "__await__"):
+            await result
+    registry = getattr(ctx.loop, "extension_registry", None)
+    if registry is None:
+        return _ok("  （ExtensionRegistry 不可用）")
+    raw = ctx.request.arguments.strip()
+    try:
+        parts = shlex.split(raw) if raw else []
+    except ValueError as exc:
+        return _ok(f"  [extensions] 参数解析失败: {exc}")
+    if len(parts) > 2:
+        return _ok(
+            "  用法: /extensions [plugin|tool|skill|agent|command|hook|mcp] "
+            "[source]")
+    kind = parts[0].lower() if parts else None
+    source = parts[1] if len(parts) == 2 else ""
+    return _ok(*registry.status_lines(kind=kind, source=source))
+
+
+async def handle_plugin_command(ctx: CommandContext) -> CommandResult:
+    """Execute a namespaced Plugin v2 Markdown prompt command."""
+    manager = ctx.plugins
+    if manager is None or not getattr(manager, "enabled", False):
+        return _ok("  （插件命令不可用）")
+    command = manager.get_command(ctx.request.name)
+    if command is None:
+        return _ok(f"  （Plugin Command 不可用: /{ctx.request.name}）")
+    try:
+        prompt = command.render(ctx.request.arguments)
+    except Exception as exc:
+        return _ok(
+            f"  [plugin] Command 渲染失败: {type(exc).__name__}: {exc}")
+    return CommandResult(
+        handled=True,
+        output=(f"  [plugin] 已加载并执行: {command.plugin_name}/{command.local_name}",),
+        run_prompt=prompt,
+        tool_allowlist=command.allowed_tools or None,
+    )
 
 
 async def handle_skill(ctx: CommandContext) -> CommandResult:

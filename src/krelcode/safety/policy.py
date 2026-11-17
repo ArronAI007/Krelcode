@@ -270,7 +270,7 @@ PROTECTED_GLOBS = (
     "id_rsa*", "id_ed25519*", "secrets.*", "credentials*",
     ".npmrc", ".netrc", ".pgpass", ".htpasswd",
     # agent 自身的配置：防 LLM 篡改配置注入 hooks / 改 provider 外传数据
-    "krelcode.toml",
+    "krelcode.toml", "krelcode.local.toml",
 )
 # 目录级保护（路径中任一段命中即保护）：
 # - .git：仓库内部（hooks/config 可执行任意代码）

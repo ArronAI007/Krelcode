@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .agent.pricing import match_context_window
-from .config import DEFAULT_PATHS
+from .config import DEFAULT_PATHS, ConfigBundle
 from .llm.registry import API_KEY_ENV, PROVIDERS, resolve_settings
 from .safety.sandbox import ExecutionSandbox, SandboxError
 
@@ -145,6 +145,33 @@ def check_config(explicit_path: Optional[Path]) -> CheckResult:
                        "未找到 krelcode.toml / ~/.krelcode/config.toml（用默认值；krelcode init 可生成模板）")
 
 
+def check_config_layers(bundle: ConfigBundle) -> CheckResult:
+    """Validate the effective user/project/local/managed layer set."""
+    explicit_missing = any(
+        layer.scope == "explicit" and not layer.exists
+        for layer in bundle.layers
+    )
+    if explicit_missing:
+        path = next(
+            layer.path for layer in bundle.layers
+            if layer.scope == "explicit" and not layer.exists)
+        return CheckResult("配置文件", STATUS_FAIL, f"指定的文件不存在: {path}")
+    if bundle.errors:
+        detail = "；".join(
+            f"{layer.scope} {layer.path}: {layer.error}"
+            for layer in bundle.errors)
+        return CheckResult("配置文件", STATUS_FAIL, detail)
+    sources = bundle.sources
+    if not sources:
+        return CheckResult(
+            "配置文件", STATUS_WARN,
+            "未找到 user/project/local/managed 配置（使用默认值）")
+    detail = " → ".join(
+        f"{layer.scope}:{layer.path}"
+        for layer in bundle.layers if layer.exists)
+    return CheckResult("配置文件", STATUS_OK, f"解析成功（{detail}）")
+
+
 def check_git(workspace: Path) -> CheckResult:
     if shutil.which("git") is None:
         return CheckResult("git", STATUS_WARN, "git 不可用（git 快照与 --auto-commit 将失效）")
@@ -225,13 +252,19 @@ def check_mcp_servers(config: Dict[str, Any]) -> List[CheckResult]:
 
 # -- 汇总 -------------------------------------------------------------------------------------------
 
-def run_all_checks(workspace: Path, config: Dict[str, Any],
-                   config_path: Optional[Path] = None) -> List[CheckResult]:
+def run_all_checks(
+    workspace: Path,
+    config: Dict[str, Any],
+    config_path: Optional[Path] = None,
+    *,
+    config_bundle: Optional[ConfigBundle] = None,
+) -> List[CheckResult]:
     results = [
         check_python(),
         check_provider_keys(config),
         check_default_provider(config),
-        check_config(config_path),
+        (check_config_layers(config_bundle)
+         if config_bundle is not None else check_config(config_path)),
         check_git(workspace),
         check_workspace_writable(workspace),
         check_sandbox(config),

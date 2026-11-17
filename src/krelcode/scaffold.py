@@ -5,7 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Tuple
 
-CONFIG_TEMPLATE = '''# Krelcode 配置（krelcode --config 或放在工作区根 / ~/.krelcode/config.toml）
+CONFIG_TEMPLATE = '''# Krelcode 配置（默认按 user → project → local → managed 合并）
+# user: ~/.krelcode/config.toml | project: ./krelcode.toml
+# local: ./krelcode.local.toml（本机覆盖，默认不提交）| managed: KRELCODE_MANAGED_CONFIG
 # 完整说明见 README.md 与 DESIGN.md
 
 # default_provider = "openai"        # openai / anthropic / gemini / mock

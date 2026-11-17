@@ -14,6 +14,7 @@ from .types import CommandSource, CommandSpec
 SOURCE_PRIORITY = {
     CommandSource.BUILTIN: 100,
     CommandSource.SKILL: 50,
+    CommandSource.PLUGIN: 45,
     CommandSource.MCP: 40,
 }
 

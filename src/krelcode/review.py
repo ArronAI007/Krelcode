@@ -124,10 +124,15 @@ class _ReviewSummary:
 
 
 async def run_review(args: argparse.Namespace, llm: Optional[LLMProvider] = None) -> int:
-    from .config import load_config
+    from .config import load_config_layers
 
     workspace = Path(args.workspace).resolve()
-    config = load_config(Path(args.config) if getattr(args, "config", None) else None)
+    bundle = load_config_layers(
+        workspace=workspace,
+        explicit_path=(Path(args.config)
+                       if getattr(args, "config", None) else None),
+    )
+    config = bundle.data
     prompt = await build_review_input(workspace, args.staged, getattr(args, "focus", "") or "")
     json_mode = getattr(args, "output_format", "text") == "json"
 
