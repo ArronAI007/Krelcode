@@ -127,6 +127,7 @@ class ContextAssembly:
     issues: Tuple[ContextSourceIssue, ...] = ()
     provider_meta: Optional[Mapping[str, object]] = None
     prompt_snapshot: Optional[PromptSnapshot] = None
+    dynamic_hash: str = ""
 
     @property
     def stable_prefix(self) -> str:

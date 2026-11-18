@@ -167,7 +167,9 @@ def build_panels(
                 "context-cache",
                 f"cache · {snapshot.stable_tokens}"
                 f"/{snapshot.volatile_tokens}",
-                f"boundary {snapshot.cache_boundary_chars} chars"
+                f"blocks {snapshot.stable_system_block_count}"
+                f"/{snapshot.dynamic_system_block_count}"
+                f" · control {snapshot.cache_control_boundary} chars"
                 f" · {snapshot.cache_mode} {snapshot.cache_segment_count}"
                 f" · hash {'changed' if state.context_cache_changed else 'same'}",
             ),

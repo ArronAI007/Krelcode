@@ -10,6 +10,8 @@ from .base import (
     PreparedLLMRequest,
     ProviderCapabilities,
     StreamFinished,
+    SystemPromptBlock,
+    SystemPromptBlocks,
     TextDelta,
     ToolCallArgumentsDelta,
     ToolCallReady,
@@ -19,6 +21,7 @@ from .base import (
     collect,
     normalize_usage,
     prepare_http_request,
+    resolve_system_prompt_blocks,
     stable_system_prefix,
 )
 from .providers.anthropic import AnthropicProvider
@@ -33,9 +36,11 @@ from .transport import Transport, TransportResponse, UrllibTransport
 __all__ = [
     "LLMProvider", "PreparedLLMProvider", "PreparedLLMRequest",
     "LLMEvent", "TextDelta", "StreamFinished", "ToolSpec",
+    "SystemPromptBlock", "SystemPromptBlocks",
     "ToolCallStartedDelta", "ToolCallArgumentsDelta", "ToolCallReady",
     "ProviderCapabilities", "collect", "normalize_usage",
     "prepare_http_request", "cache_segment", "stable_system_prefix",
+    "resolve_system_prompt_blocks",
     "FINISH_STOP", "FINISH_TOOLS", "FINISH_LENGTH",
     "OpenAIProvider", "AnthropicProvider", "GeminiProvider", "MockProvider",
     "ProviderSettings", "create_provider", "resolve_settings", "register",

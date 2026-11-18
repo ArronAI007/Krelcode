@@ -71,7 +71,7 @@ def test_request_shape():
     assert req.headers["x-api-key"] == "sk-ant"
     assert req.headers["anthropic-version"] == ANTHROPIC_VERSION
     payload = req.json
-    assert payload["system"] == "S"
+    assert payload["system"] == [{"type": "text", "text": "S"}]
     assert payload["max_tokens"] == AnthropicProvider.DEFAULT_MAX_TOKENS
     assert payload["stream"] is True
     assert payload["messages"] == [{"role": "user", "content": "hi"}]

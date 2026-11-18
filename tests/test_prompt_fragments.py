@@ -300,7 +300,7 @@ def test_anthropic_uses_fragment_cache_boundary_for_system_blocks():
         },
         {
             "type": "text",
-            "text": "\n\nDYNAMIC",
+            "text": "DYNAMIC",
         },
     ]
 

@@ -37,7 +37,8 @@ from ..base import (
     FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, PreparedLLMRequest,
     ProviderCapabilities, StreamFinished, TextDelta, ThinkingDelta,
     ToolCallArgumentsDelta, ToolCallReady, ToolCallStartedDelta, ToolSpec,
-    cache_segment, normalize_usage, prepare_http_request,
+    SystemPromptBlocks, cache_segment, normalize_usage, prepare_http_request,
+    resolve_system_prompt_blocks,
 )
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
@@ -57,15 +58,16 @@ _STOP_REASON_MAP = {
 # wire format 互转（仅本 adapter 使用）
 # ---------------------------------------------------------------------------
 
-def to_anthropic_request_messages(
+def _to_anthropic_request_messages(
     messages: Sequence[Message],
-) -> Tuple[Optional[str], List[Dict[str, Any]]]:
-    """规范化历史 → (system 文本, messages blocks)。
-
-    - system 消息抽离合并为顶层 system 参数
-    - 连续 tool 结果合并为一条 user 消息里的多个 tool_result block
-    """
-    system_parts: List[str] = []
+    *,
+    cache_all_without_boundary: bool = False,
+) -> Tuple[Optional[SystemPromptBlocks], List[Dict[str, Any]]]:
+    """规范化历史 → (显式 system blocks, messages blocks)。"""
+    system_blocks = resolve_system_prompt_blocks(
+        messages,
+        cache_all_without_boundary=cache_all_without_boundary,
+    )
     wire: List[Dict[str, Any]] = []
     pending_tool_results: List[Dict[str, Any]] = []
 
@@ -76,8 +78,6 @@ def to_anthropic_request_messages(
 
     for m in messages:
         if m.role == ROLE_SYSTEM:
-            if m.content:
-                system_parts.append(m.content)
             continue
         if m.role == ROLE_TOOL:
             pending_tool_results.append(
@@ -125,55 +125,40 @@ def to_anthropic_request_messages(
                 )
             wire.append({"role": ROLE_ASSISTANT, "content": blocks or ""})
     flush_tool_results()
+    return system_blocks, wire
 
-    system = "\n\n".join(system_parts) if system_parts else None
+
+def to_anthropic_request_messages(
+    messages: Sequence[Message],
+) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    """兼容接口：返回合并 system 文本与 messages blocks。
+
+    Provider 的实际请求构造使用 ``_to_anthropic_request_messages``，以保留显式
+    system block 数组和 stable/dynamic 边界。
+    """
+    system_blocks, wire = _to_anthropic_request_messages(messages)
+    system = system_blocks.merged_text if system_blocks is not None else None
     return system, wire
 
 
-def _system_cache_boundaries(
-    messages: Sequence[Message], merged_system: str,
-) -> List[int]:
-    """把 system 消息里的通用 boundary 元数据换算到合并后文本偏移。"""
-    boundaries: List[int] = []
-    cursor = 0
-    for message in messages:
-        if message.role != ROLE_SYSTEM or not message.content:
+def _anthropic_system_blocks(
+    blocks: SystemPromptBlocks,
+    *,
+    prompt_cache: bool,
+) -> List[Dict[str, Any]]:
+    """Preserve the explicit block array; only the stable boundary is cacheable."""
+    wire: List[Dict[str, Any]] = []
+    for block in blocks.stable_system_blocks:
+        if not block.text:
             continue
-        if cursor:
-            cursor += 2  # to_anthropic_request_messages 使用 "\n\n" 合并
-        meta = message.provider_meta or {}
-        for raw in meta.get("prompt_cache_boundaries") or []:
-            try:
-                local = int(raw)
-            except (TypeError, ValueError):
-                continue
-            offset = cursor + max(0, min(local, len(message.content)))
-            boundaries.append(offset)
-        cursor += len(message.content)
-    return sorted({value for value in boundaries if 0 < value <= len(merged_system)})[:3]
-
-
-def _cached_system_blocks(system: str, boundaries: Sequence[int]) -> List[Dict[str, Any]]:
-    """在稳定前缀末尾打 cache_control，动态尾部保持为无断点 block。"""
-    if not boundaries:
-        return [{
-            "type": "text", "text": system,
-            "cache_control": {"type": "ephemeral"},
-        }]
-    blocks: List[Dict[str, Any]] = []
-    cursor = 0
-    for boundary in boundaries:
-        if boundary <= cursor:
-            continue
-        blocks.append({
-            "type": "text",
-            "text": system[cursor:boundary],
-            "cache_control": {"type": "ephemeral"},
-        })
-        cursor = boundary
-    if cursor < len(system):
-        blocks.append({"type": "text", "text": system[cursor:]})
-    return blocks
+        item: Dict[str, Any] = {"type": "text", "text": block.text}
+        wire.append(item)
+    if prompt_cache and wire:
+        wire[-1]["cache_control"] = {"type": "ephemeral"}
+    for block in blocks.dynamic_system_blocks:
+        if block.text:
+            wire.append({"type": "text", "text": block.text})
+    return wire
 
 
 def _tool_result_block(block: Dict[str, Any]) -> Dict[str, Any]:
@@ -264,7 +249,10 @@ class AnthropicProvider:
             raise ConfigError(
                 "缺少 API key：请设置 ANTHROPIC_API_KEY（或配置文件；--mock 可离线体验）"
             )
-        system, wire_messages = to_anthropic_request_messages(messages)
+        system_blocks, wire_messages = _to_anthropic_request_messages(
+            messages,
+            cache_all_without_boundary=self.prompt_cache,
+        )
         max_tokens = self.max_tokens
         payload: Dict[str, Any] = {
             **self.generation,          # temperature/top_p 等；显式键后置不可覆盖
@@ -280,12 +268,9 @@ class AnthropicProvider:
                 payload["max_tokens"] = budget + 1024        # 必须大于思考预算
         # prompt caching：3 个 ephemeral 断点（tools 末尾 / system / 最后一条消息末尾）。
         # 缓存命中部分按 ~10% 计价，长会话显著省钱；不足最小缓存长度时服务端自动忽略，无害。
-        if system is not None:
-            if self.prompt_cache:
-                boundaries = _system_cache_boundaries(messages, system)
-                payload["system"] = _cached_system_blocks(system, boundaries)
-            else:
-                payload["system"] = system
+        if system_blocks is not None:
+            payload["system"] = _anthropic_system_blocks(
+                system_blocks, prompt_cache=self.prompt_cache)
         if tools:
             tool_defs = tool_specs_to_anthropic(tools)
             if self.prompt_cache and tool_defs:
@@ -313,7 +298,13 @@ class AnthropicProvider:
         """Build once, then expose safe accounting alongside the opaque wire body."""
         request = self.build_request(messages, tools)
         payload = json.loads(request["body"].decode("utf-8"))
-        segments, stable_chars, stable_hash = _anthropic_cache_segments(payload)
+        blocks = resolve_system_prompt_blocks(
+            messages,
+            cache_all_without_boundary=self.prompt_cache,
+        )
+        segments, _, _ = _anthropic_cache_segments(payload)
+        stable_chars = blocks.stable_chars if blocks is not None else 0
+        stable_hash = blocks.stable_hash if blocks is not None else ""
         return prepare_http_request(
             provider=self.name,
             model=self.model,
@@ -323,6 +314,7 @@ class AnthropicProvider:
             cache_segments=segments,
             stable_cache_chars=stable_chars,
             stable_cache_hash=stable_hash,
+            system_prompt_blocks=blocks,
         )
 
     async def stream(
@@ -483,15 +475,21 @@ def _anthropic_cache_segments(
     stable_chars = 0
     stable_hash = ""
     if isinstance(system, list):
+        stable_parts: List[str] = []
         for block in system:
-            if not isinstance(block, dict) or not block.get("cache_control"):
+            if not isinstance(block, dict):
                 continue
             text = str(block.get("text") or "")
-            segment = cache_segment("system", text, cache_control=True)
+            if text:
+                stable_parts.append(text)
+            if not block.get("cache_control"):
+                continue
+            stable = "\n\n".join(stable_parts)
+            segment = cache_segment("system", stable, cache_control=True)
             segments.append(segment)
-            if not stable_hash:
-                stable_chars = segment.chars
-                stable_hash = segment.digest
+            stable_chars = segment.chars
+            stable_hash = segment.digest
+            break
     tools = payload.get("tools")
     if isinstance(tools, list) and tools:
         last = tools[-1]

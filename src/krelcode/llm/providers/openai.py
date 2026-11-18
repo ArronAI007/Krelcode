@@ -24,7 +24,8 @@ from ..base import (
     FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, PreparedLLMRequest,
     ProviderCapabilities, StreamFinished, TextDelta, ThinkingDelta,
     ToolCallArgumentsDelta, ToolCallReady, ToolCallStartedDelta, ToolSpec,
-    cache_segment, normalize_usage, prepare_http_request, stable_system_prefix,
+    SystemPromptBlocks, cache_segment, normalize_usage, prepare_http_request,
+    resolve_system_prompt_blocks,
 )
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
@@ -37,7 +38,20 @@ from ..transport import (
 
 def to_openai_messages(messages: Sequence[Message]) -> List[Dict[str, Any]]:
     wire = []
+    system_blocks = resolve_system_prompt_blocks(messages)
+    system_emitted = False
     for m in messages:
+        if m.role == "system" and system_blocks is not None:
+            # OpenAI-compatible endpoints receive one deterministic system
+            # message. Keep the stable -> dynamic order while Provider
+            # metadata retains the original block boundary and hashes.
+            if not system_emitted and system_blocks.merged_text:
+                wire.append({
+                    "role": "system",
+                    "content": system_blocks.merged_text,
+                })
+                system_emitted = True
+            continue
         content: Any = m.content
         if m.images and m.role == "user":
             # 多模态：content 转 blocks（text + image_url data URI）
@@ -205,7 +219,9 @@ class OpenAIProvider:
     ) -> PreparedLLMRequest:
         request = self.build_request(messages, tools)
         payload = json.loads(request["body"].decode("utf-8"))
-        segments, stable_chars, stable_hash = _openai_cache_segments(payload, messages)
+        blocks = resolve_system_prompt_blocks(messages)
+        segments, stable_chars, stable_hash = _openai_cache_segments(
+            payload, blocks=blocks)
         return prepare_http_request(
             provider=self.name,
             model=self.model,
@@ -217,6 +233,7 @@ class OpenAIProvider:
             cache_segments=segments,
             stable_cache_chars=stable_chars,
             stable_cache_hash=stable_hash,
+            system_prompt_blocks=blocks,
         )
 
     async def stream(
@@ -334,10 +351,14 @@ class OpenAIProvider:
 
 
 
-def _openai_cache_segments(payload: Dict[str, Any], messages: Sequence[Message]):
+def _openai_cache_segments(
+    payload: Dict[str, Any],
+    *,
+    blocks: Optional[SystemPromptBlocks] = None,
+):
     """Describe OpenAI/DeepSeek implicit prefix-cache opportunities safely."""
     segments = []
-    stable = stable_system_prefix(messages)
+    stable = blocks.stable_text if blocks is not None else ""
     stable_chars = 0
     stable_hash = ""
     if stable:

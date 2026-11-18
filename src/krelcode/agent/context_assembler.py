@@ -105,6 +105,7 @@ class ContextAssembler:
         text, stable_prefix = _render_layers(ordered_layers)
         stable_prefix = max(0, min(stable_prefix, len(text)))
         stable_text = text[:stable_prefix]
+        dynamic_text = text[stable_prefix:]
         contributions = _merge_contributions(ordered_layers)
         provider_meta = dict(request.system_provider_meta or {})
         if stable_prefix > 0:
@@ -120,6 +121,8 @@ class ContextAssembler:
             layers=ordered_layers,
             stable_prefix_chars=stable_prefix,
             stable_hash=hashlib.sha256(stable_text.encode("utf-8")).hexdigest(),
+            dynamic_hash=hashlib.sha256(
+                dynamic_text.encode("utf-8")).hexdigest() if dynamic_text else "",
             full_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
             token_contributions=contributions,
             engine=self.engine,

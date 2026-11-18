@@ -21,6 +21,12 @@ Krelcode 把“本轮模型实际看到的上下文”拆成四个可独立检�
 ProviderMessages` 装配结果会形成一个真实请求快照。快照只包含 token 分项、来源 ID、裁剪项、
 缓存边界和哈希，不包含 Prompt、工具输出或密钥正文。
 
+`ProviderMessages` 同时携带显式 `SystemPromptBlocks`：连续可缓存的 Fragment 进入
+`stable_system_blocks`，其余进入 `dynamic_system_blocks`，并分别计算 `stable_hash` 与
+`dynamic_hash`。Anthropic 保留 block 数组且只在最后一个 stable block 设置
+`cache_control: ephemeral`；OpenAI-compatible 在 wire 阶段按 stable → dynamic 合并为一个
+system message，但观测层仍保留原始 block 边界与 hash。该元数据不包含 Prompt 正文。
+
 ## 2. 配置
 
 配置文件仍是 `./krelcode.toml` 或 `~/.krelcode/config.toml`：
@@ -76,7 +82,8 @@ auto_threshold = 0.80
 - 输入 token、预算、使用率、模型窗口与输出预留；
 - `system/workspace/memory/history/runtime/tools/overhead` 分项；
 - stable/volatile token 与 cache boundary；
-- stable/full hash，以及相对上一请求是否变化；
+- stable 与 dynamic system block 数、`cache_control` 边界；
+- stable/dynamic/full hash，以及相对上一请求是否变化；
 - 贡献 token 最多的来源；
 - 实际注入的记忆条数、作用域和 token；
 - 被预算或范围过滤掉的来源；
@@ -86,7 +93,7 @@ auto_threshold = 0.80
 
 ### `/context plan`
 
-展示最近一次 `PromptAssembler` / `ContextAssembly` 的机器可检查计划：stable/full hash、
+展示最近一次 `PromptAssembler` / `ContextAssembly` 的机器可检查计划：stable/dynamic/full hash、
 history digest、
 Working Context sequence、layer/source/category 清单与总 token。layer、source 和
 category 列表有数量上限；超大 Context 会显示省略数量，并可用
@@ -107,9 +114,10 @@ category 列表有数量上限；超大 Context 会显示省略数量，并可�
 ### `/context sources` 与 `/context cache`
 
 `sources` 查看 layer 顺序、来源 token、cache 属性、source issue 和 dropped item。
-`cache` 查看 stable/volatile 数、stable/full hash、与上一请求相比是否变化、显式缓存段
-数量、各 segment 的 token/字符/哈希。Prompt Fragment Registry 启用时还会列出稳定与
-动态 fragment。
+`cache` 查看 stable/dynamic block 数、stable/dynamic/full hash、与上一请求相比是否变化、
+`cache_control` 字符边界、显式缓存段数量，以及各 segment 的 token/字符/哈希。Anthropic
+的断点位于最后一个 stable block；OpenAI-compatible 只合并 wire system message，不会丢失
+这组边界元数据。Prompt Fragment Registry 启用时还会列出稳定与动态 fragment。
 
 ### `/context refresh`
 
@@ -122,7 +130,7 @@ category 列表有数量上限；超大 Context 会显示省略数量，并可�
 
 - provider 请求的输入/预算、wire 保真度与模型窗口；
 - system/workspace/runtime/history/tools/overhead token；
-- stable/volatile token、cache 模式和 stable hash 是否变化；
+- stable/volatile token、stable/dynamic block 数、cache 模式和 stable hash 是否变化；
 - Context source/fragment/tool schema 数量；
 - Memory 总条数、本请求命中条数、注入 token；
 - 被裁剪来源的预览；
@@ -349,6 +357,8 @@ compact_checkpoint context_compressed context_microcompacted
 |------|------|
 | Context 面板没有数据 | 先发起一次模型请求；没有真实请求时只显示历史估算 |
 | cache hash 每次变化 | `/context cache` 查看 stable segment；检查规则、工具 schema 或 system prompt 是否被动态改写 |
+| dynamic hash 每次变化但 stable hash 不变 | 属于正常动态尾部变化；检查 `/context cache` 的 block 数与边界，确认规则没有进入 dynamic block |
+| Anthropic 没有缓存命中 | 确认至少存在 stable block；只有一个 stable block 时 `cache_control` 必须落在该 block，没有 stable block 时不会生成显式断点 |
 | token 异常高 | `/context` 看分项，`/context sources` 看 layer，`/context why <id>` 看 attribution |
 | Memory 未注入 | `/memory list` 确认作用域，`/memory search` 检查检索，`/context` 看命中数；注入还受条数/字符预算限制 |
 | Auto Memory 不写入 | `auto` 模式仍要求达到阈值且无冲突；用 `/memory review` 检查 pending 原因 |

@@ -88,6 +88,18 @@ class ContextInspectionService:
         )
 
     @property
+    def dynamic_cache_changed(self) -> Optional[bool]:
+        current = self.snapshot
+        previous = self.previous_snapshot
+        if current is None or previous is None:
+            return None
+        return bool(
+            current.dynamic_hash
+            and previous.dynamic_hash
+            and current.dynamic_hash != previous.dynamic_hash
+        )
+
+    @property
     def memory_selection(self) -> tuple[tuple[str, ...], dict[str, int], int]:
         assembly = self.assembly
         if assembly is None:
@@ -134,6 +146,7 @@ class ContextInspectionService:
             f" · cache {snapshot.cache_mode}"
             f" · boundary {snapshot.cache_boundary_chars} chars",
             f"  stable hash {_short_hash(snapshot.stable_hash)}"
+            f" · dynamic hash {_short_hash(snapshot.dynamic_hash)}"
             f" · full hash {_short_hash(snapshot.full_hash)}"
             f" · {self.cache_change_text()}",
             f"  source {snapshot.source_count} · fragment {snapshot.fragment_count}"
@@ -169,6 +182,7 @@ class ContextInspectionService:
             f" · Step {plan.step} · {plan.token_count} tokens"
             f" · engine {plan.engine or 'legacy/unknown'}",
             f"  stable hash {_short_hash(plan.stable_hash)}"
+            f" · dynamic hash {_short_hash(plan.dynamic_hash)}"
             f" · full hash {_short_hash(plan.full_hash)}",
             f"  history digest {_short_hash(plan.history_digest)}"
             f" · working-context sequence {plan.working_context_sequence}"
@@ -277,13 +291,18 @@ class ContextInspectionService:
         if snapshot is None:
             return ["  [cache] 尚无真实请求快照"]
         lines = [
-            f"  [cache] stable {snapshot.stable_tokens}"
+            f"  [cache] stable blocks {snapshot.stable_system_block_count}"
+            f" · dynamic blocks {snapshot.dynamic_system_block_count}"
+            f" · stable {snapshot.stable_tokens}"
             f" · volatile {snapshot.volatile_tokens}"
             f" · mode {snapshot.cache_mode}",
             f"  stable hash {_short_hash(snapshot.stable_hash)}"
+            f" · dynamic hash {_short_hash(snapshot.dynamic_hash)}"
             f" · full hash {_short_hash(snapshot.full_hash)}",
-            f"  changed: {self.cache_change_text()}",
-            f"  boundary {snapshot.cache_boundary_chars} chars"
+            f"  changed: {self.cache_change_text()} (stable)"
+            f" · dynamic {self.dynamic_cache_change_text()}",
+            f"  system boundary {snapshot.cache_boundary_chars} chars"
+            f" · cache_control boundary {snapshot.cache_control_boundary} chars"
             f" · segments {snapshot.cache_segment_count}"
             f" ({snapshot.cache_control_segment_count} explicit)",
             f"  cacheable tools {snapshot.tool_cacheable_tokens}"
@@ -309,6 +328,12 @@ class ContextInspectionService:
 
     def cache_change_text(self) -> str:
         changed = self.cache_changed
+        if changed is None:
+            return "无上一请求可比较"
+        return "是" if changed else "否"
+
+    def dynamic_cache_change_text(self) -> str:
+        changed = self.dynamic_cache_changed
         if changed is None:
             return "无上一请求可比较"
         return "是" if changed else "否"

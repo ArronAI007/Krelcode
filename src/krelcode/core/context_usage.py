@@ -54,7 +54,11 @@ class ContextUsageSnapshot:
     volatile_tokens: int = 0
     cache_boundary_chars: int = 0
     stable_hash: str = ""
+    dynamic_hash: str = ""
     full_hash: str = ""
+    stable_system_block_count: int = 0
+    dynamic_system_block_count: int = 0
+    cache_control_boundary: int = 0
     tool_count: int = 0
     fragment_count: int = 0
     source_count: int = 0
@@ -124,7 +128,11 @@ class ContextUsageSnapshot:
             "volatile_tokens": self.volatile_tokens,
             "cache_boundary_chars": self.cache_boundary_chars,
             "stable_hash": self.stable_hash,
+            "dynamic_hash": self.dynamic_hash,
             "full_hash": self.full_hash,
+            "stable_system_block_count": self.stable_system_block_count,
+            "dynamic_system_block_count": self.dynamic_system_block_count,
+            "cache_control_boundary": self.cache_control_boundary,
             "tool_count": self.tool_count,
             "fragment_count": self.fragment_count,
             "source_count": self.source_count,

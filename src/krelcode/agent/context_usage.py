@@ -121,6 +121,8 @@ def build_context_usage_snapshot(
         fragment_count = context_assembly.fragment_count
         cache_boundary_chars = context_assembly.stable_prefix_chars
         stable_hash = context_assembly.stable_hash
+        dynamic_hash = str(
+            getattr(context_assembly, "dynamic_hash", "") or "")
         full_hash = context_assembly.full_hash
         source_count = context_assembly.source_count
     else:
@@ -130,6 +132,7 @@ def build_context_usage_snapshot(
         fragment_count = len(fragments)
         cache_boundary_chars = int(getattr(cache, "offset", 0) or 0)
         stable_hash = str(getattr(cache, "stable_hash", "") or "")
+        dynamic_hash = str(getattr(cache, "dynamic_hash", "") or "")
         full_hash = str(getattr(cache, "full_hash", "") or "")
         source_count = 0
     prepared_segments = (
@@ -139,6 +142,8 @@ def build_context_usage_snapshot(
             cache_boundary_chars = prepared_request.stable_cache_chars
         if prepared_request.stable_cache_hash:
             stable_hash = prepared_request.stable_cache_hash
+        if prepared_request.dynamic_cache_hash:
+            dynamic_hash = prepared_request.dynamic_cache_hash
         if stable_tokens == 0:
             stable_tokens = sum(
                 segment.tokens for segment in prepared_segments
@@ -182,7 +187,18 @@ def build_context_usage_snapshot(
         volatile_tokens=max(0, estimated - stable_tokens),
         cache_boundary_chars=cache_boundary_chars,
         stable_hash=stable_hash,
+        dynamic_hash=dynamic_hash,
         full_hash=full_hash,
+        stable_system_block_count=(
+            prepared_request.stable_system_block_count
+            if prepared_request is not None else 0),
+        dynamic_system_block_count=(
+            prepared_request.dynamic_system_block_count
+            if prepared_request is not None else 0),
+        cache_control_boundary=(
+            prepared_request.cache_control_boundary
+            if prepared_request is not None
+            else cache_boundary_chars),
         tool_count=len(tool_specs),
         fragment_count=fragment_count,
         source_count=source_count,

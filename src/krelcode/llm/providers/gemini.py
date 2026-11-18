@@ -36,7 +36,7 @@ from ..base import (
     FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, PreparedLLMRequest,
     ProviderCapabilities, StreamFinished, TextDelta, ToolCallArgumentsDelta,
     ToolCallReady, ToolCallStartedDelta, ToolSpec, normalize_usage,
-    prepare_http_request,
+    prepare_http_request, resolve_system_prompt_blocks,
 )
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
@@ -58,7 +58,7 @@ def to_gemini_contents(
     - 连续 tool 结果合并进同一条 user 消息的多个 functionResponse part
     - functionResponse 的 name 由 assistant.tool_calls 建立的 id→name 映射还原
     """
-    system_parts: List[str] = []
+    system_blocks = resolve_system_prompt_blocks(messages)
     contents: List[Dict[str, Any]] = []
     id_to_name: Dict[str, str] = {}
     pending: List[Dict[str, Any]] = []
@@ -70,8 +70,6 @@ def to_gemini_contents(
 
     for m in messages:
         if m.role == ROLE_SYSTEM:
-            if m.content:
-                system_parts.append(m.content)
             continue
         if m.role == ROLE_TOOL:
             pending.append({
@@ -104,7 +102,8 @@ def to_gemini_contents(
     flush_pending()
 
     system_instruction = (
-        {"parts": [{"text": "\n\n".join(system_parts)}]} if system_parts else None
+        {"parts": [{"text": system_blocks.merged_text}]}
+        if system_blocks is not None and system_blocks.merged_text else None
     )
     return system_instruction, contents
 
@@ -226,6 +225,7 @@ class GeminiProvider:
         request = self.build_request(messages, tools)
         payload = json.loads(request["body"].decode("utf-8"))
         generation = payload.get("generationConfig") or {}
+        blocks = resolve_system_prompt_blocks(messages)
         return prepare_http_request(
             provider=self.name,
             model=self.model,
@@ -234,6 +234,7 @@ class GeminiProvider:
                 generation.get("maxOutputTokens")
                 or generation.get("max_output_tokens") or 0),
             cache_mode="none",
+            system_prompt_blocks=blocks,
         )
 
     async def stream(

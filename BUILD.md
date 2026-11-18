@@ -74,6 +74,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | v0.83 | 扩展生态 P0 | Plugin v1 的单一 Tool 适配器升级为统一扩展平面：ExtensionRegistry 追踪 Plugin/Tool/Skill/Agent/Command/Hook/MCP 来源；Plugin v2 单包声明六类组件并保持 v1 兼容；install/update/remove/enable/disable 带原子替换、路径/symlink/体积校验和 scope 隔离状态；配置改为 user → project → local → managed 合并，managed fail-closed，`--config` 保持独占 |
 | v0.84 | 生产可用性 P1 | MCP 四类列表分页、`list_changed` 串行原子刷新、Resource Templates 与 OAuth（refresh/client credentials/metadata discovery/动态注册/PKCE/401 retry/`0600` cache）；新增 `CommandSource.CUSTOM` 和 Plugin/Custom 统一优先级；Hook 升级为 command/http/prompt 三执行器并强化 URL/Header 脱敏；Subagent Definition 支持独立 model/provider、permission-mode 和 MCP 集合。单组件失败继续隔离，所有新元数据不保存 Prompt 正文、Hook Header 或 MCP headers |
 | v0.85 | PromptAssembler 唯一入口 | Fragment 扩展 layer/stability/trust，建立 L0-L12 固定层级与 `PromptAssembler.assemble() → PromptPlan → ProviderMessages`；AgentLoop 不再用 `ContextAssembly.messages_for()` 生产请求，动态时间、工具结果、当前请求与 reminder 被隔离在稳定前缀之外，ContextAssembly 降为观测/恢复兼容视图 |
+| v0.86 | 显式 system cache boundary | `ProviderMessages` 新增 provider-neutral `SystemPromptBlocks`，逐 Fragment 保留 stable/dynamic block、双 hash 与 `cache_control` 边界；Anthropic 不再提前 join system，只在最后 stable block 标记 ephemeral，OpenAI-compatible 在 wire 层固定顺序合并但观测元数据不丢失。边界、block 数与双 hash 贯通 PreparedRequest、ContextUsageSnapshot、ContextPlanSnapshot、`/context cache` 和 TUI |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -81,6 +82,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 |----------|--------|
 | 消息/事件/错误类型 | `core/messages.py` `core/events.py` `core/errors.py` |
 | Provider 抽象与事件流契约 | `llm/base.py`（TextDelta/ThinkingDelta/StreamFinished） |
+| 显式 system block / cache boundary 契约 | `llm/base.py`（SystemPromptBlock/SystemPromptBlocks） |
 | SSE/传输桥 | `llm/transport.py`；MCP 侧 `mcp/sseparse.py` `mcp/http_connector.py` |
 | 各 wire format 翻译 | `llm/providers/{openai,anthropic,gemini}.py` |
 | 重试 | `llm/retry.py`（RetryingProvider 装饰器） |

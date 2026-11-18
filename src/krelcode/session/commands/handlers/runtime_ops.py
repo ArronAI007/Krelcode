@@ -1046,11 +1046,15 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             f" · tool schema {snapshot.tool_schema_tokens}"
             f" · overhead {snapshot.overhead_tokens}",
             f"  缓存: {snapshot.cache_mode}"
+            f" · stable blocks {snapshot.stable_system_block_count}"
+            f" · dynamic blocks {snapshot.dynamic_system_block_count}"
             f" · stable {snapshot.stable_tokens}"
             f" · volatile {snapshot.volatile_tokens}"
             f" · boundary {snapshot.cache_boundary_chars} chars"
             f" · segments {snapshot.cache_segment_count}",
             f"  stable hash: {snapshot.stable_hash or '(none)'}",
+            f"  dynamic hash: {snapshot.dynamic_hash or '(none)'}",
+            f"  cache_control boundary: {snapshot.cache_control_boundary} chars",
             f"  full hash: {snapshot.full_hash or '(none)'}",
             f"  工具 {snapshot.tool_count} 个 · fragment {snapshot.fragment_count} 个"
             f" · source {snapshot.source_count} 个",

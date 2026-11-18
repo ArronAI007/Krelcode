@@ -14,6 +14,11 @@ from dataclasses import dataclass, replace
 from typing import Callable, Mapping, Optional, Sequence, Tuple
 
 from ..core.messages import Message
+from ..llm.base import (
+    SYSTEM_PROMPT_BLOCKS_META_KEY,
+    SystemPromptBlock,
+    SystemPromptBlocks,
+)
 from .context_assembler import ContextAssembler
 from .context_source import (
     CATEGORY_MEMORY,
@@ -78,6 +83,7 @@ class ProviderMessages:
     messages: Tuple[Message, ...]
     tools: Tuple[Mapping[str, object], ...] = ()
     cache_boundary: Optional[PromptCacheBoundary] = None
+    system_blocks: Optional[SystemPromptBlocks] = None
 
     @property
     def provider_meta(self) -> Optional[Mapping[str, object]]:
@@ -109,6 +115,7 @@ class PromptPlan:
     cache: PromptCacheBoundary
     generation: int
     engine: str
+    system_blocks: Optional[SystemPromptBlocks] = None
     token_contributions: Tuple[ContextTokenContribution, ...] = ()
     omitted_fragments: Tuple[str, ...] = ()
     issues: Tuple[ContextSourceIssue, ...] = ()
@@ -121,6 +128,20 @@ class PromptPlan:
     @property
     def stable_prefix(self) -> str:
         return self.system_text[:self.cache.offset]
+
+    @property
+    def stable_system_blocks(self) -> Tuple[SystemPromptBlock, ...]:
+        return (self.system_blocks.stable_system_blocks
+                if self.system_blocks is not None else ())
+
+    @property
+    def dynamic_system_blocks(self) -> Tuple[SystemPromptBlock, ...]:
+        return (self.system_blocks.dynamic_system_blocks
+                if self.system_blocks is not None else ())
+
+    @property
+    def dynamic_hash(self) -> str:
+        return self.cache.dynamic_hash
 
     @property
     def provider_meta(self) -> Optional[Mapping[str, object]]:
@@ -199,9 +220,11 @@ class PromptAssembler:
             if fragment.layer in SYSTEM_PROMPT_LAYERS
             or fragment.layer == LAYER_L12_REMINDER
         )
-        system_text, stable_offset, stable_ids = _render_system_fragments(
-            system_fragments)
-        stable_text = system_text[:stable_offset]
+        system_blocks = _build_system_prompt_blocks(system_fragments)
+        system_text = system_blocks.merged_text
+        stable_offset = system_blocks.cache_control_boundary
+        stable_ids = tuple(
+            block.id for block in system_blocks.stable_system_blocks)
         stable_set = set(stable_ids)
         volatile_ids = tuple(
             fragment.id for fragment in fragments
@@ -209,11 +232,12 @@ class PromptAssembler:
         )
         cache = PromptCacheBoundary(
             offset=stable_offset,
-            stable_tokens=estimate_text_tokens(stable_text),
-            stable_fragments=tuple(stable_ids),
+            stable_tokens=estimate_text_tokens(system_blocks.stable_text),
+            stable_fragments=stable_ids,
             volatile_fragments=volatile_ids,
-            stable_hash=hashlib.sha256(stable_text.encode("utf-8")).hexdigest(),
+            stable_hash=system_blocks.stable_hash,
             full_hash=hashlib.sha256(system_text.encode("utf-8")).hexdigest(),
+            dynamic_hash=system_blocks.dynamic_hash,
         )
         layers = _layer_plans(fragments)
         contributions = _token_contributions(
@@ -246,6 +270,7 @@ class PromptAssembler:
                 0,
             ),
             engine=self.engine,
+            system_blocks=system_blocks,
             token_contributions=contributions,
             omitted_fragments=omitted,
             issues=dynamic_assembly.issues,
@@ -260,16 +285,19 @@ class PromptAssembler:
     ) -> ProviderMessages:
         messages = list(plan.history)
         if plan.system_text:
+            provider_meta = dict(plan.provider_meta or {})
+            if plan.system_blocks is not None:
+                provider_meta[SYSTEM_PROMPT_BLOCKS_META_KEY] = plan.system_blocks
             system = Message.system(
                 plan.system_text,
-                provider_meta=(
-                    dict(plan.provider_meta) if plan.provider_meta else None),
+                provider_meta=provider_meta or None,
             )
             messages.insert(0, system)
         return ProviderMessages(
             messages=tuple(messages),
             tools=tuple(tools or ()),
             cache_boundary=plan.cache,
+            system_blocks=plan.system_blocks,
         )
 
     def _snapshot_from_registry(self) -> Optional[PromptSnapshot]:
@@ -478,6 +506,36 @@ def _fragment_plan_sort_key(fragment: PromptFragment) -> tuple:
     )
 
 
+def _build_system_prompt_blocks(
+    fragments: Sequence[PromptFragment],
+) -> SystemPromptBlocks:
+    stable: list[SystemPromptBlock] = []
+    dynamic: list[SystemPromptBlock] = []
+    stable_open = True
+    for fragment in fragments:
+        content = _wire_fragment_content(fragment)
+        if not content:
+            continue
+        block = SystemPromptBlock(
+            id=fragment.id,
+            text=content,
+            source=fragment.source,
+            stability=fragment.stability,
+            trust=fragment.trust,
+            cacheable=fragment.cacheable,
+        )
+        if stable_open and fragment.cacheable:
+            stable.append(block)
+        else:
+            stable_open = False
+            dynamic.append(block)
+    blocks = SystemPromptBlocks(
+        stable_system_blocks=tuple(stable),
+        dynamic_system_blocks=tuple(dynamic),
+    )
+    return blocks
+
+
 def _render_system_fragments(
     fragments: Sequence[PromptFragment],
 ) -> tuple[str, int, tuple[str, ...]]:
@@ -630,6 +688,7 @@ def _compatibility_assembly(
         issues=dynamic_assembly.issues,
         provider_meta=provider_meta,
         prompt_snapshot=snapshot,
+        dynamic_hash=cache.dynamic_hash,
     )
 
 

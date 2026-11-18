@@ -76,7 +76,11 @@ def make_snapshot(
         stable_tokens=60,
         volatile_tokens=261,
         stable_hash=stable_hash,
+        dynamic_hash="dynamic-a",
         full_hash="full-93",
+        stable_system_block_count=2,
+        dynamic_system_block_count=1,
+        cache_control_boundary=60,
         tool_count=2,
         fragment_count=3,
         source_count=3,
@@ -142,6 +146,7 @@ def test_context_plan_why_sources_and_cache_are_content_free(tmp_path):
         turn_id="turn-93",
         step=2,
         stable_hash="stable-a",
+        dynamic_hash="dynamic-a",
         full_hash="full-93",
         layer_ids=("source:prompt", "runtime:tools"),
         sources=("prompt", "tool_directory"),
@@ -154,6 +159,7 @@ def test_context_plan_why_sources_and_cache_are_content_free(tmp_path):
 
     plan = "\n".join(asyncio.run(controller.execute_command("/context plan")).output)
     assert "source:prompt" in plan and "working-context sequence 7" in plan
+    assert "dynamic hash dynamic-a" in plan
 
     why = "\n".join(asyncio.run(controller.execute_command(
         "/context why source:prompt")).output)
@@ -167,6 +173,9 @@ def test_context_plan_why_sources_and_cache_are_content_free(tmp_path):
     cache = "\n".join(asyncio.run(controller.execute_command(
         "/context cache")).output)
     assert "changed: 是" in cache and "segments 2" in cache
+    assert "stable blocks 2 · dynamic blocks 1" in cache
+    assert "dynamic hash dynamic-a" in cache
+    assert "cache_control boundary 60 chars" in cache
 
 
 def test_context_plan_bounds_large_layer_and_source_lists(tmp_path):
@@ -192,6 +201,22 @@ def test_context_plan_bounds_large_layer_and_source_lists(tmp_path):
     assert "source-99" in output and "source-100" not in output
     assert "另有 4 个" in output
     assert "另有 2 个类别" in output
+
+
+def test_context_plan_snapshot_round_trips_dynamic_cache_hash():
+    plan = ContextPlanSnapshot(
+        turn_id="turn-cache",
+        step=3,
+        engine="v3",
+        stable_hash="stable-hash",
+        dynamic_hash="dynamic-hash",
+        full_hash="full-hash",
+    )
+
+    restored = ContextPlanSnapshot.from_dict(plan.as_dict())
+
+    assert restored == plan
+    assert restored.dynamic_hash == "dynamic-hash"
 
 
 def test_context_snapshot_survives_turn_boundary_for_cache_comparison(tmp_path):

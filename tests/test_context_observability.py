@@ -275,7 +275,11 @@ def test_context_command_reports_last_real_request_snapshot(tmp_path):
         volatile_tokens=406,
         cache_boundary_chars=123,
         stable_hash="stable-hash",
+        dynamic_hash="dynamic-hash",
         full_hash="full-hash",
+        stable_system_block_count=2,
+        dynamic_system_block_count=1,
+        cache_control_boundary=123,
         tool_count=4,
         fragment_count=6,
         source_count=3,
@@ -298,6 +302,9 @@ def test_context_command_reports_last_real_request_snapshot(tmp_path):
     assert "输入估算: 456 tokens" in output
     assert "tool schema 30" in output
     assert "stable 50 · volatile 406" in output
+    assert "stable blocks 2 · dynamic blocks 1" in output
+    assert "dynamic hash: dynamic-hash" in output
+    assert "cache_control boundary: 123 chars" in output
     assert "工具 4 个 · fragment 6 个 · source 3 个" in output
 
 
@@ -319,6 +326,9 @@ def test_tui_context_panel_prefers_request_snapshot():
         stable_tokens=50,
         volatile_tokens=271,
         cache_boundary_chars=64,
+        stable_system_block_count=2,
+        dynamic_system_block_count=1,
+        cache_control_boundary=64,
         tool_count=3,
         fragment_count=5,
         source_count=4,
@@ -343,5 +353,7 @@ def test_tui_context_panel_prefers_request_snapshot():
     assert "cache · 50/271" in labels
     assert "fragments · 5" in labels
     assert "workspace 40" in details
+    assert "blocks 2/1" in details
+    assert "control 64 chars" in details
     assert "sources 4" in details
     assert "tools 3" in details and "schema 12" in details

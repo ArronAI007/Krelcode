@@ -131,6 +131,7 @@ class PromptCacheBoundary:
     volatile_fragments: Tuple[str, ...]
     stable_hash: str
     full_hash: str
+    dynamic_hash: str = ""
 
     @property
     def enabled(self) -> bool:
@@ -406,6 +407,9 @@ class PromptFragmentRegistry:
                 stable_hash=hashlib.sha256(
                     stable_text.encode("utf-8")).hexdigest(),
                 full_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                dynamic_hash=hashlib.sha256(
+                    text[boundary:].encode("utf-8")).hexdigest()
+                if text[boundary:] else "",
             ),
             generation=self._generation,
             total_tokens=estimate_text_tokens(text),

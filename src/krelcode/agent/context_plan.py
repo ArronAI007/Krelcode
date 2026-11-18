@@ -59,6 +59,7 @@ class ContextPlanSnapshot:
     step: int = 0
     engine: str = ""
     stable_hash: str = ""
+    dynamic_hash: str = ""
     full_hash: str = ""
     layer_ids: tuple[str, ...] = ()
     sources: tuple[str, ...] = ()
@@ -86,6 +87,7 @@ class ContextPlanSnapshot:
             step=max(0, int(step)),
             engine=str(getattr(assembly, "engine", "") or ""),
             stable_hash=str(getattr(assembly, "stable_hash", "") or ""),
+            dynamic_hash=str(getattr(assembly, "dynamic_hash", "") or ""),
             full_hash=str(getattr(assembly, "full_hash", "") or ""),
             layer_ids=tuple(layer.id for layer in layers),
             sources=tuple(sorted({layer.source for layer in layers})),
@@ -128,6 +130,7 @@ class ContextPlanSnapshot:
             "step": self.step,
             "engine": self.engine,
             "stable_hash": self.stable_hash,
+            "dynamic_hash": self.dynamic_hash,
             "full_hash": self.full_hash,
             "layer_ids": list(self.layer_ids),
             "sources": list(self.sources),
@@ -162,6 +165,7 @@ class ContextPlanSnapshot:
             step=step,
             engine=str(raw.get("engine", "") or ""),
             stable_hash=str(raw.get("stable_hash", "") or ""),
+            dynamic_hash=str(raw.get("dynamic_hash", "") or ""),
             full_hash=str(raw.get("full_hash", "") or ""),
             layer_ids=strings("layer_ids"),
             sources=strings("sources"),

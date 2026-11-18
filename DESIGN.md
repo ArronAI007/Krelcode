@@ -918,10 +918,11 @@ Fragment sources
 - cacheable Fragment 被渲染为全局连续前缀，即使以后注册动态 system Fragment，也不会
   阻断后续 workspace stable rules。`stable_hash` 只覆盖稳定前缀，因此 git 状态/目录树
   变化会改变 `full_hash`，但不会使规则缓存失效。
-- snapshot 通过 `Message.provider_meta.prompt_cache_boundaries` 暴露字符 offset。
-  Anthropic adapter 把它换算为合并 system 的 block 边界：稳定 block 携带
-  `cache_control: ephemeral`，动态尾部不携带。OpenAI/DeepSeek 等兼容端点忽略该
-  adapter 私有元数据，但仍以相同稳定前缀受益于服务端自动前缀缓存。
+- legacy snapshot 仍通过 `Message.provider_meta.prompt_cache_boundaries` 暴露字符
+  offset；生产路径由 `ProviderMessages.system_blocks` 携带显式
+  `stable_system_blocks/dynamic_system_blocks`。Anthropic 原样保留 block 数组，只在最后
+  一个 stable block 上设置 `cache_control: ephemeral`；OpenAI/DeepSeek 等兼容端点按
+  stable → dynamic 固定顺序合并，但仍保留 block 计数、边界与双 hash 供观测。
 - App 启动、Skill 热重载、session restore 与 `/context refresh` 全部回到同一快照路径。
   workspace group/source 替换先完整校验再提交，避免冲突时留下半更新状态。
 - `/context` 展示 Fragment/source 汇总；`/context enable|disable|toggle` 修改后立即重建
@@ -1025,6 +1026,33 @@ History、L11 Current User Request、L12 Per-turn Reminder。
 - 当前 user 消息只出现一次，tool result 永远留在 history，不进入 system 或稳定前缀。
 - `ProviderMessages` 是 Provider 的唯一输入；`ContextAssembly` 仅作为 `/context`、Resume 与
   checkpoint 的无正文兼容视图。
+
+## 显式 system cache boundary（Step 99）
+
+Provider 层不再把 system prompt 当作一个不透明字符串。`PromptAssembler` 先产出 provider-
+neutral 契约：
+
+```text
+SystemPromptBlocks
+├─ stable_system_blocks[]   # 连续可缓存 L0-L9 前缀，每个 Fragment 一个 block
+├─ dynamic_system_blocks[]  # turn/session 动态尾部，永不设置显式缓存断点
+├─ stable_hash
+├─ dynamic_hash
+└─ cache_control_boundary
+```
+
+- Anthropic 保留 block 数组，不提前 join；每个 stable block 独立序列化，只有最后一个
+  stable block 获得 `cache_control: {"type": "ephemeral"}`。没有 stable block 时不生成显式
+  断点，所有 dynamic block 保持无 `cache_control`。
+- OpenAI-compatible 按 stable → dynamic 固定顺序合并成一个 system message。合并只发生在
+  adapter 的 wire 序列化阶段，`PreparedLLMRequest`、`ContextUsageSnapshot` 与
+  `ContextPlanSnapshot` 仍记录原始 block 数、边界和 `stable_hash/dynamic_hash`。
+- `stable_hash` 只覆盖 stable block 文本，动态环境、Working Context、Memory 或 reminder
+  变化不会使其改变；`dynamic_hash` 单独追踪动态尾部。hash、block 数量和 source/id 可进入
+  `/context plan|cache`、TUI、JSONL、stream-json 与 SDK，但任何记录都不包含 block 正文。
+- 旧 Provider、旧 system message 或只有 `prompt_cache_boundaries` 的调用由
+  `resolve_system_prompt_blocks()` 生成兼容视图：显式 block 优先，否则从 system 消息按固定
+  顺序恢复 stable/dynamic 视图。生产请求仍只允许由 `PromptAssembler` 产生显式 block。
 
 ## ContextSource 与 ContextAssembler（Step 85）
 

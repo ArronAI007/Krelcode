@@ -19,7 +19,10 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, AsyncIterator, Dict, Mapping, Optional, Protocol, Sequence, Tuple, Union
+from typing import (
+    Any, AsyncIterator, Dict, List, Mapping, Optional, Protocol, Sequence,
+    Tuple, Union,
+)
 
 from ..core.context_usage import CacheSegmentSnapshot
 from ..core.messages import Message, ToolCall
@@ -38,6 +41,133 @@ USAGE_CACHE_READ = "cache_read"          # 命中缓存读取的 input tokens（
 USAGE_CACHE_CREATION = "cache_creation"  # 写入缓存的 input tokens（溢价）
 
 ToolSpec = Dict[str, object]  # {"name": str, "description": str, "parameters": dict}
+
+SYSTEM_PROMPT_BLOCKS_META_KEY = "system_prompt_blocks"
+SYSTEM_BLOCK_STABILITY = ("static", "session", "turn")
+
+
+@dataclass(frozen=True)
+class SystemPromptBlock:
+    """One provider-neutral system text block before wire serialization."""
+
+    id: str
+    text: str
+    source: str = ""
+    stability: str = "static"
+    trust: str = "managed"
+    cacheable: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            raise ValueError("system block 必须包含非空 id")
+        if self.stability not in SYSTEM_BLOCK_STABILITY:
+            raise ValueError(f"未知 system block stability: {self.stability}")
+        if self.stability == "turn" and self.cacheable:
+            raise ValueError(f"turn system block 不允许 cacheable: {self.id}")
+
+    @property
+    def chars(self) -> int:
+        return len(self.text)
+
+    @property
+    def hash(self) -> str:
+        return hashlib.sha256(self.text.encode("utf-8")).hexdigest()
+
+    def as_record(self) -> Dict[str, object]:
+        return {
+            "id": self.id,
+            "source": self.source,
+            "stability": self.stability,
+            "trust": self.trust,
+            "cacheable": self.cacheable,
+            "chars": self.chars,
+            "hash": self.hash,
+        }
+
+
+@dataclass(frozen=True)
+class SystemPromptBlocks:
+    """Stable/dynamic system blocks with explicit cache boundary metadata."""
+
+    stable_system_blocks: Tuple[SystemPromptBlock, ...]
+    dynamic_system_blocks: Tuple[SystemPromptBlock, ...]
+    stable_hash: str = ""
+    dynamic_hash: str = ""
+    cache_control_boundary: int = 0
+    separator: str = "\n\n"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "stable_system_blocks",
+            tuple(self.stable_system_blocks),
+        )
+        object.__setattr__(
+            self, "dynamic_system_blocks",
+            tuple(self.dynamic_system_blocks),
+        )
+        stable_text = self.stable_text
+        dynamic_text = self.dynamic_text
+        if not self.stable_hash:
+            object.__setattr__(
+                self, "stable_hash",
+                hashlib.sha256(stable_text.encode("utf-8")).hexdigest()
+                if stable_text else "",
+            )
+        if not self.dynamic_hash:
+            object.__setattr__(
+                self, "dynamic_hash",
+                hashlib.sha256(dynamic_text.encode("utf-8")).hexdigest()
+                if dynamic_text else "",
+            )
+        # Providers place the explicit cache breakpoint after the complete
+        # stable prefix (on its last non-empty block).
+        boundary = len(stable_text) if stable_text else 0
+        object.__setattr__(self, "cache_control_boundary", boundary)
+
+    @property
+    def stable_text(self) -> str:
+        return self.separator.join(
+            block.text for block in self.stable_system_blocks if block.text)
+
+    @property
+    def dynamic_text(self) -> str:
+        return self.separator.join(
+            block.text for block in self.dynamic_system_blocks if block.text)
+
+    @property
+    def merged_text(self) -> str:
+        return self.separator.join(
+            text for text in (self.stable_text, self.dynamic_text) if text)
+
+    @property
+    def stable_chars(self) -> int:
+        return len(self.stable_text)
+
+    @property
+    def dynamic_chars(self) -> int:
+        return len(self.dynamic_text)
+
+    @property
+    def cache_control_block_index(self) -> int:
+        return max(
+            (index for index, block in enumerate(self.stable_system_blocks)
+             if block.text),
+            default=-1,
+        )
+
+    def as_record(self) -> Dict[str, object]:
+        return {
+            "stable_system_blocks": [
+                block.as_record() for block in self.stable_system_blocks],
+            "dynamic_system_blocks": [
+                block.as_record() for block in self.dynamic_system_blocks],
+            "stable_hash": self.stable_hash,
+            "dynamic_hash": self.dynamic_hash,
+            "stable_chars": self.stable_chars,
+            "dynamic_chars": self.dynamic_chars,
+            "cache_control_boundary": self.cache_control_boundary,
+            "cache_control_block_index": self.cache_control_block_index,
+        }
 
 
 @dataclass(frozen=True)
@@ -138,6 +268,11 @@ class PreparedLLMRequest:
     cache_segments: Tuple[CacheSegmentSnapshot, ...] = ()
     stable_cache_chars: int = 0
     stable_cache_hash: str = ""
+    dynamic_cache_chars: int = 0
+    dynamic_cache_hash: str = ""
+    stable_system_block_count: int = 0
+    dynamic_system_block_count: int = 0
+    cache_control_boundary: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
@@ -209,6 +344,9 @@ def prepare_http_request(
     cache_segments: Sequence[CacheSegmentSnapshot] = (),
     stable_cache_chars: int = 0,
     stable_cache_hash: str = "",
+    dynamic_cache_chars: int = 0,
+    dynamic_cache_hash: str = "",
+    system_prompt_blocks: Optional[SystemPromptBlocks] = None,
 ) -> PreparedLLMRequest:
     """Convert a provider's built HTTP request into the public prepared contract."""
     body = request.get("body")
@@ -216,6 +354,16 @@ def prepare_http_request(
         raise TypeError("provider request body 必须是 bytes")
     body_bytes = bytes(body)
     text = body_bytes.decode("utf-8", "replace")
+    stable_cache_chars = max(
+        0,
+        int(stable_cache_chars or (
+            system_prompt_blocks.stable_chars
+            if system_prompt_blocks is not None else 0)),
+    )
+    stable_cache_hash = (
+        stable_cache_hash
+        or (system_prompt_blocks.stable_hash
+            if system_prompt_blocks is not None else ""))
     return PreparedLLMRequest(
         provider=provider,
         model=model,
@@ -227,8 +375,27 @@ def prepare_http_request(
         output_limit_tokens=max(0, int(output_limit_tokens or 0)),
         cache_mode=cache_mode,
         cache_segments=tuple(cache_segments),
-        stable_cache_chars=max(0, int(stable_cache_chars or 0)),
+        stable_cache_chars=stable_cache_chars,
         stable_cache_hash=stable_cache_hash,
+        dynamic_cache_chars=max(
+            0,
+            int(dynamic_cache_chars or (
+                system_prompt_blocks.dynamic_chars
+                if system_prompt_blocks is not None else 0)),
+        ),
+        dynamic_cache_hash=(
+            dynamic_cache_hash
+            or (system_prompt_blocks.dynamic_hash
+                if system_prompt_blocks is not None else "")),
+        stable_system_block_count=(
+            len(system_prompt_blocks.stable_system_blocks)
+            if system_prompt_blocks is not None else 0),
+        dynamic_system_block_count=(
+            len(system_prompt_blocks.dynamic_system_blocks)
+            if system_prompt_blocks is not None else 0),
+        cache_control_boundary=(
+            system_prompt_blocks.cache_control_boundary
+            if system_prompt_blocks is not None else 0),
     )
 
 
@@ -247,25 +414,88 @@ def cache_segment(
         cache_control=cache_control,
     )
 
+def explicit_system_prompt_blocks(
+    messages: Sequence[Message],
+) -> Optional[SystemPromptBlocks]:
+    """Read the explicit block contract carried by a transient system message."""
+    for message in messages:
+        if message.role != "system":
+            continue
+        blocks = (message.provider_meta or {}).get(SYSTEM_PROMPT_BLOCKS_META_KEY)
+        if isinstance(blocks, SystemPromptBlocks):
+            return blocks
+    return None
 
-def stable_system_prefix(messages: Sequence[Message]) -> str:
-    """Return the first explicit stable system prefix in provider-neutral form."""
+
+def resolve_system_prompt_blocks(
+    messages: Sequence[Message],
+    *,
+    cache_all_without_boundary: bool = False,
+) -> Optional[SystemPromptBlocks]:
+    """Return explicit blocks, or derive a legacy stable/dynamic view."""
+    explicit = explicit_system_prompt_blocks(messages)
+    if explicit is not None:
+        return explicit
+
+    parts: List[str] = []
+    boundaries: List[int] = []
+    cursor = 0
     for message in messages:
         if message.role != "system" or not message.content:
             continue
-        boundaries = (message.provider_meta or {}).get(
-            "prompt_cache_boundaries") or []
-        offsets = []
-        for raw in boundaries:
+        if parts:
+            cursor += 2
+        meta = message.provider_meta or {}
+        for raw in meta.get("prompt_cache_boundaries") or []:
             try:
-                offsets.append(int(raw))
+                local = int(raw)
             except (TypeError, ValueError):
                 continue
-        if offsets:
-            end = max(0, min(max(offsets), len(message.content)))
-            if end:
-                return message.content[:end]
-    return ""
+            boundaries.append(
+                cursor + max(0, min(local, len(message.content))))
+        parts.append(message.content)
+        cursor += len(message.content)
+    merged = "\n\n".join(parts)
+    if not merged:
+        return None
+    boundary = max(boundaries) if boundaries else (
+        len(merged) if cache_all_without_boundary else 0)
+    boundary = max(0, min(boundary, len(merged)))
+    stable_text = merged[:boundary]
+    dynamic_text = merged[boundary:]
+    if stable_text and dynamic_text.startswith("\n\n"):
+        # The separator belongs to the stable/dynamic join, not to the
+        # dynamic block itself. SystemPromptBlocks.merged_text restores it.
+        dynamic_text = dynamic_text[2:]
+    stable = (
+        SystemPromptBlock(
+            id="legacy:system:stable",
+            text=stable_text,
+            source="legacy_system",
+            stability="static",
+            cacheable=True,
+        ),
+    ) if stable_text else ()
+    dynamic = (
+        SystemPromptBlock(
+            id="legacy:system:dynamic",
+            text=dynamic_text,
+            source="legacy_system",
+            stability="session",
+            cacheable=False,
+        ),
+    ) if dynamic_text else ()
+    return SystemPromptBlocks(
+        stable_system_blocks=stable,
+        dynamic_system_blocks=dynamic,
+        cache_control_boundary=len(stable_text),
+    )
+
+
+def stable_system_prefix(messages: Sequence[Message]) -> str:
+    """Return the explicit stable system prefix in provider-neutral form."""
+    blocks = resolve_system_prompt_blocks(messages)
+    return blocks.stable_text if blocks is not None else ""
 
 
 async def collect(
