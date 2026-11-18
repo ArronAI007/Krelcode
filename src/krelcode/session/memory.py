@@ -32,7 +32,14 @@ from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
 from ..agent.context import CONTEXT_ENGINE_V3
-from ..agent.fragments import GROUP_RUNTIME, PromptFragment, refresh_registry_snapshot
+from ..agent.fragments import (
+    GROUP_RUNTIME,
+    LAYER_L7_MEMORY,
+    STABILITY_TURN,
+    PromptFragment,
+    TRUST_DATA,
+    refresh_registry_snapshot,
+)
 from ..agent.tokens import estimate_text_tokens
 from ..core.redact import MASK, SecretRedactor
 
@@ -1042,6 +1049,10 @@ class MemoryStore:
                 "entry_ids": [entry.id for entry in selected],
                 "tokens": estimate_text_tokens(content),
             },
+            scope="project",
+            layer=LAYER_L7_MEMORY,
+            stability=STABILITY_TURN,
+            trust=TRUST_DATA,
         )
 
     def token_count(self) -> int:

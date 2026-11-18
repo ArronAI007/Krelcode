@@ -93,6 +93,11 @@ from .fragments import (
 )
 from .intent import TurnIntent, infer_turn_intent
 from .pricing import match_context_window
+from .prompt_assembler import (
+    PromptAssembler,
+    PromptAssemblyRequest,
+    PromptPlan,
+)
 from .streaming_tools import StreamingToolExecutor
 from .tokens import estimate_history_tokens
 from .tool_pool import TurnToolPool
@@ -170,6 +175,7 @@ class AgentLoop:
         tool_output_inline_limit: int = 12_000,
         token_budget: Optional[int] = None,
         context_assembler: Optional[ContextAssembler] = None,
+        prompt_assembler: Optional[PromptAssembler] = None,
         redactor: Optional[SecretRedactor] = None,
         runtime_snapshot_provider: Optional[
             Callable[[RuntimeSnapshot], RuntimeSnapshot]
@@ -235,6 +241,12 @@ class AgentLoop:
                 self.context_assembler.register(RetrievedMemoryContextSource())
         self.context_engine = str(
             getattr(self.context_assembler, "engine", "v3") or "v3")
+        self.prompt_assembler = prompt_assembler or PromptAssembler(
+            self.context_assembler,
+            registry_provider=lambda: getattr(
+                self, "prompt_registry", None),
+        )
+        self.last_prompt_plan: PromptPlan | None = None
         self.last_context_assembly = None
         self.last_context_snapshot = None
         self.previous_context_snapshot = None
@@ -281,6 +293,7 @@ class AgentLoop:
     def reset(self) -> None:
         """清空历史，只保留系统提示词。"""
         self.history = self.history[:1] if self.history and self.history[0].role == "system" else []
+        self.last_prompt_plan = None
         self.last_context_assembly = None
         self.last_context_snapshot = None
         self.previous_context_snapshot = None
@@ -752,7 +765,16 @@ class AgentLoop:
             working_context=self.working_context_store.snapshot(),
             relevant_memory=tuple(self.restored_memory_context),
         )
-        context_assembly = await self.context_assembler.assemble(context_request)
+        prompt_plan = await self.prompt_assembler.assemble(
+            PromptAssemblyRequest(
+                context_request=context_request,
+                prompt_snapshot=getattr(self, "prompt_snapshot", None),
+                tools=tuple(tools or ()),
+            ))
+        context_assembly = prompt_plan.context_assembly
+        if context_assembly is None:
+            raise RuntimeError("PromptAssembler 未产出 ContextAssembly 兼容视图")
+        self.last_prompt_plan = prompt_plan
         working_snapshot = self.working_context_store.snapshot()
         self.last_context_plan = ContextPlanSnapshot.from_assembly(
             context_assembly,
@@ -761,7 +783,9 @@ class AgentLoop:
             step=step,
             working_context_sequence=working_snapshot.sequence,
         )
-        messages = context_assembly.messages_for(self.history)
+        provider_messages = self.prompt_assembler.provider_messages(
+            prompt_plan, tools=tools)
+        messages = list(provider_messages.messages)
         prepared: Optional[PreparedLLMRequest] = None
         prepare = getattr(self.llm, "prepare_request", None)
         stream_prepared = getattr(self.llm, "stream_prepared", None)

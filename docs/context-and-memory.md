@@ -17,8 +17,9 @@ Krelcode 把“本轮模型实际看到的上下文”拆成四个可独立检�
 4. **History / Tool Results**：对话历史与工具结果；超预算时先做 Tool Microcompact，
    仍超限再做 Structured Compact。
 
-最终的 `ContextSource -> ContextAssembler` 装配结果会形成一个真实请求快照。快照只包含
-token 分项、来源 ID、裁剪项、缓存边界和哈希，不包含 Prompt、工具输出或密钥正文。
+最终的 `PromptFragmentRegistry/ContextSource -> PromptAssembler -> PromptPlan ->
+ProviderMessages` 装配结果会形成一个真实请求快照。快照只包含 token 分项、来源 ID、裁剪项、
+缓存边界和哈希，不包含 Prompt、工具输出或密钥正文。
 
 ## 2. 配置
 
@@ -85,7 +86,8 @@ auto_threshold = 0.80
 
 ### `/context plan`
 
-展示最近一次 `ContextAssembler` 的机器可检查计划：stable/full hash、history digest、
+展示最近一次 `PromptAssembler` / `ContextAssembly` 的机器可检查计划：stable/full hash、
+history digest、
 Working Context sequence、layer/source/category 清单与总 token。layer、source 和
 category 列表有数量上限；超大 Context 会显示省略数量，并可用
 `/context why <id>` 定向检查。

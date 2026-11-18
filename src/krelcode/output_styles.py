@@ -17,7 +17,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping, Optional, Sequence
 
-from .agent.fragments import GROUP_SYSTEM, PromptFragment, PromptFragmentRegistry
+from .agent.fragments import (
+    GROUP_SYSTEM,
+    LAYER_L4_AGENT_STYLE,
+    STABILITY_SESSION,
+    PromptFragment,
+    PromptFragmentRegistry,
+    TRUST_PROJECT,
+    TRUST_USER,
+)
 
 MAX_STYLE_BYTES = 64 * 1024
 MAX_STYLE_NAME = 80
@@ -223,6 +231,10 @@ class OutputStyleManager:
                 "scope": style.scope,
                 "path": str(style.path) if style.path else "",
             },
+            scope=style.scope,
+            layer=LAYER_L4_AGENT_STYLE,
+            stability=STABILITY_SESSION,
+            trust=(TRUST_USER if style.scope == "user" else TRUST_PROJECT),
         )
 
     def status_lines(self) -> tuple[str, ...]:

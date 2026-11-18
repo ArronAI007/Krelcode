@@ -218,6 +218,36 @@ class PromptSnapshotContextSource:
         ),)
 
 
+def select_prompt_fragments(
+    snapshot: PromptSnapshot,
+    request: ContextRequest,
+) -> Tuple[Tuple[PromptFragment, ...], Tuple[str, ...], str]:
+    """Apply v3 trust/scope filtering without duplicating registry rendering."""
+    omitted: list[str] = []
+    selected: list[PromptFragment] = []
+    for fragment in snapshot.fragments:
+        if fragment.source == "memory" or fragment.id.startswith("memory:"):
+            omitted.append(fragment.id)
+            continue
+        if (
+            request.intent is not None
+            and request.intent.is_file_explanation
+            and fragment.id in {"workspace:git", "workspace:tree"}
+        ):
+            omitted.append(fragment.id)
+            continue
+        selected.append(fragment)
+    scope_filter = ""
+    if omitted:
+        scope_filter = (
+            "file_explanation"
+            if request.intent is not None
+            and request.intent.is_file_explanation
+            else "trust_separation"
+        )
+    return tuple(selected), tuple(omitted), scope_filter
+
+
 class V3PromptSnapshotContextSource(PromptSnapshotContextSource):
     """Render the prompt registry with v3 trust and intent boundaries.
 
@@ -232,20 +262,8 @@ class V3PromptSnapshotContextSource(PromptSnapshotContextSource):
         if snapshot is None:
             return super().collect(request)
 
-        omitted: list[str] = []
-        selected: list[PromptFragment] = []
-        for fragment in snapshot.fragments:
-            if fragment.source == "memory" or fragment.id.startswith("memory:"):
-                omitted.append(fragment.id)
-                continue
-            if (
-                request.intent is not None
-                and request.intent.is_file_explanation
-                and fragment.id in {"workspace:git", "workspace:tree"}
-            ):
-                omitted.append(fragment.id)
-                continue
-            selected.append(fragment)
+        selected, omitted, scope_filter = select_prompt_fragments(
+            snapshot, request)
         effective = (
             snapshot if len(selected) == len(snapshot.fragments)
             else PromptFragmentRegistry(selected).snapshot()
@@ -258,12 +276,7 @@ class V3PromptSnapshotContextSource(PromptSnapshotContextSource):
         }
         if omitted:
             metadata["excluded_fragments"] = tuple(omitted)
-            metadata["scope_filter"] = (
-                "file_explanation"
-                if request.intent is not None
-                and request.intent.is_file_explanation
-                else "trust_separation"
-            )
+            metadata["scope_filter"] = scope_filter
         if request.intent is not None and request.intent.is_file_explanation:
             metadata["intent"] = request.intent.mode
             metadata["targets"] = request.intent.labels(request.workspace_root)

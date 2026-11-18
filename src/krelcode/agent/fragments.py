@@ -1,8 +1,8 @@
 """Prompt/Context Fragment Registry。
 
-Registry 是 system prompt 的唯一组装点：fragment 带来源、作用域、稳定排序、
-手动启停和缓存属性。稳定 fragment 永远排在动态 fragment 前面，快照暴露
-稳定前缀结束位置，Provider 可据此建立真实 prompt-cache 断点。
+Registry 统一登记带来源、作用域、层级、稳定性和信任级别的 fragment，并负责
+手动启停与兼容快照。请求级最终排序和消息生成由 PromptAssembler 独占；
+快照仍暴露稳定前缀结束位置，供旧路径和观测逻辑兼容使用。
 """
 
 from __future__ import annotations
@@ -21,6 +21,69 @@ GROUP_WORKSPACE = "workspace_context"
 GROUP_RUNTIME = "runtime"
 GROUP_ORDER = (GROUP_SYSTEM, GROUP_WORKSPACE, GROUP_RUNTIME)
 
+STABILITY_STATIC = "static"
+STABILITY_SESSION = "session"
+STABILITY_TURN = "turn"
+PROMPT_STABILITY_LEVELS = (
+    STABILITY_STATIC,
+    STABILITY_SESSION,
+    STABILITY_TURN,
+)
+STABILITY_ORDER = {
+    STABILITY_STATIC: 0,
+    STABILITY_SESSION: 1,
+    STABILITY_TURN: 2,
+}
+
+TRUST_MANAGED = "managed"
+TRUST_USER = "user"
+TRUST_PROJECT = "project"
+TRUST_DATA = "data"
+TRUST_UNTRUSTED = "untrusted"
+PROMPT_TRUST_LEVELS = (
+    TRUST_MANAGED,
+    TRUST_USER,
+    TRUST_PROJECT,
+    TRUST_DATA,
+    TRUST_UNTRUSTED,
+)
+
+LAYER_L0_MANAGED_POLICY = "L0_MANAGED_POLICY"
+LAYER_L1_BASE_AGENT = "L1_BASE_AGENT_PROMPT"
+LAYER_L2_USER_GLOBAL = "L2_USER_GLOBAL_INSTRUCTIONS"
+LAYER_L3_PROJECT_RULES = "L3_PROJECT_DIRECTORY_RULES"
+LAYER_L4_AGENT_STYLE = "L4_AGENT_PERSONA_OUTPUT_STYLE"
+LAYER_L5_MODE_CONTRACT = "L5_MODE_PERMISSION_TOOL_CONTRACT"
+LAYER_L6_CATALOG = "L6_SKILL_AGENT_MCP_CATALOG"
+LAYER_L7_MEMORY = "L7_MEMORY_EVIDENCE"
+LAYER_L8_ENVIRONMENT = "L8_ENVIRONMENT_DATE_SESSION"
+LAYER_L9_WORKING = "L9_PLAN_WORKING_CONTEXT"
+LAYER_L10_HISTORY = "L10_RECENT_RETRIEVED_HISTORY"
+LAYER_L11_USER_REQUEST = "L11_CURRENT_USER_REQUEST"
+LAYER_L12_REMINDER = "L12_PER_TURN_REMINDER"
+PROMPT_LAYERS = (
+    LAYER_L0_MANAGED_POLICY,
+    LAYER_L1_BASE_AGENT,
+    LAYER_L2_USER_GLOBAL,
+    LAYER_L3_PROJECT_RULES,
+    LAYER_L4_AGENT_STYLE,
+    LAYER_L5_MODE_CONTRACT,
+    LAYER_L6_CATALOG,
+    LAYER_L7_MEMORY,
+    LAYER_L8_ENVIRONMENT,
+    LAYER_L9_WORKING,
+    LAYER_L10_HISTORY,
+    LAYER_L11_USER_REQUEST,
+    LAYER_L12_REMINDER,
+)
+LAYER_ORDER = {layer: index for index, layer in enumerate(PROMPT_LAYERS)}
+SYSTEM_PROMPT_LAYERS = frozenset(PROMPT_LAYERS[:10])
+TURN_ONLY_LAYERS = frozenset((
+    LAYER_L10_HISTORY,
+    LAYER_L11_USER_REQUEST,
+    LAYER_L12_REMINDER,
+))
+
 WORKSPACE_OPEN = "<workspace_context>"
 WORKSPACE_CLOSE = "</workspace_context>"
 
@@ -37,6 +100,23 @@ class PromptFragment:
     compactable: bool = True
     toggleable: bool = True
     metadata: Mapping[str, object] = field(default_factory=dict)
+    scope: str = "core"
+    layer: str = LAYER_L1_BASE_AGENT
+    stability: str = ""
+    trust: str = TRUST_MANAGED
+
+    def __post_init__(self) -> None:
+        if not self.stability:
+            object.__setattr__(
+                self, "stability",
+                STABILITY_STATIC if self.cacheable else STABILITY_SESSION,
+            )
+        if self.stability == STABILITY_TURN and self.cacheable:
+            raise ValueError(
+                f"turn fragment 不允许进入稳定缓存前缀: {self.id}")
+        if self.trust == TRUST_UNTRUSTED and self.cacheable:
+            raise ValueError(
+                f"untrusted fragment 不允许 cacheable: {self.id}")
 
     @property
     def tokens(self) -> int:
@@ -113,6 +193,31 @@ def _validate_fragment(fragment: PromptFragment) -> None:
         raise ValueError("fragment 必须包含非空 id/source")
     if fragment.group not in GROUP_ORDER:
         raise ValueError(f"未知 fragment group: {fragment.group}")
+    if not fragment.scope:
+        raise ValueError(f"fragment 必须包含非空 scope: {fragment.id}")
+    if fragment.layer not in LAYER_ORDER:
+        raise ValueError(f"未知 fragment layer: {fragment.layer}")
+    if fragment.stability not in PROMPT_STABILITY_LEVELS:
+        raise ValueError(f"未知 fragment stability: {fragment.stability}")
+    if fragment.trust not in PROMPT_TRUST_LEVELS:
+        raise ValueError(f"未知 fragment trust: {fragment.trust}")
+    if fragment.layer in TURN_ONLY_LAYERS and fragment.stability != STABILITY_TURN:
+        raise ValueError(
+            f"{fragment.layer} 只能承载 turn fragment: {fragment.id}")
+    if (
+        fragment.layer in {
+            LAYER_L0_MANAGED_POLICY,
+            LAYER_L1_BASE_AGENT,
+            LAYER_L2_USER_GLOBAL,
+            LAYER_L3_PROJECT_RULES,
+            LAYER_L4_AGENT_STYLE,
+            LAYER_L5_MODE_CONTRACT,
+            LAYER_L6_CATALOG,
+        }
+        and fragment.stability == STABILITY_TURN
+    ):
+        raise ValueError(
+            f"turn fragment 不能进入稳定/会话层 {fragment.layer}: {fragment.id}")
 
 
 class PromptFragmentRegistry:
@@ -324,6 +429,10 @@ def base_fragment() -> PromptFragment:
         cacheable=True,
         compactable=False,
         toggleable=False,
+        scope="managed",
+        layer=LAYER_L1_BASE_AGENT,
+        stability=STABILITY_STATIC,
+        trust=TRUST_MANAGED,
     )
 
 
@@ -339,6 +448,10 @@ def skills_fragment(index: str) -> Optional[PromptFragment]:
         priority=20,
         cacheable=True,
         compactable=False,
+        scope="project",
+        layer=LAYER_L6_CATALOG,
+        stability=STABILITY_SESSION,
+        trust=TRUST_PROJECT,
     )
 
 
@@ -362,6 +475,10 @@ def _workspace_fragment(section: ContextSection) -> PromptFragment:
         cacheable=cacheable,
         compactable=True,
         metadata={"original_source": section.source},
+        scope="project",
+        layer=(LAYER_L3_PROJECT_RULES if cacheable else LAYER_L8_ENVIRONMENT),
+        stability=(STABILITY_SESSION if cacheable else STABILITY_TURN),
+        trust=(TRUST_PROJECT if cacheable else TRUST_DATA),
     )
 
 

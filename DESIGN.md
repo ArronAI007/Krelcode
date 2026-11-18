@@ -260,8 +260,9 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
 
 ```text
 persistent history
-  → ContextAssembler (system layers + cache boundary)
-  → messages_for(history)
+  → PromptAssembler (PromptFragmentRegistry + ContextSources)
+      → PromptPlan (fixed L0-L12 order + cache boundary)
+      → ProviderMessages (system + exact history + tools)
   → provider.prepare_request(messages, tool_specs)   # optional, assemble once
       ├─ opaque HTTP request {url, headers, body}
       ├─ body bytes / token estimate / SHA-256
@@ -304,7 +305,8 @@ WorkingContextStore (session-scoped, not memory)
   ├─ record_tool_result(ToolCall, ToolResult.data)
   └─ snapshot() → max entries/chars/tokens, redacted, grouped XML-like text
         ↓ volatile runtime layer (cacheable=false, priority < tool directory)
-ContextAssembler → provider-bound system message
+PromptAssembler → PromptPlan → ProviderMessages
+                         └─ ContextAssembly（/context 兼容归因视图）
 ```
 
 - `WorkingContextStore` 生命周期属于当前 session；`/reset` 清空，`/resume`、
@@ -882,9 +884,9 @@ running ──pause()──> paused ──resume()──> running
 
 ## Prompt/Context Fragment Registry（Step 82）
 
-system prompt 不再由 App、Skill 热重载和 `/context refresh` 各自拼接，而是统一经过
-`agent/fragments.py`。Registry 是唯一组装点，负责来源、稳定排序、手动启停、快照版本
-和缓存边界；AgentLoop 只消费最终文本与不透明的 `provider_meta`。
+system prompt 不再由 App、Skill 热重载和 `/context refresh` 各自拼接。
+`agent/fragments.py` 负责来源登记、作用域、手动启停与快照版本；请求级最终分层和消息生成
+由 `agent/prompt_assembler.py` 独占，AgentLoop 只消费 `PromptPlan` 与 `ProviderMessages`。
 
 ```
 Fragment sources
@@ -900,12 +902,17 @@ Fragment sources
                 ├─ atomic group/source replacement
                 └─ PromptSnapshot {text, generation, stable/full SHA-256}
                          │
-             ┌───────────┴────────────┐
-             ▼                        ▼
-    history[0] system msg      provider_meta cache offset
+                         │
+                         ▼
+                  PromptAssembler
+                ├─ fixed L0-L12 order
+                ├─ stability/trust validation
+                ├─ PromptPlan + cache boundary
+                └─ ProviderMessages
 ```
 
-- Fragment 有 `id/source/title/group/priority/cacheable/compactable/toggleable`。
+- Fragment 有 `id/source/scope/layer/priority/content/stability/trust/cacheable/
+  compactable/toggleable`；旧构造参数仍保持兼容。
   `core:base` 为不可关闭安全底座；其他内置 Fragment 均可按精确 id 或 source 启停，
   精确 id 覆盖 source 级设置，`/context reset` 清除运行时 overrides。
 - cacheable Fragment 被渲染为全局连续前缀，即使以后注册动态 system Fragment，也不会
@@ -997,22 +1004,42 @@ AgentLoop._llm_turn(step)
 - Step 84 只增加观测基线，不改变真实 Prompt 内容、工具 schema、预算判断或 compact
   行为；`/context` 在尚无快照时保持旧版估算输出兼容。
 
+## PromptAssembler 与固定 Prompt 层级（P0）
+
+```text
+PromptFragmentRegistry + ContextSources
+  → PromptAssembler.assemble()
+      → PromptPlan
+      → ProviderMessages
+```
+
+`PromptFragment` 统一携带 `id/source/scope/layer/priority/content/stability/trust/cacheable/compactable`。
+固定层级为 L0 Managed Policy、L1 Base Agent Prompt、L2 User Global Instructions、L3 Project/Directory
+Rules、L4 Persona/Output Style、L5 Mode/Permission/Tool Contract、L6 Skill/Agent/MCP Catalog、
+L7 Memory Evidence、L8 Environment/Date/Session、L9 Plan/Working Context、L10 Recent/Retrieved
+History、L11 Current User Request、L12 Per-turn Reminder。
+
+- L0-L9（以及动态 L12 reminder）进入 system；L10/L11 由权威历史消息承载，不会复制进 system。
+- 排序键固定为 layer → static/session/turn → priority → source/id；L0-L6 拒绝 turn fragment。
+- `turn`、`data`、`untrusted` fragment 不得 `cacheable`；稳定断点只允许覆盖连续 cacheable 前缀。
+- 当前 user 消息只出现一次，tool result 永远留在 history，不进入 system 或稳定前缀。
+- `ProviderMessages` 是 Provider 的唯一输入；`ContextAssembly` 仅作为 `/context`、Resume 与
+  checkpoint 的无正文兼容视图。
+
 ## ContextSource 与 ContextAssembler（Step 85）
 
 临时 system context 的唯一组装边界从 AgentLoop 移到可注册来源集合：
 
 ```
-AgentLoop._llm_turn(step)
-  ├─ ContextRequest
+AgentLoop._build_llm_request(step)
+  ├─ PromptAssemblyRequest
   │    history + workspace_root + PromptSnapshot + TurnToolPool
   │    + TurnIntent + runtime hook context
-  ├─ ContextAssembler.assemble()
-  │    ├─ 依次 collect；同步返回值或 awaitable 均可
-  │    ├─ 隔离 source exception / invalid layer / duplicate id
-  │    ├─ 分类 → priority → 注册顺序 → layer 顺序稳定排序
-  │    ├─ 拼接文本并重算 cache boundary + stable/full SHA-256
-  │    └─ ContextAssembly
-  ├─ messages_for(history)：只替换 provider-bound system message
+  ├─ PromptAssembler.assemble()
+  │    ├─ PromptFragmentRegistry：L0-L9 固定层级
+  │    ├─ ContextAssembler：动态 ContextSource 收集与失败隔离
+  │    ├─ PromptPlan：L0-L12 排序、稳定断点、stable/full SHA-256
+  │    └─ ProviderMessages：system + exact history + tools
   └─ ContextUsageSnapshot → emit ContextAssembled → provider.stream
 ```
 
@@ -1023,15 +1050,16 @@ AgentLoop._llm_turn(step)
 - `ContextLayer` 是装配单位，携带稳定 `id/source/category/content/priority`、cache 属性与
   token attribution。四个类别固定为 `system → workspace → memory → runtime`；同分类先按
   priority，再按来源注册顺序和来源内 layer 顺序，结果不依赖集合遍历或异步完成时序。
-- `ContextAssembler` 是唯一把 layer 变成 system 文本的组件。空 layer 忽略；重复 ID、
-  非法 category/metadata/token attribution 被拒绝并记入有界 issue；可选来源抛出异常时只保留
-  异常类型，不保留可能含敏感值的 message，也不会中断其它来源。
+- `ContextAssembler` 负责征集 ContextSource、稳定排序与来源归因；`PromptAssembler` 是唯一
+  请求级 Prompt/Message 装配入口。空 layer 忽略；重复 ID、非法 category/metadata/token
+  attribution 被拒绝并记入有界 issue；可选来源抛出异常时只保留异常类型，不保留可能含敏感
+  值的 message，也不会中断其它来源。
 - `ContextAssembly` 包含最终文本、有序 layer、cache 边界/hash、token attribution、source/
   fragment 计数、issue 和 provider metadata；`stable_prefix_chars` 必须位于所有动态 layer
   之前，Anthropic block cache 与观测快照复用同一值。
-- `messages_for()` 返回浅拷贝消息列表并替换首个 system message；持久 history 中的原始
-  system message 不变。这样每 Step 的 tool directory、intent 和 Hook context 可以变化，
-  turn 历史仍保持可恢复、可 fork。
+- `ContextAssembly.messages_for()` 仅保留为兼容工具；生产请求统一由
+  `PromptAssembler.provider_messages()` 生成。它返回新消息序列且不修改持久 history，因此每
+  Step 的 tool directory、intent 和 Hook context 可以变化，turn 历史仍可恢复、可 fork。
 
 默认来源与职责：
 
@@ -1051,7 +1079,8 @@ layer 正文。`ContextUsageSnapshot.source_count` 只统计实际贡献了非�
 
 ## Context v3 安全边界与默认切换（Step 94）
 
-Context v3 保留 ContextAssembler 为唯一装配入口，同时把“来源”和“信任”拆开：
+Context v3 以 `PromptAssembler` 为唯一请求级装配入口，`ContextAssembler` 保留为来源收集与
+`ContextAssembly` 兼容归因层，同时把“来源”和“信任”拆开：
 
 - `[context].engine` 默认 `v3`；`legacy`（别名 `v2`）只保留一个发布周期用于回退，
   未知值 fail-safe 回落 v3。engine 写入 `ContextAssembly`、`ContextPlanSnapshot` 和
