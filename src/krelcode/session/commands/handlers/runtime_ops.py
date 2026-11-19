@@ -868,6 +868,10 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         inspection = ContextInspectionService(ctx.loop)
         return _ok(*inspection.why_lines(parts[1]))
 
+    if operation == "ledger" and len(parts) == 1:
+        inspection = ContextInspectionService(ctx.loop)
+        return _ok(*inspection.ledger_lines())
+
     if operation == "refresh" and len(parts) == 1:
         manager = ctx.skills or getattr(ctx.loop, "skill_manager", None)
         if manager is not None and getattr(ctx.loop, "skill_manager", None) is None:
@@ -1104,7 +1108,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             "  用法: /context | /context fragments [source] | "
             "/context attachments | "
             "/context sources | /context rules | "
-            "/context plan | /context why <id> | "
+            "/context plan | /context why <id> | /context ledger | "
             "/context enable|disable|toggle <id|source> | "
             "/context reset | /context cache | /context refresh")
 

@@ -152,6 +152,7 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
                   "ContextSource 装配诊断；/context rules 查看分层规则与 @import；"
                   "/context attachments 查看动态附件 revision；"
                   "/context plan 查看最近请求计划；/context why <id> 解释来源；"
+                  "/context ledger 查看统一请求/缓存身份与 cache miss 原因；"
                   "/context fragments [source] 查看来源；\n"
                   "/context enable|disable|toggle <id|source> 手动启停；"
                   "/context reset 清除启停设置；/context cache 查看缓存边界；\n"

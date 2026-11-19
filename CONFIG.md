@@ -88,6 +88,7 @@ krelcode [子命令] [选项]
 | `/context enable\|disable\|toggle <id\|source>` | 手动启停单个 Fragment 或整个来源；精确 id 设置优先于 source 设置 |
 | `/context reset` | 清除当前会话的全部手动启停设置 |
 | `/context cache` | 显示稳定前缀字符/token 数、稳定/动态 Fragment、stable/dynamic/full hash、工具目录 hash、与上一请求相比的 hash/flag/token 差值及 cache segment 归因 |
+| `/context ledger` | 显示统一请求身份、instruction/evidence/tool/attachment/working/compact/memory/history/wire hash、完整请求 hash、cache miss 原因、Resume invalidation 与子代理指令继承状态 |
 | `/context refresh` | 重采目录树/git/规则文件；规则变化才更新稳定 Fragment，环境变化只替换对应 snapshot/delta attachment |
 | `/memory` · `/memory list [scope]` | 列出全部或指定 user/project/session 作用域记忆及 ID、类型和内容 |
 | `/memory scopes` | 显示各作用域条数与存储路径 |

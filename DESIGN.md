@@ -1726,3 +1726,22 @@ L7 inherited-memory fragment 也注册到子代理自己的 `PromptFragmentRegis
 Fragment 计划和 omission/diff，`/context why <id>` 可定位 Fragment、Memory entry、Context
 layer 或裁剪项，`/context cache` 展示工具目录 hash 与跨请求变化。所有观测记录只保留
 来源、计数和哈希，不包含 Prompt、工具 description/schema、history、Memory 或附件正文。
+
+## Context / Cache Ledger（Step 104）
+
+每个最终 Provider 请求由唯一的 `ContextCacheLedger` 收口。它只在 microcompact/compact 后的
+最终重装配完成、且 `PreparedLLMRequest` 已确定后生成，避免把中间压缩探测误记成实际请求。
+Ledger 聚合 stable/dynamic/instruction/evidence hash、tool catalog hash、attachment
+generation/revision semantic identity、compact checkpoint、Working Context sequence、Memory
+evidence IDs、history digest、Provider payload digest 与 `complete_request_hash`，并通过
+`compared_with(previous)` 产生 machine-readable cache-miss reasons。
+
+`ContextPlanSnapshot.cache_ledger` 随 Context checkpoint 持久化；Resume 保留原 request identity，
+同时记录 `workspace-refresh`、文件 hash、Memory 选择或 Working Context 等 invalidation。
+Subagent sidechain 持久化 child Ledger，并以 managed/user/project/directory 与 Agent Definition
+Fragment 计算 `policy_instruction_hash`，再与父请求比较 `match/mismatch/not-applicable`；
+父级完整 history、Evidence 正文和 sidechain 都不会因该诊断泄漏或自动注入。
+
+`context_assembled` 的 JSONL/stream-json 记录同时携带 Ledger。`/context ledger` 是完整诊断入口，
+`/context cache` 提供摘要。所有字段均为 hash、ID、revision、sequence 或布尔值，不保存 Prompt、
+消息、工具 Schema、Memory 与请求体正文。

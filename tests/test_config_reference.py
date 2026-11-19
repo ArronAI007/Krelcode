@@ -38,7 +38,8 @@ def test_repl_commands_documented():
                     "/resume", "/mcp", "/agents", "/skills", "/skill",
                     "/undo", "/model", "/allow", "/permissions", "/cost",
                     "/context", "/context plan", "/context why",
-                    "/context sources", "/context cache", "/context refresh",
+                    "/context sources", "/context cache", "/context ledger",
+                    "/context refresh",
                     "/compact", "/export", "/reset", "/stop", "/exit",
                     "/thinking", "/tool-output", "/plugins", "/fork",
                     "/rewind", "/rename", "/delete", "/memory",
@@ -52,7 +53,8 @@ def test_context_memory_guide_covers_config_storage_commands_and_events():
     text = (ROOT / "docs" / "context-and-memory.md").read_text(encoding="utf-8")
     for required in (
         "[context]", "[memory]", "/context plan", "/context why",
-        "/context sources", "/context cache", "/context refresh",
+        "/context sources", "/context cache", "/context ledger",
+        "/context refresh",
         "/memory list", "/memory show", "/memory add", "/memory search",
         "/memory pin", "/memory forget", "/memory review", "/memory migrate",
         "/compact", "entries.jsonl", "candidates.jsonl", "backup",

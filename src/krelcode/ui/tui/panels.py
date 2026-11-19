@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from typing import Iterable, Mapping, Optional
 
 from ...session.state import SessionPhase, SessionViewState
 from .model import Panel, PanelItem
@@ -187,6 +187,29 @@ def build_panels(
                 f" · {memory_tokens} tokens",
             ),
         )
+    ledger = state.context_cache_ledger
+    if isinstance(ledger, Mapping):
+        diff = ledger.get("diff")
+        reasons = (
+            diff.get("reasons", ())
+            if isinstance(diff, Mapping) else ()
+        )
+        complete_hash = str(ledger.get("complete_request_hash", "") or "")
+        inheritance = str(ledger.get("instruction_inheritance", "") or "")
+        detail = (
+            f"complete {(complete_hash or 'unknown')[:12]}"
+            f" · miss {', '.join(str(item) for item in reasons) or 'none'}"
+        )
+        if inheritance and inheritance != "not-applicable":
+            detail += f" · inherit {inheritance}"
+        context_items += (PanelItem(
+            "context-ledger",
+            (
+                "ledger · "
+                f"{str(ledger.get('wire_fidelity', '') or 'estimated')}"
+            ),
+            detail,
+        ),)
     if state.context_dropped_items:
         dropped = state.context_dropped_items
         preview = ", ".join(dropped[:3])

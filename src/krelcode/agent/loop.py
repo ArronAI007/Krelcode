@@ -89,6 +89,7 @@ from .attachments import (
 )
 from .context import build_workspace_context_bundle
 from .context_assembler import ContextAssembler
+from .context_cache_ledger import ContextCacheLedger
 from .context_plan import ContextPlanSnapshot, history_digest
 from .prompt_plan import PromptPlanSnapshot
 from .context_source import (
@@ -267,6 +268,10 @@ class AgentLoop:
         self.last_context_snapshot = None
         self.previous_context_snapshot = None
         self.last_context_plan: ContextPlanSnapshot | None = None
+        self.last_context_cache_ledger: ContextCacheLedger | None = None
+        self.previous_context_cache_ledger: ContextCacheLedger | None = None
+        self.cache_ledger_owner = "main"
+        self.parent_policy_instruction_hash = ""
         self.last_context_restore = None
         self.context_integrity = None
         self.context_workspace_fingerprint = None
@@ -317,6 +322,8 @@ class AgentLoop:
         self.last_context_assembly = None
         self.last_context_snapshot = None
         self.previous_context_snapshot = None
+        self.last_context_cache_ledger = None
+        self.previous_context_cache_ledger = None
         self.last_microcompact_report = None
         self.last_compact_checkpoint = None
         self.context_attachments.clear()
@@ -943,6 +950,35 @@ class AgentLoop:
             prepared = prepare(messages, tools)
         return messages, context_assembly, prepared
 
+    def _finalize_context_cache_ledger(self, context_snapshot):
+        """Bind the final, actually-sent request to one content-free ledger."""
+        context_plan = self.last_context_plan
+        if context_plan is None:
+            return None
+        prompt_plan = context_plan.prompt_plan
+        previous = self.last_context_cache_ledger
+        current = ContextCacheLedger.from_components(
+            prompt_plan=prompt_plan,
+            attachment_snapshot=self.context_attachments.snapshot(),
+            compact_checkpoint_id=str(getattr(
+                self.last_compact_checkpoint, "id", "") or ""),
+            working_context_sequence=context_plan.working_context_sequence,
+            provider=(
+                context_snapshot.provider
+                or str(getattr(self.llm, "name", "") or "")),
+            model=str(getattr(self.llm, "model", "") or ""),
+            provider_request_digest=context_snapshot.request_digest,
+            wire_fidelity=context_snapshot.wire_fidelity,
+            owner=getattr(self, "cache_ledger_owner", "main"),
+            parent_policy_instruction_hash=getattr(
+                self, "parent_policy_instruction_hash", ""),
+        ).compared_with(previous)
+        self.previous_context_cache_ledger = previous
+        self.last_context_cache_ledger = current
+        self.last_context_plan = replace(
+            context_plan, cache_ledger=current)
+        return current
+
     def _request_snapshot(
         self,
         *,
@@ -1016,7 +1052,11 @@ class AgentLoop:
         self.previous_context_snapshot = self.last_context_snapshot
         self.last_context_assembly = context_assembly
         self.last_context_snapshot = context_snapshot
-        await self._emit(ContextAssembled(context_snapshot))
+        ledger = self._finalize_context_cache_ledger(context_snapshot)
+        await self._emit(ContextAssembled(
+            context_snapshot,
+            ledger=ledger.as_dict() if ledger is not None else None,
+        ))
         if context_snapshot.dropped_items:
             await self._emit(ContextDropped(
                 items=tuple(context_snapshot.dropped_items),

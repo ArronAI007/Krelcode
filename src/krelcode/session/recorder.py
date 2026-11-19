@@ -200,11 +200,14 @@ class SessionRecorder:
                     "agent_id": event.agent_id, "status": event.status,
                     "preview": event.preview}
         if isinstance(event, ContextAssembled):
-            return {
+            record = {
                 "type": "context_assembled",
                 "ts": ts,
                 **event.snapshot.as_record(),
             }
+            if event.ledger is not None:
+                record["cache_ledger"] = dict(event.ledger)
+            return record
         if isinstance(event, ContextDropped):
             return {
                 "type": "context_dropped",

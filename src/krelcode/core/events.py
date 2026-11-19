@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Dict, List, Optional, Tuple, Union
+from typing import (
+    Awaitable, Callable, Dict, List, Mapping, Optional, Tuple, Union,
+)
 
 from .context_usage import ContextUsageSnapshot
 from .messages import Message, ToolCall, ToolResultBlock
@@ -185,6 +187,7 @@ class ContextAssembled(AgentEvent):
     快照只包含 token 分项、缓存边界和哈希，不携带 Prompt 正文。
     """
     snapshot: ContextUsageSnapshot
+    ledger: Optional[Mapping[str, object]] = None
 
 
 @dataclass(frozen=True)

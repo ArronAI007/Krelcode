@@ -212,6 +212,8 @@ class StreamJsonEncoder:
                 "event": "context_assembled",
                 "snapshot": event.snapshot.as_record(),
             }
+            if event.ledger is not None:
+                payload["ledger"] = dict(event.ledger)
         elif isinstance(event, ContextDropped):
             payload = {
                 "type": "context",

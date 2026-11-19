@@ -14,6 +14,7 @@ from dataclasses import dataclass, field, replace
 from typing import Iterable, Mapping, Sequence
 
 from ..core.messages import Message
+from .context_cache_ledger import ContextCacheLedger
 from .prompt_plan import PromptPlanSnapshot
 
 
@@ -72,6 +73,7 @@ class ContextPlanSnapshot:
     created_at: float = 0.0
     restored_from: str = ""
     prompt_plan: PromptPlanSnapshot = field(default_factory=PromptPlanSnapshot)
+    cache_ledger: ContextCacheLedger = field(default_factory=ContextCacheLedger)
 
     @classmethod
     def from_assembly(
@@ -127,7 +129,12 @@ class ContextPlanSnapshot:
         checkpoint_id: str,
         *,
         working_context_sequence: int | None = None,
+        invalidations: Sequence[str] = (),
     ) -> "ContextPlanSnapshot":
+        ledger = self.cache_ledger
+        if ledger.complete_request_hash:
+            ledger = ledger.restored(
+                checkpoint_id, invalidations=invalidations)
         return replace(
             self,
             history_digest=history_digest(history),
@@ -137,6 +144,7 @@ class ContextPlanSnapshot:
                 if working_context_sequence is not None
                 else self.working_context_sequence
             ),
+            cache_ledger=ledger,
         )
 
     def as_dict(self) -> dict:
@@ -157,6 +165,7 @@ class ContextPlanSnapshot:
             "created_at": self.created_at,
             "restored_from": self.restored_from,
             "prompt_plan": self.prompt_plan.as_dict(),
+            "cache_ledger": self.cache_ledger.as_dict(),
         }
 
     @classmethod
@@ -195,6 +204,10 @@ class ContextPlanSnapshot:
             prompt_plan=PromptPlanSnapshot.from_dict(
                 raw.get("prompt_plan")
                 if isinstance(raw.get("prompt_plan"), Mapping)
+                else None),
+            cache_ledger=ContextCacheLedger.from_dict(
+                raw.get("cache_ledger")
+                if isinstance(raw.get("cache_ledger"), Mapping)
                 else None),
         )
 

@@ -714,6 +714,9 @@ async def build_loop(
     loop.redactor = redactor
     # fork_context 数据源：getter 形式，/resume 重绑定 loop.history 后依然正确
     manager.get_parent_history = lambda: loop.history
+    # Subagent instruction inheritance compares rule/policy hashes from the
+    # parent's latest real request; history remains intentionally separate.
+    manager.cache_ledger_provider = lambda: loop.last_context_cache_ledger
     loop.skill_manager = skill_manager
     loop.plugin_manager = plugin_manager
     loop.custom_command_manager = custom_commands

@@ -116,6 +116,7 @@ auto_threshold = 0.80
 /context sources
 /context attachments
 /context cache
+/context ledger
 /context refresh
 ```
 
@@ -172,6 +173,25 @@ token/字符/哈希。Anthropic 的断点位于最后一个 stable block；OpenA
 system message，不会丢失这组边界元数据。`/context cache` 从最近 `PromptPlan` 列出包含
 attachment 在内的 stable/volatile Fragment；`/context attachments` 则列出动态附件的 kind、
 revision、generation、layer 与 token，均不输出正文。
+
+### `/context ledger`
+
+`ledger` 把一个真实 Provider 请求的分散身份合并成同一条内容无关记录：
+
+- `stable_hash`、`dynamic_hash`、`instruction_hash`、`evidence_hash`；
+- `tool_catalog_hash`、attachment generation/revision 和 semantic 指纹；
+- compact checkpoint、Working Context sequence、Memory evidence IDs；
+- `history_digest`、Provider wire payload digest 与最终 `complete_request_hash`；
+- 相对上一真实请求的 `cache_miss` 原因：stable/instruction、tool catalog、environment
+  attachment、Memory/Evidence、history、Working Context、compact checkpoint 或 provider/model；
+- Resume 后的 `restored_from_checkpoint_id` 与 invalidation 原因；
+- 子代理的 parent/policy instruction hash 以及 `match/mismatch/not-applicable`。
+
+该记录只保存 hash、ID、revision、sequence 和布尔归因，不保存 Prompt、消息、工具 Schema、
+Memory 或请求体正文。`wire_fidelity=exact` 时 Provider digest 来自实际 wire body；旧 Provider
+没有 `prepare_request` 时标记为 `estimated`，仍保留可比较的完整 identity hash。Ledger 随
+`ContextPlanSnapshot` 进入 checkpoint，因此 `/rewind`、`/fork`、`/resume` 后仍能解释原请求
+现场；下一次真实请求会与恢复记录比较并产生新的 cache-miss diff。
 
 ### `/context refresh`
 
@@ -372,7 +392,7 @@ prompt、权限、Sandbox 或工具规则。
 
 | `event` | `type/subtype` | 关键字段 |
 |---------|----------------|----------|
-| `context_assembled` | `context/assembled` | `snapshot` |
+| `context_assembled` | `context/assembled` | `snapshot`, `ledger` |
 | `context_dropped` | `context/dropped` | `items`, `reason` |
 | `memory_loaded` | `memory/loaded` | `entry_ids`, `scope_counts`, `tokens`, `source` |
 | `memory_candidate` | `memory/candidate` | `candidate_id`, `status`, `trigger`, `confidence`, `conflict_count`, `digest` |
@@ -419,7 +439,9 @@ compact_checkpoint context_compressed context_microcompacted
 ## 12. Resume、Fork、Rewind 与子代理
 
 - `resume` 恢复 history 和最近 `context_checkpoint`，校验文件 hash、刷新 Git/目录/rules，
-  重建 Working Context，并重新检索相关 Memory；不沿用旧 Git 状态。
+  重建 Working Context，并重新检索相关 Memory；不沿用旧 Git 状态。持久化 Cache Ledger 的
+  request identity 保留，`resume_invalidations` 明确记录 workspace、文件、Memory 或 Working
+  Context 中哪些现场需要刷新。
 - `fork` 复制对应 checkpoint 引用，而不是共享可变 Memory/session 状态；后续写入互不影响。
 - `rewind` 联合恢复 history、compact 前现场、文件 checkpoint、plan/审批/权限状态，并让
   `ContextPlan` 与恢复后的 history 保持一致。
@@ -431,7 +453,7 @@ compact_checkpoint context_compressed context_microcompacted
 | 现象 | 检查 |
 |------|------|
 | Context 面板没有数据 | 先发起一次模型请求；没有真实请求时只显示历史估算 |
-| cache hash 每次变化 | `/context cache` 查看 stable segment；检查规则、工具 schema 或 system prompt 是否被动态改写 |
+| cache hash 每次变化 | `/context ledger` 看 machine-readable miss 原因；`/context cache` 查看 stable segment |
 | dynamic hash 每次变化但 stable hash 不变 | 属于正常动态尾部变化；检查 `/context cache` 的 block 数与边界，确认规则没有进入 dynamic block |
 | Anthropic 没有缓存命中 | 确认至少存在 stable block；只有一个 stable block 时 `cache_control` 必须落在该 block，没有 stable block 时不会生成显式断点 |
 | token 异常高 | `/context` 看分项，`/context sources` 看 layer，`/context why <id>` 看 attribution |

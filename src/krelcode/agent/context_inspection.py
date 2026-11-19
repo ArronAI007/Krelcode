@@ -105,6 +105,15 @@ class ContextInspectionService:
         return getattr(self.loop, "previous_context_snapshot", None)
 
     @property
+    def cache_ledger(self):
+        ledger = getattr(self.loop, "last_context_cache_ledger", None)
+        if ledger is not None:
+            return ledger
+        plan = self.plan
+        ledger = getattr(plan, "cache_ledger", None) if plan is not None else None
+        return ledger if getattr(ledger, "has_request_identity", False) else None
+
+    @property
     def dropped_items(self) -> tuple[str, ...]:
         items: list[str] = []
         snapshot = self.snapshot
@@ -585,6 +594,65 @@ class ContextInspectionService:
             lines.append("  被裁剪: " + ", ".join(self.dropped_items[:50]))
         return lines
 
+    def ledger_lines(self) -> list[str]:
+        """Explain the complete request identity and cache-miss causes."""
+        ledger = self.cache_ledger
+        if ledger is None:
+            return ["  [cache ledger] 尚无真实请求 ledger"]
+        revisions = ", ".join(
+            f"{item_id}@{revision}"
+            for item_id, revision in ledger.attachment_revisions[:20]
+        ) or "(none)"
+        if len(ledger.attachment_revisions) > 20:
+            revisions += (
+                f" · … 另有 {len(ledger.attachment_revisions) - 20} 个")
+        lines = [
+            f"  [cache ledger] {ledger.owner or 'main'}"
+            f" · {ledger.provider or '(unknown)'}"
+            f"/{ledger.model or '(unknown)'}"
+            f" · {ledger.turn_id or '(unknown turn)'}"
+            f" · Step {ledger.step}",
+            f"  stable {_short_hash(ledger.stable_hash)}"
+            f" · dynamic {_short_hash(ledger.dynamic_hash)}"
+            f" · instruction {_short_hash(ledger.instruction_hash)}"
+            f" · evidence {_short_hash(ledger.evidence_hash)}",
+            f"  tools {_short_hash(ledger.tool_catalog_hash)}"
+            f" · history {_short_hash(ledger.history_digest)}"
+            f" · provider request {_short_hash(ledger.provider_request_digest)}"
+            f" · fidelity {ledger.wire_fidelity}",
+            f"  complete request {_short_hash(ledger.complete_request_hash)}",
+            f"  attachments generation {ledger.attachment_generation}"
+            f" · {_ids(ledger.memory_evidence_ids, 20)} memory evidence"
+            f" · revisions {revisions}",
+            f"  compact {ledger.compact_checkpoint_id or '(none)'}"
+            f" · working context sequence {ledger.working_context_sequence}",
+        ]
+        diff = ledger.diff
+        if diff.available:
+            lines.append(
+                f"  cache miss: {_yes_no(diff.cache_miss)}"
+                f" · prefix miss: {_yes_no(diff.prefix_cache_miss)}"
+                f" · previous {diff.previous_turn_id or '(unknown turn)'}"
+                f" Step {diff.previous_step}")
+            lines.append(
+                "  reasons: " + (
+                    ", ".join(diff.reasons) if diff.reasons else "(none)"))
+            lines.append(
+                f"  changed fields: {_ids(diff.changed_fields, 30)}")
+        else:
+            lines.append("  cache miss: 无上一请求 ledger 可比较")
+        if ledger.policy_instruction_hash or ledger.parent_policy_instruction_hash:
+            lines.append(
+                f"  policy instruction {_short_hash(ledger.policy_instruction_hash)}"
+                f" · parent {_short_hash(ledger.parent_policy_instruction_hash)}"
+                f" · inheritance {ledger.instruction_inheritance}")
+        if ledger.restored_from_checkpoint_id or ledger.resume_invalidations:
+            lines.append(
+                f"  restored from {ledger.restored_from_checkpoint_id or '(none)'}"
+                f" · invalidations "
+                f"{', '.join(ledger.resume_invalidations) or '(none)'}")
+        return lines
+
     def cache_lines(self) -> list[str]:
         snapshot = self.snapshot
         previous = self.previous_snapshot
@@ -605,7 +673,9 @@ class ContextInspectionService:
                 f" · volatile {volatile_count}/{request_plan.volatile_tokens} tokens",
                 f"  stable hash {_short_hash(request_plan.stable_hash)}"
                 f" · dynamic hash {_short_hash(request_plan.dynamic_hash)}"
-                f" · full hash {_short_hash(request_plan.full_hash)}",
+                f" · full hash {_short_hash(request_plan.full_hash)}"
+                f" · instruction {_short_hash(request_plan.instruction_hash)}"
+                f" · evidence {_short_hash(request_plan.evidence_hash)}",
                 f"  cache boundary {request_plan.cache_boundary_chars} chars"
                 f" · tool catalog {_short_hash(request_plan.tool_catalog_hash)}"
                 f" · tools {request_plan.tool_count}",
@@ -660,6 +730,19 @@ class ContextInspectionService:
         if len(snapshot.cache_segments) > 30:
             lines.append(
                 f"  … 另有 {len(snapshot.cache_segments) - 30} 个 segment")
+        ledger = self.cache_ledger
+        if ledger is not None:
+            diff = ledger.diff
+            lines.append(
+                f"  [ledger] {ledger.owner or 'main'}"
+                f" · complete {_short_hash(ledger.complete_request_hash)}"
+                f" · attachment generation {ledger.attachment_generation}"
+                f" · compact {ledger.compact_checkpoint_id or '(none)'}"
+                f" · working sequence {ledger.working_context_sequence}")
+            lines.append(
+                f"  [ledger/cache miss] {_yes_no(diff.cache_miss)}"
+                f" · reasons "
+                f"{', '.join(diff.reasons) if diff.reasons else '(none)'}")
         return lines
 
     def memory_metadata(self) -> tuple[tuple[str, ...], dict[str, int], int]:

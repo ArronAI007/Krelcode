@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Mapping, Optional
 
 from ..agent.query import QueryEvent
 from ..core.context_usage import ContextUsageSnapshot
@@ -80,6 +80,7 @@ class SessionViewState:
     context_dropped_items: tuple[str, ...] = ()
     context_cache_changed: bool = False
     context_stable_hash: str = ""
+    context_cache_ledger: Optional[Mapping[str, object]] = None
     microcompact_count: int = 0
     microcompact_saved_tokens: int = 0
     compact_generation: int = 0
@@ -139,6 +140,7 @@ class SessionViewState:
         self.plan_explanation = ""
         self.plan_approval_status = "none"
         self.context_snapshot = None
+        self.context_cache_ledger = None
         self.microcompact_count = 0
         self.microcompact_saved_tokens = 0
         self.input_request_id = ""
@@ -275,6 +277,8 @@ class SessionEventReducer:
             )
             state.context_stable_hash = event.snapshot.stable_hash
             state.context_snapshot = event.snapshot
+            state.context_cache_ledger = (
+                dict(event.ledger) if event.ledger is not None else None)
         elif isinstance(event, ContextDropped):
             state.context_dropped_items = tuple(event.items)
         elif isinstance(event, MemoryLoaded):

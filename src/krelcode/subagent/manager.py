@@ -25,6 +25,7 @@ from ..agent.loop import DEFAULT_MAX_STEPS, AgentLoop
 from ..agent.prompts import build_system_prompt
 from ..agent.working_context import WorkingContextStore
 from ..core.events import (
+    ContextAssembled,
     ContextCompressed,
     ContextCheckpointCreated,
     ErrorOccurred,
@@ -119,6 +120,7 @@ class AgentHandle:
     permission_mode: str = ""
     mcp_servers: Tuple[str, ...] = field(default_factory=tuple)
     kill_requested: bool = field(default=False, repr=False)
+    cache_ledger_hash: str = ""
 
     def preview(self) -> str:
         text = self.result or self.error or ""
@@ -151,6 +153,7 @@ class SubagentManager:
         catalog_fragments_provider: Optional[
             Callable[[], Iterable[PromptFragment]]
         ] = None,
+        cache_ledger_provider: Optional[Callable[[], object | None]] = None,
     ) -> None:
         self.llm = llm
         self.tool_factory = tool_factory
@@ -179,6 +182,7 @@ class SubagentManager:
         self._counter = 0
         self._exclude_checked = False
         self.get_parent_history: Optional[Callable[[], List[Message]]] = None
+        self.cache_ledger_provider = cache_ledger_provider
         self._closed = False
 
     # -- 生命周期 -----------------------------------------------------------------
@@ -362,6 +366,14 @@ class SubagentManager:
         loop.subagent_instruction_layers = instruction_bundle.layers
         loop.inherited_memory_ids = memory_ids
         loop.parent_history_inherited = False
+        parent_ledger = (
+            self.cache_ledger_provider()
+            if self.cache_ledger_provider is not None else None
+        )
+        parent_policy_hash = str(getattr(
+            parent_ledger, "policy_instruction_hash", "") or "")
+        loop.cache_ledger_owner = f"subagent:{agent_id}"
+        loop.parent_policy_instruction_hash = parent_policy_hash
 
         context_store_directory = (
             tool_context.workspace_root / ".krelcode" / "context-checkpoints"
@@ -408,6 +420,7 @@ class SubagentManager:
             "parent_history_inherited": False,
             "inherited_memory_ids": list(memory_ids),
             "instruction_layers": instruction_bundle.metadata(),
+            "parent_policy_instruction_hash": parent_policy_hash,
         })
         handle = AgentHandle(
             id=agent_id,
@@ -486,6 +499,19 @@ class SubagentManager:
     # -- child feed ---------------------------------------------------------------
 
     async def _on_child_event(self, handle: AgentHandle, event) -> None:
+        if isinstance(event, ContextAssembled):
+            ledger = getattr(handle.loop, "last_context_cache_ledger", None)
+            if (
+                ledger is not None
+                and ledger.complete_request_hash
+                and ledger.complete_request_hash != handle.cache_ledger_hash
+            ):
+                handle.cache_ledger_hash = ledger.complete_request_hash
+                if handle.sidechain is not None:
+                    handle.sidechain.write({
+                        "type": "context_cache_ledger",
+                        "ledger": ledger.as_dict(),
+                    })
         if isinstance(event, ContextCheckpointCreated):
             handle.context_checkpoint_id = event.checkpoint_id
             if handle.sidechain is not None:

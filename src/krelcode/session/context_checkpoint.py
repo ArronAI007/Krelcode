@@ -553,13 +553,33 @@ def restore_context_checkpoint(
     loop.restored_workspace_fingerprint = checkpoint.workspace
 
     plan = checkpoint.context_plan or ContextPlanSnapshot()
+    previous_ledger = plan.cache_ledger
+    invalidations = ["workspace-refresh"]
+    if integrity.stale:
+        invalidations.append("file-integrity-changed")
+    restored_memory_ids = tuple(entry.id for entry in relevant)
+    if (
+        memory_query
+        and previous_ledger.memory_evidence_ids != restored_memory_ids
+    ):
+        invalidations.append("memory-selection-refreshed")
+    if (
+        checkpoint.working_context.get("entries")
+        and snapshot is not None
+        and previous_ledger.working_context_sequence != snapshot.sequence
+    ):
+        invalidations.append("working-context-restored")
     plan = plan.restored_for(
         restored,
         checkpoint.id,
         working_context_sequence=(
             snapshot.sequence if snapshot is not None else 0),
+        invalidations=invalidations,
     )
     loop.last_context_plan = plan
+    loop.last_context_cache_ledger = (
+        plan.cache_ledger if plan.cache_ledger.has_request_identity else None)
+    loop.previous_context_cache_ledger = None
     loop.pending_context_refresh = True
 
     result = ContextRestoreResult(
@@ -570,7 +590,7 @@ def restore_context_checkpoint(
         compact_checkpoint_id=checkpoint.compact_checkpoint_id,
         working_context_entries=(snapshot.count if snapshot is not None else 0),
         integrity=integrity,
-        memory_ids=tuple(entry.id for entry in relevant),
+        memory_ids=restored_memory_ids,
         workspace_refresh_pending=True,
         context_plan=plan,
     )
