@@ -15,7 +15,9 @@ from typing import Mapping, Optional, Sequence
 
 
 _MEMORY_LAYER = "L7_MEMORY_EVIDENCE"
-_MEMORY_SOURCES = frozenset({"memory", "memory_retrieval"})
+_MEMORY_SOURCES = frozenset({
+    "memory", "memory_retrieval", "inherited_memory",
+})
 
 
 def _text(value: object, limit: int = 500) -> str:

@@ -49,6 +49,13 @@ envelope 后伪造 system 标签。Memory 位于 `L7_MEMORY_EVIDENCE`、turn sta
 不会进入 cacheable stable prefix。`/context why memory:scoped` 和 `/context sources` 显示
 来源角色，但不输出正文。
 
+子代理也走同一条 `InstructionBundle → PromptFragment[] → PromptAssembler` 路径：
+managed、base、user、project/directory 和 agent definition 分别映射到 L0-L4；当前
+turn 的工具目录映射到 L5，Skill Catalog 独立映射到 L6；筛选后的 inherited memory
+作为独立的 `subagent:inherited-memory` L7 Evidence Fragment 注入。
+子代理不复制父级完整历史，并复用与主 Agent 相同的 cache boundary、stable/dynamic hash
+和 `/context why` 诊断。
+
 ## 2. 配置
 
 配置文件仍是 `./krelcode.toml` 或 `~/.krelcode/config.toml`：

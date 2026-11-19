@@ -32,6 +32,7 @@ from .agent.fragments import (
     PromptFragmentRegistry,
     apply_prompt_snapshot,
     base_fragment,
+    skills_fragment,
     workspace_rule_fragments,
 )
 from .agent.rules import RuleLoader
@@ -619,6 +620,10 @@ async def build_loop(
         log(f"[agents] 跳过无效定义: {issue.path}: {issue.message}")
     redactor = SecretRedactor()
     redactor.add(getattr(llm, "api_key", None))
+    def subagent_catalog_fragments():
+        catalog = skills_fragment(skill_manager.prompt_index())
+        return (catalog,) if catalog is not None else ()
+
     manager = SubagentManager(
         llm=llm,
         tool_factory=child_tool_factory,
@@ -627,8 +632,12 @@ async def build_loop(
         bus=bus,
         max_steps=args.max_steps,
         context_budget=context_budget,   # 子代理长任务同样受压缩保护
+        # Keep the legacy composite view; new assembly splits base (L1) and
+        # the skill catalog (L6) into independent source-attributed fragments.
         system_prompt_provider=(
             lambda: skill_manager.apply_to_prompt(SUBAGENT_SYSTEM_PROMPT)),
+        base_prompt_provider=lambda: SUBAGENT_SYSTEM_PROMPT,
+        catalog_fragments_provider=subagent_catalog_fragments,
         definitions=agent_definitions,
         memory_store=memory_store,
         llm_resolver=build_subagent_llm_resolver(

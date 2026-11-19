@@ -46,6 +46,15 @@ def _bounded(items: Sequence[object], limit: int) -> tuple[list[object], int]:
     return list(items[:limit]), len(items) - limit
 
 
+def _is_memory_fragment(fragment: PromptFragmentSnapshot) -> bool:
+    return (
+        fragment.id == "memory:scoped"
+        or fragment.source in {
+            "memory", "memory_retrieval", "inherited_memory",
+        }
+    )
+
+
 def _layer_memory_metadata(layer: ContextLayer) -> tuple[tuple[str, ...], dict[str, int], int]:
     metadata = layer.metadata or {}
     raw_ids = metadata.get("memory_entry_ids", ())
@@ -443,10 +452,7 @@ class ContextInspectionService:
             if fragment.id in plan.dropped_items:
                 lines.append("  budget: 该 fragment 同时记录在 dropped items 中")
             for hit in plan.memory_hits:
-                if (
-                    fragment.id == "memory:scoped"
-                    or fragment.source in {"memory", "memory_retrieval"}
-                ):
+                if _is_memory_fragment(fragment):
                     lines.append(
                         f"  memory hit {hit.id} · source={hit.source}"
                         f" · scope={hit.scope or '(unknown)'}"
@@ -467,8 +473,7 @@ class ContextInspectionService:
             hit = memory_hits[0]
             memory_fragment = next(
                 (item for item in plan.fragments
-                 if item.id == "memory:scoped"
-                 or item.source in {"memory", "memory_retrieval"}),
+                 if _is_memory_fragment(item)),
                 None,
             )
             return True, [

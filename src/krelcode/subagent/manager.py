@@ -16,6 +16,11 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..agent.compression import ContextManager
 from ..agent.context import _git
+from ..agent.fragments import (
+    PromptFragment,
+    PromptFragmentRegistry,
+    apply_prompt_snapshot,
+)
 from ..agent.loop import DEFAULT_MAX_STEPS, AgentLoop
 from ..agent.prompts import build_system_prompt
 from ..agent.working_context import WorkingContextStore
@@ -55,7 +60,7 @@ from ..tools.registry import ToolRegistry
 from .control import AgentControl
 from .definition import AgentDefinition, AgentDefinitionManager
 from .feed import AgentFeed, AgentFeedPage
-from .instructions import build_subagent_instructions, render_relevant_memory
+from .instructions import build_subagent_instructions, inherited_memory_fragment
 from .sidechain import (
     AgentSidechainWriter,
     SidechainInfo,
@@ -142,6 +147,10 @@ class SubagentManager:
         memory_store=None,
         llm_resolver: Optional[Callable[[str], LLMProvider]] = None,
         mcp_servers_provider: Optional[Callable[[], Iterable[str]]] = None,
+        base_prompt_provider: Optional[Callable[[], str]] = None,
+        catalog_fragments_provider: Optional[
+            Callable[[], Iterable[PromptFragment]]
+        ] = None,
     ) -> None:
         self.llm = llm
         self.tool_factory = tool_factory
@@ -152,6 +161,8 @@ class SubagentManager:
         self.context_budget = context_budget
         self.redactor = redactor
         self.system_prompt_provider = system_prompt_provider
+        self.base_prompt_provider = base_prompt_provider
+        self.catalog_fragments_provider = catalog_fragments_provider
         self.hook_port = hook_port
         self.definitions = definitions or AgentDefinitionManager(
             tool_context.workspace_root)
@@ -306,9 +317,10 @@ class SubagentManager:
         if child_hook_port is not None and hasattr(child_hook_port, "rebind"):
             child_hook_port = child_hook_port.rebind(tool_context.workspace_root)
 
+        prompt_provider = self.base_prompt_provider or self.system_prompt_provider
         base_prompt = (
-            self.system_prompt_provider()
-            if self.system_prompt_provider is not None
+            prompt_provider()
+            if prompt_provider is not None
             else SUBAGENT_SYSTEM_PROMPT
         )
         instruction_bundle = build_subagent_instructions(
@@ -318,7 +330,14 @@ class SubagentManager:
             definition=definition_obj,
             redactor=self.redactor,
         )
-        system_prompt = instruction_bundle.text
+        prompt_fragments = list(instruction_bundle.fragments())
+        if self.catalog_fragments_provider is not None:
+            prompt_fragments.extend(self.catalog_fragments_provider())
+        memory_fragment = inherited_memory_fragment(memory_entries)
+        if memory_fragment is not None:
+            prompt_fragments.append(memory_fragment)
+        prompt_registry = PromptFragmentRegistry(prompt_fragments)
+        prompt_snapshot = prompt_registry.snapshot()
         own_working_context = WorkingContextStore(
             tool_context.workspace_root, redactor=self.redactor)
         loop = AgentLoop(
@@ -327,7 +346,6 @@ class SubagentManager:
             tool_context=tool_context,
             policy=self.policy,
             bus=child_bus,
-            system_prompt=system_prompt,
             max_steps=self.max_steps,
             context_manager=(ContextManager(child_llm, max_tokens=self.context_budget)
                              if self.context_budget else None),
@@ -336,12 +354,11 @@ class SubagentManager:
             step_gate=control.wait_if_paused,
             working_context_store=own_working_context,
         )
+        loop.prompt_registry = prompt_registry
+        apply_prompt_snapshot(loop, prompt_snapshot)
 
         effective_task = task
         forked = bool(fork_context)
-        memory_context = render_relevant_memory(memory_entries)
-        if memory_context:
-            loop.add_runtime_context((memory_context,), source="inherited_memory")
         loop.subagent_instruction_layers = instruction_bundle.layers
         loop.inherited_memory_ids = memory_ids
         loop.parent_history_inherited = False

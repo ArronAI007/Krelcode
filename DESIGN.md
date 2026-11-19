@@ -1663,6 +1663,13 @@ Memory 不再拥有独立的 authority 语义：
 Instruction 侧仍由 managed/user/project/agent-definition 分类器收口，Evidence 分类器对
 `data`/`untrusted` 输入返回无指令来源，避免两套 taxonomy 在后继 adapter 中漂移。
 
+SubagentManager 复用同一装配契约：`InstructionBundle` 先转换为带 L0-L4 来源层级的
+`PromptFragment[]`，L5 工具目录和 L6 Skill Catalog 继续由统一装配链补齐；筛选后的
+L7 inherited-memory fragment 也注册到子代理自己的 `PromptFragmentRegistry`，再由同一个
+`PromptAssembler` 生成 PromptPlan/ProviderMessages。
+子代理因此拥有与主 Agent 相同的 stable/dynamic cache boundary、来源归因和 `/context why`
+观测；inherited memory 不再经过 Runtime Hook 通道，也不会继承父级完整 history。
+
 ## Prompt Plan 可观测性（Step 103）
 
 请求观测继续复用唯一 `PromptAssembler.assemble()` 路径，不建立第二套 Prompt 组装逻辑。
