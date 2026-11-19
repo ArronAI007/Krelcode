@@ -58,6 +58,8 @@ class ContextUsageSnapshot:
     full_hash: str = ""
     stable_system_block_count: int = 0
     dynamic_system_block_count: int = 0
+    evidence_block_count: int = 0
+    evidence_hash: str = ""
     cache_control_boundary: int = 0
     tool_count: int = 0
     fragment_count: int = 0
@@ -132,6 +134,8 @@ class ContextUsageSnapshot:
             "full_hash": self.full_hash,
             "stable_system_block_count": self.stable_system_block_count,
             "dynamic_system_block_count": self.dynamic_system_block_count,
+            "evidence_block_count": self.evidence_block_count,
+            "evidence_hash": self.evidence_hash,
             "cache_control_boundary": self.cache_control_boundary,
             "tool_count": self.tool_count,
             "fragment_count": self.fragment_count,

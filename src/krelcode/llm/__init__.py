@@ -6,6 +6,7 @@ from .base import (
     FINISH_STOP,
     FINISH_TOOLS,
     EvidenceBlock,
+    EvidenceChannel,
     LLMEvent,
     LLMProvider,
     PreparedLLMProvider,
@@ -22,10 +23,13 @@ from .base import (
     cache_segment,
     collect,
     explicit_evidence_blocks,
+    explicit_evidence_channel,
     normalize_usage,
     prepare_http_request,
+    resolve_evidence_channel,
     resolve_system_prompt_blocks,
     stable_system_prefix,
+    supports_keyword_argument,
 )
 from .providers.anthropic import AnthropicProvider
 from .providers.gemini import GeminiProvider
@@ -39,11 +43,13 @@ from .transport import Transport, TransportResponse, UrllibTransport
 __all__ = [
     "LLMProvider", "PreparedLLMProvider", "PreparedLLMRequest",
     "LLMEvent", "TextDelta", "StreamFinished", "ToolSpec",
-    "SystemPromptBlock", "SystemPromptBlocks", "EvidenceBlock",
+    "SystemPromptBlock", "SystemPromptBlocks", "EvidenceBlock", "EvidenceChannel",
     "EVIDENCE_BLOCKS_META_KEY", "explicit_evidence_blocks",
+    "explicit_evidence_channel", "resolve_evidence_channel",
     "ToolCallStartedDelta", "ToolCallArgumentsDelta", "ToolCallReady",
     "ProviderCapabilities", "collect", "normalize_usage",
     "prepare_http_request", "cache_segment", "stable_system_prefix",
+    "supports_keyword_argument",
     "resolve_system_prompt_blocks",
     "FINISH_STOP", "FINISH_TOOLS", "FINISH_LENGTH",
     "OpenAIProvider", "AnthropicProvider", "GeminiProvider", "MockProvider",

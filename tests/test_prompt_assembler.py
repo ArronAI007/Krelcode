@@ -42,13 +42,14 @@ from krelcode.agent.loop import AgentLoop
 from krelcode.agent.prompt_assembler import PromptAssembler, PromptAssemblyRequest
 from krelcode.core.messages import Message, ToolCall
 from krelcode.llm import (
-    EVIDENCE_BLOCKS_META_KEY,
     EvidenceBlock,
+    EvidenceChannel,
     SystemPromptBlock,
     SystemPromptBlocks,
     explicit_evidence_blocks,
 )
 from krelcode.llm.providers.anthropic import AnthropicProvider
+from krelcode.llm.providers.gemini import GeminiProvider
 from krelcode.llm.providers.mock import MockProvider
 from krelcode.llm.providers.openai import OpenAIProvider, to_openai_messages
 from krelcode.safety.policy import AllowAllPolicy
@@ -344,17 +345,15 @@ def test_public_system_prompt_block_contract_is_provider_neutral():
     assert blocks.cache_control_block_index == 0
     assert [block.id for block in blocks.instruction_blocks] == [
         "stable", "dynamic"]
-    assert blocks.evidence_system_blocks == ()
     assert blocks.instruction_hash
-    assert blocks.evidence_hash == ""
     assert "STABLE" not in json.dumps(blocks.as_record(), ensure_ascii=False)
 
-    with pytest.raises(ValueError, match="evidence block 不得进入稳定缓存前缀"):
+    with pytest.raises(ValueError, match="独立 EvidenceChannel"):
         SystemPromptBlocks(
-            stable_system_blocks=(SystemPromptBlock(
+            stable_system_blocks=(),
+            dynamic_system_blocks=(SystemPromptBlock(
                 id="evidence", text="EVIDENCE", channel="evidence",
                 requires_validation=True),),
-            dynamic_system_blocks=(),
         )
 
 
@@ -469,30 +468,118 @@ def test_provider_messages_preserve_instruction_and_evidence_channels(tmp_path):
     assert "MEMORY FACT" in evidence.text
     assert evidence.as_record().get("metadata") is None
     assert "MEMORY FACT" not in plan.stable_prefix
+    assert "MEMORY FACT" not in plan.system_text
     assert plan.instruction_hash == provider_messages.instruction_hash
     assert plan.evidence_hash == provider_messages.evidence_hash
     assert plan.evidence_hash
+    assert provider_messages.evidence_channel.anchor_message_index == 1
 
     system_message = provider_messages.messages[0]
     assert system_message.content == plan.system_text
-    assert system_message.provider_meta[EVIDENCE_BLOCKS_META_KEY] == (
-        provider_messages.evidence_blocks)
-    assert explicit_evidence_blocks(provider_messages.messages) == (
-        provider_messages.evidence_blocks)
-    assert provider_messages.provider_meta[EVIDENCE_BLOCKS_META_KEY] == (
-        provider_messages.evidence_blocks)
+    assert "MEMORY FACT" not in (system_message.content or "")
+    assert explicit_evidence_blocks(provider_messages.messages) == ()
+    assert "evidence_blocks" not in (provider_messages.provider_meta or {})
 
     provider = OpenAIProvider(model="deepseek-chat", api_key="k")
-    prepared = provider.prepare_request(provider_messages.messages, None)
+    evidence = provider_messages.evidence_channel
+    prepared = provider.prepare_request(
+        provider_messages.messages, None, evidence=evidence)
     payload = json.loads(provider.build_request(
-        provider_messages.messages, None)["body"])
+        provider_messages.messages, None, evidence=evidence)["body"])
     system_wire = next(
         item for item in payload["messages"] if item["role"] == "system")
+    user_wire = next(
+        item for item in payload["messages"] if item["role"] == "user")
     assert system_wire["content"] == plan.system_text
+    assert "MEMORY FACT" not in system_wire["content"]
+    assert "MEMORY FACT" in user_wire["content"]
+    assert user_wire["content"].endswith("CURRENT")
     assert prepared.instruction_system_block_count == 2
-    assert prepared.evidence_system_block_count == 1
+    assert prepared.evidence_block_count == 1
     assert prepared.instruction_hash == plan.instruction_hash
     assert prepared.evidence_hash == plan.evidence_hash
+    snapshot = build_context_usage_snapshot(
+        provider_messages.messages,
+        turn_id="turn-evidence",
+        step=1,
+        prepared_request=prepared,
+    )
+    assert snapshot.evidence_block_count == 1
+    assert snapshot.evidence_hash == plan.evidence_hash
+
+
+def test_evidence_channel_reaches_each_provider_without_system_pollution(tmp_path):
+    registry = PromptFragmentRegistry([base_fragment()])
+    memory = ContextLayer(
+        id="memory:scoped",
+        source="memory",
+        category=CATEGORY_MEMORY,
+        content="[Evidence: Memory]\nrequires_validation: true\n\nMEMORY FACT",
+        trust=TRUST_UNTRUSTED,
+        metadata={
+            "source_role": "evidence",
+            "evidence_type": "memory",
+            "requires_validation": True,
+        },
+    )
+    assembler, plan = assemble(
+        tmp_path,
+        registry,
+        history=(Message.user("CURRENT"),),
+        layers=(memory,),
+    )
+    provider_messages = assembler.provider_messages(plan)
+    evidence = provider_messages.evidence_channel
+
+    anthropic = AnthropicProvider(model="claude-x", api_key="k")
+    anthropic_payload = json.loads(anthropic.build_request(
+        provider_messages.messages, None, evidence=evidence)["body"])
+    assert all("MEMORY FACT" not in block["text"]
+               for block in anthropic_payload["system"])
+    assert anthropic_payload["messages"][0]["content"][0]["text"].startswith(
+        "[Evidence: Memory]")
+    assert anthropic_payload["messages"][0]["content"][-1]["text"] == "CURRENT"
+
+    gemini = GeminiProvider(model="gemini-x", api_key="k")
+    gemini_payload = json.loads(gemini.build_request(
+        provider_messages.messages, None, evidence=evidence)["body"])
+    assert "MEMORY FACT" not in gemini_payload["systemInstruction"]["parts"][0]["text"]
+    assert gemini_payload["contents"][0]["parts"][0]["text"].startswith(
+        "[Evidence: Memory]")
+    assert gemini_payload["contents"][0]["parts"][-1]["text"] == "CURRENT"
+
+
+def test_evidence_channel_survives_tool_result_turns_in_all_providers():
+    messages = (
+        Message.user("CURRENT"),
+        Message.assistant(tool_calls=[ToolCall("t1", "read_file", {})]),
+        Message.tool_result("t1", "TOOL RESULT"),
+    )
+    evidence = EvidenceChannel(
+        blocks=(EvidenceBlock(
+            id="memory:scoped",
+            text="[Evidence: Memory]\n\nMEMORY FACT",
+            evidence_type="memory",
+            requires_validation=True,
+        ),),
+        anchor_message_index=0,
+    )
+
+    openai_wire = to_openai_messages(messages, evidence=evidence)
+    assert "MEMORY FACT" in openai_wire[0]["content"]
+    assert "TOOL RESULT" in json.dumps(openai_wire[-1], ensure_ascii=False)
+
+    anthropic = AnthropicProvider(model="claude-x", api_key="k")
+    anthropic_wire = json.loads(anthropic.build_request(
+        messages, None, evidence=evidence)["body"])["messages"]
+    assert anthropic_wire[0]["content"][0]["text"].startswith("[Evidence: Memory]")
+    assert anthropic_wire[-1]["content"][0]["type"] == "tool_result"
+
+    gemini = GeminiProvider(model="gemini-x", api_key="k")
+    gemini_wire = json.loads(gemini.build_request(
+        messages, None, evidence=evidence)["body"])["contents"]
+    assert gemini_wire[0]["parts"][0]["text"].startswith("[Evidence: Memory]")
+    assert "functionResponse" in gemini_wire[-1]["parts"][0]
 
 
 def test_prompt_plan_exposes_omitted_fragment_ids(tmp_path):

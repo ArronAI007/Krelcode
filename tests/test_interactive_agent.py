@@ -284,9 +284,15 @@ def test_run_repl_end_to_end_ask_user_then_final_answer(tmp_path):
     class AsyncLines:
         def __init__(self):
             self.lines = ["请选择", "2", "/exit"]
+            self.calls = 0
 
         async def __call__(self, _prompt):
-            await asyncio.sleep(0.03)
+            self.calls += 1
+            if self.calls == 2:
+                while broker.pending is None:
+                    await asyncio.sleep(0.005)
+            else:
+                await asyncio.sleep(0.08)
             if not self.lines:
                 raise EOFError
             return self.lines.pop(0)

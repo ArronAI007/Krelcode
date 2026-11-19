@@ -17,6 +17,7 @@ agent 层只消费统一事件，对 provider 差异零感知。
 from __future__ import annotations
 
 import hashlib
+import inspect
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import (
@@ -50,12 +51,25 @@ SYSTEM_BLOCK_CHANNEL_INSTRUCTION = "instruction"
 SYSTEM_BLOCK_CHANNEL_EVIDENCE = "evidence"
 
 
+def supports_keyword_argument(callback: object, keyword: str) -> bool:
+    """Return whether a callable can accept one named keyword safely."""
+    try:
+        parameters = inspect.signature(callback).parameters
+    except (TypeError, ValueError):
+        return False
+    return keyword in parameters or any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+
+
 @dataclass(frozen=True)
 class SystemPromptBlock:
-    """One provider-neutral system-bound block before wire serialization.
+    """One provider-neutral instruction block before wire serialization.
 
-    ``channel`` keeps instruction authority separate from evidence while legacy
-    providers may still receive both through one merged system message.
+    Evidence is deliberately not a system channel.  ``channel`` remains only
+    for compatibility with callers that still construct typed blocks, and
+    ``SystemPromptBlocks`` rejects evidence before a request can be assembled.
     """
 
     id: str
@@ -109,12 +123,7 @@ class SystemPromptBlock:
 
 @dataclass(frozen=True)
 class EvidenceBlock:
-    """A provider-neutral, non-instruction evidence payload.
-
-    Current providers may still serialize the text inside a system message for
-    compatibility.  This object preserves authority, provenance and validation
-    requirements independently of that wire choice.
-    """
+    """A provider-neutral, non-instruction evidence payload."""
 
     id: str
     text: str
@@ -154,6 +163,58 @@ class EvidenceBlock:
             "hash": self.hash,
         }
 
+
+@dataclass(frozen=True)
+class EvidenceChannel:
+    """Independent, non-cacheable evidence data sent with the current turn.
+
+    Evidence never participates in the system prompt or its stable/dynamic
+    hashes.  Providers serialize this channel into the anchored user turn using
+    their native content representation.  ``anchor_message_index`` indexes the
+    final provider-neutral message list (including the transient system
+    message); ``-1`` lets an adapter fall back to the last user message.
+    """
+
+    blocks: Tuple[EvidenceBlock, ...] = ()
+    anchor_message_index: int = -1
+    separator: str = "\n\n"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "blocks", tuple(self.blocks))
+
+    @property
+    def text(self) -> str:
+        return self.separator.join(block.text for block in self.blocks if block.text)
+
+    @property
+    def chars(self) -> int:
+        return len(self.text)
+
+    @property
+    def hash(self) -> str:
+        return hashlib.sha256(self.text.encode("utf-8")).hexdigest() if self.text else ""
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.blocks)
+
+    def resolved_anchor_index(self, messages: Sequence[Message]) -> int:
+        if 0 <= self.anchor_message_index < len(messages):
+            return self.anchor_message_index
+        for index in range(len(messages) - 1, -1, -1):
+            if messages[index].role == "user":
+                return index
+        return -1
+
+    def as_record(self) -> Dict[str, object]:
+        return {
+            "anchor_message_index": self.anchor_message_index,
+            "block_count": len(self.blocks),
+            "chars": self.chars,
+            "hash": self.hash,
+            "blocks": [block.as_record() for block in self.blocks],
+        }
+
     @classmethod
     def from_system_block(cls, block: SystemPromptBlock) -> "EvidenceBlock":
         if block.channel != SYSTEM_BLOCK_CHANNEL_EVIDENCE:
@@ -174,7 +235,7 @@ class EvidenceBlock:
 
 @dataclass(frozen=True)
 class SystemPromptBlocks:
-    """Stable/dynamic system blocks with explicit cache boundary metadata."""
+    """Stable/dynamic instruction blocks with explicit cache boundary metadata."""
 
     stable_system_blocks: Tuple[SystemPromptBlock, ...]
     dynamic_system_blocks: Tuple[SystemPromptBlock, ...]
@@ -207,10 +268,11 @@ class SystemPromptBlocks:
                 if dynamic_text else "",
             )
         if any(
-            block.channel == SYSTEM_BLOCK_CHANNEL_EVIDENCE
-            for block in self.stable_system_blocks
+            block.channel != SYSTEM_BLOCK_CHANNEL_INSTRUCTION
+            for block in (
+                *self.stable_system_blocks, *self.dynamic_system_blocks)
         ):
-            raise ValueError("evidence block 不得进入稳定缓存前缀")
+            raise ValueError("evidence block 必须使用独立 EvidenceChannel")
         # Providers place the explicit cache breakpoint after the complete
         # stable prefix (on its last non-empty block).
         boundary = len(stable_text) if stable_text else 0
@@ -240,23 +302,9 @@ class SystemPromptBlocks:
         )
 
     @property
-    def evidence_system_blocks(self) -> Tuple[SystemPromptBlock, ...]:
-        return tuple(
-            block for block in (
-                *self.stable_system_blocks, *self.dynamic_system_blocks)
-            if block.channel == SYSTEM_BLOCK_CHANNEL_EVIDENCE
-        )
-
-    @property
     def instruction_hash(self) -> str:
         text = self.separator.join(
             block.text for block in self.instruction_blocks if block.text)
-        return hashlib.sha256(text.encode("utf-8")).hexdigest() if text else ""
-
-    @property
-    def evidence_hash(self) -> str:
-        text = self.separator.join(
-            block.text for block in self.evidence_system_blocks if block.text)
         return hashlib.sha256(text.encode("utf-8")).hexdigest() if text else ""
 
     @property
@@ -288,9 +336,7 @@ class SystemPromptBlocks:
             "cache_control_boundary": self.cache_control_boundary,
             "cache_control_block_index": self.cache_control_block_index,
             "instruction_block_count": len(self.instruction_blocks),
-            "evidence_block_count": len(self.evidence_system_blocks),
             "instruction_hash": self.instruction_hash,
-            "evidence_hash": self.evidence_hash,
         }
 
 
@@ -369,6 +415,7 @@ class ProviderCapabilities:
 
     supports_tools: bool = True
     supports_streaming: bool = True
+    supports_evidence_channel: bool = False
 
 
 @dataclass(frozen=True)
@@ -398,7 +445,9 @@ class PreparedLLMRequest:
     dynamic_system_block_count: int = 0
     cache_control_boundary: int = 0
     instruction_system_block_count: int = 0
-    evidence_system_block_count: int = 0
+    evidence_block_count: int = 0
+    evidence_chars: int = 0
+    evidence_anchor_message_index: int = -1
     instruction_hash: str = ""
     evidence_hash: str = ""
 
@@ -419,6 +468,11 @@ class PreparedLLMRequest:
     def wire_fidelity(self) -> str:
         return "exact"
 
+    @property
+    def evidence_system_block_count(self) -> int:
+        """Deprecated compatibility alias; evidence is not a system channel."""
+        return self.evidence_block_count
+
     def __repr__(self) -> str:
         return (
             "PreparedLLMRequest("
@@ -428,7 +482,7 @@ class PreparedLLMRequest:
             f"output_limit_tokens={self.output_limit_tokens}, "
             f"cache_mode={self.cache_mode!r}, "
             f"cache_segments={len(self.cache_segments)}, "
-            f"evidence_blocks={self.evidence_system_block_count})"
+            f"evidence_blocks={self.evidence_block_count})"
         )
 
 
@@ -441,6 +495,8 @@ class LLMProvider(Protocol):
         self,
         messages: Sequence[Message],
         tools: Optional[Sequence[ToolSpec]] = None,
+        *,
+        evidence: Optional[EvidenceChannel] = None,
     ) -> AsyncIterator[LLMEvent]:
         """给定完整历史（与统一 ToolSpec），流式产出下一条 assistant 消息。"""
         ...
@@ -453,6 +509,8 @@ class PreparedLLMProvider(LLMProvider, Protocol):
         self,
         messages: Sequence[Message],
         tools: Optional[Sequence[ToolSpec]] = None,
+        *,
+        evidence: Optional[EvidenceChannel] = None,
     ) -> PreparedLLMRequest:
         ...
 
@@ -476,6 +534,7 @@ def prepare_http_request(
     dynamic_cache_chars: int = 0,
     dynamic_cache_hash: str = "",
     system_prompt_blocks: Optional[SystemPromptBlocks] = None,
+    evidence_channel: Optional[EvidenceChannel] = None,
 ) -> PreparedLLMRequest:
     """Convert a provider's built HTTP request into the public prepared contract."""
     body = request.get("body")
@@ -528,15 +587,19 @@ def prepare_http_request(
         instruction_system_block_count=(
             len(system_prompt_blocks.instruction_blocks)
             if system_prompt_blocks is not None else 0),
-        evidence_system_block_count=(
-            len(system_prompt_blocks.evidence_system_blocks)
-            if system_prompt_blocks is not None else 0),
+        evidence_block_count=(
+            len(evidence_channel.blocks) if evidence_channel is not None else 0),
+        evidence_chars=(
+            evidence_channel.chars if evidence_channel is not None else 0),
+        evidence_anchor_message_index=(
+            evidence_channel.anchor_message_index
+            if evidence_channel is not None else -1),
         instruction_hash=(
             system_prompt_blocks.instruction_hash
             if system_prompt_blocks is not None else ""),
         evidence_hash=(
-            system_prompt_blocks.evidence_hash
-            if system_prompt_blocks is not None else ""),
+            evidence_channel.hash
+            if evidence_channel is not None else ""),
     )
 
 
@@ -568,26 +631,35 @@ def explicit_system_prompt_blocks(
     return None
 
 
-def explicit_evidence_blocks(
+def explicit_evidence_channel(
     messages: Sequence[Message],
-) -> Tuple[EvidenceBlock, ...]:
-    """Read the provider-neutral evidence channel carried beside legacy text."""
+) -> EvidenceChannel:
+    """Read a compatibility evidence channel from transient message metadata."""
     for message in messages:
-        if message.role != "system":
-            continue
-        blocks = (message.provider_meta or {}).get(EVIDENCE_BLOCKS_META_KEY)
+        channel = (message.provider_meta or {}).get(EVIDENCE_BLOCKS_META_KEY)
+        if isinstance(channel, EvidenceChannel):
+            return channel
+        blocks = channel
         if isinstance(blocks, (list, tuple)) and all(
             isinstance(block, EvidenceBlock) for block in blocks
         ):
-            return tuple(blocks)
-        system_blocks = (message.provider_meta or {}).get(
-            SYSTEM_PROMPT_BLOCKS_META_KEY)
-        if isinstance(system_blocks, SystemPromptBlocks):
-            return tuple(
-                EvidenceBlock.from_system_block(block)
-                for block in system_blocks.evidence_system_blocks
-            )
-    return ()
+            return EvidenceChannel(blocks=tuple(blocks))
+    return EvidenceChannel()
+
+
+def explicit_evidence_blocks(
+    messages: Sequence[Message],
+) -> Tuple[EvidenceBlock, ...]:
+    """Compatibility view of the independent evidence channel."""
+    return explicit_evidence_channel(messages).blocks
+
+
+def resolve_evidence_channel(
+    messages: Sequence[Message],
+    evidence: Optional[EvidenceChannel] = None,
+) -> EvidenceChannel:
+    """Prefer the explicit request channel, then compatibility metadata."""
+    return evidence if evidence is not None else explicit_evidence_channel(messages)
 
 
 def resolve_system_prompt_blocks(
@@ -665,10 +737,21 @@ async def collect(
     provider: LLMProvider,
     messages: Sequence[Message],
     tools: Optional[Sequence[ToolSpec]] = None,
+    *,
+    evidence: Optional[EvidenceChannel] = None,
 ) -> StreamFinished:
     """便捷函数：消费整个流，返回 StreamFinished（丢弃中间 delta）。"""
     finished: Optional[StreamFinished] = None
-    async for event in provider.stream(messages, tools):
+    capabilities = getattr(provider, "capabilities", None)
+    if (
+        evidence is not None
+        and getattr(capabilities, "supports_evidence_channel", False)
+        and supports_keyword_argument(provider.stream, "evidence")
+    ):
+        stream = provider.stream(messages, tools, evidence=evidence)
+    else:
+        stream = provider.stream(messages, tools)
+    async for event in stream:
         if isinstance(event, StreamFinished):
             finished = event
     if finished is None:

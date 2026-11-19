@@ -16,7 +16,10 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Awaitable, Callable, Optional, Sequence
 
 from ..core.errors import LLMError, LLMHTTPError
-from .base import LLMEvent, PreparedLLMRequest, ProviderCapabilities, ToolSpec
+from .base import (
+    EvidenceChannel, LLMEvent, PreparedLLMRequest, ProviderCapabilities, ToolSpec,
+    supports_keyword_argument,
+)
 from ..core.messages import Message
 
 RETRYABLE_STATUSES = frozenset({408, 409, 425, 429})
@@ -99,24 +102,40 @@ class RetryingProvider:
         self,
         messages: Sequence[Message],
         tools: Optional[Sequence[ToolSpec]] = None,
+        *,
+        evidence: Optional[EvidenceChannel] = None,
     ) -> PreparedLLMRequest:
         if not self.supports_prepared_requests:
             raise TypeError(f"provider {self.name} 不支持 prepared requests")
+        if (
+            evidence is not None
+            and supports_keyword_argument(self._inner.prepare_request, "evidence")
+        ):
+            return self._inner.prepare_request(
+                messages, tools, evidence=evidence)
         return self._inner.prepare_request(messages, tools)
 
     async def stream(
         self,
         messages: Sequence[Message],
         tools: Optional[Sequence[ToolSpec]] = None,
+        *,
+        evidence: Optional[EvidenceChannel] = None,
     ) -> AsyncIterator[LLMEvent]:
         if self.supports_prepared_requests:
-            prepared = self.prepare_request(messages, tools)
+            prepared = self.prepare_request(messages, tools, evidence=evidence)
             async for event in self.stream_prepared(prepared):
                 yield event
             return
-        async for event in self._stream_with_retry(
-            lambda: self._inner.stream(messages, tools)
+        if (
+            evidence is not None
+            and supports_keyword_argument(self._inner.stream, "evidence")
         ):
+            open_stream = lambda: self._inner.stream(
+                messages, tools, evidence=evidence)
+        else:
+            open_stream = lambda: self._inner.stream(messages, tools)
+        async for event in self._stream_with_retry(open_stream):
             yield event
 
     async def stream_prepared(

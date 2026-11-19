@@ -72,6 +72,7 @@ from ..llm.base import (
     TextDelta,
     ThinkingDelta,
     ToolCallReady,
+    supports_keyword_argument,
 )
 from ..safety.contract import (
     ModePermissionContract,
@@ -992,7 +993,18 @@ class AgentLoop:
         stream_prepared = getattr(self.llm, "stream_prepared", None)
         supported = getattr(self.llm, "supports_prepared_requests", True)
         if supported and callable(prepare) and callable(stream_prepared):
-            prepared = prepare(messages, tools)
+            capabilities = getattr(self.llm, "capabilities", None)
+            if (
+                getattr(capabilities, "supports_evidence_channel", False)
+                and supports_keyword_argument(prepare, "evidence")
+            ):
+                prepared = prepare(
+                    messages,
+                    tools,
+                    evidence=provider_messages.evidence_channel,
+                )
+            else:
+                prepared = prepare(messages, tools)
         return messages, context_assembly, prepared
 
     def _finalize_context_cache_ledger(self, context_snapshot):
@@ -1119,11 +1131,23 @@ class AgentLoop:
         finished: Optional[StreamFinished] = None
         executor = StreamingToolExecutor(
             self._current_tool_pool(), self._run_stream_tool)
-        stream = (
-            self.llm.stream_prepared(prepared)
-            if prepared is not None
-            else self.llm.stream(messages, tools)
-        )
+        if prepared is not None:
+            stream = self.llm.stream_prepared(prepared)
+        else:
+            capabilities = getattr(self.llm, "capabilities", None)
+            if (
+                self.last_provider_messages is not None
+                and getattr(
+                    capabilities, "supports_evidence_channel", False)
+                and supports_keyword_argument(self.llm.stream, "evidence")
+            ):
+                stream = self.llm.stream(
+                    messages,
+                    tools,
+                    evidence=self.last_provider_messages.evidence_channel,
+                )
+            else:
+                stream = self.llm.stream(messages, tools)
         try:
             async for event in stream:
                 if isinstance(event, TextDelta):

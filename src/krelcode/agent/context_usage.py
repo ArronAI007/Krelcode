@@ -195,6 +195,12 @@ def build_context_usage_snapshot(
         dynamic_system_block_count=(
             prepared_request.dynamic_system_block_count
             if prepared_request is not None else 0),
+        evidence_block_count=(
+            prepared_request.evidence_block_count
+            if prepared_request is not None else 0),
+        evidence_hash=(
+            prepared_request.evidence_hash
+            if prepared_request is not None else ""),
         cache_control_boundary=(
             prepared_request.cache_control_boundary
             if prepared_request is not None

@@ -34,11 +34,11 @@ from ...core.messages import (
     ToolCall,
 )
 from ..base import (
-    FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, PreparedLLMRequest,
-    ProviderCapabilities, StreamFinished, TextDelta, ThinkingDelta,
+    FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, EvidenceChannel, LLMEvent,
+    PreparedLLMRequest, ProviderCapabilities, StreamFinished, TextDelta, ThinkingDelta,
     ToolCallArgumentsDelta, ToolCallReady, ToolCallStartedDelta, ToolSpec,
     SystemPromptBlocks, cache_segment, normalize_usage, prepare_http_request,
-    resolve_system_prompt_blocks,
+    resolve_evidence_channel, resolve_system_prompt_blocks,
 )
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
@@ -62,12 +62,15 @@ def _to_anthropic_request_messages(
     messages: Sequence[Message],
     *,
     cache_all_without_boundary: bool = False,
+    evidence: Optional[EvidenceChannel] = None,
 ) -> Tuple[Optional[SystemPromptBlocks], List[Dict[str, Any]]]:
     """规范化历史 → (显式 system blocks, messages blocks)。"""
     system_blocks = resolve_system_prompt_blocks(
         messages,
         cache_all_without_boundary=cache_all_without_boundary,
     )
+    evidence_channel = resolve_evidence_channel(messages, evidence)
+    evidence_anchor = evidence_channel.resolved_anchor_index(messages)
     wire: List[Dict[str, Any]] = []
     pending_tool_results: List[Dict[str, Any]] = []
 
@@ -76,7 +79,7 @@ def _to_anthropic_request_messages(
             wire.append({"role": ROLE_USER, "content": list(pending_tool_results)})
             pending_tool_results.clear()
 
-    for m in messages:
+    for index, m in enumerate(messages):
         if m.role == ROLE_SYSTEM:
             continue
         if m.role == ROLE_TOOL:
@@ -93,11 +96,15 @@ def _to_anthropic_request_messages(
             continue
         flush_tool_results()
         if m.role == ROLE_USER:
-            if m.images:
+            turn_evidence = (
+                evidence_channel.blocks if index == evidence_anchor else ())
+            if m.images or turn_evidence:
                 blocks_u: List[Dict[str, Any]] = []
+                for block in turn_evidence:
+                    blocks_u.append({"type": "text", "text": block.text})
                 if m.content:
                     blocks_u.append({"type": "text", "text": m.content})
-                for img in m.images:
+                for img in m.images or []:
                     blocks_u.append({
                         "type": "image",
                         "source": {
@@ -130,13 +137,16 @@ def _to_anthropic_request_messages(
 
 def to_anthropic_request_messages(
     messages: Sequence[Message],
+    *,
+    evidence: Optional[EvidenceChannel] = None,
 ) -> Tuple[Optional[str], List[Dict[str, Any]]]:
     """兼容接口：返回合并 system 文本与 messages blocks。
 
     Provider 的实际请求构造使用 ``_to_anthropic_request_messages``，以保留显式
     system block 数组和 stable/dynamic 边界。
     """
-    system_blocks, wire = _to_anthropic_request_messages(messages)
+    system_blocks, wire = _to_anthropic_request_messages(
+        messages, evidence=evidence)
     system = system_blocks.merged_text if system_blocks is not None else None
     return system, wire
 
@@ -206,7 +216,11 @@ def tool_specs_to_anthropic(tools: Sequence[ToolSpec]) -> List[Dict[str, Any]]:
 
 class AnthropicProvider:
     name = "anthropic"
-    capabilities = ProviderCapabilities(supports_tools=True, supports_streaming=True)
+    capabilities = ProviderCapabilities(
+        supports_tools=True,
+        supports_streaming=True,
+        supports_evidence_channel=True,
+    )
     # TOML [providers.anthropic] 中除标准字段外、构造函数额外接受的键
     EXTRA_CONFIG_KEYS = ("max_tokens", "prompt_cache", "thinking_budget")
 
@@ -243,7 +257,11 @@ class AnthropicProvider:
     # -- 请求构造（纯函数，可单测） ---------------------------------------------
 
     def build_request(
-        self, messages: Sequence[Message], tools: Optional[Sequence[ToolSpec]]
+        self,
+        messages: Sequence[Message],
+        tools: Optional[Sequence[ToolSpec]],
+        *,
+        evidence: Optional[EvidenceChannel] = None,
     ) -> Dict[str, Any]:
         if not self.api_key:
             raise ConfigError(
@@ -252,6 +270,7 @@ class AnthropicProvider:
         system_blocks, wire_messages = _to_anthropic_request_messages(
             messages,
             cache_all_without_boundary=self.prompt_cache,
+            evidence=evidence,
         )
         max_tokens = self.max_tokens
         payload: Dict[str, Any] = {
@@ -294,14 +313,17 @@ class AnthropicProvider:
         self,
         messages: Sequence[Message],
         tools: Optional[Sequence[ToolSpec]] = None,
+        *,
+        evidence: Optional[EvidenceChannel] = None,
     ) -> PreparedLLMRequest:
         """Build once, then expose safe accounting alongside the opaque wire body."""
-        request = self.build_request(messages, tools)
+        request = self.build_request(messages, tools, evidence=evidence)
         payload = json.loads(request["body"].decode("utf-8"))
         blocks = resolve_system_prompt_blocks(
             messages,
             cache_all_without_boundary=self.prompt_cache,
         )
+        evidence_channel = resolve_evidence_channel(messages, evidence)
         segments, _, _ = _anthropic_cache_segments(payload)
         stable_chars = blocks.stable_chars if blocks is not None else 0
         stable_hash = blocks.stable_hash if blocks is not None else ""
@@ -315,14 +337,17 @@ class AnthropicProvider:
             stable_cache_chars=stable_chars,
             stable_cache_hash=stable_hash,
             system_prompt_blocks=blocks,
+            evidence_channel=evidence_channel,
         )
 
     async def stream(
         self,
         messages: Sequence[Message],
         tools: Optional[Sequence[ToolSpec]] = None,
+        *,
+        evidence: Optional[EvidenceChannel] = None,
     ) -> AsyncIterator[LLMEvent]:
-        prepared = self.prepare_request(messages, tools)
+        prepared = self.prepare_request(messages, tools, evidence=evidence)
         async for event in self.stream_prepared(prepared):
             yield event
 

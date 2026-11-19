@@ -33,10 +33,11 @@ from ...core.messages import (
     ToolCall,
 )
 from ..base import (
-    FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, PreparedLLMRequest,
-    ProviderCapabilities, StreamFinished, TextDelta, ToolCallArgumentsDelta,
-    ToolCallReady, ToolCallStartedDelta, ToolSpec, normalize_usage,
-    prepare_http_request, resolve_system_prompt_blocks,
+    FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, EvidenceChannel, LLMEvent,
+    PreparedLLMRequest, ProviderCapabilities, StreamFinished, TextDelta,
+    ToolCallArgumentsDelta, ToolCallReady, ToolCallStartedDelta, ToolSpec,
+    normalize_usage, prepare_http_request, resolve_evidence_channel,
+    resolve_system_prompt_blocks,
 )
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
@@ -51,6 +52,8 @@ GEMINI_ROLE_MODEL = "model"
 
 def to_gemini_contents(
     messages: Sequence[Message],
+    *,
+    evidence: Optional[EvidenceChannel] = None,
 ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
     """规范化历史 → (systemInstruction, contents)。
 
@@ -59,6 +62,8 @@ def to_gemini_contents(
     - functionResponse 的 name 由 assistant.tool_calls 建立的 id→name 映射还原
     """
     system_blocks = resolve_system_prompt_blocks(messages)
+    evidence_channel = resolve_evidence_channel(messages, evidence)
+    evidence_anchor = evidence_channel.resolved_anchor_index(messages)
     contents: List[Dict[str, Any]] = []
     id_to_name: Dict[str, str] = {}
     pending: List[Dict[str, Any]] = []
@@ -68,7 +73,7 @@ def to_gemini_contents(
             contents.append({"role": ROLE_USER, "parts": list(pending)})
             pending.clear()
 
-    for m in messages:
+    for index, m in enumerate(messages):
         if m.role == ROLE_SYSTEM:
             continue
         if m.role == ROLE_TOOL:
@@ -81,7 +86,11 @@ def to_gemini_contents(
             continue
         flush_pending()
         if m.role == ROLE_USER:
-            parts_u: List[Dict[str, Any]] = [{"text": m.content or ""}]
+            parts_u: List[Dict[str, Any]] = []
+            if index == evidence_anchor:
+                parts_u.extend(
+                    {"text": block.text} for block in evidence_channel.blocks)
+            parts_u.append({"text": m.content or ""})
             for img in m.images or []:
                 parts_u.append({"inline_data": {
                     "mime_type": img.media_type,
@@ -162,7 +171,11 @@ _FINISH_MAP = {"STOP": FINISH_STOP, "MAX_TOKENS": FINISH_LENGTH}
 
 class GeminiProvider:
     name = "gemini"
-    capabilities = ProviderCapabilities(supports_tools=True, supports_streaming=True)
+    capabilities = ProviderCapabilities(
+        supports_tools=True,
+        supports_streaming=True,
+        supports_evidence_channel=True,
+    )
 
     DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com"
     DEFAULT_MODEL = "gemini-2.5-flash"
@@ -189,14 +202,19 @@ class GeminiProvider:
     # -- 请求构造（纯函数，可单测） ------------------------------------------------------
 
     def build_request(
-        self, messages: Sequence[Message], tools: Optional[Sequence[ToolSpec]]
+        self,
+        messages: Sequence[Message],
+        tools: Optional[Sequence[ToolSpec]],
+        *,
+        evidence: Optional[EvidenceChannel] = None,
     ) -> Dict[str, Any]:
         if not self.api_key:
             raise ConfigError(
                 "缺少 API key：请设置 GEMINI_API_KEY 或 GOOGLE_API_KEY"
                 "（或配置文件；--mock 可离线体验）"
             )
-        system_instruction, contents = to_gemini_contents(messages)
+        system_instruction, contents = to_gemini_contents(
+            messages, evidence=evidence)
         payload: Dict[str, Any] = {"contents": contents}
         if self.generation:
             # Gemini 的生成参数在独立 generationConfig 段（temperature/topP/…）
@@ -221,11 +239,14 @@ class GeminiProvider:
         self,
         messages: Sequence[Message],
         tools: Optional[Sequence[ToolSpec]] = None,
+        *,
+        evidence: Optional[EvidenceChannel] = None,
     ) -> PreparedLLMRequest:
-        request = self.build_request(messages, tools)
+        request = self.build_request(messages, tools, evidence=evidence)
         payload = json.loads(request["body"].decode("utf-8"))
         generation = payload.get("generationConfig") or {}
         blocks = resolve_system_prompt_blocks(messages)
+        evidence_channel = resolve_evidence_channel(messages, evidence)
         return prepare_http_request(
             provider=self.name,
             model=self.model,
@@ -235,14 +256,17 @@ class GeminiProvider:
                 or generation.get("max_output_tokens") or 0),
             cache_mode="none",
             system_prompt_blocks=blocks,
+            evidence_channel=evidence_channel,
         )
 
     async def stream(
         self,
         messages: Sequence[Message],
         tools: Optional[Sequence[ToolSpec]] = None,
+        *,
+        evidence: Optional[EvidenceChannel] = None,
     ) -> AsyncIterator[LLMEvent]:
-        prepared = self.prepare_request(messages, tools)
+        prepared = self.prepare_request(messages, tools, evidence=evidence)
         async for event in self.stream_prepared(prepared):
             yield event
 

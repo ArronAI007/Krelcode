@@ -313,6 +313,7 @@ class PromptPlanSnapshot:
     full_hash: str = ""
     instruction_hash: str = ""
     evidence_hash: str = ""
+    evidence_block_count: int = 0
     history_digest: str = ""
     tool_catalog_hash: str = ""
     tool_count: int = 0
@@ -405,6 +406,8 @@ class PromptPlanSnapshot:
             instruction_hash=str(
                 getattr(plan, "instruction_hash", "") or ""),
             evidence_hash=str(getattr(plan, "evidence_hash", "") or ""),
+            evidence_block_count=len(
+                getattr(plan, "evidence_blocks", ()) or ()),
             history_digest=str(history_digest or ""),
             tool_catalog_hash=tool_hash,
             tool_count=len(tools),
@@ -429,6 +432,7 @@ class PromptPlanSnapshot:
             "full_hash": self.full_hash,
             "instruction_hash": self.instruction_hash,
             "evidence_hash": self.evidence_hash,
+            "evidence_block_count": self.evidence_block_count,
             "history_digest": self.history_digest,
             "tool_catalog_hash": self.tool_catalog_hash,
             "tool_count": self.tool_count,
@@ -469,6 +473,7 @@ class PromptPlanSnapshot:
             full_hash=_text(raw.get("full_hash"), 128),
             instruction_hash=_text(raw.get("instruction_hash"), 128),
             evidence_hash=_text(raw.get("evidence_hash"), 128),
+            evidence_block_count=_integer(raw.get("evidence_block_count")),
             history_digest=_text(raw.get("history_digest"), 128),
             tool_catalog_hash=_text(raw.get("tool_catalog_hash"), 128),
             tool_count=_integer(raw.get("tool_count")),

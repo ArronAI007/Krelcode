@@ -21,11 +21,11 @@ from ...core.messages import (
     ToolCall,
 )
 from ..base import (
-    FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, LLMEvent, PreparedLLMRequest,
-    ProviderCapabilities, StreamFinished, TextDelta, ThinkingDelta,
+    FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, EvidenceChannel, LLMEvent,
+    PreparedLLMRequest, ProviderCapabilities, StreamFinished, TextDelta, ThinkingDelta,
     ToolCallArgumentsDelta, ToolCallReady, ToolCallStartedDelta, ToolSpec,
     SystemPromptBlocks, cache_segment, normalize_usage, prepare_http_request,
-    resolve_system_prompt_blocks,
+    resolve_evidence_channel, resolve_system_prompt_blocks,
 )
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
@@ -36,11 +36,17 @@ from ..transport import (
 # wire format 互转（仅本 adapter 使用）
 # ---------------------------------------------------------------------------
 
-def to_openai_messages(messages: Sequence[Message]) -> List[Dict[str, Any]]:
+def to_openai_messages(
+    messages: Sequence[Message],
+    *,
+    evidence: Optional[EvidenceChannel] = None,
+) -> List[Dict[str, Any]]:
     wire = []
     system_blocks = resolve_system_prompt_blocks(messages)
+    evidence_channel = resolve_evidence_channel(messages, evidence)
+    evidence_anchor = evidence_channel.resolved_anchor_index(messages)
     system_emitted = False
-    for m in messages:
+    for index, m in enumerate(messages):
         if m.role == "system" and system_blocks is not None:
             # OpenAI-compatible endpoints receive one deterministic system
             # message. Keep the stable -> dynamic order while Provider
@@ -53,9 +59,13 @@ def to_openai_messages(messages: Sequence[Message]) -> List[Dict[str, Any]]:
                 system_emitted = True
             continue
         content: Any = m.content
+        turn_evidence = (
+            evidence_channel.text if index == evidence_anchor else "")
         if m.images and m.role == "user":
             # 多模态：content 转 blocks（text + image_url data URI）
             blocks: List[Dict[str, Any]] = []
+            if turn_evidence:
+                blocks.append({"type": "text", "text": turn_evidence})
             if m.content:
                 blocks.append({"type": "text", "text": m.content})
             for img in m.images:
@@ -66,6 +76,10 @@ def to_openai_messages(messages: Sequence[Message]) -> List[Dict[str, Any]]:
                     },
                 })
             content = blocks
+        elif turn_evidence and m.role == "user":
+            # OpenAI-compatible text endpoints stay on the string form. Evidence
+            # is a separate request channel but shares the current user turn.
+            content = f"{turn_evidence}\n\n{m.content}" if m.content else turn_evidence
         if m.role == "tool" and m.tool_blocks:
             content = [_tool_block(block) for block in m.tool_blocks]
         msg: Dict[str, Any] = {"role": m.role, "content": content}
@@ -159,7 +173,11 @@ _FINISH_MAP = {"stop": FINISH_STOP, "tool_calls": FINISH_TOOLS, "length": FINISH
 
 class OpenAIProvider:
     name = "openai"
-    capabilities = ProviderCapabilities(supports_tools=True, supports_streaming=True)
+    capabilities = ProviderCapabilities(
+        supports_tools=True,
+        supports_streaming=True,
+        supports_evidence_channel=True,
+    )
 
     DEFAULT_BASE_URL = "https://api.openai.com/v1"
     DEFAULT_MODEL = "gpt-4o-mini"
@@ -185,7 +203,11 @@ class OpenAIProvider:
     # -- 请求构造（纯函数，可单测） ---------------------------------------------
 
     def build_request(
-        self, messages: Sequence[Message], tools: Optional[Sequence[ToolSpec]]
+        self,
+        messages: Sequence[Message],
+        tools: Optional[Sequence[ToolSpec]],
+        *,
+        evidence: Optional[EvidenceChannel] = None,
     ) -> Dict[str, Any]:
         if not self.api_key:
             raise ConfigError(
@@ -196,7 +218,7 @@ class OpenAIProvider:
         payload: Dict[str, Any] = {
             **self.generation,
             "model": self.model,
-            "messages": to_openai_messages(messages),
+            "messages": to_openai_messages(messages, evidence=evidence),
             "stream": True,
         }
         if tools:
@@ -216,10 +238,13 @@ class OpenAIProvider:
         self,
         messages: Sequence[Message],
         tools: Optional[Sequence[ToolSpec]] = None,
+        *,
+        evidence: Optional[EvidenceChannel] = None,
     ) -> PreparedLLMRequest:
-        request = self.build_request(messages, tools)
+        request = self.build_request(messages, tools, evidence=evidence)
         payload = json.loads(request["body"].decode("utf-8"))
         blocks = resolve_system_prompt_blocks(messages)
+        evidence_channel = resolve_evidence_channel(messages, evidence)
         segments, stable_chars, stable_hash = _openai_cache_segments(
             payload, blocks=blocks)
         return prepare_http_request(
@@ -234,14 +259,17 @@ class OpenAIProvider:
             stable_cache_chars=stable_chars,
             stable_cache_hash=stable_hash,
             system_prompt_blocks=blocks,
+            evidence_channel=evidence_channel,
         )
 
     async def stream(
         self,
         messages: Sequence[Message],
         tools: Optional[Sequence[ToolSpec]] = None,
+        *,
+        evidence: Optional[EvidenceChannel] = None,
     ) -> AsyncIterator[LLMEvent]:
-        prepared = self.prepare_request(messages, tools)
+        prepared = self.prepare_request(messages, tools, evidence=evidence)
         async for event in self.stream_prepared(prepared):
             yield event
 

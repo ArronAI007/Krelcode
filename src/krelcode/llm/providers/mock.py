@@ -14,9 +14,9 @@ from typing import AsyncIterator, List, Optional, Sequence, Union
 
 from ...core.messages import Message
 from ..base import (
-    FINISH_STOP, FINISH_TOOLS, LLMEvent, ProviderCapabilities, StreamFinished,
-    TextDelta, ToolCallArgumentsDelta, ToolCallReady, ToolCallStartedDelta,
-    ToolSpec,
+    FINISH_STOP, FINISH_TOOLS, EvidenceChannel, LLMEvent, ProviderCapabilities,
+    StreamFinished, TextDelta, ToolCallArgumentsDelta, ToolCallReady,
+    ToolCallStartedDelta, ToolSpec,
 )
 
 ScriptItem = Union[str, Message]
@@ -24,7 +24,11 @@ ScriptItem = Union[str, Message]
 
 class MockProvider:
     name = "mock"
-    capabilities = ProviderCapabilities(supports_tools=True, supports_streaming=True)
+    capabilities = ProviderCapabilities(
+        supports_tools=True,
+        supports_streaming=True,
+        supports_evidence_channel=True,
+    )
     # mock 不接收 model/api_key/base_url/timeout/generation 等标准 wire 配置
     STANDARD_CONFIG = False
 
@@ -41,17 +45,21 @@ class MockProvider:
         self._usage = dict(usage or {})
         self.calls: List[List[Message]] = []
         self.tools_seen: List[Optional[List[ToolSpec]]] = []
+        self.evidence_seen: List[EvidenceChannel] = []
         self.model = "mock-model"
 
     async def stream(
         self,
         messages: Sequence[Message],
         tools: Optional[Sequence[ToolSpec]] = None,
+        *,
+        evidence: Optional[EvidenceChannel] = None,
     ) -> AsyncIterator[LLMEvent]:
         self.calls.append(
             [Message(m.role, m.content, m.tool_calls, m.tool_call_id) for m in messages]
         )
         self.tools_seen.append(list(tools) if tools else None)
+        self.evidence_seen.append(evidence or EvidenceChannel())
         item: ScriptItem = self._scripted.pop(0) if self._scripted else self._fallback
         message = Message.assistant(item) if isinstance(item, str) else item
         if message.content:

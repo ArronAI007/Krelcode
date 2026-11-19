@@ -1165,6 +1165,8 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             f" · segments {snapshot.cache_segment_count}",
             f"  stable hash: {snapshot.stable_hash or '(none)'}",
             f"  dynamic hash: {snapshot.dynamic_hash or '(none)'}",
+            f"  evidence channel: {snapshot.evidence_block_count} blocks"
+            f" · hash {snapshot.evidence_hash or '(none)'}",
             f"  cache_control boundary: {snapshot.cache_control_boundary} chars",
             f"  full hash: {snapshot.full_hash or '(none)'}",
             f"  工具 {snapshot.tool_count} 个 · fragment {snapshot.fragment_count} 个"

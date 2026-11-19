@@ -222,10 +222,12 @@ def test_prompt_assembler_places_memory_in_uncached_l7_evidence(tmp_path):
     assert memory_fragment.metadata["requires_validation"] is True
     assert memory_fragment.metadata["confidence_min"] == 0.5
     assert "first memory fact" not in first.stable_prefix
-    assert "first memory fact" in first.system_text
-    assert first.system_text.count("[Evidence: Memory]") == 1
+    assert "first memory fact" not in first.system_text
+    assert len(first.evidence_blocks) == 1
+    assert first.evidence_blocks[0].text.count("[Evidence: Memory]") == 1
     assert first.cache.stable_hash == second.cache.stable_hash
-    assert first.cache.dynamic_hash != second.cache.dynamic_hash
+    assert first.cache.dynamic_hash == second.cache.dynamic_hash
+    assert first.evidence_hash != second.evidence_hash
 
     provider_messages = assembler.provider_messages(first)
     system_messages = [
@@ -233,7 +235,9 @@ def test_prompt_assembler_places_memory_in_uncached_l7_evidence(tmp_path):
         if message.role == "system"
     ]
     assert len(system_messages) == 1
-    assert "[Evidence: Memory]" in system_messages[0].content
+    assert "[Evidence: Memory]" not in system_messages[0].content
+    assert provider_messages.evidence_channel.blocks == first.evidence_blocks
+    assert provider_messages.evidence_channel.anchor_message_index == -1
     assert all(
         message.content.strip() != "[Evidence: Memory]"
         for message in provider_messages.messages

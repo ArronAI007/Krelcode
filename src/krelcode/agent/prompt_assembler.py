@@ -15,11 +15,11 @@ from typing import Callable, Mapping, Optional, Sequence, Tuple
 
 from ..core.messages import Message
 from ..llm.base import (
-    EVIDENCE_BLOCKS_META_KEY,
     SYSTEM_BLOCK_CHANNEL_EVIDENCE,
     SYSTEM_BLOCK_CHANNEL_INSTRUCTION,
     SYSTEM_PROMPT_BLOCKS_META_KEY,
     EvidenceBlock,
+    EvidenceChannel,
     SystemPromptBlock,
     SystemPromptBlocks,
 )
@@ -99,13 +99,17 @@ class ProviderMessages:
     cache_boundary: Optional[PromptCacheBoundary] = None
     system_blocks: Optional[SystemPromptBlocks] = None
     instruction_blocks: Tuple[SystemPromptBlock, ...] = ()
-    evidence_blocks: Tuple[EvidenceBlock, ...] = ()
+    evidence_channel: EvidenceChannel = EvidenceChannel()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "messages", tuple(self.messages))
         object.__setattr__(self, "tools", tuple(self.tools))
         object.__setattr__(self, "instruction_blocks", tuple(self.instruction_blocks))
-        object.__setattr__(self, "evidence_blocks", tuple(self.evidence_blocks))
+        object.__setattr__(self, "evidence_channel", self.evidence_channel)
+
+    @property
+    def evidence_blocks(self) -> Tuple[EvidenceBlock, ...]:
+        return self.evidence_channel.blocks
 
     @property
     def stable_hash(self) -> str:
@@ -133,7 +137,7 @@ class ProviderMessages:
 
     @property
     def evidence_hash(self) -> str:
-        return self.system_blocks.evidence_hash if self.system_blocks else ""
+        return self.evidence_channel.hash
 
     def channel_record(self) -> Mapping[str, object]:
         """Content-free observability for the provider-neutral channels."""
@@ -144,6 +148,7 @@ class ProviderMessages:
                 block.as_record() for block in self.evidence_blocks],
             "instruction_hash": self.instruction_hash,
             "evidence_hash": self.evidence_hash,
+            "evidence_channel": self.evidence_channel.as_record(),
             "cache_boundary": (
                 self.cache_boundary.offset
                 if self.cache_boundary is not None else 0),
@@ -154,8 +159,6 @@ class ProviderMessages:
         metadata: dict[str, object] = {}
         if self.cache_boundary is not None and self.cache_boundary.enabled:
             metadata["prompt_cache_boundaries"] = [self.cache_boundary.offset]
-        if self.evidence_blocks:
-            metadata[EVIDENCE_BLOCKS_META_KEY] = self.evidence_blocks
         return metadata or None
 
 
@@ -181,6 +184,7 @@ class PromptPlan:
     generation: int
     engine: str
     system_blocks: Optional[SystemPromptBlocks] = None
+    evidence_blocks: Tuple[EvidenceBlock, ...] = ()
     token_contributions: Tuple[ContextTokenContribution, ...] = ()
     omitted_fragments: Tuple[str, ...] = ()
     omitted_details: Tuple[PromptOmissionSnapshot, ...] = ()
@@ -211,23 +215,13 @@ class PromptPlan:
                 if self.system_blocks is not None else ())
 
     @property
-    def evidence_blocks(self) -> Tuple[EvidenceBlock, ...]:
-        return tuple(
-            EvidenceBlock.from_system_block(block)
-            for block in (
-                self.system_blocks.evidence_system_blocks
-                if self.system_blocks is not None else ())
-        )
-
-    @property
     def instruction_hash(self) -> str:
         return (self.system_blocks.instruction_hash
                 if self.system_blocks is not None else "")
 
     @property
     def evidence_hash(self) -> str:
-        return (self.system_blocks.evidence_hash
-                if self.system_blocks is not None else "")
+        return EvidenceChannel(blocks=self.evidence_blocks).hash
 
     @property
     def dynamic_hash(self) -> str:
@@ -336,12 +330,21 @@ class PromptAssembler:
             )
         )
 
-        system_fragments = tuple(
+        prompt_fragments_for_request = tuple(
             fragment for fragment in fragments
             if fragment.layer in SYSTEM_PROMPT_LAYERS
             or fragment.layer == LAYER_L12_REMINDER
         )
-        system_blocks = _build_system_prompt_blocks(system_fragments)
+        instruction_fragments = tuple(
+            fragment for fragment in prompt_fragments_for_request
+            if _fragment_channel(fragment) == SYSTEM_BLOCK_CHANNEL_INSTRUCTION
+        )
+        evidence_fragments = tuple(
+            fragment for fragment in prompt_fragments_for_request
+            if _fragment_channel(fragment) == SYSTEM_BLOCK_CHANNEL_EVIDENCE
+        )
+        system_blocks = _build_system_prompt_blocks(instruction_fragments)
+        evidence_blocks = _build_evidence_blocks(evidence_fragments)
         system_text = system_blocks.merged_text
         stable_offset = system_blocks.cache_control_boundary
         stable_ids = tuple(
@@ -396,6 +399,7 @@ class PromptAssembler:
             ),
             engine=self.engine,
             system_blocks=system_blocks,
+            evidence_blocks=evidence_blocks,
             token_contributions=contributions,
             omitted_fragments=all_omitted_ids,
             omitted_details=all_omissions,
@@ -415,20 +419,23 @@ class PromptAssembler:
             provider_meta = dict(plan.provider_meta or {})
             if plan.system_blocks is not None:
                 provider_meta[SYSTEM_PROMPT_BLOCKS_META_KEY] = plan.system_blocks
-            if evidence_blocks:
-                provider_meta[EVIDENCE_BLOCKS_META_KEY] = evidence_blocks
             system = Message.system(
                 plan.system_text,
                 provider_meta=provider_meta or None,
             )
             messages.insert(0, system)
+        anchor_index = _evidence_anchor_index(messages, plan.current_user)
+        evidence_channel = EvidenceChannel(
+            blocks=evidence_blocks,
+            anchor_message_index=anchor_index,
+        )
         return ProviderMessages(
             messages=tuple(messages),
             tools=tuple(tools or ()),
             cache_boundary=plan.cache,
             system_blocks=plan.system_blocks,
             instruction_blocks=plan.instruction_blocks,
-            evidence_blocks=evidence_blocks,
+            evidence_channel=evidence_channel,
         )
 
     def _snapshot_from_registry(self) -> Optional[PromptSnapshot]:
@@ -842,6 +849,51 @@ def _build_system_prompt_blocks(
     return blocks
 
 
+def _build_evidence_blocks(
+    fragments: Sequence[PromptFragment],
+) -> Tuple[EvidenceBlock, ...]:
+    """Build the independent evidence channel from L7 fragments."""
+    blocks: list[EvidenceBlock] = []
+    for fragment in fragments:
+        content = fragment.content.strip()
+        if not content:
+            continue
+        metadata = _prompt_block_metadata(fragment)
+        blocks.append(EvidenceBlock(
+            id=fragment.id,
+            text=content,
+            source=fragment.source,
+            evidence_type=str(metadata.get("evidence_type", "") or ""),
+            scope=fragment.scope,
+            origin=str(metadata.get("evidence_origin", "") or ""),
+            trust=fragment.trust,
+            requires_validation=bool(
+                metadata.get("requires_validation", True)),
+            metadata=metadata,
+        ))
+    return tuple(blocks)
+
+
+def _evidence_anchor_index(
+    messages: Sequence[Message],
+    current_user: Optional[Message],
+) -> int:
+    """Return the transient user-message index that owns this turn's evidence."""
+    if current_user is None:
+        return -1
+    for index, message in enumerate(messages):
+        if message is current_user:
+            return index
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.role == "user" and message == current_user:
+            return index
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].role == "user":
+            return index
+    return -1
+
+
 _PROMPT_BLOCK_METADATA_KEYS = frozenset({
     "source_role",
     "instruction",
@@ -1030,6 +1082,7 @@ def _compatibility_assembly(
     prompt_text, prompt_stable, _ = _render_system_fragments(tuple(
         fragment for fragment in prompt_fragments
         if fragment.layer in SYSTEM_PROMPT_LAYERS
+        and _fragment_channel(fragment) == SYSTEM_BLOCK_CHANNEL_INSTRUCTION
     ))
     metadata: dict[str, object] = {
         "fragment_count": len(prompt_fragments),

@@ -173,7 +173,9 @@ def test_subagent_uses_prompt_assembler_and_l7_inherited_memory(tmp_path):
             if message.role == "system"
         ]
         assert len(system_messages) == 1
-        assert "[Evidence: Memory]" in system_messages[0].content
+        assert "[Evidence: Memory]" not in system_messages[0].content
+        assert "[Evidence: Memory]" in provider_messages.evidence_channel.text
+        assert provider_messages.evidence_channel.anchor_message_index >= 0
 
         prompt_snapshot = handle.loop.last_context_plan.prompt_plan
         assert prompt_snapshot is not None

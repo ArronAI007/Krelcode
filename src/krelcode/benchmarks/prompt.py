@@ -51,10 +51,12 @@ from ..core.events import EventBus
 from ..core.messages import Message
 from ..core.redact import SecretRedactor
 from ..llm.base import (
+    EvidenceChannel,
     PreparedLLMRequest,
     ProviderCapabilities,
     StreamFinished,
     TextDelta,
+    resolve_evidence_channel,
     resolve_system_prompt_blocks,
 )
 from ..safety.policy import AllowAllPolicy
@@ -359,7 +361,10 @@ class _BenchmarkProvider:
     name = "benchmark-prepared"
     model = "benchmark-model"
     capabilities = ProviderCapabilities(
-        supports_tools=True, supports_streaming=True)
+        supports_tools=True,
+        supports_streaming=True,
+        supports_evidence_channel=True,
+    )
 
     def __init__(self, responses: Sequence[str] = ()) -> None:
         self._responses = deque(responses)
@@ -371,13 +376,20 @@ class _BenchmarkProvider:
         self,
         messages: Sequence[Message],
         tools: Sequence[Mapping[str, object]] | None = None,
+        *,
+        evidence: EvidenceChannel | None = None,
     ) -> PreparedLLMRequest:
         blocks = resolve_system_prompt_blocks(messages)
+        evidence_channel = resolve_evidence_channel(messages, evidence)
         payload = {
             "provider": self.name,
             "model": self.model,
             "messages": [_message_payload(message) for message in messages],
             "tools": list(tools or ()),
+            "evidence": {
+                "anchor_message_index": evidence_channel.anchor_message_index,
+                "blocks": [block.text for block in evidence_channel.blocks],
+            },
         }
         body = json.dumps(
             payload, ensure_ascii=False, sort_keys=True, default=str,
@@ -406,12 +418,12 @@ class _BenchmarkProvider:
                 blocks.cache_control_boundary if blocks is not None else 0),
             instruction_system_block_count=(
                 len(blocks.instruction_blocks) if blocks is not None else 0),
-            evidence_system_block_count=(
-                len(blocks.evidence_system_blocks)
-                if blocks is not None else 0),
+            evidence_block_count=len(evidence_channel.blocks),
+            evidence_chars=evidence_channel.chars,
+            evidence_anchor_message_index=evidence_channel.anchor_message_index,
             instruction_hash=(
                 blocks.instruction_hash if blocks is not None else ""),
-            evidence_hash=blocks.evidence_hash if blocks is not None else "",
+            evidence_hash=evidence_channel.hash,
         )
         self.last_prepared = prepared
         return prepared
@@ -426,8 +438,10 @@ class _BenchmarkProvider:
         self,
         messages: Sequence[Message],
         tools: Sequence[Mapping[str, object]] | None = None,
+        *,
+        evidence: EvidenceChannel | None = None,
     ):
-        prepared = self.prepare_request(messages, tools)
+        prepared = self.prepare_request(messages, tools, evidence=evidence)
         async for event in self.stream_prepared(prepared):
             yield event
 
