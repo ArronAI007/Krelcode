@@ -95,6 +95,26 @@ class ProviderMessages:
     system_blocks: Optional[SystemPromptBlocks] = None
 
     @property
+    def stable_hash(self) -> str:
+        if self.system_blocks is None:
+            return ""
+        return self.system_blocks.stable_hash
+
+    @property
+    def dynamic_hash(self) -> str:
+        if self.system_blocks is None:
+            return ""
+        return self.system_blocks.dynamic_hash
+
+    @property
+    def full_hash(self) -> str:
+        if self.system_blocks is None:
+            return ""
+        return hashlib.sha256(
+            self.system_blocks.merged_text.encode("utf-8")
+        ).hexdigest()
+
+    @property
     def provider_meta(self) -> Optional[Mapping[str, object]]:
         if self.cache_boundary is None or not self.cache_boundary.enabled:
             return None
@@ -152,6 +172,14 @@ class PromptPlan:
     @property
     def dynamic_hash(self) -> str:
         return self.cache.dynamic_hash
+
+    @property
+    def stable_hash(self) -> str:
+        return self.cache.stable_hash
+
+    @property
+    def full_hash(self) -> str:
+        return self.cache.full_hash
 
     @property
     def provider_meta(self) -> Optional[Mapping[str, object]]:

@@ -347,6 +347,15 @@ def test_runner_single_prompt_emits_one_terminal_result(tmp_path):
     assert rc == 0
     assert rows[0]["type"] == "system" and rows[0]["subtype"] == "init"
     assert rows[0]["protocol"] == PROTOCOL_NAME
+    assembled = [
+        item for item in rows
+        if item["type"] == "context" and item["subtype"] == "assembled"
+    ]
+    assert assembled
+    snapshot = assembled[-1]["snapshot"]
+    assert "stable_hash" in snapshot
+    assert snapshot["dynamic_hash"]
+    assert snapshot["full_hash"]
     assert rows[-1]["type"] == "system" and rows[-1]["subtype"] == "session_end"
     results = [item for item in rows if item["type"] == "result"]
     assert len(results) == 1

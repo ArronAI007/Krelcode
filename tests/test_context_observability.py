@@ -161,6 +161,11 @@ def test_agent_loop_emits_snapshot_before_each_model_request(tmp_path):
     assert assembled[0].snapshot.tool_count == 1
     assert assembled[1].snapshot.history_tokens > assembled[0].snapshot.history_tokens
     assert loop.last_context_snapshot == assembled[-1].snapshot
+    assert loop.last_prompt_plan is not None
+    assert assembled[-1].snapshot.stable_hash == loop.last_prompt_plan.stable_hash
+    assert assembled[-1].snapshot.dynamic_hash == loop.last_prompt_plan.dynamic_hash
+    assert assembled[-1].snapshot.cache_boundary_chars == (
+        loop.last_prompt_plan.cache_boundary)
     assert len(provider.calls) == len(assembled)
     assert "SYSTEM SENTINEL" not in json.dumps(
         assembled[-1].snapshot.as_record(), ensure_ascii=False)

@@ -163,6 +163,16 @@ def test_sdk_e2e_streams_query_and_reuses_session(tmp_path):
                 and message.subtype == "text_delta"
                 for message in messages
             )
+            assembled = [
+                message for message in messages
+                if message.type == "context"
+                and message.subtype == "assembled"
+            ]
+            assert assembled
+            snapshot = assembled[-1].get("snapshot")
+            assert "stable_hash" in snapshot
+            assert snapshot["dynamic_hash"]
+            assert snapshot["full_hash"]
             result = messages[-1]
             assert result.is_terminal and not result.is_error
             assert result.get("result")

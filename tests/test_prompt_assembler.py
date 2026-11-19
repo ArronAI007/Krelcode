@@ -385,8 +385,37 @@ def test_prompt_plan_exposes_stable_and_dynamic_system_blocks(tmp_path):
         blocks.stable_text.encode("utf-8")).hexdigest()
     assert blocks.dynamic_hash == hashlib.sha256(b"DYNAMIC").hexdigest()
     assert plan.cache.dynamic_hash == blocks.dynamic_hash
+    assert plan.stable_hash == blocks.stable_hash
+    assert plan.dynamic_hash == blocks.dynamic_hash
+    assert plan.full_hash == hashlib.sha256(
+        plan.system_text.encode("utf-8")).hexdigest()
+    assert provider_messages.stable_hash == plan.stable_hash
+    assert provider_messages.dynamic_hash == plan.dynamic_hash
+    assert provider_messages.full_hash == plan.full_hash
     assert provider_messages.messages[0].provider_meta[
         "system_prompt_blocks"] is blocks
+
+
+def test_prompt_plan_exposes_omitted_fragment_ids(tmp_path):
+    registry = PromptFragmentRegistry([
+        base_fragment(),
+        PromptFragment(
+            id="memory:hidden", source="memory", title="Memory",
+            content="MEMORY MUST NOT REACH PROVIDER",
+            layer=LAYER_L7_MEMORY, stability=STABILITY_TURN,
+            trust=TRUST_UNTRUSTED,
+        ),
+    ])
+
+    assembler, plan = assemble(
+        tmp_path, registry, history=(Message.user("CURRENT"),))
+    provider_messages = assembler.provider_messages(plan)
+
+    assert plan.omitted_fragments == ("memory:hidden",)
+    assert plan.omitted_details[0].reason == "memory-evidence-separation"
+    assert "MEMORY MUST NOT REACH PROVIDER" not in plan.system_text
+    assert "MEMORY MUST NOT REACH PROVIDER" not in "\n".join(
+        message.content or "" for message in provider_messages.messages)
 
 
 def test_anthropic_preserves_each_stable_system_block_and_boundary(tmp_path):
