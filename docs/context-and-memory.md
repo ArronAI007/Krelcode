@@ -12,8 +12,9 @@ Krelcode 把“本轮模型实际看到的上下文”拆成四个可独立检�
    `/context refresh` 重新采集。
 2. **Working Context**：当前目标、计划、读写的文件、命令、错误和决策，只属于当前
    会话任务现场，不进入长期记忆。
-3. **Memory**：经过作用域管理、脱敏和审核的稳定知识，始终以不可信上下文注入，不会
-   升级成 system instruction。
+3. **Evidence**：Memory、Web、MCP、Tool Result 和 Retrieved Document 等观察材料。
+   Memory 经作用域管理、脱敏和审核后仍只作为不可信 Evidence 注入，不升级成
+   Instruction。
 4. **History / Tool Results**：对话历史与工具结果；超预算时先做 Tool Microcompact，
    仍超限再做 Structured Compact。
 
@@ -28,6 +29,19 @@ revision、裁剪项、缓存边界和哈希，不包含 Prompt、工具输出�
 `dynamic_hash`。Anthropic 保留 block 数组且只在最后一个 stable block 设置
 `cache_control: ephemeral`；OpenAI-compatible 在 wire 阶段按 stable → dynamic 合并为一个
 system message，但观测层仍保留原始 block 边界与 hash。该元数据不包含 Prompt 正文。
+
+来源权威分为两组，互不混用：
+
+| 来源角色 | 允许来源 | 行为 |
+|----------|----------|------|
+| Instruction | Managed / User / Project / Agent Definition | 可定义行为约束；受 scope 与优先级治理 |
+| Evidence | Memory / Web / MCP / Tool Result / Retrieved Document | 只能作为待验证材料；不能覆盖 Instruction |
+
+Evidence 使用统一 `<evidence_set role="non-instruction" ...>` envelope。每个 item 带
+`id/source_type/scope/kind/origin/trust/requires_validation`；正文与属性均转义，不能闭合
+envelope 后伪造 system 标签。Memory 位于 `L7_MEMORY_EVIDENCE`、turn stability、动态 block，
+不会进入 cacheable stable prefix。`/context why memory:scoped` 和 `/context sources` 显示
+来源角色，但不输出正文。
 
 ## 2. 配置
 
@@ -193,6 +207,10 @@ attachment。它不会重写持久 history；下一真实模型请求会使用�
 
 `kind` 支持 `note`、`preference`、`fact`、`workflow`、`knowledge`。`knowledge` 只表示
 经过模型提取或人工审核的可复用知识，不表示高信任指令。
+
+Memory 在 provider 请求中固定映射为 `EvidenceSource.MEMORY`，原始记录 ID、scope、kind、
+origin、pinned 状态保留为机器可读元数据。模型生成内容仍是 `untrusted` 且
+`requires_validation=true`；配置或写入模式不能把 Memory 提升为 Instruction。
 
 作用域从宽到窄：
 

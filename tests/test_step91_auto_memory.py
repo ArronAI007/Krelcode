@@ -384,7 +384,7 @@ def test_pinned_entries_rank_first_in_search_and_context(tmp_path):
     assert any(item.id == older.id for item in store.list(limit=0))
     context = store.render_context(max_entries=1, max_chars=500)
     assert "make deploy" in context
-    assert "[pinned]" in context
+    assert 'pinned="true"' in context
 
 
 def test_memory_search_tool_is_read_only_bounded_and_marks_context(tmp_path):
@@ -404,7 +404,8 @@ def test_memory_search_tool_is_read_only_bounded_and_marks_context(tmp_path):
 
     assert result.is_error is False
     assert tool.read_only is True
-    assert 'role="contextual_knowledge"' in result.content
+    assert 'role="non-instruction"' in result.content
+    assert 'source_type="memory"' in result.content
     assert 'kind="knowledge"' in result.content
     assert 'pinned="true"' in result.content
     assert result.data["count"] == 1

@@ -44,6 +44,7 @@ from .fragments import (
     LAYER_L1_BASE_AGENT,
     LAYER_L3_PROJECT_RULES,
     LAYER_L5_MODE_CONTRACT,
+    LAYER_L7_EVIDENCE,
     LAYER_L7_MEMORY,
     LAYER_L9_WORKING,
     LAYER_L10_HISTORY,
@@ -389,10 +390,20 @@ def _fragment_from_context_layer(layer: ContextLayer) -> PromptFragment:
 def _context_layer_classification(
     layer: ContextLayer,
 ) -> tuple[str, str, str]:
+    metadata = layer.metadata
+    if (
+        str(metadata.get("source_role", "")).strip().lower() == "evidence"
+        or bool(metadata.get("evidence_type"))
+    ):
+        evidence_trust = (
+            FRAGMENT_TRUST_UNTRUSTED
+            if layer.trust != TRUST_SYSTEM else TRUST_DATA
+        )
+        return LAYER_L7_EVIDENCE, STABILITY_TURN, evidence_trust
     if layer.id == "memory:scoped" or layer.source in {
         "memory", "memory_retrieval",
     }:
-        return LAYER_L7_MEMORY, STABILITY_TURN, TRUST_DATA
+        return LAYER_L7_EVIDENCE, STABILITY_TURN, FRAGMENT_TRUST_UNTRUSTED
     if layer.id == "workspace:directory-rules":
         return LAYER_L3_PROJECT_RULES, STABILITY_SESSION, TRUST_PROJECT
     if layer.source == "tool_directory":
@@ -404,7 +415,7 @@ def _context_layer_classification(
     if layer.source == "runtime_hooks":
         return LAYER_L12_REMINDER, STABILITY_TURN, FRAGMENT_TRUST_UNTRUSTED
     if layer.category == CATEGORY_MEMORY:
-        return LAYER_L7_MEMORY, STABILITY_TURN, TRUST_DATA
+        return LAYER_L7_EVIDENCE, STABILITY_TURN, FRAGMENT_TRUST_UNTRUSTED
     if layer.category == CATEGORY_WORKSPACE:
         return LAYER_L8_ENVIRONMENT, STABILITY_TURN, TRUST_PROJECT
     if layer.category == CATEGORY_RUNTIME:

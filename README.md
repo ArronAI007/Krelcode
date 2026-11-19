@@ -424,6 +424,8 @@ Step 93 进一步把 Context/Memory 变成可直接操作的会话能力：`/con
 
 Step 94 将 Context v3 设为默认并完成安全收口：`[context].engine = "v3"`（`legacy`/`v2` 仅保留一个版本回退）；每个 `ContextLayer` 带 `trust` 与 `origin`，`/context`/plan/token snapshot 都暴露 engine 与信任级别。Memory 不再进入 system Prompt Registry，而由独立 `MemoryContextSource` 以 `trust="untrusted"` knowledge layer 注入并做标签转义；Working Context 与 Hook runtime context 同样使用 data-not-instructions 边界。高置信度“只解释指定文件”会在 v3 装配阶段过滤 git/tree，避免无关工作区内容占用 token。回归覆盖 Prompt Injection、Memory Poisoning、symlink/path traversal、大文件/损坏文件/权限错误、compact 取消与摘要失败、长会话 compact、Memory 检索质量、跨项目隔离、Resume 刷新和预算总量守恒。
 
+Step 102 将 Memory 从独立“knowledge 特例”收敛为统一 Evidence：Instruction 来源固定为 Managed / User / Project / Agent Definition；Memory / Web / MCP / Tool Result / Retrieved Document 只能进入 Evidence。`MemoryContextSource`、Resume 检索记忆、子代理记忆与 MCP instructions 统一渲染为转义后的 `<evidence_set role="non-instruction" ...>`，逐项携带 source/scope/kind/origin/trust/requires-validation 元数据；Memory 固定位于 L7 Evidence、turn stability、非 cacheable，任何 Memory 变化只改变 `dynamic_hash`。`/context why memory:scoped` 会明确显示 `role=evidence`、`instruction=false` 与 `requires-validation=true`，诊断元数据仍不包含记忆正文。
+
 ## 模块结构（依赖严格单向）
 
 ```

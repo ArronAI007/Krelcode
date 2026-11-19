@@ -10,6 +10,12 @@ from typing import (
 )
 
 from ..core.messages import Message
+from .evidence import (
+    EvidenceRecord,
+    EvidenceSource,
+    evidence_metadata,
+    evidence_record_from_memory,
+)
 from .fragments import (
     GROUP_RUNTIME,
     GROUP_WORKSPACE,
@@ -197,6 +203,10 @@ class PromptSnapshotContextSource:
                             for key, value in raw_scopes.items()
                         }
                     metadata["memory_tokens"] = fragment.tokens
+                    metadata.setdefault("source_role", "evidence")
+                    metadata.setdefault("evidence_type", "memory")
+                    metadata.setdefault("requires_validation", True)
+                    metadata.setdefault("instruction", False)
         else:
             contributions.append(ContextTokenContribution(
                 source="system",
@@ -407,6 +417,16 @@ class RetrievedMemoryContextSource:
             text = str(raw).strip()
             if not text:
                 continue
+            record = EvidenceRecord(
+                id=f"retrieved-memory:{index}",
+                source=EvidenceSource.MEMORY,
+                content=text,
+                scope="session",
+                kind="retrieved_document",
+                trust=TRUST_UNTRUSTED,
+                requires_validation=True,
+                origin="resume_memory_query",
+            )
             layers.append(ContextLayer(
                 id=f"runtime:memory-retrieval:{index}",
                 source=self.name,
@@ -417,7 +437,11 @@ class RetrievedMemoryContextSource:
                 priority=250 + index,
                 cacheable=False,
                 compactable=True,
-                metadata={"index": index, "origin": "resume_query"},
+                metadata=evidence_metadata(
+                    (record,),
+                    origin="resume_memory_query",
+                    extra={"index": index, "origin": "resume_query"},
+                ),
                 token_contributions=(ContextTokenContribution(
                     f"runtime:memory:{index}", CATEGORY_RUNTIME,
                     estimate_text_tokens(text)),),
@@ -446,6 +470,18 @@ class MemoryContextSource:
             )
             for scope in ("user", "project", "session")
         }
+        records = tuple(
+            evidence_record_from_memory(entry) for entry in selected)
+        metadata = evidence_metadata(
+            records,
+            origin="scoped_memory",
+            extra={
+                "memory_entry_ids": tuple(entry.id for entry in selected),
+                "memory_scope_counts": scope_counts,
+                "entries": len(selected),
+                "memory_tokens": estimate_text_tokens(content),
+            },
+        )
         return (ContextLayer(
             id="memory:scoped",
             source=self.name,
@@ -456,12 +492,7 @@ class MemoryContextSource:
             priority=80,
             cacheable=False,
             compactable=True,
-            metadata={
-                "memory_entry_ids": tuple(entry.id for entry in selected),
-                "memory_scope_counts": scope_counts,
-                "entries": len(selected),
-                "memory_tokens": estimate_text_tokens(content),
-            },
+            metadata=metadata,
             token_contributions=(ContextTokenContribution(
                 "memory:scoped", CATEGORY_MEMORY,
                 estimate_text_tokens(content)),),

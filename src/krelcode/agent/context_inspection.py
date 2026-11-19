@@ -230,6 +230,16 @@ class ContextInspectionService:
                 "  metadata keys: "
                 + (", ".join(sorted(str(key) for key in layer.metadata)) or "(none)"),
             ])
+            if layer.metadata.get("source_role"):
+                lines.insert(2, (
+                    "  authority: "
+                    f"role={layer.metadata.get('source_role', 'unknown')}"
+                    f" · type={layer.metadata.get('evidence_type', '(unspecified)')}"
+                    " · instruction="
+                    f"{str(bool(layer.metadata.get('instruction', False))).lower()}"
+                    " · requires-validation="
+                    f"{str(bool(layer.metadata.get('requires_validation', False))).lower()}"
+                ))
             for contribution in layer.effective_token_contributions():
                 lines.append(
                     f"  token ← {contribution.source}"
@@ -270,10 +280,15 @@ class ContextInspectionService:
         ]
         shown, omitted = _bounded(assembly.layers, limit)
         for layer in shown:
+            role = str(layer.metadata.get("source_role", "") or "")
+            evidence_type = str(layer.metadata.get("evidence_type", "") or "")
+            type_suffix = f"/{evidence_type}" if evidence_type else ""
+            role_suffix = f" · role={role}{type_suffix}" if role else ""
             lines.append(
                 f"  [{layer.priority}] {layer.id} · {layer.source}"
                 f" · {layer.category} · {layer.tokens} tokens"
                 f" · trust={layer.trust}"
+                f"{role_suffix}"
                 f" · {'cache-prefix' if layer.cacheable else 'dynamic'}")
         if omitted:
             lines.append(f"  … 另有 {omitted} 个 layer；使用 /context why <id> 定向查看")

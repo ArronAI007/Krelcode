@@ -74,11 +74,11 @@ def test_memory_context_is_bounded_and_recent_first(tmp_path):
     for index in range(INJECT_ENTRIES + 4):
         store.add(f"entry-{index}")
 
-    context = store.render_context(max_entries=3, max_chars=500)
+    context = store.render_context(max_entries=3, max_chars=2_000)
 
     assert "entry-15" in context and "entry-14" in context
     assert "entry-13" in context and "entry-12" not in context
-    assert len(context) <= 500
+    assert len(context) <= 2_000
     assert store.token_count() > 0
 
 
@@ -173,9 +173,11 @@ def test_scoped_context_prioritizes_specific_scopes_and_keeps_order(tmp_path):
     project_at = context.index("project-rule")
     session_at = context.index("session-rule")
     assert user_at < project_at < session_at
-    assert "<user_memory>" in context
-    assert "<project_memory>" in context
-    assert "<session_memory>" in context
+    assert context.count("<evidence ") == 3
+    assert 'scope="user"' in context
+    assert 'scope="project"' in context
+    assert 'scope="session"' in context
+    assert 'role="non-instruction"' in context
     assert "more specific scopes take precedence" in context
 
 

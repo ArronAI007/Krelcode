@@ -1622,3 +1622,35 @@ agent.QueryEngine / AgentRuntime / EventBus
 - **TypeScript SDK**：与 Python SDK 共享 `krelcode.stream-json` v1 子进程边界；
   负责 JSONL 路由、request_id 队列、中断、超时和 stderr 脱敏，不复制 Agent
   业务实现。
+
+## Instruction / Evidence 权威分层（Step 102）
+
+Prompt 来源按权威而不是按文件格式分类：
+
+```text
+Instruction sources
+  Managed / User / Project / Agent Definition
+
+Evidence sources
+  Memory / Web / MCP / Tool Result / Retrieved Document
+```
+
+`agent/evidence.py` 定义 `SourceRole`、`InstructionSource`、`EvidenceSource`、
+`EvidenceRecord` 与唯一 renderer。Evidence 使用
+`<evidence_set role="non-instruction">` envelope，逐项携带 source/scope/kind/origin/
+trust/requires-validation；所有正文和属性先做 HTML escape，因此工具输出或记忆正文不能
+闭合 envelope 并注入新的 system 标签。
+
+Memory 不再拥有独立的 authority 语义：
+
+- `MemoryContextSource` 将 `MemoryEntry` 映射为 `EvidenceSource.MEMORY`。
+- PromptAssembler 固定映射到 L7 Evidence、turn stability、非 cacheable；Memory 变化只
+  影响 `dynamic_hash`。
+- Resume 任务检索、子代理筛选记忆和 `memory_search` 复用同一契约。
+- MCP initialize instructions 从 L6 catalog 降为 L7 Evidence；它仍是 server guidance，
+  但不能伪装成受信任目录或行为指令。
+- `/context why` 与 `/context sources` 展示 `role=evidence`、`instruction=false` 和
+  `requires-validation=true`，metadata 只含 ID/scope/count/origin 等无正文字段。
+
+Instruction 侧仍由 managed/user/project/agent-definition 分类器收口，Evidence 分类器对
+`data`/`untrusted` 输入返回无指令来源，避免两套 taxonomy 在后继 adapter 中漂移。
