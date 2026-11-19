@@ -78,6 +78,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | v0.87 | 动态工具池与 ToolSearch | `ToolTier` 将 turn 工具目录拆为 core/discoverable/deferred：core 带完整 Schema，discoverable 只暴露名称与单行描述，MCP/Plugin 默认 deferred；`tool_search` 只在已完成权限/运行模式/feature/MCP/禁用过滤的候选集内搜索并加载 Schema，新工具下一模型 Step 才可执行。Registry、Provider tools、动态目录、搜索和 `/tools` 使用名称稳定排序，避免注册顺序改变 Prompt Cache 前缀 |
 | v0.88 | 上下文增量附件 | `ContextAttachmentStore` 将 environment snapshot/delta、date、Skill/Agent/MCP catalog delta、token budget 与 mode reminder 拆成固定 ID、独立 revision 的动态 block；环境按 section hash 做增量，catalog 只读已加载快照，MCP instructions 标记 untrusted。相同内容不更新 revision；PromptAssembler 仍保持唯一装配入口，环境变化只改变对应 dynamic block 与 `dynamic_hash`，稳定前缀和持久 history 不变。`/context attachments` 提供无正文 revision/generation/token 观测 |
 | v0.89 | Memory 降级为 Evidence | 新增统一 `InstructionSource/EvidenceSource` 分权契约：L0-L6 在 PromptAssembler 标注 instruction_source，L7 标注 evidence_type/instruction=false；Memory 改用 `[Evidence: Memory]` envelope（source/scope/confidence/requires-validation），Resume、子代理、memory_search 复用该格式，MCP/Web 保留转义后的 `<evidence_set>`。Memory 固定进入 L7 Evidence、turn stability、untrusted 且不可缓存；`/context why|sources` 暴露来源权威和 validation 要求但不记录正文 |
+| v0.90+ | Base Prompt 生产级拆分与模型 profile | `core:base*` 拆为身份、执行循环、工具纪律、编码质量、安全权威、验证、沟通与完成度八个独立 L1 Fragment；`[prompt].profile=auto` 按最长模型模式 → provider family → default 解析 Claude/DeepSeek/OpenAI/Gemini profile。Profile 仅可追加 optional section，安全 required section 不可覆盖；主 Agent、`/model` 热切换和按实际子模型运行的后台子代理复用同一解析与 PromptAssembler 路径，`/context why` 暴露 profile/match/hash 但不记录正文 |
 
 ## 3. 文件导览（能力 → 位置）
 

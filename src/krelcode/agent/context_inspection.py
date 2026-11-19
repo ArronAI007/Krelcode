@@ -472,6 +472,16 @@ class ContextInspectionService:
                     f"  authority: role={provenance.get('source_role')}"
                     f" · instruction={str(provenance.get('instruction', False)).lower()}"
                     f" · source={provenance.get('instruction_source', '(unknown)')}")
+            profile_name = str(provenance.get("prompt_profile", "") or "")
+            if profile_name:
+                lines.append(
+                    f"  prompt profile: {profile_name}"
+                    f" · match={provenance.get('prompt_profile_match', '(unknown)')}"
+                    f" · provider={provenance.get('prompt_provider', '') or '(none)'}"
+                    f" · model={provenance.get('prompt_model', '') or '(none)'}")
+                lines.append(
+                    f"  base hash: {provenance.get('base_prompt_hash', '')}"
+                    f" · section={provenance.get('prompt_section', fragment.id)}")
             rule_scope = str(provenance.get("rule_scope", "") or "")
             if rule_scope:
                 overrides = provenance.get("rule_overrides", ())

@@ -12,6 +12,11 @@ CONFIG_TEMPLATE = '''# Krelcode 配置（默认按 user → project → local �
 
 # default_provider = "openai"        # openai / anthropic / gemini / mock
 
+# ---- 生产级 Base Prompt 与模型 profile ----
+# [prompt]
+# profile = "auto"                   # auto / default / claude / deepseek / openai / gemini
+# auto 先按模型名、再按 provider 匹配；profile 只追加指导，不能覆盖安全 section
+
 [providers.openai]
 # model = "gpt-4o-mini"
 # base_url = "https://api.openai.com/v1"   # 任意 OpenAI 兼容端点

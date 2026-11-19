@@ -12,7 +12,7 @@ import json
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..agent.compression import ContextManager
 from ..agent.context import _git
@@ -22,7 +22,11 @@ from ..agent.fragments import (
     apply_prompt_snapshot,
 )
 from ..agent.loop import DEFAULT_MAX_STEPS, AgentLoop
-from ..agent.prompts import build_system_prompt
+from ..agent.prompts import (
+    PROMPT_PROFILE_AUTO,
+    build_system_prompt,
+    resolve_prompt_profile,
+)
 from ..agent.working_context import WorkingContextStore
 from ..core.events import (
     ContextAssembled,
@@ -64,18 +68,33 @@ from .feed import AgentFeed, AgentFeedPage
 from .instructions import build_subagent_instructions, inherited_memory_fragment
 from .sidechain import (
     AgentSidechainWriter,
-    SidechainInfo,
     SidechainStore,
     read_sidechain,
 )
 
-SUBAGENT_SYSTEM_PROMPT = build_system_prompt(
-    "You are a Krelcode SUBAGENT working on a delegated subtask.\n"
-    "- Focus strictly on the task you were given; do not ask the user questions.\n"
-    "- Use tools to do the work and verify results when possible.\n"
-    "- Your final text message is the report handed back to the parent agent: "
-    "make it dense and self-contained (what was done, key results, file paths, caveats)."
-)
+SUBAGENT_ROLE_PROMPT = """\
+You are a Krelcode SUBAGENT working on a delegated subtask.
+- Focus strictly on the task you were given; do not ask the user questions.
+- Use tools to do the work and verify results when possible.
+- Your final text message is the report handed back to the parent agent: make it
+  dense and self-contained (what was done, key results, file paths, caveats)."""
+
+
+def build_subagent_system_prompt(
+    *,
+    profile: str = PROMPT_PROFILE_AUTO,
+    provider: object = "",
+    model: object = "",
+) -> str:
+    return build_system_prompt(
+        SUBAGENT_ROLE_PROMPT,
+        profile=profile,
+        provider=provider,
+        model=model,
+    )
+
+
+SUBAGENT_SYSTEM_PROMPT = build_subagent_system_prompt()
 
 PREVIEW_CHARS = 160
 
@@ -117,6 +136,7 @@ class AgentHandle:
     instruction_layers: Tuple[str, ...] = field(default_factory=tuple)
     model: str = ""
     provider: str = ""
+    prompt_profile: str = ""
     permission_mode: str = ""
     mcp_servers: Tuple[str, ...] = field(default_factory=tuple)
     kill_requested: bool = field(default=False, repr=False)
@@ -150,6 +170,8 @@ class SubagentManager:
         llm_resolver: Optional[Callable[[str], LLMProvider]] = None,
         mcp_servers_provider: Optional[Callable[[], Iterable[str]]] = None,
         base_prompt_provider: Optional[Callable[[], str]] = None,
+        base_prompt_for_llm: Optional[Callable[[LLMProvider], str]] = None,
+        prompt_profile: str = PROMPT_PROFILE_AUTO,
         catalog_fragments_provider: Optional[
             Callable[[], Iterable[PromptFragment]]
         ] = None,
@@ -165,6 +187,8 @@ class SubagentManager:
         self.redactor = redactor
         self.system_prompt_provider = system_prompt_provider
         self.base_prompt_provider = base_prompt_provider
+        self.base_prompt_for_llm = base_prompt_for_llm
+        self.prompt_profile = prompt_profile
         self.catalog_fragments_provider = catalog_fragments_provider
         self.hook_port = hook_port
         self.definitions = definitions or AgentDefinitionManager(
@@ -321,18 +345,39 @@ class SubagentManager:
         if child_hook_port is not None and hasattr(child_hook_port, "rebind"):
             child_hook_port = child_hook_port.rebind(tool_context.workspace_root)
 
-        prompt_provider = self.base_prompt_provider or self.system_prompt_provider
-        base_prompt = (
-            prompt_provider()
-            if prompt_provider is not None
-            else SUBAGENT_SYSTEM_PROMPT
+        prompt_resolution = resolve_prompt_profile(
+            child_llm,
+            getattr(child_llm, "model", ""),
+            configured=self.prompt_profile,
         )
+        if self.base_prompt_for_llm is not None:
+            base_prompt = self.base_prompt_for_llm(child_llm)
+        else:
+            prompt_provider = (
+                self.base_prompt_provider or self.system_prompt_provider)
+            base_prompt = (
+                prompt_provider()
+                if prompt_provider is not None
+                else build_subagent_system_prompt(
+                    profile=self.prompt_profile,
+                    provider=child_llm,
+                    model=getattr(child_llm, "model", ""),
+                )
+            )
         instruction_bundle = build_subagent_instructions(
             tool_context.workspace_root,
             task,
             base_prompt=base_prompt,
             definition=definition_obj,
             redactor=self.redactor,
+            base_metadata={
+                "prompt_profile": prompt_resolution.name,
+                "prompt_profile_requested": prompt_resolution.requested,
+                "prompt_profile_match": prompt_resolution.matched_by,
+                "prompt_provider": prompt_resolution.provider,
+                "prompt_model": prompt_resolution.model,
+                "base_prompt_hash": prompt_resolution.base_prompt_hash,
+            },
         )
         prompt_fragments = list(instruction_bundle.fragments())
         if self.catalog_fragments_provider is not None:
@@ -359,6 +404,9 @@ class SubagentManager:
             working_context_store=own_working_context,
         )
         loop.prompt_registry = prompt_registry
+        loop.prompt_profile = prompt_resolution.profile
+        loop.prompt_profile_resolution = prompt_resolution
+        loop.prompt_profile_name = prompt_resolution.name
         apply_prompt_snapshot(loop, prompt_snapshot)
 
         effective_task = task
@@ -411,6 +459,7 @@ class SubagentManager:
             "model": definition_obj.model if definition_obj else "",
             "resolved_model": str(getattr(child_llm, "model", "") or ""),
             "provider": str(getattr(child_llm, "name", "") or ""),
+            "prompt_profile": prompt_resolution.name,
             "permission_mode": permission_mode.value,
             "mcp_servers": list(mcp_servers),
             "isolated": bool(isolated),
@@ -439,6 +488,7 @@ class SubagentManager:
                 layer.kind for layer in instruction_bundle.layers),
             model=str(getattr(child_llm, "model", "") or ""),
             provider=str(getattr(child_llm, "name", "") or ""),
+            prompt_profile=prompt_resolution.name,
             permission_mode=permission_mode.value,
             mcp_servers=mcp_servers,
         )

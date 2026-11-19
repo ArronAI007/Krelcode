@@ -107,7 +107,11 @@ def restore_session(loop: AgentLoop, path: Path, log=print) -> bool:
         log(f"（会话 {path} 中没有历史快照）")
         return False
     if history[0].role != "system":
-        history.insert(0, Message.system(build_system_prompt()))
+        history.insert(0, Message.system(build_system_prompt(
+            profile=getattr(loop, "prompt_profile_config", "auto"),
+            provider=getattr(loop, "llm", ""),
+            model=getattr(getattr(loop, "llm", None), "model", ""),
+        )))
     loop.history = history
     loop.rebuild_working_context()
     loop.pending_context_refresh = True

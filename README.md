@@ -72,7 +72,7 @@ krelcode               # 进入 REPL
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（沙箱内 1272 通过，2 个本地端口测试自动跳过）
+# 运行全部测试（沙箱内 1284 通过，2 个本地端口测试自动跳过）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -132,6 +132,23 @@ PYTHONPATH=src python -m krelcode.benchmarks.prompt --list --json
 每个 check 的通过状态；不包含 Prompt、规则/Memory 正文、工具 Schema、
 history 或请求体正文。任一 case 失败不会隐藏其他 case，CLI 以非零退出码结束。
 Benchmark 不访问网络，也不要求 API key。
+
+### 生产级 Base Prompt 与模型 profile
+
+Base Prompt 固定拆为身份、执行循环、工具纪律、编码质量、安全权威、验证、沟通与
+任务闭环八个 L1 section，每个 section 都有独立 ID、来源、优先级、hash 和可观测
+元数据。`[prompt].profile` 默认 `auto`：按模型名最长匹配、再按 provider family
+匹配 `claude` / `deepseek` / `openai` / `gemini`，最后回退 `default`。
+
+```toml
+[prompt]
+profile = "auto"  # 或 default / claude / deepseek / openai / gemini
+```
+
+profile 只能追加非权威的模型适配 section，不能替换或弱化共享安全规则。`/model`
+热切换会在 `auto` 模式下重新解析 profile、原子替换 `core:base*` 并更新 stable
+hash；子代理按自身实际模型独立解析。`/context why core:base:safety` 可查看 profile、
+provider/model、匹配方式和 base hash，但不会记录 Prompt 正文。
 
 REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`（当前工具池的 core/discoverable/deferred/loaded/excluded 状态）、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp [reload|auth <server>]`（状态、热重载、OAuth + PKCE 授权）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>|install|update|enable|disable|remove ...]`（插件生命周期）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/lsp`（语言服务器状态）、`/web`（网页工具安全配置）、`/output-style [list|show <name>|reload|off|<name>]`（声明式输出样式）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|fragments|enable|disable|toggle|reset|cache|ledger|refresh]`（请求 token 分项、来源归因、Fragment 启停、缓存边界与工作区重采）、`/memory [list [scope]|show|add <text> --scope|search|pin|unpin|forget|mode|review|migrate]`（分层记忆、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
 

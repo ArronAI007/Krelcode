@@ -8,12 +8,10 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from . import __version__
 from .agent.compression import DEFAULT_MAX_TOKENS as DEFAULT_CONTEXT_BUDGET
 from .agent.compression import ContextManager
 from .agent.pricing import default_budget_for
@@ -22,7 +20,7 @@ from .agent.context import (
     ContextOptions,
     build_workspace_context_bundle,
 )
-from .agent.loop import DEFAULT_MAX_STEPS, AgentLoop
+from .agent.loop import AgentLoop
 from .agent.context_assembler import ContextAssembler
 from .agent.context_source import (
     DirectoryRulesContextSource,
@@ -31,9 +29,15 @@ from .agent.context_source import (
 from .agent.fragments import (
     PromptFragmentRegistry,
     apply_prompt_snapshot,
-    base_fragment,
+    base_fragments,
+    refresh_registry_snapshot,
+    replace_base_fragments,
     skills_fragment,
     sync_rule_fragments,
+)
+from .agent.prompts import (
+    prompt_profile_from_config,
+    resolve_prompt_profile,
 )
 from .agent.rules import RuleLoader
 from .agent.runtime import AgentRuntime
@@ -83,11 +87,17 @@ from .session.memory_candidates import (
     AutoMemoryMode,
     coerce_auto_memory_mode,
 )
-from .session.restore import refresh_skill_system_prompt, restore_session
+from .session.restore import (
+    refresh_skill_system_prompt,
+    restore_session as _restore_session,
+)
 from .session.runner import run_session
 from .skills import SkillManager, build_skill_tools
 from .subagent.definition import AgentDefinitionManager
-from .subagent.manager import SUBAGENT_SYSTEM_PROMPT, SubagentManager
+from .subagent.manager import (
+    SubagentManager,
+    build_subagent_system_prompt,
+)
 from .tools.base import (
     PermissionMode,
     RunMode,
@@ -121,6 +131,9 @@ from .tools.registry import ToolRegistry
 from .ui.approval import ApprovalBroker
 from .ui.repl import run_repl
 from .ui.status_line import StatusLineOptions, StatusLineRenderer
+
+# Backward-compatible public re-export used by embedders and older tests.
+restore_session = _restore_session
 
 
 def default_tools(
@@ -505,6 +518,12 @@ async def build_loop(
                     f"{issue.message}")
     bus = EventBus()
     llm = build_llm(args, config, log=log)
+    prompt_profile_setting = prompt_profile_from_config(config)
+    prompt_profile_resolution = resolve_prompt_profile(
+        llm,
+        getattr(llm, "model", ""),
+        configured=prompt_profile_setting,
+    )
     memory_store = MemoryStore(workspace_root)
     base_skill_paths = configured_skill_paths(args, config)
     custom_commands = build_custom_command_manager(config, workspace_root)
@@ -620,6 +639,13 @@ async def build_loop(
         log(f"[agents] 跳过无效定义: {issue.path}: {issue.message}")
     redactor = SecretRedactor()
     redactor.add(getattr(llm, "api_key", None))
+    def subagent_base_prompt(child_llm: LLMProvider) -> str:
+        return build_subagent_system_prompt(
+            profile=prompt_profile_setting,
+            provider=child_llm,
+            model=getattr(child_llm, "model", ""),
+        )
+
     def subagent_catalog_fragments():
         catalog = skills_fragment(skill_manager.prompt_index())
         return (catalog,) if catalog is not None else ()
@@ -635,8 +661,10 @@ async def build_loop(
         # Keep the legacy composite view; new assembly splits base (L1) and
         # the skill catalog (L6) into independent source-attributed fragments.
         system_prompt_provider=(
-            lambda: skill_manager.apply_to_prompt(SUBAGENT_SYSTEM_PROMPT)),
-        base_prompt_provider=lambda: SUBAGENT_SYSTEM_PROMPT,
+            lambda: skill_manager.apply_to_prompt(
+                subagent_base_prompt(manager.llm))),
+        base_prompt_for_llm=subagent_base_prompt,
+        prompt_profile=prompt_profile_setting,
         catalog_fragments_provider=subagent_catalog_fragments,
         definitions=agent_definitions,
         memory_store=memory_store,
@@ -661,7 +689,8 @@ async def build_loop(
             home=output_style_config.home)
     output_style_manager = OutputStyleManager(
         workspace_root, config=output_style_config)
-    prompt_registry = PromptFragmentRegistry([base_fragment()])
+    prompt_registry = PromptFragmentRegistry(
+        base_fragments(prompt_profile_resolution))
     if workspace_context is not None:
         sync_rule_fragments(prompt_registry, workspace_context)
     # v3 keeps Memory out of the system Prompt Registry. It is assembled as a
@@ -723,6 +752,10 @@ async def build_loop(
     loop.agent_definitions = agent_definitions
     loop.base_skill_paths = tuple(base_skill_paths)
     loop.prompt_registry = prompt_registry
+    loop.prompt_profile = prompt_profile_resolution.profile
+    loop.prompt_profile_resolution = prompt_profile_resolution
+    loop.prompt_profile_name = prompt_profile_resolution.name
+    loop.prompt_profile_config = prompt_profile_setting
     loop.context_options = context_options
     loop.context_engine = context_options.engine
     loop.context_enabled = not args.no_context
@@ -821,7 +854,11 @@ def build_model_switcher(args: argparse.Namespace, config: Dict[str, Any],
     def switch(new_spec: Optional[str]) -> str:
         if not new_spec:
             model = getattr(loop.llm, "model", "?")
-            return f"当前: {current_base()} / {model}（/model <名称> 或 <provider>/<名称> 切换）"
+            profile = getattr(loop, "prompt_profile_name", "") or "unknown"
+            return (
+                f"当前: {current_base()} / {model} · prompt {profile}"
+                "（/model <名称> 或 <provider>/<名称> 切换）"
+            )
         if "/" in new_spec:
             provider_name, model_name = new_spec.split("/", 1)
         else:
@@ -844,9 +881,29 @@ def build_model_switcher(args: argparse.Namespace, config: Dict[str, Any],
         except Exception as e:
             return f"切换失败: {type(e).__name__}: {e}"
 
+        profile_resolution = resolve_prompt_profile(
+            inner,
+            getattr(inner, "model", ""),
+            configured=prompt_profile_from_config(config),
+        )
         loop.llm = provider
         if subagents is not None:
             subagents.llm = provider   # 之后 spawn 的子代理用新模型
+            subagents.prompt_profile = prompt_profile_from_config(config)
+        loop.prompt_profile = profile_resolution.profile
+        loop.prompt_profile_resolution = profile_resolution
+        loop.prompt_profile_name = profile_resolution.name
+        prompt_note = ""
+        registry = getattr(loop, "prompt_registry", None)
+        if registry is not None:
+            replace_base_fragments(
+                registry,
+                profile_resolution,
+                provider=inner,
+                model=getattr(inner, "model", ""),
+            )
+            refresh_registry_snapshot(loop)
+            prompt_note = f"，prompt {profile_resolution.name}"
         budget_note = ""
         if loop.context_manager is not None:
             loop.context_manager.llm = provider
@@ -859,7 +916,10 @@ def build_model_switcher(args: argparse.Namespace, config: Dict[str, Any],
         # 新 provider 的 key 也纳入脱敏集合（旧 key 保留，避免历史旧内容漏网）
         if redactor is not None:
             redactor.add(getattr(inner, "api_key", None))
-        return f"已切换: {provider.name} / {getattr(inner, 'model', '?')}{budget_note}"
+        return (
+            f"已切换: {provider.name} / {getattr(inner, 'model', '?')}"
+            f"{budget_note}{prompt_note}"
+        )
 
     return switch
 
@@ -933,6 +993,9 @@ async def async_main(args: argparse.Namespace) -> int:
         )
     except SandboxError as e:
         print(f"Sandbox 配置错误: {e}", file=sys.stderr)
+        return 2
+    except ConfigError as e:
+        print(f"配置错误: {e}", file=sys.stderr)
         return 2
     custom_commands = loop.custom_command_manager
     redactor = getattr(loop, "redactor", None) or SecretRedactor()

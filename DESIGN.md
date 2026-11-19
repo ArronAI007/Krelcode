@@ -1051,6 +1051,23 @@ History、L11 Current User Request、L12 Per-turn Reminder。
 - `ProviderMessages` 是 Provider 的唯一输入；`ContextAssembly` 仅作为 `/context`、Resume 与
   checkpoint 的无正文兼容视图。
 
+### 生产级 Base Prompt 与模型 profile
+
+L1 Base Prompt 不再是一个不可归因的大字符串，而由固定 `core:base*` section 组成：
+身份、operating loop、tool discipline、coding quality、instruction authority/safety、
+verification、communication 和 completion。每个 section 都是 static/cacheable/managed、
+不可手动关闭，并携带 section ID、profile、provider/model、匹配方式与 base hash。
+
+`ModelPromptProfile` 只允许追加 optional section。共享 base section ID 被保留，profile
+尝试复用或替换时在构造阶段 fail-closed，因此模型适配不能削弱安全与权限约束。
+profile 解析顺序为：显式配置 → 最长 model pattern → provider family → `default`；
+DeepSeek 即使运行在 OpenAI-compatible provider 上，也会先由 `deepseek-*` 模型模式命中。
+
+主 Agent 在 composition root 解析 profile 后通过 `base_fragments()` 注册；`/model` 在
+`auto` 模式重新解析并原子替换保留的 `core:base*` 命名空间，再刷新 PromptSnapshot 与
+stable hash。子代理不继承父 history，但在实际 child provider/model 确定后独立解析
+profile；共享规则、L7 Evidence Memory 和 PromptAssembler 路径保持不变。
+
 ## 显式 system cache boundary（Step 99）
 
 Provider 层不再把 system prompt 当作一个不透明字符串。`PromptAssembler` 先产出 provider-

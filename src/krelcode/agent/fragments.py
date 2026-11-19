@@ -14,7 +14,15 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from ..core.messages import Message
 from .context import ContextSection, WorkspaceContext
 from .evidence import SourceRole, instruction_source_for
-from .prompts import BASE_SYSTEM_PROMPT
+from .prompts import (
+    BASE_SYSTEM_PROMPT,
+    ModelPromptProfile,
+    PromptProfileResolution,
+    PROMPT_BASE_SECTIONS,
+    PROMPT_PROFILE_AUTO,
+    base_prompt_hash,
+    resolve_prompt_profile,
+)
 from .rules import RuleLayer, RuleScope
 from .tokens import estimate_text_tokens
 
@@ -427,22 +435,147 @@ class PromptFragmentRegistry:
         self._snapshot = None
 
 
+def _base_fragment_metadata(
+    resolution: PromptProfileResolution,
+    *,
+    section_id: str,
+    required: bool,
+) -> Dict[str, object]:
+    return {
+        "kind": "base",
+        "prompt_section": section_id,
+        "prompt_section_required": required,
+        "prompt_profile": resolution.profile.name,
+        "prompt_profile_requested": resolution.requested,
+        "prompt_profile_match": resolution.matched_by,
+        "prompt_provider": resolution.provider,
+        "prompt_model": resolution.model,
+        "base_prompt_hash": resolution.base_prompt_hash,
+        "source_role": SourceRole.INSTRUCTION.value,
+        "instruction_source": "managed",
+        "instruction": True,
+    }
+
+
+def _coerce_base_profile(
+    profile: str | ModelPromptProfile | PromptProfileResolution,
+    provider: object,
+    model: object,
+) -> PromptProfileResolution:
+    if isinstance(profile, PromptProfileResolution):
+        return profile
+    if isinstance(profile, ModelPromptProfile):
+        provider_name = str(getattr(provider, "name", provider) or "").strip().lower()
+        model_name = str(
+            model if isinstance(model, str) else getattr(model, "model", "")
+        ).strip()
+        return PromptProfileResolution(
+            profile=profile,
+            requested=profile.name,
+            matched_by="direct",
+            provider=provider_name,
+            model=model_name,
+            base_prompt_hash=base_prompt_hash(profile),
+        )
+    return resolve_prompt_profile(
+        provider,
+        model,
+        configured=str(profile or PROMPT_PROFILE_AUTO),
+    )
+
+
 def base_fragment() -> PromptFragment:
+    """Compatibility view containing the default production base prompt."""
+
+    resolution = resolve_prompt_profile(configured=PROMPT_PROFILE_AUTO)
     return PromptFragment(
         id="core:base",
         source="core",
-        title="Krelcode base system prompt",
+        title="Krelcode base system prompt (aggregate compatibility view)",
         content=BASE_SYSTEM_PROMPT,
         group=GROUP_SYSTEM,
         priority=0,
         cacheable=True,
         compactable=False,
         toggleable=False,
+        metadata=_base_fragment_metadata(
+            resolution, section_id="core:base", required=True),
         scope="managed",
         layer=LAYER_L1_BASE_AGENT,
         stability=STABILITY_STATIC,
         trust=TRUST_MANAGED,
     )
+
+
+def base_fragments(
+    profile: str | ModelPromptProfile | PromptProfileResolution = PROMPT_PROFILE_AUTO,
+    *,
+    provider: object = "",
+    model: object = "",
+) -> Tuple[PromptFragment, ...]:
+    """Build independently attributable L1 fragments for production assembly."""
+
+    resolution = _coerce_base_profile(profile, provider, model)
+    sections = (*PROMPT_BASE_SECTIONS, *resolution.profile.additional_sections)
+    fragments: List[PromptFragment] = []
+    for section in sections:
+        is_profile_section = section in resolution.profile.additional_sections
+        fragments.append(PromptFragment(
+            id=section.id,
+            source=(
+                f"model_profile:{resolution.profile.name}"
+                if is_profile_section else "core"
+            ),
+            title=section.title,
+            content=section.content,
+            group=GROUP_SYSTEM,
+            priority=section.priority,
+            cacheable=True,
+            compactable=False,
+            toggleable=False,
+            metadata=_base_fragment_metadata(
+                resolution,
+                section_id=section.id,
+                required=False if is_profile_section else section.required,
+            ),
+            scope="managed",
+            layer=LAYER_L1_BASE_AGENT,
+            stability=STABILITY_STATIC,
+            trust=TRUST_MANAGED,
+        ))
+    return tuple(fragments)
+
+
+def replace_base_fragments(
+    registry: PromptFragmentRegistry,
+    profile: str | ModelPromptProfile | PromptProfileResolution = PROMPT_PROFILE_AUTO,
+    *,
+    provider: object = "",
+    model: object = "",
+) -> Tuple[PromptFragment, ...]:
+    """Atomically replace the reserved ``core:base*`` namespace."""
+
+    fragments = base_fragments(profile, provider=provider, model=model)
+    ids = {fragment.id for fragment in fragments}
+    if len(ids) != len(fragments):
+        raise ValueError("base prompt 包含重复 fragment id")
+    retained = {
+        fragment.id: fragment for fragment in registry.list()
+        if fragment.id != "core:base" and not fragment.id.startswith("core:base:")
+    }
+    conflicts = sorted(ids & set(retained))
+    if conflicts:
+        raise ValueError(
+            "base prompt fragment 与保留 fragment 冲突: " + ", ".join(conflicts))
+    for fragment in fragments:
+        _validate_fragment(fragment)
+    # Validation completes before mutation, so a profile refresh cannot leave a
+    # half-installed base prompt behind.
+    registry._fragments = retained  # noqa: SLF001 - registry owns this reserved swap
+    for fragment in fragments:
+        registry._fragments[fragment.id] = fragment  # noqa: SLF001
+    registry._invalidate()  # noqa: SLF001
+    return fragments
 
 
 def skills_fragment(index: str) -> Optional[PromptFragment]:

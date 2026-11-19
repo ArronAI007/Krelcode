@@ -170,7 +170,9 @@ Review $ARGUMENTS. Check compatibility and cite file:line.
   保留独立 `CommandSource.PLUGIN` 与 `/plugin__<plugin>__<command>` 名称。
 
 Fragment 启停是**当前会话运行时状态**，不写入 TOML；重启后恢复默认全开。
-稳定内置来源为 `core`（不可关闭的基础 system prompt）与 `workspace:rules`。Git/tree、
+稳定内置来源为按职责拆分的 `core:base*`（不可关闭的生产级 Base Prompt sections）
+与 `workspace:rules`。模型 profile 以独立 `core:base:profile:<name>` Fragment 追加，
+不能覆盖共享的安全与指令权威 section。Git/tree、
 日期、Skill/Agent/MCP catalog 和 mode/token reminder 属于动态
 `ContextAttachmentStore`，各有独立 revision，不参与 Fragment 启停。cacheable Fragment
 会形成连续的稳定前缀；只有真正位于第一个动态 block 之前的稳定内容会报告为 cache boundary。
@@ -216,6 +218,9 @@ KRELCODE_MANAGED_CONFIG 或平台 managed 路径
 
 ```toml
 default_provider = "openai"          # openai / anthropic / gemini / mock
+
+[prompt]
+profile = "auto"                     # auto / default / claude / deepseek / openai / gemini
 
 [providers.openai]
 model = "gpt-4o-mini"                # 覆盖 KRELCODE_MODEL
@@ -357,6 +362,14 @@ Working Context 与 Hook runtime context 只作为 data-not-instructions 注入�
 
 配置优先级：**显式 CLI 旗标 > TOML > 环境变量 > 内置默认**。
 未知键进 `extra` 透传（如 anthropic 的 prompt_cache/thinking_budget）。
+
+`[prompt].profile = "auto"` 先按模型名做最长模式匹配（例如 `deepseek-*`、
+`claude-*`、`gpt-*`、`gemini-*`），再按 Provider family 匹配，最后回退到
+`default`。显式指定 profile 会覆盖自动识别；未知名称启动时直接报配置错误。
+profile 只追加模型适配指导，不替换、关闭或削弱 `core:base:safety` 等共享
+required section。`/model` 热切换在 `auto` 模式会重新解析 profile、原子替换
+`core:base*` 并刷新 stable hash；显式 profile 保持不变。子代理按自身实际
+provider/model 解析同一套 profile。
 
 MCP 远程能力：
 

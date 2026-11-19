@@ -11,9 +11,9 @@ a runtime instruction.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 from ..agent.evidence import (
     InstructionSource,
@@ -54,6 +54,7 @@ class InstructionBundle:
     layers: tuple[InstructionLayer, ...]
     rule_sources: tuple[str, ...] = ()
     rule_layers: tuple[RuleLayer, ...] = ()
+    base_metadata: Mapping[str, object] = field(default_factory=dict)
 
     @property
     def text(self) -> str:
@@ -115,6 +116,7 @@ class InstructionBundle:
                         "source_role": SourceRole.INSTRUCTION.value,
                         "instruction_source": InstructionSource.MANAGED.value,
                         "instruction": True,
+                        **dict(self.base_metadata),
                     },
                     scope="managed",
                     layer=LAYER_L1_BASE_AGENT,
@@ -146,6 +148,7 @@ def build_subagent_instructions(
     home: Optional[Path] = None,
     redactor: Optional[SecretRedactor] = None,
     managed_paths: Sequence[Path] = (),
+    base_metadata: Optional[Mapping[str, object]] = None,
 ) -> InstructionBundle:
     root = Path(workspace_root).resolve()
     home_path = (Path(home) if home is not None else Path.home()).expanduser().resolve()
@@ -187,6 +190,7 @@ def build_subagent_instructions(
         tuple(layers),
         sources,
         rule_layers=tuple(rule_layers),
+        base_metadata=dict(base_metadata or {}),
     )
 
 
