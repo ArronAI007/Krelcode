@@ -9,15 +9,35 @@ already retained by ``AgentLoop``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence
+from typing import Optional, Sequence
 
 from .context_source import ContextAssembly, ContextLayer
 from .context_plan import ContextPlanSnapshot
+from .prompt_plan import (
+    PromptFragmentSnapshot,
+    PromptPlanSnapshot,
+)
 from .tokens import estimate_history_tokens
 
 
 def _short_hash(value: str) -> str:
     return (value or "(none)")[:16]
+
+
+def _signed(value: int) -> str:
+    return f"+{value}" if value > 0 else str(value)
+
+
+def _yes_no(value: bool) -> str:
+    return "是" if value else "否"
+
+
+def _ids(items: Sequence[str], limit: int = 20) -> str:
+    if not items:
+        return "(none)"
+    shown = ", ".join(items[:limit])
+    return shown + (f" · … 另有 {len(items) - limit} 个"
+                    if len(items) > limit else "")
 
 
 def _bounded(items: Sequence[object], limit: int) -> tuple[list[object], int]:
@@ -57,6 +77,11 @@ class ContextInspectionService:
     @property
     def plan(self) -> Optional[ContextPlanSnapshot]:
         return getattr(self.loop, "last_context_plan", None)
+
+    @property
+    def prompt_plan(self) -> Optional[PromptPlanSnapshot]:
+        plan = self.plan
+        return plan.prompt_plan if plan is not None else None
 
     @property
     def previous_snapshot(self):
@@ -170,6 +195,7 @@ class ContextInspectionService:
         *,
         layer_limit: int = 100,
         source_limit: int = 100,
+        fragment_limit: int = 100,
     ) -> list[str]:
         plan = self.plan
         if plan is None:
@@ -177,6 +203,7 @@ class ContextInspectionService:
         layers, omitted_layers = _bounded(plan.layer_ids, layer_limit)
         sources, omitted_sources = _bounded(plan.sources, source_limit)
         categories, omitted_categories = _bounded(plan.categories, 30)
+        request_plan = plan.prompt_plan
         lines = [
             f"  [context plan] {plan.turn_id or '(unknown turn)'}"
             f" · Step {plan.step} · {plan.token_count} tokens"
@@ -187,6 +214,17 @@ class ContextInspectionService:
             f"  history digest {_short_hash(plan.history_digest)}"
             f" · working-context sequence {plan.working_context_sequence}"
             + (f" · restored←{plan.restored_from}" if plan.restored_from else ""),
+        ]
+        if request_plan is not None and (
+            request_plan.fragments or request_plan.tool_catalog_hash
+            or request_plan.engine
+        ):
+            lines.extend(self._prompt_distribution_lines(
+                request_plan, fragment_limit=fragment_limit))
+            lines.extend(self._prompt_omission_lines(request_plan))
+            lines.extend(self._prompt_memory_lines(request_plan))
+            lines.extend(self._prompt_diff_lines(request_plan))
+        lines.extend([
             f"  layers {len(plan.layer_ids)} · sources {len(plan.sources)}"
             f" · categories {', '.join(categories) or '(none)'}"
             + (f" · 另有 {omitted_categories} 个类别" if omitted_categories else ""),
@@ -195,17 +233,124 @@ class ContextInspectionService:
             + (f" · … 另有 {omitted_layers} 个" if omitted_layers else ""),
             "  sources: " + (", ".join(sources) or "(none)")
             + (f" · … 另有 {omitted_sources} 个" if omitted_sources else ""),
+        ])
+        return lines
+
+    def _prompt_distribution_lines(
+        self,
+        plan: PromptPlanSnapshot,
+        *,
+        fragment_limit: int,
+    ) -> list[str]:
+        fragments, omitted = _bounded(plan.fragments, fragment_limit)
+        stable_count = sum(1 for item in plan.fragments if item.stable)
+        volatile_count = len(plan.fragments) - stable_count
+        stable_sources: dict[str, int] = {}
+        volatile_sources: dict[str, int] = {}
+        for fragment in plan.fragments:
+            target = stable_sources if fragment.stable else volatile_sources
+            target[fragment.source] = target.get(fragment.source, 0) + fragment.tokens
+
+        def source_tokens(values: dict[str, int]) -> str:
+            ordered = sorted(values.items(), key=lambda item: (-item[1], item[0]))
+            return " · ".join(f"{name} {tokens}" for name, tokens in ordered[:20])
+
+        lines = [
+            f"  prompt engine {plan.engine or 'unknown'}"
+            f" · fragment {len(plan.fragments)}"
+            f" · stable {stable_count}/{plan.stable_tokens} tokens"
+            f" · volatile {volatile_count}/{plan.volatile_tokens} tokens",
+            f"  stable sources: {source_tokens(stable_sources) or '(none)'}",
+            f"  volatile sources: {source_tokens(volatile_sources) or '(none)'}",
+            f"  cache boundary {plan.cache_boundary_chars} chars"
+            f" · fragment tokens {plan.fragment_tokens}"
+            f" · tools {plan.tool_count}"
+            f" · tool catalog {_short_hash(plan.tool_catalog_hash)}",
+        ]
+        for fragment in fragments:
+            if not isinstance(fragment, PromptFragmentSnapshot):
+                continue
+            placement = "stable" if fragment.stable else "volatile"
+            lines.append(
+                f"  [{placement}] {fragment.id} · {fragment.source}"
+                f" · scope={fragment.scope} · {fragment.tokens} tokens"
+                f" · {fragment.layer} · {fragment.stability}"
+                f" · trust={fragment.trust}"
+                f" · cacheable={str(fragment.cacheable).lower()}")
+        if omitted:
+            lines.append(f"  … 另有 {omitted} 个 fragment 未展示")
+        return lines
+
+    def _prompt_omission_lines(self, plan: PromptPlanSnapshot) -> list[str]:
+        if not plan.omitted:
+            return ["  omitted: 无"]
+        lines = [f"  omitted: {len(plan.omitted)} 项"]
+        for item in plan.omitted[:50]:
+            lines.append(
+                f"  [omitted/{item.reason or 'unspecified'}] {item.id}"
+                f" · {item.source or '(unknown)'}"
+                f" · scope={item.scope or '(unknown)'}"
+                f" · {item.tokens} tokens"
+                + (f" · {item.layer}" if item.layer else ""))
+        if len(plan.omitted) > 50:
+            lines.append(f"  … 另有 {len(plan.omitted) - 50} 个裁剪项")
+        return lines
+
+    def _prompt_memory_lines(self, plan: PromptPlanSnapshot) -> list[str]:
+        if not plan.memory_hits:
+            return ["  memory hits: 无"]
+        lines = [f"  memory hits: {len(plan.memory_hits)}"]
+        for hit in plan.memory_hits[:30]:
+            lines.append(
+                f"  [memory] {hit.id} · source={hit.source}"
+                f" · scope={hit.scope or '(unknown)'}"
+                f" · kind={hit.kind or '(unknown)'}"
+                f" · origin={hit.origin or '(unknown)'}"
+                f" · {hit.tokens} tokens")
+        if len(plan.memory_hits) > 30:
+            lines.append(f"  … 另有 {len(plan.memory_hits) - 30} 条 memory hit")
+        return lines
+
+    def _prompt_diff_lines(self, plan: PromptPlanSnapshot) -> list[str]:
+        diff = plan.diff
+        if not diff.available:
+            return ["  diff: 无上一请求可比较"]
+        lines = [
+            f"  diff ← {diff.previous_turn_id or '(unknown turn)'}"
+            f" Step {diff.previous_step}"
+            f" · changed={_yes_no(diff.changed)}"
+            f" · tokens stable {_signed(diff.stable_token_delta)}"
+            f" / volatile {_signed(diff.volatile_token_delta)}",
+            f"  added: {_ids(diff.added_fragments)}"
+            f" · removed: {_ids(diff.removed_fragments)}"
+            f" · changed: {_ids(diff.changed_fragments)}",
+            f"  hash changed: stable={_yes_no(diff.stable_changed)}"
+            f" · dynamic={_yes_no(diff.dynamic_changed)}"
+            f" · full={_yes_no(diff.full_changed)}"
+            f" · history={_yes_no(diff.history_changed)}"
+            f" · tools={_yes_no(diff.tool_catalog_changed)}"
+            f" · memory={_yes_no(diff.memory_changed)}"
+            f" · omitted={_yes_no(diff.omitted_changed)}",
         ]
         return lines
 
     def why_lines(self, target: str) -> list[str]:
         needle = str(target or "").strip()
         if not needle:
-            return ["  用法: /context why <layer-id|source|token-source>"]
+            return [
+                "  用法: /context why "
+                "<fragment-id|source|memory-id|layer-id|token-source|omitted-id>"
+            ]
         assembly = self.assembly
         snapshot = self.snapshot
-        if assembly is None and snapshot is None:
+        request_plan = self.prompt_plan
+        if assembly is None and snapshot is None and request_plan is None:
             return ["  [context why] 尚无真实请求快照"]
+
+        prompt_match, prompt_lines = self._prompt_why_lines(
+            request_plan, needle)
+        if prompt_match:
+            return prompt_lines
 
         exact: list[ContextLayer] = []
         partial: list[ContextLayer] = []
@@ -267,6 +412,106 @@ class ContextInspectionService:
                 f" · {'包含 source' if plan_has_source else '未记录为该 source'}")
         return lines
 
+    def _prompt_why_lines(
+        self,
+        plan: Optional[PromptPlanSnapshot],
+        needle: str,
+    ) -> tuple[bool, list[str]]:
+        if plan is None:
+            return False, []
+        fragment_exact = [
+            item for item in plan.fragments
+            if needle == item.id or needle == item.source
+        ]
+        fragment_partial = [
+            item for item in plan.fragments
+            if needle in item.id or needle in item.source
+        ]
+        fragments = fragment_exact or fragment_partial
+        if fragments:
+            fragment = fragments[0]
+            placement = "stable-prefix" if fragment.stable else "volatile"
+            lines = [
+                f"  [context why] {fragment.id}",
+                f"  source {fragment.source} · scope {fragment.scope}"
+                f" · layer {fragment.layer} · stability {fragment.stability}"
+                f" · trust {fragment.trust} · {fragment.tokens} tokens",
+                f"  cache {placement} · cacheable "
+                f"{str(fragment.cacheable).lower()}"
+                f" · content hash {_short_hash(fragment.content_hash)}",
+            ]
+            if fragment.id in plan.dropped_items:
+                lines.append("  budget: 该 fragment 同时记录在 dropped items 中")
+            for hit in plan.memory_hits:
+                if (
+                    fragment.id == "memory:scoped"
+                    or fragment.source in {"memory", "memory_retrieval"}
+                ):
+                    lines.append(
+                        f"  memory hit {hit.id} · source={hit.source}"
+                        f" · scope={hit.scope or '(unknown)'}"
+                        f" · kind={hit.kind or '(unknown)'}"
+                        f" · origin={hit.origin or '(unknown)'}"
+                        f" · {hit.tokens} tokens")
+            if len(fragments) > 1:
+                lines.append("  其他匹配: " + _ids(
+                    [item.id for item in fragments[1:]]))
+            if plan.diff.available:
+                lines.append(
+                    f"  previous request: {plan.diff.previous_turn_id}"
+                    f" Step {plan.diff.previous_step}")
+            return True, lines
+
+        memory_hits = [item for item in plan.memory_hits if needle == item.id]
+        if memory_hits:
+            hit = memory_hits[0]
+            memory_fragment = next(
+                (item for item in plan.fragments
+                 if item.id == "memory:scoped"
+                 or item.source in {"memory", "memory_retrieval"}),
+                None,
+            )
+            return True, [
+                f"  [context why] {hit.id}",
+                f"  memory hit · source={hit.source}"
+                f" · scope={hit.scope or '(unknown)'}"
+                f" · kind={hit.kind or '(unknown)'}"
+                f" · origin={hit.origin or '(unknown)'}"
+                f" · {hit.tokens} tokens",
+                "  authority: role=evidence · instruction=false"
+                " · requires-validation=true",
+                (
+                    f"  fragment {memory_fragment.id} · "
+                    f"{memory_fragment.tokens} tokens · volatile"
+                    if memory_fragment is not None
+                    else "  fragment: 未记录独立 memory fragment"
+                ),
+            ]
+
+        omission_exact = [
+            item for item in plan.omitted
+            if needle == item.id or needle == item.source
+        ]
+        omission_partial = [
+            item for item in plan.omitted
+            if needle in item.id or needle in item.source
+        ]
+        omissions = omission_exact or omission_partial
+        if omissions:
+            item = omissions[0]
+            return True, [
+                f"  [context why] {item.id}",
+                f"  source {item.source or '(unknown)'}"
+                f" · scope {item.scope or '(unknown)'}"
+                f" · layer {item.layer or '(unknown)'}"
+                f" · stability {item.stability or '(unknown)'}"
+                f" · trust {item.trust or '(unknown)'}"
+                f" · {item.tokens} tokens",
+                f"  omitted: {item.reason or 'unspecified'}"
+                " · 未计入 provider 请求正文",
+            ]
+        return False, []
+
     def sources_lines(self, *, limit: int = 100) -> list[str]:
         assembly = self.assembly
         if assembly is None:
@@ -303,9 +548,48 @@ class ContextInspectionService:
     def cache_lines(self) -> list[str]:
         snapshot = self.snapshot
         previous = self.previous_snapshot
-        if snapshot is None:
+        request_plan = self.prompt_plan
+        if snapshot is None and request_plan is None:
             return ["  [cache] 尚无真实请求快照"]
-        lines = [
+        lines: list[str] = []
+        if request_plan is not None and (
+            request_plan.fragments or request_plan.tool_catalog_hash
+            or request_plan.engine
+        ):
+            stable_count = len(request_plan.stable_fragments)
+            volatile_count = len(request_plan.volatile_fragments)
+            lines.extend([
+                f"  [cache] prompt plan {request_plan.turn_id or '(unknown turn)'}"
+                f" · Step {request_plan.step}"
+                f" · stable {stable_count}/{request_plan.stable_tokens} tokens"
+                f" · volatile {volatile_count}/{request_plan.volatile_tokens} tokens",
+                f"  stable hash {_short_hash(request_plan.stable_hash)}"
+                f" · dynamic hash {_short_hash(request_plan.dynamic_hash)}"
+                f" · full hash {_short_hash(request_plan.full_hash)}",
+                f"  cache boundary {request_plan.cache_boundary_chars} chars"
+                f" · tool catalog {_short_hash(request_plan.tool_catalog_hash)}"
+                f" · tools {request_plan.tool_count}",
+                f"  stable fragments: "
+                f"{_ids([item.id for item in request_plan.stable_fragments], 30)}",
+                f"  volatile fragments: "
+                f"{_ids([item.id for item in request_plan.volatile_fragments], 30)}",
+                f"  omitted: {_ids([item.id for item in request_plan.omitted], 30)}",
+            ])
+            if request_plan.diff.available:
+                diff = request_plan.diff
+                lines.extend([
+                    f"  changed: {_yes_no(diff.stable_changed)} (stable)"
+                    f" · dynamic {_yes_no(diff.dynamic_changed)}"
+                    f" · full {_yes_no(diff.full_changed)}"
+                    f" · tools {_yes_no(diff.tool_catalog_changed)}",
+                    f"  previous: {diff.previous_turn_id or '(unknown turn)'}"
+                    f" Step {diff.previous_step}"
+                    f" · token Δ stable {_signed(diff.stable_token_delta)}"
+                    f" / volatile {_signed(diff.volatile_token_delta)}",
+                ])
+        if snapshot is None:
+            return lines
+        lines.extend([
             f"  [cache] stable blocks {snapshot.stable_system_block_count}"
             f" · dynamic blocks {snapshot.dynamic_system_block_count}"
             f" · stable {snapshot.stable_tokens}"
@@ -322,7 +606,7 @@ class ContextInspectionService:
             f" ({snapshot.cache_control_segment_count} explicit)",
             f"  cacheable tools {snapshot.tool_cacheable_tokens}"
             f" · messages {snapshot.message_cacheable_tokens}",
-        ]
+        ])
         if previous is not None:
             lines.append(
                 f"  previous stable {_short_hash(previous.stable_hash)}"

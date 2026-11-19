@@ -243,6 +243,11 @@ def test_single_file_explanation_filters_unrelated_workspace_context(tmp_path):
         if layer.id == "source:prompt"
     )
     assert "workspace:tree" in prompt_layer.metadata["excluded_fragments"]
+    omitted = {
+        item.id: item.reason
+        for item in loop.last_context_plan.prompt_plan.omitted
+    }
+    assert omitted["workspace:tree"] == "file-explanation-scope"
 
 
 def test_rule_files_reject_oversized_corrupt_and_permission_errors(

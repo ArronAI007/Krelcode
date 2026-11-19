@@ -1658,3 +1658,20 @@ Memory 不再拥有独立的 authority 语义：
 
 Instruction 侧仍由 managed/user/project/agent-definition 分类器收口，Evidence 分类器对
 `data`/`untrusted` 输入返回无指令来源，避免两套 taxonomy 在后继 adapter 中漂移。
+
+## Prompt Plan 可观测性（Step 103）
+
+请求观测继续复用唯一 `PromptAssembler.assemble()` 路径，不建立第二套 Prompt 组装逻辑。
+运行期 `PromptPlan` 保留正文用于 provider 序列化；新增的 `PromptPlanSnapshot` 只保存：
+
+- 每个 Fragment 的 `id/source/scope/layer/stability/trust/tokens/cacheable/stable/content_hash`；
+- stable/volatile token、按 source 分布、cache boundary 与 stable/dynamic/full hash；
+- 稳定排序后的工具 Schema 目录 hash 和工具数量；
+- Memory hit 的 `id/source/scope/kind/origin/tokens`；
+- trust/scope、单文件范围、空 attachment、预算等裁剪项及机器可读 reason；
+- 与上一次真实请求相比新增/删除/变化的 Fragment、各类 hash 标志和 token 差值。
+
+`ContextPlanSnapshot` 嵌入该快照并随 Context checkpoint 持久化。`/context plan` 展示逐
+Fragment 计划和 omission/diff，`/context why <id>` 可定位 Fragment、Memory entry、Context
+layer 或裁剪项，`/context cache` 展示工具目录 hash 与跨请求变化。所有观测记录只保留
+来源、计数和哈希，不包含 Prompt、工具 description/schema、history、Memory 或附件正文。

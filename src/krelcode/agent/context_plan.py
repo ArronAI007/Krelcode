@@ -10,10 +10,11 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Iterable, Mapping, Sequence
 
 from ..core.messages import Message
+from .prompt_plan import PromptPlanSnapshot
 
 
 def history_digest(history: Iterable[Message]) -> str:
@@ -70,6 +71,7 @@ class ContextPlanSnapshot:
     working_context_sequence: int = 0
     created_at: float = 0.0
     restored_from: str = ""
+    prompt_plan: PromptPlanSnapshot = field(default_factory=PromptPlanSnapshot)
 
     @classmethod
     def from_assembly(
@@ -80,15 +82,26 @@ class ContextPlanSnapshot:
         turn_id: str,
         step: int,
         working_context_sequence: int = 0,
+        prompt_plan: PromptPlanSnapshot | None = None,
     ) -> "ContextPlanSnapshot":
         layers = tuple(getattr(assembly, "layers", ()) or ())
+        request_plan = prompt_plan or PromptPlanSnapshot()
         return cls(
             turn_id=str(turn_id or ""),
             step=max(0, int(step)),
             engine=str(getattr(assembly, "engine", "") or ""),
-            stable_hash=str(getattr(assembly, "stable_hash", "") or ""),
-            dynamic_hash=str(getattr(assembly, "dynamic_hash", "") or ""),
-            full_hash=str(getattr(assembly, "full_hash", "") or ""),
+            stable_hash=(
+                request_plan.stable_hash
+                or str(getattr(assembly, "stable_hash", "") or "")
+            ),
+            dynamic_hash=(
+                request_plan.dynamic_hash
+                or str(getattr(assembly, "dynamic_hash", "") or "")
+            ),
+            full_hash=(
+                request_plan.full_hash
+                or str(getattr(assembly, "full_hash", "") or "")
+            ),
             layer_ids=tuple(layer.id for layer in layers),
             sources=tuple(sorted({layer.source for layer in layers})),
             categories=tuple(layer.category for layer in layers),
@@ -98,9 +111,11 @@ class ContextPlanSnapshot:
             })),
             token_count=sum(max(0, int(c.tokens)) for c in getattr(
                 assembly, "token_contributions", ()) or ()),
-            history_digest=history_digest(history),
+            history_digest=(
+                request_plan.history_digest or history_digest(history)),
             working_context_sequence=max(0, int(working_context_sequence)),
             created_at=time.time(),
+            prompt_plan=request_plan,
         )
 
     def matches_history(self, history: Sequence[Message]) -> bool:
@@ -141,6 +156,7 @@ class ContextPlanSnapshot:
             "working_context_sequence": self.working_context_sequence,
             "created_at": self.created_at,
             "restored_from": self.restored_from,
+            "prompt_plan": self.prompt_plan.as_dict(),
         }
 
     @classmethod
@@ -176,6 +192,10 @@ class ContextPlanSnapshot:
             working_context_sequence=sequence,
             created_at=created_at,
             restored_from=str(raw.get("restored_from", "") or ""),
+            prompt_plan=PromptPlanSnapshot.from_dict(
+                raw.get("prompt_plan")
+                if isinstance(raw.get("prompt_plan"), Mapping)
+                else None),
         )
 
 

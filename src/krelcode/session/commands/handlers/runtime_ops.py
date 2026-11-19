@@ -1040,8 +1040,9 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
 
     if operation == "cache" and len(parts) == 1:
         lines = ContextInspectionService(ctx.loop).cache_lines()
+        context_plan = getattr(ctx.loop, "last_context_plan", None)
         plan = getattr(ctx.loop, "last_prompt_plan", None)
-        if plan is not None:
+        if plan is not None and context_plan is None:
             cache = plan.cache
             store = getattr(ctx.loop, "context_attachments", None)
             attachment_generation = (

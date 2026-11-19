@@ -79,15 +79,15 @@ krelcode [子命令] [选项]
 | `/model [provider/]model` | 查看/热切换模型（预算联动，失败不破坏现状） |
 | `/cost` | token 用量（本轮+累计）与估算成本 $ |
 | `/context` | 最近真实请求的 token 分项、预算、stable/volatile、memory 命中、dropped 来源、cache hash 变化、compact 水位与 checkpoint |
-| `/context plan` | 查看最近请求计划、stable/full hash、history digest、Working Context sequence 及有界 layer/source/category 清单 |
-| `/context why <id>` | 解释 layer/source/token-source/dropped item 的 token 归因、cache/compact 属性与 plan 命中；不输出正文 |
+| `/context plan` | 查看最近请求的逐 Fragment source/scope/token、stable/volatile 分布、cache boundary、stable/dynamic/full hash、工具目录 hash、裁剪原因、Memory 命中与上一请求 diff |
+| `/context why <id>` | 解释 Fragment/source/Memory entry/layer/token-source/omitted item 的归因、位置、哈希、cache/compact 属性与裁剪原因；不输出正文 |
 | `/context sources` | 查看已注册 ContextSource、最近装配 layer 顺序、来源 token、cache 属性、dropped item 与有界错误诊断 |
 | `/context rules` | 查看 user/project/directory 规则入口、@import 来源、字符数与越界/循环/敏感文件问题 |
 | `/context attachments` | 查看动态 Context Attachment 的 ID、kind、revision、generation、layer 与 token；不输出附件正文 |
 | `/context fragments [source]` | 列出全部或指定来源的 Fragment、启停状态、group、tokens 与 cache 属性 |
 | `/context enable\|disable\|toggle <id\|source>` | 手动启停单个 Fragment 或整个来源；精确 id 设置优先于 source 设置 |
 | `/context reset` | 清除当前会话的全部手动启停设置 |
-| `/context cache` | 显示稳定前缀字符/token 数、稳定/动态 Fragment、stable/full hash、与上一请求相比是否变化及 cache segment 归因 |
+| `/context cache` | 显示稳定前缀字符/token 数、稳定/动态 Fragment、stable/dynamic/full hash、工具目录 hash、与上一请求相比的 hash/flag/token 差值及 cache segment 归因 |
 | `/context refresh` | 重采目录树/git/规则文件；规则变化才更新稳定 Fragment，环境变化只替换对应 snapshot/delta attachment |
 | `/memory` · `/memory list [scope]` | 列出全部或指定 user/project/session 作用域记忆及 ID、类型和内容 |
 | `/memory scopes` | 显示各作用域条数与存储路径 |

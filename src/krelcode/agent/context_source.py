@@ -237,14 +237,8 @@ def select_prompt_fragments(
     omitted: list[str] = []
     selected: list[PromptFragment] = []
     for fragment in snapshot.fragments:
-        if fragment.source == "memory" or fragment.id.startswith("memory:"):
-            omitted.append(fragment.id)
-            continue
-        if (
-            request.intent is not None
-            and request.intent.is_file_explanation
-            and fragment.id in {"workspace:git", "workspace:tree"}
-        ):
+        reason = prompt_fragment_omission_reason(fragment, request)
+        if reason:
             omitted.append(fragment.id)
             continue
         selected.append(fragment)
@@ -257,6 +251,22 @@ def select_prompt_fragments(
             else "trust_separation"
         )
     return tuple(selected), tuple(omitted), scope_filter
+
+
+def prompt_fragment_omission_reason(
+    fragment: PromptFragment,
+    request: ContextRequest,
+) -> str:
+    """Explain a v3 prompt-registry exclusion without retaining its content."""
+    if fragment.source == "memory" or fragment.id.startswith("memory:"):
+        return "memory-evidence-separation"
+    if (
+        request.intent is not None
+        and request.intent.is_file_explanation
+        and fragment.id in {"workspace:git", "workspace:tree"}
+    ):
+        return "file-explanation-scope"
+    return ""
 
 
 class V3PromptSnapshotContextSource(PromptSnapshotContextSource):
@@ -440,7 +450,18 @@ class RetrievedMemoryContextSource:
                 metadata=evidence_metadata(
                     (record,),
                     origin="resume_memory_query",
-                    extra={"index": index, "origin": "resume_query"},
+                    extra={
+                        "index": index,
+                        "origin": "resume_query",
+                        "memory_hits": ({
+                            "id": record.id,
+                            "source": "memory_retrieval",
+                            "scope": record.scope,
+                            "kind": record.kind,
+                            "origin": record.origin,
+                            "tokens": estimate_text_tokens(text),
+                        },),
+                    },
                 ),
                 token_contributions=(ContextTokenContribution(
                     f"runtime:memory:{index}", CATEGORY_RUNTIME,
@@ -480,6 +501,14 @@ class MemoryContextSource:
                 "memory_scope_counts": scope_counts,
                 "entries": len(selected),
                 "memory_tokens": estimate_text_tokens(content),
+                "memory_hits": tuple({
+                    "id": record.id,
+                    "source": "memory",
+                    "scope": record.scope,
+                    "kind": record.kind,
+                    "origin": record.origin,
+                    "tokens": estimate_text_tokens(record.content),
+                } for record in records),
             },
         )
         return (ContextLayer(

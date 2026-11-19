@@ -89,7 +89,8 @@ from .attachments import (
 )
 from .context import build_workspace_context_bundle
 from .context_assembler import ContextAssembler
-from .context_plan import ContextPlanSnapshot
+from .context_plan import ContextPlanSnapshot, history_digest
+from .prompt_plan import PromptPlanSnapshot
 from .context_source import (
     ContextAssembly,
     ContextRequest,
@@ -898,6 +899,21 @@ class AgentLoop:
         context_assembly = prompt_plan.context_assembly
         if context_assembly is None:
             raise RuntimeError("PromptAssembler 未产出 ContextAssembly 兼容视图")
+        previous_context_plan = getattr(self, "last_context_plan", None)
+        previous_prompt_plan = (
+            previous_context_plan.prompt_plan
+            if previous_context_plan is not None else None
+        )
+        current_history_digest = history_digest(self.history)
+        prompt_plan_snapshot = PromptPlanSnapshot.from_prompt_plan(
+            prompt_plan,
+            turn_id=self._current_turn_id,
+            step=step,
+            history_digest=current_history_digest,
+            tools=tuple(tools or ()),
+            dropped_items=_context_dropped_items(self),
+            previous=previous_prompt_plan,
+        )
         self.last_prompt_plan = prompt_plan
         working_snapshot = self.working_context_store.snapshot()
         self.last_context_plan = ContextPlanSnapshot.from_assembly(
@@ -906,6 +922,7 @@ class AgentLoop:
             turn_id=self._current_turn_id,
             step=step,
             working_context_sequence=working_snapshot.sequence,
+            prompt_plan=prompt_plan_snapshot,
         )
         provider_messages = self.prompt_assembler.provider_messages(
             prompt_plan, tools=tools)

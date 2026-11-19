@@ -24,6 +24,12 @@ Krelcode 把“本轮模型实际看到的上下文”拆成四个可独立检�
 有固定 ID 和独立 revision，只替换发生变化的那一块。快照只包含 token 分项、来源 ID、
 revision、裁剪项、缓存边界和哈希，不包含 Prompt、工具输出或密钥正文。
 
+请求级 `PromptPlanSnapshot` 进一步记录每个 Fragment 的 `source/scope/layer/stability/
+trust/tokens/cache position`、stable/volatile 来源分布、cache boundary、stable/dynamic/
+full hash、工具目录 hash、Memory 命中来源、被裁剪项及原因，并与上一次真实请求做无正文
+diff。`ContextPlanSnapshot` 持久化该快照，所以 `/context plan|why|cache` 可以直接解释
+最近请求，而不需要重新扫描 workspace、Memory 或工具注册表。
+
 `ProviderMessages` 同时携带显式 `SystemPromptBlocks`：连续可缓存的 Fragment 进入
 `stable_system_blocks`，其余进入 `dynamic_system_blocks`，并分别计算 `stable_hash` 与
 `dynamic_hash`。Anthropic 保留 block 数组且只在最后一个 stable block 设置
@@ -85,7 +91,7 @@ auto_threshold = 0.80
 ```text
 /context
 /context plan
-/context why <layer-id|source|token-source|dropped-id>
+/context why <fragment-id|source|memory-id|layer-id|token-source|omitted-id>
 /context sources
 /context attachments
 /context cache
@@ -110,33 +116,41 @@ auto_threshold = 0.80
 
 ### `/context plan`
 
-展示最近一次 `PromptAssembler` / `ContextAssembly` 的机器可检查计划：stable/dynamic/full hash、
-history digest、
-Working Context sequence、layer/source/category 清单与总 token。layer、source 和
-category 列表有数量上限；超大 Context 会显示省略数量，并可用
-`/context why <id>` 定向检查。
+展示最近一次 `PromptAssembler` / `ContextAssembly` 的机器可检查计划：
+
+- 每个 Fragment 的 ID、source、scope、layer、stability、trust、token 和 stable/volatile 位置；
+- stable/volatile 的 Fragment 数与 token，以及按 source 的分布；
+- cache boundary、stable/dynamic/full hash、工具目录 hash 与工具数；
+- 被 trust/scope 过滤、单文件范围过滤、空 attachment 或预算裁剪的项目及原因；
+- Memory 命中条目的 ID、source、scope、kind、origin 和 token；
+- 与上一真实请求相比新增/删除/变化/裁剪的 Fragment、hash 变化标志和 token 差值。
+
+Fragment、layer、source 和 category 列表都有数量上限；超大 Context 会显示省略数量，并可用
+`/context why <id>` 定向检查。所有输出均不含 Fragment、工具 Schema、history 或 Memory 正文。
 
 ### `/context why <id>`
 
 接受以下目标：
 
+- Prompt Fragment ID 或 source 名；
+- Memory entry ID；
 - Context layer ID，例如 `source:prompt`；
 - source 名，例如 `prompt`、`tool_directory`；
 - token source，例如 `history`；
-- dropped item，例如 `workspace:tree`。
+- omitted item，例如 `workspace:tree`。
 
-输出会解释 priority、category、cache/compact 属性、token attribution、是否出现在请求
-计划中以及是否被裁剪；不会输出对应内容正文。
+输出会解释 scope、layer、stability、trust、stable/volatile 位置、content hash、cache/compact
+属性、token attribution、Memory 来源、是否出现在请求计划中以及裁剪原因；不会输出对应内容正文。
 
 ### `/context sources` 与 `/context cache`
 
 `sources` 查看 layer 顺序、来源 token、cache 属性、source issue 和 dropped item。
-`cache` 查看 stable/dynamic block 数、stable/dynamic/full hash、与上一请求相比是否变化、
-`cache_control` 字符边界、显式缓存段数量，以及各 segment 的 token/字符/哈希。Anthropic
-的断点位于最后一个 stable block；OpenAI-compatible 只合并 wire system message，不会丢失
-这组边界元数据。`/context cache` 从最近 `PromptPlan` 列出包含 attachment 在内的
-stable/volatile block；`/context attachments` 则列出动态附件的 kind、revision、generation、
-layer 与 token，均不输出正文。
+`cache` 查看 stable/dynamic block 数、stable/dynamic/full hash、工具目录 hash、与上一请求
+相比的 hash/flag/token 差值、`cache_control` 字符边界、显式缓存段数量，以及各 segment 的
+token/字符/哈希。Anthropic 的断点位于最后一个 stable block；OpenAI-compatible 只合并 wire
+system message，不会丢失这组边界元数据。`/context cache` 从最近 `PromptPlan` 列出包含
+attachment 在内的 stable/volatile Fragment；`/context attachments` 则列出动态附件的 kind、
+revision、generation、layer 与 token，均不输出正文。
 
 ### `/context refresh`
 

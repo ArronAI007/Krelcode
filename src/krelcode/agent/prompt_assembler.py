@@ -37,6 +37,7 @@ from .context_source import (
     ContextSourceIssue,
     ContextTokenContribution,
     default_context_sources,
+    prompt_fragment_omission_reason,
     select_prompt_fragments,
 )
 from .fragments import (
@@ -70,6 +71,7 @@ from .fragments import (
     WORKSPACE_OPEN,
 )
 from .tokens import estimate_text_tokens
+from .prompt_plan import PromptOmissionSnapshot
 
 
 @dataclass(frozen=True)
@@ -125,6 +127,7 @@ class PromptPlan:
     system_blocks: Optional[SystemPromptBlocks] = None
     token_contributions: Tuple[ContextTokenContribution, ...] = ()
     omitted_fragments: Tuple[str, ...] = ()
+    omitted_details: Tuple[PromptOmissionSnapshot, ...] = ()
     issues: Tuple[ContextSourceIssue, ...] = ()
     context_assembly: Optional[ContextAssembly] = None
 
@@ -196,10 +199,18 @@ class PromptAssembler:
         )
         prompt_fragments, omitted, scope_filter = self._prompt_fragments(
             snapshot, context_request)
-        attachment_fragments, attachment_omitted = _select_attachment_fragments(
+        prompt_omissions = _prompt_omission_details(
+            snapshot, context_request, omitted)
+        attachment_fragments, attachment_omissions = _select_attachment_fragments(
             request.attachments, context_request)
-        if not scope_filter and attachment_omitted:
+        if not scope_filter and any(
+            item.reason == "file-explanation-scope"
+            for item in attachment_omissions
+        ):
             scope_filter = "file_explanation"
+        all_omissions = _dedupe_omissions(
+            (*prompt_omissions, *attachment_omissions))
+        all_omitted_ids = tuple(item.id for item in all_omissions)
 
         # ContextSources contribute only the dynamic layers here.  The prompt
         # source is disabled by using an empty snapshot/system prompt so the
@@ -269,7 +280,7 @@ class PromptAssembler:
             cache=cache,
             contributions=contributions,
             fragment_count=len(fragments),
-            omitted=(*omitted, *attachment_omitted),
+            omitted=all_omitted_ids,
             scope_filter=scope_filter,
             snapshot=snapshot,
             engine=self.engine,
@@ -292,7 +303,8 @@ class PromptAssembler:
             engine=self.engine,
             system_blocks=system_blocks,
             token_contributions=contributions,
-            omitted_fragments=omitted,
+            omitted_fragments=all_omitted_ids,
+            omitted_details=all_omissions,
             issues=dynamic_assembly.issues,
             context_assembly=assembly,
         )
@@ -436,10 +448,12 @@ def _scope_for_trust(trust: str) -> str:
 def _select_attachment_fragments(
     attachments: Sequence[ContextAttachment],
     request: ContextRequest,
-) -> Tuple[Tuple[PromptFragment, ...], Tuple[str, ...]]:
+) -> Tuple[
+    Tuple[PromptFragment, ...], Tuple[PromptOmissionSnapshot, ...]
+]:
     """Apply request-scope rules without mutating the attachment store."""
     selected: list[ContextAttachment] = []
-    omitted: list[str] = []
+    omitted: list[PromptOmissionSnapshot] = []
     for attachment in attachments:
         if (
             request.intent is not None
@@ -449,11 +463,69 @@ def _select_attachment_fragments(
                 ContextAttachmentKind.ENVIRONMENT_DELTA,
             }
         ):
-            omitted.append(attachment.id)
+            omitted.append(PromptOmissionSnapshot(
+                id=attachment.id,
+                source=f"attachment:{attachment.kind.value}",
+                scope=attachment.scope,
+                layer=attachment.layer,
+                stability=attachment.stability,
+                trust=attachment.trust,
+                tokens=attachment.tokens,
+                reason="file-explanation-scope",
+            ))
             continue
         if attachment.content.strip():
             selected.append(attachment)
+        else:
+            omitted.append(PromptOmissionSnapshot(
+                id=attachment.id,
+                source=f"attachment:{attachment.kind.value}",
+                scope=attachment.scope,
+                layer=attachment.layer,
+                stability=attachment.stability,
+                trust=attachment.trust,
+                reason="empty-content",
+            ))
     return context_attachment_fragments(selected), tuple(omitted)
+
+
+def _prompt_omission_details(
+    snapshot: Optional[PromptSnapshot],
+    request: ContextRequest,
+    omitted_ids: Sequence[str],
+) -> tuple[PromptOmissionSnapshot, ...]:
+    if snapshot is None or not omitted_ids:
+        return ()
+    omitted = set(omitted_ids)
+    details: list[PromptOmissionSnapshot] = []
+    for fragment in snapshot.fragments:
+        if fragment.id not in omitted:
+            continue
+        details.append(PromptOmissionSnapshot(
+            id=fragment.id,
+            source=fragment.source,
+            scope=fragment.scope,
+            layer=fragment.layer,
+            stability=fragment.stability,
+            trust=fragment.trust,
+            tokens=fragment.tokens,
+            reason=prompt_fragment_omission_reason(fragment, request),
+        ))
+    return tuple(details)
+
+
+def _dedupe_omissions(
+    omissions: Sequence[PromptOmissionSnapshot],
+) -> tuple[PromptOmissionSnapshot, ...]:
+    seen: set[tuple[str, str]] = set()
+    result: list[PromptOmissionSnapshot] = []
+    for omission in omissions:
+        key = (omission.id, omission.reason)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(omission)
+    return tuple(result)
 
 
 def _current_user_message(history: Sequence[Message]) -> Optional[Message]:

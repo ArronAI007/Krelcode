@@ -426,6 +426,8 @@ Step 94 将 Context v3 设为默认并完成安全收口：`[context].engine = "
 
 Step 102 将 Memory 从独立“knowledge 特例”收敛为统一 Evidence：Instruction 来源固定为 Managed / User / Project / Agent Definition；Memory / Web / MCP / Tool Result / Retrieved Document 只能进入 Evidence。`MemoryContextSource`、Resume 检索记忆、子代理记忆与 MCP instructions 统一渲染为转义后的 `<evidence_set role="non-instruction" ...>`，逐项携带 source/scope/kind/origin/trust/requires-validation 元数据；Memory 固定位于 L7 Evidence、turn stability、非 cacheable，任何 Memory 变化只改变 `dynamic_hash`。`/context why memory:scoped` 会明确显示 `role=evidence`、`instruction=false` 与 `requires-validation=true`，诊断元数据仍不包含记忆正文。
 
+Step 103 增加内容轻量的 Prompt Plan 可观测性：每个 Fragment 记录 source/scope/tokens、stable/volatile 位置、cache boundary 与 content hash；请求快照同时记录工具目录 hash、Memory 命中来源、所有已知裁剪项及原因，以及相对上一真实请求的 Fragment/hash/token diff。`/context plan`、`/context why <fragment|memory|omitted-id>` 与 `/context cache` 形成一致的诊断入口，持久化到 Context checkpoint 的内容仍不包含 Prompt、工具 Schema、history 或 Memory 正文。
+
 ## 模块结构（依赖严格单向）
 
 ```
