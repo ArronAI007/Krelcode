@@ -277,7 +277,7 @@ def test_real_request_overhead_triggers_one_compact_then_reassembles(tmp_path):
         ])
     history_only = estimate_history_tokens(loop.history)
     loop.context_manager = ContextManager(
-        provider, max_tokens=history_only + 470, keep_recent=2)
+        provider, max_tokens=history_only + 490, keep_recent=2)
     events = []
     loop.bus.subscribe(events.append)
 

@@ -19,6 +19,11 @@ from ..llm.base import (
     SystemPromptBlock,
     SystemPromptBlocks,
 )
+from .attachments import (
+    ContextAttachment,
+    ContextAttachmentKind,
+    context_attachment_fragments,
+)
 from .context_assembler import ContextAssembler
 from .context_source import (
     CATEGORY_MEMORY,
@@ -74,6 +79,7 @@ class PromptAssemblyRequest:
     prompt_snapshot: Optional[PromptSnapshot] = None
     tools: Tuple[Mapping[str, object], ...] = ()
     per_turn_reminders: Tuple[str, ...] = ()
+    attachments: Tuple[ContextAttachment, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -189,6 +195,10 @@ class PromptAssembler:
         )
         prompt_fragments, omitted, scope_filter = self._prompt_fragments(
             snapshot, context_request)
+        attachment_fragments, attachment_omitted = _select_attachment_fragments(
+            request.attachments, context_request)
+        if not scope_filter and attachment_omitted:
+            scope_filter = "file_explanation"
 
         # ContextSources contribute only the dynamic layers here.  The prompt
         # source is disabled by using an empty snapshot/system prompt so the
@@ -213,7 +223,12 @@ class PromptAssembler:
             request.per_turn_reminders,
         )
         fragments = _ordered_fragments(
-            (*prompt_fragments, *dynamic_fragments, *conversation_fragments))
+            (
+                *prompt_fragments,
+                *attachment_fragments,
+                *dynamic_fragments,
+                *conversation_fragments,
+            ))
 
         system_fragments = tuple(
             fragment for fragment in fragments
@@ -240,16 +255,20 @@ class PromptAssembler:
             dynamic_hash=system_blocks.dynamic_hash,
         )
         layers = _layer_plans(fragments)
+        registry_and_attachment_fragments = (
+            *prompt_fragments, *attachment_fragments)
         contributions = _token_contributions(
-            prompt_fragments, dynamic_assembly.token_contributions)
+            registry_and_attachment_fragments,
+            dynamic_assembly.token_contributions,
+        )
         assembly = _compatibility_assembly(
-            prompt_fragments=prompt_fragments,
+            prompt_fragments=registry_and_attachment_fragments,
             dynamic_assembly=dynamic_assembly,
             system_text=system_text,
             cache=cache,
             contributions=contributions,
             fragment_count=len(fragments),
-            omitted=omitted,
+            omitted=(*omitted, *attachment_omitted),
             scope_filter=scope_filter,
             snapshot=snapshot,
             engine=self.engine,
@@ -401,6 +420,29 @@ def _scope_for_trust(trust: str) -> str:
     if trust == TRUST_PROJECT:
         return "project"
     return "session"
+
+
+def _select_attachment_fragments(
+    attachments: Sequence[ContextAttachment],
+    request: ContextRequest,
+) -> Tuple[Tuple[PromptFragment, ...], Tuple[str, ...]]:
+    """Apply request-scope rules without mutating the attachment store."""
+    selected: list[ContextAttachment] = []
+    omitted: list[str] = []
+    for attachment in attachments:
+        if (
+            request.intent is not None
+            and request.intent.is_file_explanation
+            and attachment.kind in {
+                ContextAttachmentKind.ENVIRONMENT_SNAPSHOT,
+                ContextAttachmentKind.ENVIRONMENT_DELTA,
+            }
+        ):
+            omitted.append(attachment.id)
+            continue
+        if attachment.content.strip():
+            selected.append(attachment)
+    return context_attachment_fragments(selected), tuple(omitted)
 
 
 def _current_user_message(history: Sequence[Message]) -> Optional[Message]:
@@ -609,6 +651,8 @@ def _token_contributions(
 
 def _fragment_category(fragment: PromptFragment) -> str:
     if fragment.group == GROUP_WORKSPACE:
+        return CATEGORY_WORKSPACE
+    if fragment.layer == LAYER_L8_ENVIRONMENT:
         return CATEGORY_WORKSPACE
     if fragment.layer == LAYER_L7_MEMORY:
         return CATEGORY_MEMORY

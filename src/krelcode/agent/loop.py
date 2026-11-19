@@ -74,6 +74,19 @@ from ..llm.base import (
     ToolCallReady,
 )
 from .compression import ContextManager
+from .attachments import (
+    ContextAttachmentDiff,
+    ContextAttachmentKind,
+    ContextAttachmentStore,
+    agent_catalog_attachment,
+    attachment_id,
+    date_attachment,
+    environment_attachments,
+    mcp_instructions_attachment,
+    mode_reminder_attachment,
+    skill_catalog_attachment,
+    token_budget_reminder_attachment,
+)
 from .context import build_workspace_context_bundle
 from .context_assembler import ContextAssembler
 from .context_plan import ContextPlanSnapshot
@@ -86,10 +99,8 @@ from .context_source import (
 )
 from .context_usage import build_context_usage_snapshot
 from .fragments import (
-    GROUP_WORKSPACE,
     refresh_registry_snapshot,
-    skills_fragment,
-    workspace_fragments,
+    workspace_rule_fragments,
 )
 from .intent import TurnIntent, infer_turn_intent
 from .pricing import match_context_window
@@ -186,6 +197,7 @@ class AgentLoop:
         working_context_store: Optional[WorkingContextStore] = None,
         tool_microcompactor: Optional[ToolMicrocompactor] = None,
         compact_checkpoint_store: Optional[CompactCheckpointPort] = None,
+        today_provider: Optional[Callable[[], str]] = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -259,6 +271,9 @@ class AgentLoop:
         self.restored_memory_context: tuple[str, ...] = ()
         self.restored_relevant_memory_ids: tuple[str, ...] = ()
         self.pending_context_refresh = False
+        self.context_attachments = ContextAttachmentStore()
+        self.last_attachment_diff = ContextAttachmentDiff(0, 0)
+        self._today_provider = today_provider
         self.last_microcompact_report: Optional[MicrocompactReport] = None
         self.compact_checkpoint_store = compact_checkpoint_store
         self.last_compact_checkpoint = None
@@ -299,6 +314,8 @@ class AgentLoop:
         self.previous_context_snapshot = None
         self.last_microcompact_report = None
         self.last_compact_checkpoint = None
+        self.context_attachments.clear()
+        self.last_attachment_diff = ContextAttachmentDiff(0, 0)
         self.working_context_store.clear()
 
     def rebuild_working_context(self):
@@ -309,7 +326,7 @@ class AgentLoop:
         return snapshot
 
     async def refresh_workspace_context(self):
-        """Reload git/tree/rules and rebuild the prompt snapshot from live state."""
+        """Reload rules and replace only changed environment attachments."""
         options = getattr(self, "context_options", None)
         rule_loader = getattr(self, "rule_loader", None)
         bundle = await build_workspace_context_bundle(
@@ -320,18 +337,121 @@ class AgentLoop:
         self.workspace_context = bundle
         registry = getattr(self, "prompt_registry", None)
         if registry is not None:
-            registry.replace_group(
-                GROUP_WORKSPACE, workspace_fragments(bundle))
-            manager = getattr(self, "skill_manager", None)
-            if manager is not None:
-                fragment = skills_fragment(manager.prompt_index())
-                if fragment is None:
-                    registry.remove("skills:index")
-                else:
-                    registry.upsert(fragment)
-            refresh_registry_snapshot(self)
+            rules = workspace_rule_fragments(bundle)
+            current = registry.list(source="workspace:rules")
+            if current != rules:
+                registry.replace_group("workspace_context", rules)
+                refresh_registry_snapshot(self)
+        self.sync_context_attachments()
         self.pending_context_refresh = False
         return bundle
+
+    def sync_context_attachments(
+        self,
+        *,
+        include_environment: bool = True,
+        include_catalogs: bool = True,
+        include_mcp: bool = True,
+        include_reminders: bool = True,
+    ) -> ContextAttachmentDiff:
+        """Replace only attachments whose semantic content changed.
+
+        Catalog builders consume already-loaded manager snapshots.  This method
+        never scans the workspace or MCP servers; callers explicitly refresh
+        those owners first.
+        """
+        previous = self.context_attachments.snapshot()
+
+        if include_environment:
+            try:
+                bundle = getattr(self, "workspace_context", None)
+                environment_ids = {
+                    attachment_id(ContextAttachmentKind.ENVIRONMENT_SNAPSHOT),
+                    attachment_id(ContextAttachmentKind.ENVIRONMENT_DELTA),
+                }
+                has_environment = (
+                    bundle is not None
+                    and any(section.name != "rules" for section in bundle.sections)
+                )
+                if has_environment:
+                    snapshot_id = attachment_id(
+                        ContextAttachmentKind.ENVIRONMENT_SNAPSHOT)
+                    changed = environment_attachments(
+                        bundle, self.context_attachments.get(snapshot_id))
+                    for item in changed:
+                        self.context_attachments.upsert(item)
+                else:
+                    for item_id in environment_ids:
+                        self.context_attachments.remove(item_id)
+            except Exception:
+                # Keep the previous environment snapshot on malformed input;
+                # a partial refresh is safer than dropping all working state.
+                pass
+
+        if include_catalogs:
+            self._sync_catalog_attachment(
+                ContextAttachmentKind.SKILL_CATALOG_DELTA,
+                getattr(self, "skill_manager", None),
+                skill_catalog_attachment,
+            )
+            self._sync_catalog_attachment(
+                ContextAttachmentKind.AGENT_CATALOG_DELTA,
+                getattr(self, "agent_definitions", None),
+                agent_catalog_attachment,
+            )
+
+        if include_mcp:
+            self._sync_catalog_attachment(
+                ContextAttachmentKind.MCP_INSTRUCTIONS_DELTA,
+                getattr(self, "mcp_supervisor", None),
+                mcp_instructions_attachment,
+            )
+
+        if include_reminders:
+            try:
+                today = (
+                    self._today_provider()
+                    if self._today_provider is not None else None
+                )
+            except Exception:
+                today = None
+            self.context_attachments.upsert(date_attachment(today))
+            runtime = self._turn_tool_context.runtime
+            self.context_attachments.upsert(mode_reminder_attachment(
+                runtime.run_mode, runtime.permission_mode))
+            token_budget_id = attachment_id(
+                ContextAttachmentKind.TOKEN_BUDGET_REMINDER)
+            if self.token_budget is None:
+                self.context_attachments.remove(token_budget_id)
+            else:
+                self.context_attachments.upsert(
+                    token_budget_reminder_attachment(
+                        self.token_budget, self._token_total))
+
+        diff = self.context_attachments.diff(previous)
+        self.last_attachment_diff = diff
+        return diff
+
+    def _sync_catalog_attachment(
+        self,
+        kind: ContextAttachmentKind,
+        manager: object,
+        builder,
+    ) -> None:
+        item_id = attachment_id(kind)
+        if manager is None:
+            self.context_attachments.remove(item_id)
+            return
+        try:
+            item = builder(manager, self.context_attachments.get(item_id))
+        except Exception:
+            # Catalog providers are optional extension surfaces.  A broken
+            # provider must not break the prompt assembly path.
+            return
+        if item is None:
+            self.context_attachments.remove(item_id)
+        else:
+            self.context_attachments.upsert(item)
 
     def add_runtime_context(self, contents: Iterable[str], source: str = "hook") -> int:
         """注入不写入历史快照的运行时上下文（SessionStart/Compact Hook）。"""
@@ -740,6 +860,8 @@ class AgentLoop:
         specs: list,
         tools,
     ):
+        self.sync_context_attachments()
+        attachment_snapshot = self.context_attachments.snapshot()
         memory_store = getattr(self, "memory_store", None)
         if (
             self.context_engine == "v3"
@@ -771,6 +893,7 @@ class AgentLoop:
                 context_request=context_request,
                 prompt_snapshot=getattr(self, "prompt_snapshot", None),
                 tools=tuple(tools or ()),
+                attachments=attachment_snapshot.items,
             ))
         context_assembly = prompt_plan.context_assembly
         if context_assembly is None:

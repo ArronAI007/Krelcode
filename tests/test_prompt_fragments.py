@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from krelcode.agent.compression import ContextManager, SUMMARY_PREFIX
+from krelcode.agent.attachments import ContextAttachmentKind, attachment_id
 from krelcode.agent.context import ContextSection, WorkspaceContext
 from krelcode.agent.fragments import (
     GROUP_RUNTIME,
@@ -254,7 +255,7 @@ def test_context_commands_list_toggle_cache_and_reset(tmp_path):
     assert loop.history[0].provider_meta is not None
 
 
-def test_context_refresh_uses_registry_and_preserves_skill_index(tmp_path):
+def test_context_refresh_updates_attachments_without_growing_stable_prefix(tmp_path):
     skill_dir = tmp_path / ".agents" / "skills" / "demo"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
@@ -268,15 +269,22 @@ def test_context_refresh_uses_registry_and_preserves_skill_index(tmp_path):
     loop.skill_manager = skills
     apply_prompt_snapshot(loop, registry.snapshot())
     previous_generation = registry.generation
+    previous_system = loop.history[0].content
 
     result = run_context("/context refresh", loop, tmp_path, skills)
 
     assert any("已刷新" in line for line in result.output)
-    assert registry.get("skills:index") is not None
-    assert registry.get("workspace:tree") is not None
-    assert "refresh me" in loop.history[0].content
-    assert "<workspace_context>" in loop.history[0].content
-    assert registry.generation > previous_generation
+    assert registry.get("skills:index") is None
+    assert registry.get("workspace:tree") is None
+    skill_attachment = loop.context_attachments.get(attachment_id(
+        ContextAttachmentKind.SKILL_CATALOG_DELTA))
+    environment = loop.context_attachments.get(attachment_id(
+        ContextAttachmentKind.ENVIRONMENT_SNAPSHOT))
+    assert skill_attachment is not None
+    assert environment is not None
+    assert "refresh me" in skill_attachment.content
+    assert loop.history[0].content == previous_system
+    assert registry.generation == previous_generation
 
 
 def test_anthropic_uses_fragment_cache_boundary_for_system_blocks():

@@ -70,7 +70,8 @@ class FakeStreamableServer:
             }, json.dumps({"jsonrpc": "2.0", "id": mid, "result": {
                 "protocolVersion": "2025-03-26",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "stream-stub", "version": "1.0"}}}).encode())
+                "serverInfo": {"name": "stream-stub", "version": "1.0"},
+                "instructions": "Use the indexed search tool first."}}).encode())
         if mid is None:  # 通知
             return FakeHTTPResponse(202, {}, b"")
         if m == "tools/list":
@@ -113,6 +114,7 @@ def test_initialize_json_mode_and_session_capture():
         client = make_client(fake)
         await client.start()
         assert client.server_info["name"] == "stream-stub"
+        assert client.instructions == "Use the indexed search tool first."
 
         # 首个 POST：Accept 双类型，尚无会话头
         url0, headers0, payload0 = fake.posts[0]

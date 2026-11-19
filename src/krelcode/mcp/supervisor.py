@@ -374,8 +374,21 @@ class MCPSupervisor:
                 "server": (
                     client.server_info.get("name", "")
                     if client is not None else ""),
+                "instructions": bool(
+                    client is not None and client.instructions.strip()),
             })
         return out
+
+    def server_instructions(self) -> tuple[tuple[str, str], ...]:
+        """Return connected server guidance without exposing it in status logs."""
+        entries = []
+        for name, client in self.clients.items():
+            if not client.alive:
+                continue
+            text = str(client.instructions or "").strip()
+            if text:
+                entries.append((name, text))
+        return tuple(sorted(entries))
 
     async def close_all(self) -> None:
         for name in list(self.clients):

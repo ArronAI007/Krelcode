@@ -7,6 +7,7 @@ import json
 import subprocess
 from pathlib import Path
 
+from krelcode.agent.attachments import ContextAttachmentKind, attachment_id
 from krelcode.agent.compact_summary import CompactSummary
 from krelcode.agent.context import ContextOptions
 from krelcode.agent.context_plan import ContextPlanSnapshot, history_digest
@@ -136,11 +137,14 @@ def test_resume_reloads_live_git_tree_and_rules(tmp_path):
 
     assert restore_session(loop, session_path, log=lambda _: None)
     system = loop.history[0].content or ""
-    assert "fresh-branch" in system
-    assert "old-branch" not in system
+    environment = loop.context_attachments.get(attachment_id(
+        ContextAttachmentKind.ENVIRONMENT_SNAPSHOT))
+    assert environment is not None
+    assert "fresh-branch" in environment.content
+    assert "old-branch" not in environment.content
     assert "PROJECT RULE FRESH" in system
     assert "PROJECT RULE OLD" not in system
-    assert "app.py" in system
+    assert "app.py" in environment.content
     assert loop.pending_context_refresh is False
     assert loop.restored_workspace_fingerprint == old_workspace
     assert loop.context_workspace_fingerprint is None

@@ -76,6 +76,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | v0.85 | PromptAssembler 唯一入口 | Fragment 扩展 layer/stability/trust，建立 L0-L12 固定层级与 `PromptAssembler.assemble() → PromptPlan → ProviderMessages`；AgentLoop 不再用 `ContextAssembly.messages_for()` 生产请求，动态时间、工具结果、当前请求与 reminder 被隔离在稳定前缀之外，ContextAssembly 降为观测/恢复兼容视图 |
 | v0.86 | 显式 system cache boundary | `ProviderMessages` 新增 provider-neutral `SystemPromptBlocks`，逐 Fragment 保留 stable/dynamic block、双 hash 与 `cache_control` 边界；Anthropic 不再提前 join system，只在最后 stable block 标记 ephemeral，OpenAI-compatible 在 wire 层固定顺序合并但观测元数据不丢失。边界、block 数与双 hash 贯通 PreparedRequest、ContextUsageSnapshot、ContextPlanSnapshot、`/context cache` 和 TUI |
 | v0.87 | 动态工具池与 ToolSearch | `ToolTier` 将 turn 工具目录拆为 core/discoverable/deferred：core 带完整 Schema，discoverable 只暴露名称与单行描述，MCP/Plugin 默认 deferred；`tool_search` 只在已完成权限/运行模式/feature/MCP/禁用过滤的候选集内搜索并加载 Schema，新工具下一模型 Step 才可执行。Registry、Provider tools、动态目录、搜索和 `/tools` 使用名称稳定排序，避免注册顺序改变 Prompt Cache 前缀 |
+| v0.88 | 上下文增量附件 | `ContextAttachmentStore` 将 environment snapshot/delta、date、Skill/Agent/MCP catalog delta、token budget 与 mode reminder 拆成固定 ID、独立 revision 的动态 block；环境按 section hash 做增量，catalog 只读已加载快照，MCP instructions 标记 untrusted。相同内容不更新 revision；PromptAssembler 仍保持唯一装配入口，环境变化只改变对应 dynamic block 与 `dynamic_hash`，稳定前缀和持久 history 不变。`/context attachments` 提供无正文 revision/generation/token 观测 |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -90,6 +91,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | 主循环/steering/取消修复 | `agent/loop.py` |
 | system prompt 来源/启停/cache 边界 | `agent/fragments.py` |
 | 唯一 PromptPlan/ProviderMessages 装配 | `agent/prompt_assembler.py` |
+| 动态上下文附件/revision/增量 | `agent/attachments.py` |
 | 压缩边界/预览与两道防线 | `agent/compression.py`（LLM 摘要）· `agent/tool_microcompact.py`（分级工具微压缩） |
 | 会话任务现场 | `agent/working_context.py`（goal/plan/files/commands/errors） |
 | token 估算/价目/窗口 | `agent/tokens.py` `agent/pricing.py` |

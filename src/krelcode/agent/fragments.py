@@ -466,6 +466,15 @@ def workspace_fragments(bundle: WorkspaceContext) -> Tuple[PromptFragment, ...]:
     return tuple(fragments)
 
 
+def workspace_rule_fragments(bundle: WorkspaceContext) -> Tuple[PromptFragment, ...]:
+    """Return only stable project rules; volatile workspace data is attachments."""
+    return tuple(
+        _workspace_fragment(section)
+        for section in bundle.sections
+        if section.name == "rules"
+    )
+
+
 def _workspace_fragment(section: ContextSection) -> PromptFragment:
     # rules 在一次会话内稳定；git/tree 随工作区变化，必须位于缓存边界之后。
     cacheable = section.name == "rules"

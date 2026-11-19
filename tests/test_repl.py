@@ -251,6 +251,7 @@ def test_undo_command_restores_file(tmp_path, capsys):
 
 def test_context_stats_and_refresh(tmp_path, capsys):
     from types import SimpleNamespace
+    from krelcode.agent.attachments import ContextAttachmentKind, attachment_id
 
     (tmp_path / "proj.py").write_text("x = 1", encoding="utf-8")
     loop = make_loop(tmp_path, scripted=["r1"])
@@ -263,8 +264,10 @@ def test_context_stats_and_refresh(tmp_path, capsys):
     assert "已刷新" in out                                        # refresh
     system_msg = loop.history[0]
     assert system_msg.role == "system"
-    assert "<workspace_context>" in system_msg.content
-    assert "proj.py" in system_msg.content                      # 目录树已进 system
+    environment = loop.context_attachments.get(attachment_id(
+        ContextAttachmentKind.ENVIRONMENT_SNAPSHOT))
+    assert environment is not None
+    assert "proj.py" in environment.content
 
 
 # -- 运行中 steering / stop（Step 26）----------------------------------------------------------------

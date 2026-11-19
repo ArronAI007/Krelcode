@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from krelcode.agent.attachments import ContextAttachmentKind, attachment_id
 from krelcode.agent.context import (
     TREE_MAX_ENTRIES, build_workspace_context, git_snapshot, read_agents_md,
     render_tree,
@@ -279,7 +280,10 @@ def test_build_loop_applies_context_config_and_retains_bundle(tmp_path):
         assert [section.name for section in loop.workspace_context.sections] == [
             "tree",
         ]
-        assert "visible.py" in loop.history[0].content
+        environment = loop.context_attachments.get(attachment_id(
+            ContextAttachmentKind.ENVIRONMENT_SNAPSHOT))
+        assert environment is not None
+        assert "visible.py" in environment.content
         assert loop.workspace_context.total_tokens <= 512
     finally:
         asyncio.run(manager.shutdown())

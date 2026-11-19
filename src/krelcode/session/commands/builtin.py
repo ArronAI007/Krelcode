@@ -150,6 +150,7 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
                            "toggle|reset|cache|refresh]"),
             help=("显示上下文统计与 Fragment 来源；/context sources 查看 "
                   "ContextSource 装配诊断；/context rules 查看分层规则与 @import；"
+                  "/context attachments 查看动态附件 revision；"
                   "/context plan 查看最近请求计划；/context why <id> 解释来源；"
                   "/context fragments [source] 查看来源；\n"
                   "/context enable|disable|toggle <id|source> 手动启停；"

@@ -29,12 +29,10 @@ from .agent.context_source import (
     default_context_sources,
 )
 from .agent.fragments import (
-    GROUP_WORKSPACE,
     PromptFragmentRegistry,
     apply_prompt_snapshot,
     base_fragment,
-    skills_fragment,
-    workspace_fragments,
+    workspace_rule_fragments,
 )
 from .agent.rules import RuleLoader
 from .agent.runtime import AgentRuntime
@@ -657,10 +655,7 @@ async def build_loop(
     prompt_registry = PromptFragmentRegistry([base_fragment()])
     if workspace_context is not None:
         prompt_registry.replace_group(
-            GROUP_WORKSPACE, workspace_fragments(workspace_context))
-    skill_fragment = skills_fragment(skill_manager.prompt_index())
-    if skill_fragment is not None:
-        prompt_registry.register(skill_fragment)
+            "workspace_context", workspace_rule_fragments(workspace_context))
     # v3 keeps Memory out of the system Prompt Registry. It is assembled as a
     # separate, untrusted knowledge layer at request time.
     if context_options.engine != CONTEXT_ENGINE_V3:
@@ -730,6 +725,7 @@ async def build_loop(
     loop.status_line_renderer = StatusLineRenderer(
         StatusLineOptions.from_config(config.get("status_line")))
     loop.context_checkpoint_store = context_checkpoint_store
+    loop.sync_context_attachments(include_mcp=False)
     if context_checkpoint_store is not None:
         context_coordinator = ContextCheckpointCoordinator(
             loop=loop,
@@ -790,6 +786,7 @@ async def build_loop(
         agent_definitions.set_extra_paths(
             plugin_manager.agent_paths, reload=True)
         refresh_skill_system_prompt(loop)
+        loop.sync_context_attachments(include_mcp=True)
         refresh_extensions_basic()
         return records
 
@@ -953,6 +950,7 @@ async def async_main(args: argparse.Namespace) -> int:
         loop.registry, log=note,
         sampler=build_mcp_sampler(loop.llm),
         roots=build_mcp_roots(loop.tool_context.workspace_root))
+    loop.mcp_supervisor = supervisor
     def merged_mcp_config(source: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         active = current_config if source is None else source
         return compose_mcp_config(
@@ -960,6 +958,7 @@ async def async_main(args: argparse.Namespace) -> int:
 
     if not args.no_mcp:
         await supervisor.sync(merged_mcp_config())
+        loop.sync_context_attachments(include_mcp=True)
 
     async def reload_mcp():
         """REPL /mcp reload：重读分层配置 → diff 同步 → 刷新 Prompt。"""
@@ -972,6 +971,7 @@ async def async_main(args: argparse.Namespace) -> int:
         await supervisor.sync(merged_mcp_config(new_bundle.data))
         restarted = await supervisor.check_and_restart()
         await supervisor.refresh_prompts()
+        loop.sync_context_attachments(include_mcp=True)
         refresh = getattr(loop, "extension_refresh", None)
         if refresh is not None:
             refresh()

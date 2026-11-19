@@ -899,9 +899,7 @@ system prompt 不再由 App、Skill 热重载和 `/context refresh` 各自拼接
 ```
 Fragment sources
 ├─ core       → core:base                 locked · cacheable
-├─ skills     → skills:index              toggleable · cacheable
 └─ workspace  → workspace:rules           toggleable · cacheable
-                workspace:git / tree      toggleable · dynamic
                          │
                          ▼
               PromptFragmentRegistry
@@ -912,6 +910,12 @@ Fragment sources
                          │
                          │
                          ▼
+             ContextAttachmentStore
+                ├─ environment/date       dynamic · revisioned
+                ├─ skill/agent/MCP delta  dynamic · revisioned
+                └─ mode/token reminder    dynamic · revisioned
+                         │
+                         ▼
                   PromptAssembler
                 ├─ fixed L0-L12 order
                 ├─ stability/trust validation
@@ -919,13 +923,17 @@ Fragment sources
                 └─ ProviderMessages
 ```
 
+Step 101 后，`skills:index` 与 `workspace:git/tree` 不再写入 Registry；它们迁移到
+`ContextAttachmentStore`，与 date/catalog/reminder 一样作为独立 dynamic block 进入
+`PromptAssembler`。Registry 只保留稳定 base/rules 与会话级手动启停语义。
+
 - Fragment 有 `id/source/scope/layer/priority/content/stability/trust/cacheable/
   compactable/toggleable`；旧构造参数仍保持兼容。
   `core:base` 为不可关闭安全底座；其他内置 Fragment 均可按精确 id 或 source 启停，
   精确 id 覆盖 source 级设置，`/context reset` 清除运行时 overrides。
 - cacheable Fragment 被渲染为全局连续前缀，即使以后注册动态 system Fragment，也不会
-  阻断后续 workspace stable rules。`stable_hash` 只覆盖稳定前缀，因此 git 状态/目录树
-  变化会改变 `full_hash`，但不会使规则缓存失效。
+  阻断后续 workspace stable rules。`stable_hash` 只覆盖稳定前缀；git 状态/目录树由
+  attachment 承载，变化只改变请求 `dynamic_hash`，不会使 Registry 或规则缓存失效。
 - legacy snapshot 仍通过 `Message.provider_meta.prompt_cache_boundaries` 暴露字符
   offset；生产路径由 `ProviderMessages.system_blocks` 携带显式
   `stable_system_blocks/dynamic_system_blocks`。Anthropic 原样保留 block 数组，只在最后
@@ -1061,6 +1069,35 @@ SystemPromptBlocks
 - 旧 Provider、旧 system message 或只有 `prompt_cache_boundaries` 的调用由
   `resolve_system_prompt_blocks()` 生成兼容视图：显式 block 优先，否则从 system 消息按固定
   顺序恢复 stable/dynamic 视图。生产请求仍只允许由 `PromptAssembler` 产生显式 block。
+
+## 增量 Context Attachment（Step 101）
+
+动态上下文不再作为一个整体重建 system prompt。`ContextAttachmentStore` 为每个易变来源分配
+固定 ID、kind、scope、trust、layer 与独立 revision；只要语义指纹未变化，revision 和
+generation 都不推进。当前附件类型为：
+
+```text
+environment_snapshot / environment_delta   # L8，git/tree/root 当前现场与变化摘要
+date                                       # L8，会话日期
+skill_catalog_delta                        # L6，Skill 目录与本次增删
+agent_catalog_delta                        # L6，Agent Definition 目录与本次增删
+mcp_instructions_delta                     # L6，MCP initialize instructions（untrusted）
+token_budget_reminder                      # L12，当前 turn 已用/剩余预算
+mode_reminder                              # L12，run mode / permission mode
+```
+
+- `environment_attachments()` 对每个非 rules section 计算 SHA-256；只有 changed/added/removed
+  section 会更新 `environment_snapshot` 与 `environment_delta`。稳定项目规则仍属于
+  `workspace:rules` Fragment，环境变化不会使 Registry generation 或 stable hash 变化。
+- catalog 只消费已经加载的 Manager/Supervisor 快照，不在 Prompt 装配时扫描磁盘或 MCP；
+  catalog membership 变化与正文变化分别记录在无正文 metadata 中。
+- 所有附件均 `cacheable=False`。`PromptAssembler` 将每个附件映射为一个独立
+  `SystemPromptBlock`，因此环境变化只改变对应 block(s) 与 `dynamic_hash`，不会改变
+  `stable_hash`，也不会复制进持久 history。
+- 单文件解释意图仍会过滤 `environment_snapshot/environment_delta`，避免无关目录树扩大 token
+  范围。MCP instructions 标记为 `untrusted`，Skill/Agent catalog 标记为 project scope。
+- `/context attachments` 只展示 ID/revision/generation/layer/token；`/context cache` 从最近
+  `PromptPlan` 展示包含附件在内的 stable/volatile block，绝不输出附件正文。
 
 ## ContextSource 与 ContextAssembler（Step 85）
 

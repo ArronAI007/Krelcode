@@ -96,6 +96,7 @@ class MCPClient:
         self._disconnect_reason = ""
         self.server_info: Dict[str, Any] = {}
         self.capabilities: Dict[str, Any] = {}
+        self.instructions: str = ""
         self.server_protocol_version: Optional[str] = None
         self.oauth: Optional[OAuthTokenManager] = None
         if self.config.url and self.config.oauth:
@@ -128,6 +129,7 @@ class MCPClient:
         if isinstance(result, dict):
             self.server_info = result.get("serverInfo", {}) or {}
             self.capabilities = result.get("capabilities", {}) or {}
+            self.instructions = str(result.get("instructions") or "")
             self.server_protocol_version = result.get("protocolVersion")
             # 后续 HTTP 请求用协商版本填充 MCP-Protocol-Version（streamable）
             setter = getattr(self._transport, "set_protocol_version", None)

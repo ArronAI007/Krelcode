@@ -17,8 +17,18 @@ from .recorder import (
 
 
 def refresh_skill_system_prompt(loop: AgentLoop) -> None:
-    """热重载/恢复会话后，把最新 Skill 索引同步到 Prompt Registry。"""
+    """热重载/恢复会话后，只替换受影响的 catalog attachment。"""
     manager = getattr(loop, "skill_manager", None)
+    sync = getattr(loop, "sync_context_attachments", None)
+    if callable(sync):
+        sync(
+            include_environment=False,
+            include_catalogs=True,
+            include_mcp=False,
+            include_reminders=False,
+        )
+        return
+    # Compatibility for third-party loops without an attachment store.
     registry = getattr(loop, "prompt_registry", None)
     if registry is not None:
         if manager is not None:

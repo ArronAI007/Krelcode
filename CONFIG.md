@@ -83,11 +83,12 @@ krelcode [子命令] [选项]
 | `/context why <id>` | 解释 layer/source/token-source/dropped item 的 token 归因、cache/compact 属性与 plan 命中；不输出正文 |
 | `/context sources` | 查看已注册 ContextSource、最近装配 layer 顺序、来源 token、cache 属性、dropped item 与有界错误诊断 |
 | `/context rules` | 查看 user/project/directory 规则入口、@import 来源、字符数与越界/循环/敏感文件问题 |
+| `/context attachments` | 查看动态 Context Attachment 的 ID、kind、revision、generation、layer 与 token；不输出附件正文 |
 | `/context fragments [source]` | 列出全部或指定来源的 Fragment、启停状态、group、tokens 与 cache 属性 |
 | `/context enable\|disable\|toggle <id\|source>` | 手动启停单个 Fragment 或整个来源；精确 id 设置优先于 source 设置 |
 | `/context reset` | 清除当前会话的全部手动启停设置 |
 | `/context cache` | 显示稳定前缀字符/token 数、稳定/动态 Fragment、stable/full hash、与上一请求相比是否变化及 cache segment 归因 |
-| `/context refresh` | 重采目录树/git/规则文件，原子替换 workspace Fragment 并重建 system prompt |
+| `/context refresh` | 重采目录树/git/规则文件；规则变化才更新稳定 Fragment，环境变化只替换对应 snapshot/delta attachment |
 | `/memory` · `/memory list [scope]` | 列出全部或指定 user/project/session 作用域记忆及 ID、类型和内容 |
 | `/memory scopes` | 显示各作用域条数与存储路径 |
 | `/memory show <id>` | 查看作用域、类型、source、时间、tag、token 与完整内容；ID 支持唯一后缀 |
@@ -168,9 +169,10 @@ Review $ARGUMENTS. Check compatibility and cite file:line.
   保留独立 `CommandSource.PLUGIN` 与 `/plugin__<plugin>__<command>` 名称。
 
 Fragment 启停是**当前会话运行时状态**，不写入 TOML；重启后恢复默认全开。
-内置来源为 `core`（不可关闭的基础 system prompt）、`skills`（可用 Skill 索引）以及
-`workspace:rules|git|tree`。cacheable Fragment 会形成连续的稳定前缀；只有真正位于
-第一个动态 Fragment 之前的稳定内容会报告为 cache boundary。
+稳定内置来源为 `core`（不可关闭的基础 system prompt）与 `workspace:rules`。Git/tree、
+日期、Skill/Agent/MCP catalog 和 mode/token reminder 属于动态
+`ContextAttachmentStore`，各有独立 revision，不参与 Fragment 启停。cacheable Fragment
+会形成连续的稳定前缀；只有真正位于第一个动态 block 之前的稳定内容会报告为 cache boundary。
 
 TUI 的 `Context` 面板展示当前请求 token 分布、stable/volatile、source/fragment/schema
 数量、cache hash 是否变化、实际 Memory 命中、dropped 来源、Tool Microcompact 节省量与

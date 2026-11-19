@@ -868,12 +868,27 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         return _ok(*inspection.why_lines(parts[1]))
 
     if operation == "refresh" and len(parts) == 1:
+        manager = ctx.skills or getattr(ctx.loop, "skill_manager", None)
+        if manager is not None and getattr(ctx.loop, "skill_manager", None) is None:
+            ctx.loop.skill_manager = manager
+        refresh = getattr(ctx.loop, "refresh_workspace_context", None)
+        if callable(refresh):
+            bundle = await refresh()
+            lines = ["  [context] 工作区规则与环境附件已刷新"]
+            lines.extend(f"  {line}" for line in bundle.summary_lines())
+            diff = getattr(ctx.loop, "last_attachment_diff", None)
+            if diff is not None:
+                lines.extend(f"  {line}" for line in diff.summary_lines())
+            snapshot = getattr(ctx.loop, "prompt_snapshot", None)
+            if snapshot is not None:
+                lines.extend(f"  {line}" for line in snapshot.summary_lines())
+            return _ok(*lines)
+
         options = getattr(ctx.loop, "context_options", None)
         rule_loader = getattr(ctx.loop, "rule_loader", None)
         bundle = await build_workspace_context_bundle(
             ctx.workspace_root, options=options, rule_loader=rule_loader)
         ctx.loop.workspace_context = bundle
-        manager = ctx.skills or getattr(ctx.loop, "skill_manager", None)
         if registry is not None:
             registry.replace_group(
                 GROUP_WORKSPACE, workspace_fragments(bundle))
@@ -904,6 +919,27 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             "  [context] 工作区上下文已刷新",
             *[f"  {line}" for line in bundle.summary_lines()],
         )
+
+    if operation == "attachments" and len(parts) == 1:
+        store = getattr(ctx.loop, "context_attachments", None)
+        if store is None:
+            return _ok("  （Context Attachment Store 未启用）")
+        snapshot = store.snapshot()
+        lines = [
+            f"  [attachments] {len(snapshot.items)} 个"
+            f" · generation {snapshot.generation}"
+            f" · {snapshot.total_tokens} tokens",
+        ]
+        for item in snapshot.items:
+            lines.append(
+                f"  {item.id} · {item.kind.value} · revision {item.revision}"
+                f" · {item.layer} · {item.tokens} tokens · dynamic")
+        diff = getattr(ctx.loop, "last_attachment_diff", None)
+        if diff is not None and diff.changed:
+            lines.extend(f"  {line}" for line in diff.summary_lines())
+        if not snapshot.items:
+            lines.append("  （当前没有动态附件）")
+        return _ok(*lines)
 
     if operation == "rules" and len(parts) == 1:
         loader = getattr(ctx.loop, "rule_loader", None)
@@ -1004,7 +1040,23 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
 
     if operation == "cache" and len(parts) == 1:
         lines = ContextInspectionService(ctx.loop).cache_lines()
-        if registry is not None:
+        plan = getattr(ctx.loop, "last_prompt_plan", None)
+        if plan is not None:
+            cache = plan.cache
+            store = getattr(ctx.loop, "context_attachments", None)
+            attachment_generation = (
+                store.snapshot().generation
+                if store is not None else 0
+            )
+            lines[0:0] = [
+                f"  [cache] prompt stable prefix {cache.offset} chars"
+                f" · {cache.stable_tokens} tokens"
+                f" · generation {plan.generation}"
+                f" · attachment generation {attachment_generation}",
+                f"  stable fragments: {', '.join(cache.stable_fragments) or '(none)'}",
+                f"  volatile fragments: {', '.join(cache.volatile_fragments) or '(none)'}",
+            ]
+        elif registry is not None:
             snapshot = registry.snapshot()
             cache = snapshot.cache
             lines[0:0] = [
@@ -1021,6 +1073,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
     if operation != "stats" or parts:
         return _ok(
             "  用法: /context | /context fragments [source] | "
+            "/context attachments | "
             "/context sources | /context rules | "
             "/context plan | /context why <id> | "
             "/context enable|disable|toggle <id|source> | "

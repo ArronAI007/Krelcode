@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from krelcode.agent.attachments import ContextAttachmentKind, attachment_id
 from krelcode.agent.loop import AgentLoop
 from krelcode.app import build_loop, build_parser
 from krelcode.core.messages import ToolCall
@@ -299,7 +300,10 @@ def test_build_loop_registers_skills_and_no_skills_disables_them(tmp_path):
     loop, manager = asyncio.run(build_loop(args, {}))
     try:
         assert "load_skill" in loop.registry.names()
-        assert "demo" in loop.history[0].content
+        skill_attachment = loop.context_attachments.get(attachment_id(
+            ContextAttachmentKind.SKILL_CATALOG_DELTA))
+        assert skill_attachment is not None
+        assert "demo" in skill_attachment.content
         assert "demo" in manager.system_prompt_provider()
         assert set(tool.name for tool in build_skill_tools(loop.skill_manager)) == {
             "list_skills", "load_skill", "list_skill_resources",
@@ -314,6 +318,7 @@ def test_build_loop_registers_skills_and_no_skills_disables_them(tmp_path):
     disabled_loop, disabled_manager = asyncio.run(build_loop(disabled_args, {}))
     try:
         assert "load_skill" not in disabled_loop.registry.names()
-        assert "<available_skills>" not in disabled_loop.history[0].content
+        assert disabled_loop.context_attachments.get(attachment_id(
+            ContextAttachmentKind.SKILL_CATALOG_DELTA)) is None
     finally:
         asyncio.run(disabled_manager.shutdown())

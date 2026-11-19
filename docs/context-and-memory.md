@@ -17,9 +17,11 @@ Krelcode 把“本轮模型实际看到的上下文”拆成四个可独立检�
 4. **History / Tool Results**：对话历史与工具结果；超预算时先做 Tool Microcompact，
    仍超限再做 Structured Compact。
 
-最终的 `PromptFragmentRegistry/ContextSource -> PromptAssembler -> PromptPlan ->
-ProviderMessages` 装配结果会形成一个真实请求快照。快照只包含 token 分项、来源 ID、裁剪项、
-缓存边界和哈希，不包含 Prompt、工具输出或密钥正文。
+最终的 `PromptFragmentRegistry + ContextAttachmentStore + ContextSource -> PromptAssembler
+-> PromptPlan -> ProviderMessages` 装配结果会形成一个真实请求快照。稳定 Fragment（base、
+项目规则等）与动态 attachment（environment/date/catalog/reminder）分开管理；每个 attachment
+有固定 ID 和独立 revision，只替换发生变化的那一块。快照只包含 token 分项、来源 ID、
+revision、裁剪项、缓存边界和哈希，不包含 Prompt、工具输出或密钥正文。
 
 `ProviderMessages` 同时携带显式 `SystemPromptBlocks`：连续可缓存的 Fragment 进入
 `stable_system_blocks`，其余进入 `dynamic_system_blocks`，并分别计算 `stable_hash` 与
@@ -71,6 +73,7 @@ auto_threshold = 0.80
 /context plan
 /context why <layer-id|source|token-source|dropped-id>
 /context sources
+/context attachments
 /context cache
 /context refresh
 ```
@@ -117,12 +120,15 @@ category 列表有数量上限；超大 Context 会显示省略数量，并可�
 `cache` 查看 stable/dynamic block 数、stable/dynamic/full hash、与上一请求相比是否变化、
 `cache_control` 字符边界、显式缓存段数量，以及各 segment 的 token/字符/哈希。Anthropic
 的断点位于最后一个 stable block；OpenAI-compatible 只合并 wire system message，不会丢失
-这组边界元数据。Prompt Fragment Registry 启用时还会列出稳定与动态 fragment。
+这组边界元数据。`/context cache` 从最近 `PromptPlan` 列出包含 attachment 在内的
+stable/volatile block；`/context attachments` 则列出动态附件的 kind、revision、generation、
+layer 与 token，均不输出正文。
 
 ### `/context refresh`
 
-重新读取目录树、Git 状态和规则文件，并重建 workspace fragment。它不会静默修改历史；
-下一真实模型请求会使用新快照。TUI 刷新本身不会触发该扫描。
+重新读取目录树、Git 状态和规则文件。规则变化才更新稳定 Fragment；Git/tree 变化只替换
+`environment_snapshot/environment_delta` attachment，Skill/Agent/MCP catalog 也各自使用独立
+attachment。它不会重写持久 history；下一真实模型请求会使用新快照。TUI 刷新本身不会触发该扫描。
 
 ## 4. TUI Context 面板
 
