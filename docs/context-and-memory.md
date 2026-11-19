@@ -255,9 +255,25 @@ origin、pinned 状态保留为机器可读元数据。模型生成内容仍是 
   `/compact 保留 API 设计、失败测试和下一步`。
 
 自动 compact 只在安全 turn 边界切割，并保护当前 turn、最近工具、错误、写入/编辑确认、
-plan 与 ask_user 结果。compact 摘要使用可校验 schema，覆盖目标、决策、文件、命令、测试
-状态、错误、未完成项和下一步；连续 compact 会合并旧摘要，摘要失败时从 Working Context
-与保留历史生成降级摘要。
+plan 与 ask_user 结果。compact 摘要使用机器可校验的八字段契约：
+
+```json
+{
+  "goal": "",
+  "completed": [],
+  "decisions": [],
+  "files": [],
+  "tests": [],
+  "open_issues": [],
+  "next_steps": [],
+  "critical_constraints": []
+}
+```
+
+模型不得增加其他字段；source/generation/checkpoint 等审计信息只保存在内部，不会混入
+下一轮摘要请求。连续 compact 会按稳定 key 合并旧摘要，摘要失败时从 Working Context
+与保留历史生成降级摘要。compact checkpoint 同时保存精确 Working Context 和任务文件
+SHA-256；`/rewind` 恢复后若文件已变化或缺失，会移除陈旧文件事实并记录 open issue。
 
 ## 8. 存储、迁移与备份
 

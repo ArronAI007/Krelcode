@@ -364,11 +364,13 @@ high watermark reached
   → persist pre-compact history + checkpoint metadata
 ```
 
-`CompactSummary v2` 的稳定字段为 `goal`、`decisions`、`files`、`commands`、`tests`、
-`errors`、`open_issues`、`next_steps`、`handoff_notes`。文件带 path/status/note，
-测试带 name/status/detail；模型输出必须包含全部字段，非法版本、类型、枚举或重复 key
-会触发降级。wire 中使用短别名并在 `Message.provider_meta` 保存 generation/source 等
-非 provider 元数据，减少重复 compact 的 token 成本。
+`CompactSummary v2` 的模型契约固定为 `goal`、`completed`、`decisions`、`files`、
+`tests`、`open_issues`、`next_steps`、`critical_constraints` 八个字段。文件带
+path/status/note，测试带 name/status/detail；模型输出必须包含全部字段且不能携带
+version、commands、errors、handoff notes 或其他扩展字段。缺少字段、非法类型、枚举、
+超限数组或重复 key 都会触发降级。`source/generation/compacted_messages/created_at`
+只作为内部审计元数据持久化，不会回灌给摘要模型。wire 中使用短别名并在
+`Message.provider_meta` 保存审计元数据，减少重复 compact 的 token 成本。
 
 - 每次 compact 都从已有摘要继续合并；旧 goal/file/test/error/open issue 不会因模型
   本轮“没说”而消失，generation 单调递增，compacted message 计数累计。
@@ -376,13 +378,15 @@ high watermark reached
   保持原样；若中段只剩上一条摘要，不会重复摘要同一内容。
 - 高低水位是触发与目标而非两个阈值循环：高水位判断完整请求预算，低水位用于选择
   更激进的合法切点；若无法达到低水位，选择最激进的合法 turn 边界。
-- compact 前完整 history、摘要、边界、水位、来源节省量和 Working Context 快照写入
-  `.krelcode/compact-checkpoints/`，原子替换、fail-open、SecretRedactor 脱敏。
+- compact 前完整 history、摘要、边界、水位、来源节省量、精确 Working Context 快照和
+  任务文件 SHA-256 写入 `.krelcode/compact-checkpoints/`，原子替换、fail-open、
+  SecretRedactor 脱敏。
 - `/compact preview` 展示按来源（tool results/conversation/total）的预计节省量与
   low-watermark 是否可达；正式 `/compact` 展示 checkpoint ID。
 - `ContextCompressed`、TUI Context 面板、recorder、stream-json 和子代理 feed 只传播
   内容无关元数据，不复制摘要正文。`/rewind` 匹配摘要 digest 后优先恢复 compact 前
-  完整现场，再重建 Working Context 和压缩状态。
+  完整现场与 Working Context，再校验文件 Hash；变化或缺失的文件事实会失效并记录为
+  open issue，压缩状态则从恢复后的 history 重新建立。
 
 ## 交互与会话（Step 8）
 

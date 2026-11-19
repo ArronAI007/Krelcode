@@ -12,15 +12,24 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ..agent.compact_summary import CompactSummary, summary_from_history
 from ..core.messages import Message
 from ..core.redact import SecretRedactor
 from .codec import history_from_dicts, history_to_dicts
+from .context_checkpoint import (
+    FileHash,
+    FileIntegrity,
+    collect_tracked_files,
+    hash_tracked_files,
+    verify_file_hashes,
+)
 
 COMPACT_CHECKPOINT_DIRNAME = Path(".krelcode") / "compact-checkpoints"
-COMPACT_CHECKPOINT_VERSION = 1
+COMPACT_CHECKPOINT_VERSION = 2
+_SUPPORTED_COMPACT_CHECKPOINT_VERSIONS = {1, COMPACT_CHECKPOINT_VERSION}
 
 
 @dataclass(frozen=True)
@@ -36,6 +45,7 @@ class CompactCheckpoint:
     boundary: Dict[str, object] = field(default_factory=dict)
     source_savings: Dict[str, int] = field(default_factory=dict)
     working_context: Dict[str, object] = field(default_factory=dict)
+    file_hashes: Tuple[FileHash, ...] = ()
     pre_compact_history: Tuple[Message, ...] = ()
 
     def record(self) -> dict:
@@ -50,12 +60,17 @@ class CompactCheckpoint:
             "after_tokens": self.after_tokens,
             "boundary": dict(self.boundary),
             "source_savings": dict(self.source_savings),
+            "file_count": len(self.file_hashes),
             "summary": self.summary.record(),
         }
 
     def matches_history(self, history: Sequence[Message]) -> bool:
         current = summary_from_history(history)
         return current is not None and current.digest == self.summary.digest
+
+    def verify_files(self, workspace_root: Path) -> FileIntegrity:
+        """Detect task files changed after this compact checkpoint."""
+        return verify_file_hashes(self.file_hashes, Path(workspace_root))
 
 
 class CompactCheckpointStore:
@@ -84,10 +99,24 @@ class CompactCheckpointStore:
         boundary: Optional[Dict[str, object]] = None,
         source_savings: Optional[Dict[str, int]] = None,
         working_context: Optional[Dict[str, object]] = None,
+        file_hashes: Optional[Sequence[FileHash]] = None,
         created_at: Optional[float] = None,
     ) -> Optional[CompactCheckpoint]:
         timestamp = float(created_at if created_at is not None else time.time())
         checkpoint_id = self._next_id(timestamp)
+        working_record = dict(working_context or {})
+        if file_hashes is None:
+            entries = working_record.get("entries")
+            working_view = SimpleNamespace(entries=tuple(
+                SimpleNamespace(metadata=dict(item.get("metadata") or {}))
+                for item in entries
+                if isinstance(item, dict)
+            )) if isinstance(entries, list) else None
+            tracked = collect_tracked_files(
+                self.root, pre_compact_history, working_view)
+            captured_hashes = hash_tracked_files(tracked, self.root)
+        else:
+            captured_hashes = tuple(file_hashes)
         checkpoint = CompactCheckpoint(
             id=checkpoint_id,
             created_at=timestamp,
@@ -102,7 +131,8 @@ class CompactCheckpointStore:
                 str(key): int(value)
                 for key, value in (source_savings or {}).items()
             },
-            working_context=dict(working_context or {}),
+            working_context=working_record,
+            file_hashes=captured_hashes,
             pre_compact_history=tuple(pre_compact_history),
         )
         payload = {
@@ -110,6 +140,7 @@ class CompactCheckpointStore:
             "version": COMPACT_CHECKPOINT_VERSION,
             **checkpoint.record(),
             "summary_full": summary.as_dict(),
+            "file_hashes": [item.as_dict() for item in checkpoint.file_hashes],
             "history": history_to_dicts(pre_compact_history),
         }
         try:
@@ -199,7 +230,7 @@ class CompactCheckpointStore:
             return None
         if not isinstance(raw, dict):
             return None
-        if raw.get("version") != COMPACT_CHECKPOINT_VERSION:
+        if raw.get("version") not in _SUPPORTED_COMPACT_CHECKPOINT_VERSIONS:
             return None
         summary_raw = raw.get("summary_full")
         if not isinstance(summary_raw, dict):
@@ -216,6 +247,15 @@ class CompactCheckpointStore:
             )
         except (TypeError, ValueError, KeyError, AttributeError):
             return None
+        hashes_raw = raw.get("file_hashes")
+        try:
+            file_hashes = tuple(
+                FileHash.from_dict(item)
+                for item in hashes_raw
+                if isinstance(item, dict)
+            ) if isinstance(hashes_raw, list) else ()
+        except (TypeError, ValueError):
+            return None
         return CompactCheckpoint(
             id=str(raw.get("id", path.stem)),
             created_at=float(raw.get("created_at", 0.0)),
@@ -231,8 +271,36 @@ class CompactCheckpointStore:
                 for key, value in dict(raw.get("source_savings") or {}).items()
             },
             working_context=dict(raw.get("working_context") or {}),
+            file_hashes=file_hashes,
             pre_compact_history=messages,
         )
+
+
+def restore_compact_checkpoint(loop, checkpoint: CompactCheckpoint) -> FileIntegrity:
+    """Restore the exact pre-compact task scene and invalidate stale files."""
+    loop.last_compact_checkpoint = checkpoint
+    store = getattr(loop, "working_context_store", None)
+    restore_working = getattr(store, "restore_snapshot", None)
+    raw_entries = checkpoint.working_context.get("entries")
+    if callable(restore_working) and isinstance(raw_entries, list) and raw_entries:
+        snapshot = restore_working(checkpoint.working_context)
+    else:
+        rebuild = getattr(loop, "rebuild_working_context", None)
+        snapshot = rebuild() if callable(rebuild) else None
+
+    workspace_root = Path(loop.tool_context.workspace_root)
+    integrity = checkpoint.verify_files(workspace_root)
+    if integrity.stale and store is not None:
+        store.invalidate_files(
+            integrity.stale, reason="compact-file-hash-mismatch")
+        snapshot = store.snapshot()
+    loop.context_integrity = integrity
+
+    manager = getattr(loop, "context_manager", None)
+    if manager is not None:
+        manager.rebuild_state(loop.history)
+    loop.pending_context_refresh = True
+    return integrity
 
 
 __all__ = [
@@ -240,4 +308,5 @@ __all__ = [
     "COMPACT_CHECKPOINT_VERSION",
     "CompactCheckpoint",
     "CompactCheckpointStore",
+    "restore_compact_checkpoint",
 ]

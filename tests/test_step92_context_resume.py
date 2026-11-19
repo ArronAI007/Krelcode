@@ -61,16 +61,14 @@ def git(tmp_path: Path, *args: str) -> str:
 
 def summary_json() -> str:
     return json.dumps({
-        "version": 2,
         "goal": "Resume the context safely",
+        "completed": ["restored the previous checkpoint"],
         "decisions": ["reload live instructions"],
         "files": [{"path": "app.py", "status": "modified", "note": "live"}],
-        "commands": ["pytest -q"],
         "tests": [{"name": "step92", "status": "passed", "detail": "ok"}],
-        "errors": [],
         "open_issues": [],
         "next_steps": ["continue"],
-        "handoff_notes": ["checkpoint restored"],
+        "critical_constraints": ["never reuse stale workspace state"],
     })
 
 

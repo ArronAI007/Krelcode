@@ -790,7 +790,7 @@ class AgentLoop:
         result = self.context_manager.last_compact_result
         checkpoint = None
         if result is not None and self.compact_checkpoint_store is not None:
-            working = self.working_context_store.snapshot().as_record()
+            working = self.working_context_store.snapshot().as_checkpoint_record()
             checkpoint = self.compact_checkpoint_store.record(
                 pre_compact_history=pre_compact_history,
                 summary=result.summary,

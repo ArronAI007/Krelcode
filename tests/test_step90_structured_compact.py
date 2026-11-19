@@ -40,26 +40,32 @@ from krelcode.tools.registry import ToolRegistry
 def summary_payload(
     *,
     goal: str = "完成 Structured Compact v2",
+    completed: list[str] | None = None,
     decisions: list[str] | None = None,
     files: list[dict] | None = None,
     tests: list[dict] | None = None,
     next_steps: list[str] | None = None,
+    critical_constraints: list[str] | None = None,
 ) -> dict:
     return {
-        "version": 2,
         "goal": goal,
-        "decisions": decisions or [],
-        "files": files or [
-            {"path": "src/a.py", "status": "modified", "note": "main change"},
-        ],
-        "commands": ["python3 -m pytest -q tests/test_step90_structured_compact.py"],
-        "tests": tests or [
-            {"name": "pytest step90", "status": "passed", "detail": "exit 0"},
-        ],
-        "errors": [],
+        "completed": (
+            ["implemented the compact summary schema"]
+            if completed is None else completed),
+        "decisions": [] if decisions is None else decisions,
+        "files": (
+            [{"path": "src/a.py", "status": "modified", "note": "main change"}]
+            if files is None else files),
+        "tests": (
+            [{"name": "pytest step90", "status": "passed", "detail": "exit 0"}]
+            if tests is None else tests),
         "open_issues": [],
-        "next_steps": next_steps or ["run the full test suite"],
-        "handoff_notes": ["keep the compact checkpoint"],
+        "next_steps": (
+            ["run the full test suite"]
+            if next_steps is None else next_steps),
+        "critical_constraints": (
+            ["the summary must remain machine-verifiable"]
+            if critical_constraints is None else critical_constraints),
     }
 
 
@@ -77,13 +83,16 @@ def turn_history(count: int = 8, size: int = 600) -> list[Message]:
 
 def test_compact_summary_schema_and_strict_model_parser():
     assert COMPACT_SUMMARY_JSON_SCHEMA["required"] == [
-        "version", "goal", "decisions", "files", "commands", "tests",
-        "errors", "open_issues", "next_steps", "handoff_notes",
+        "goal", "completed", "decisions", "files", "tests", "open_issues",
+        "next_steps", "critical_constraints",
     ]
     parsed = CompactSummary.from_model_json_text(model_json())
     assert parsed.goal == "完成 Structured Compact v2"
+    assert parsed.completed[0] == "implemented the compact summary schema"
     assert parsed.files[0].path == "src/a.py"
     assert parsed.tests[0].status == "passed"
+    assert parsed.critical_constraints[0] == (
+        "the summary must remain machine-verifiable")
     assert parsed.validate() == []
 
     payload = summary_payload()
@@ -94,6 +103,15 @@ def test_compact_summary_schema_and_strict_model_parser():
         assert "tests" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("missing required field must fail")
+
+    legacy = summary_payload()
+    legacy["version"] = 2
+    try:
+        CompactSummary.from_model_json_text(json.dumps(legacy))
+    except CompactSummaryError as exc:
+        assert "version" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("model-facing schema must reject extra fields")
 
     invalid = summary_payload()
     invalid["files"][0]["status"] = "invented"
@@ -130,9 +148,11 @@ def test_model_summary_is_structural_and_merges_previous_handoff():
     first = CompactSummary.from_model_json_text(model_json())
     second = CompactSummary.from_model_json_text(model_json(
         goal="继续 Step 90",
+        completed=["finished the second compact"],
         files=[],
         tests=[],
         decisions=["model output wins for changed keys"],
+        critical_constraints=["do not weaken checkpoint recovery"],
     ))
     merged = merge_summaries(first, second)
 
@@ -140,8 +160,33 @@ def test_model_summary_is_structural_and_merges_previous_handoff():
     assert merged.files[0].path == "src/a.py"
     assert merged.tests[0].status == "passed"
     assert "model output wins for changed keys" in merged.decisions
+    assert "implemented the compact summary schema" in merged.completed
+    assert "finished the second compact" in merged.completed
+    assert "the summary must remain machine-verifiable" in (
+        merged.critical_constraints)
+    assert "do not weaken checkpoint recovery" in merged.critical_constraints
     assert "完成 Structured Compact v2" not in merged.goal
     assert "路径" not in merged.render()  # wire aliases keep compact bounded
+
+
+def test_previous_summary_prompt_uses_only_the_machine_contract_fields():
+    provider = MockProvider(scripted=[model_json()])
+    manager = ContextManager(provider, max_tokens=10**9, keep_recent=2)
+    previous = CompactSummary.from_model_json_text(model_json())
+
+    summary = asyncio.run(manager._summarize(
+        [Message.user("new completed work"), Message.assistant("done")],
+        previous=previous,
+        compacted_messages=previous.compacted_messages + 2,
+    ))
+
+    prompt = provider.calls[0][1].content or ""
+    previous_json = prompt.split("<previous_summary>", 1)[1].split(
+        "</previous_summary>", 1)[0]
+    payload = json.loads(previous_json)
+    assert set(payload) == set(COMPACT_SUMMARY_JSON_SCHEMA["required"])
+    assert payload["completed"] == list(previous.completed)
+    assert summary.completed[0] == previous.completed[0]
 
 
 def test_failed_model_summary_uses_working_context_fallback(tmp_path):
@@ -161,6 +206,16 @@ def test_failed_model_summary_uses_working_context_fallback(tmp_path):
     store.upsert(
         "command", "pytest -q", id="command:test",
         metadata={"command": "pytest -q", "exit_code": 0})
+    store.upsert(
+        "plan", "plan",
+        id="plan:current",
+        metadata={
+            "items": ["implement schema", "run full suite"],
+            "statuses": ["completed", "pending"],
+        })
+    store.upsert(
+        "critical_constraint", "never expose checkpoint secrets",
+        id="constraint:secrets")
     manager = ContextManager(
         FailingProvider(), max_tokens=1, keep_recent=2,
         working_context_provider=store.snapshot,
@@ -174,6 +229,8 @@ def test_failed_model_summary_uses_working_context_fallback(tmp_path):
     assert summary.source == "working_context"
     assert summary.files[0].path == "src/a.py"
     assert summary.tests[0].status == "passed"
+    assert "implement schema" in summary.completed
+    assert "never expose checkpoint secrets" in summary.critical_constraints
     assert "摘要失败" in history[1].content
 
 
@@ -182,16 +239,20 @@ def test_three_consecutive_compacts_keep_goal_files_and_tests():
         model_json(),
         model_json(
             goal="继续 Structured Compact v2",
+            completed=["second compact completed"],
             files=[],
             tests=[],
             decisions=["第二个持久决策"],
+            critical_constraints=["second constraint"],
         ),
         model_json(
             goal="继续 Structured Compact v2",
+            completed=["third compact completed"],
             files=[],
             tests=[],
             decisions=["第三个持久决策"],
             next_steps=["执行全量测试"],
+            critical_constraints=["third constraint"],
         ),
     ])
     manager = ContextManager(provider, max_tokens=10**9, keep_recent=2)
@@ -215,6 +276,10 @@ def test_three_consecutive_compacts_keep_goal_files_and_tests():
     assert any(item.status == "passed" for item in summary.tests)
     assert "第二个持久决策" in summary.decisions
     assert "第三个持久决策" in summary.decisions
+    assert "second compact completed" in summary.completed
+    assert "third compact completed" in summary.completed
+    assert "second constraint" in summary.critical_constraints
+    assert "third constraint" in summary.critical_constraints
     assert summary.compacted_messages > 0
     assert len(provider.calls) == 3
 
@@ -445,6 +510,78 @@ def test_rewind_restores_pre_compact_history_from_checkpoint(tmp_path):
     assert loop.last_compact_checkpoint is not None
 
 
+def test_rewind_restores_working_context_and_invalidates_changed_compact_file(
+    tmp_path,
+):
+    target = tmp_path / "tracked.py"
+    target.write_text("version = 1\n", encoding="utf-8")
+    working = WorkingContextStore(tmp_path)
+    working.upsert("goal", "update tracked.py", id="goal:current", source="user")
+    working.upsert(
+        "file", "tracked.py", id="file:tracked.py", source="tool:read_file",
+        metadata={"path": "tracked.py"})
+
+    bus = EventBus()
+    provider = MockProvider()
+    loop = AgentLoop(
+        llm=provider,
+        registry=ToolRegistry(),
+        tool_context=ToolContext(workspace_root=tmp_path),
+        policy=AllowAllPolicy(),
+        bus=bus,
+        system_prompt="SYS",
+        context_manager=ContextManager(provider, max_tokens=10_000),
+        working_context_store=working,
+    )
+    store = CompactCheckpointStore(tmp_path)
+    loop.compact_checkpoint_store = store
+    controller = SessionController(AgentRuntime(loop), checkpoints=None)
+    loop.history = [
+        Message.system("SYS"),
+        Message.user("original goal"),
+        Message.assistant("original answer"),
+    ]
+
+    async def first_turn():
+        loop.history.append(Message.user("turn one"))
+        await bus.emit(RunStarted("turn one", turn_id="turn-1"))
+        loop.history.append(Message.assistant("one done"))
+        await bus.emit(RunFinished("one done", turn_id="turn-1"))
+
+    asyncio.run(first_turn())
+    summary = CompactSummary.from_model_json_text(model_json())
+    checkpoint = store.record(
+        pre_compact_history=loop.history,
+        summary=summary,
+        trigger="auto",
+        before_tokens=100,
+        after_tokens=20,
+        session_id="",
+        turn_id="turn-1",
+        working_context=working.snapshot().as_checkpoint_record(),
+    )
+    assert checkpoint is not None
+    assert checkpoint.file_hashes[0].path == "tracked.py"
+    loop.history = [Message.system("SYS"), Message.user(summary.render())]
+
+    async def second_turn():
+        loop.history.append(Message.user("turn two"))
+        await bus.emit(RunStarted("turn two", turn_id="turn-2"))
+        loop.history.append(Message.assistant("two done"))
+        await bus.emit(RunFinished("two done", turn_id="turn-2"))
+
+    asyncio.run(second_turn())
+    target.write_text("version = 2\n", encoding="utf-8")
+    controller.rewind.rewind(2)
+
+    snapshot = loop.working_context_store.snapshot()
+    ids = {entry.id for entry in snapshot.entries}
+    assert "goal:current" in ids
+    assert "file:tracked.py" not in ids
+    assert "open_issue:resume-file-integrity" in ids
+    assert loop.context_integrity.changed == ("tracked.py",)
+
+
 def test_compact_observability_is_content_free_across_state_recorder_and_json(tmp_path):
     event = ContextCompressed(
         200,
@@ -490,8 +627,10 @@ def test_compact_observability_is_content_free_across_state_recorder_and_json(tm
 def test_summary_payload_is_redacted_before_becoming_history():
     redactor = SecretRedactor(["sk-step90-summary-secret"])
     payload = summary_payload(
+        completed=["finished sk-step90-summary-secret"],
         decisions=["use sk-step90-summary-secret"],
         next_steps=["never persist sk-step90-summary-secret"],
+        critical_constraints=["never reveal sk-step90-summary-secret"],
     )
     provider = MockProvider(scripted=[json.dumps(payload)])
     manager = ContextManager(

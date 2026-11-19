@@ -43,12 +43,15 @@ COMPACT_SUMMARY_JSON_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "required": [
-        "version", "goal", "decisions", "files", "commands", "tests",
-        "errors", "open_issues", "next_steps", "handoff_notes",
+        "goal", "completed", "decisions", "files", "tests", "open_issues",
+        "next_steps", "critical_constraints",
     ],
     "properties": {
-        "version": {"const": COMPACT_SUMMARY_VERSION},
         "goal": {"type": "string", "maxLength": _MAX_GOAL_CHARS},
+        "completed": {
+            "type": "array", "maxItems": _MAX_ITEMS,
+            "items": {"type": "string", "maxLength": _MAX_ITEM_CHARS},
+        },
         "decisions": {
             "type": "array", "maxItems": _MAX_ITEMS,
             "items": {"type": "string", "maxLength": _MAX_ITEM_CHARS},
@@ -69,10 +72,6 @@ COMPACT_SUMMARY_JSON_SCHEMA = {
                 },
             },
         },
-        "commands": {
-            "type": "array", "maxItems": _MAX_ITEMS,
-            "items": {"type": "string", "maxLength": _MAX_ITEM_CHARS},
-        },
         "tests": {
             "type": "array", "maxItems": _MAX_ITEMS,
             "items": {
@@ -89,10 +88,6 @@ COMPACT_SUMMARY_JSON_SCHEMA = {
                 },
             },
         },
-        "errors": {
-            "type": "array", "maxItems": _MAX_ITEMS,
-            "items": {"type": "string", "maxLength": _MAX_ITEM_CHARS},
-        },
         "open_issues": {
             "type": "array", "maxItems": _MAX_ITEMS,
             "items": {"type": "string", "maxLength": _MAX_ITEM_CHARS},
@@ -101,7 +96,7 @@ COMPACT_SUMMARY_JSON_SCHEMA = {
             "type": "array", "maxItems": _MAX_ITEMS,
             "items": {"type": "string", "maxLength": _MAX_ITEM_CHARS},
         },
-        "handoff_notes": {
+        "critical_constraints": {
             "type": "array", "maxItems": _MAX_ITEMS,
             "items": {"type": "string", "maxLength": _MAX_ITEM_CHARS},
         },
@@ -163,13 +158,17 @@ class CompactSummary:
 
     version: int = COMPACT_SUMMARY_VERSION
     goal: str = ""
+    completed: Tuple[str, ...] = ()
     decisions: Tuple[str, ...] = ()
     files: Tuple[CompactFile, ...] = ()
+    # Retained as internal/audit fields for backward compatibility and
+    # deterministic fallbacks. They are not part of the model-facing v2 schema.
     commands: Tuple[str, ...] = ()
     tests: Tuple[CompactTestStatus, ...] = ()
     errors: Tuple[str, ...] = ()
     open_issues: Tuple[str, ...] = ()
     next_steps: Tuple[str, ...] = ()
+    critical_constraints: Tuple[str, ...] = ()
     handoff_notes: Tuple[str, ...] = ()
     source: str = "model"
     generation: int = 1
@@ -198,6 +197,12 @@ class CompactSummary:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
     def as_dict(self) -> dict:
+        """Return the persisted/audit representation.
+
+        This includes deterministic metadata that must never be sent back to
+        the summary model. Use :meth:`as_contract_dict` for the model-facing
+        contract and :meth:`render` for the compact history wire format.
+        """
         return {
             **self._content_dict(),
             "source": self.source,
@@ -206,10 +211,24 @@ class CompactSummary:
             "created_at": self.created_at,
         }
 
+    def as_contract_dict(self) -> dict:
+        """Return exactly the machine-verifiable model-facing v2 schema."""
+        return {
+            "goal": self.goal,
+            "completed": list(self.completed),
+            "decisions": list(self.decisions),
+            "files": [item.as_dict() for item in self.files],
+            "tests": [item.as_dict() for item in self.tests],
+            "open_issues": list(self.open_issues),
+            "next_steps": list(self.next_steps),
+            "critical_constraints": list(self.critical_constraints),
+        }
+
     def _content_dict(self) -> dict:
         return {
             "version": self.version,
             "goal": self.goal,
+            "completed": list(self.completed),
             "decisions": list(self.decisions),
             "files": [item.as_dict() for item in self.files],
             "commands": list(self.commands),
@@ -217,6 +236,7 @@ class CompactSummary:
             "errors": list(self.errors),
             "open_issues": list(self.open_issues),
             "next_steps": list(self.next_steps),
+            "critical_constraints": list(self.critical_constraints),
             "handoff_notes": list(self.handoff_notes),
         }
 
@@ -225,9 +245,10 @@ class CompactSummary:
         if self.goal:
             payload_data["g"] = self.goal
         for key, alias in (
-            ("decisions", "d"), ("files", "f"), ("commands", "c"),
-            ("tests", "t"), ("errors", "e"), ("open_issues", "o"),
-            ("next_steps", "x"), ("handoff_notes", "n"),
+            ("completed", "q"), ("decisions", "d"), ("files", "f"),
+            ("commands", "c"), ("tests", "t"), ("errors", "e"),
+            ("open_issues", "o"), ("next_steps", "x"),
+            ("critical_constraints", "r"), ("handoff_notes", "n"),
         ):
             value = getattr(self, key)
             if value:
@@ -262,6 +283,8 @@ class CompactSummary:
         summary = cls(
             version=version,
             goal=_bounded(raw.get("goal", raw.get("g", "")), _MAX_GOAL_CHARS),
+            completed=_string_tuple(
+                raw.get("completed", raw.get("q", [])), "completed"),
             decisions=_string_tuple(raw.get("decisions", raw.get("d", [])), "decisions"),
             files=tuple(CompactFile.from_dict(item) for item in files_raw),
             commands=_string_tuple(raw.get("commands", raw.get("c", [])), "commands"),
@@ -272,6 +295,9 @@ class CompactSummary:
                 raw.get("open_issues", raw.get("o", [])), "open_issues"),
             next_steps=_string_tuple(
                 raw.get("next_steps", raw.get("x", [])), "next_steps"),
+            critical_constraints=_string_tuple(
+                raw.get("critical_constraints", raw.get("r", [])),
+                "critical_constraints"),
             handoff_notes=_string_tuple(
                 raw.get("handoff_notes", raw.get("n", [])), "handoff_notes"),
             source={
@@ -323,11 +349,13 @@ class CompactSummary:
         if len(self.goal) > _MAX_GOAL_CHARS:
             issues.append("goal 超长")
         for name, values in (
+            ("completed", self.completed),
             ("decisions", self.decisions),
             ("commands", self.commands),
             ("errors", self.errors),
             ("open_issues", self.open_issues),
             ("next_steps", self.next_steps),
+            ("critical_constraints", self.critical_constraints),
             ("handoff_notes", self.handoff_notes),
             ("files", self.files),
             ("tests", self.tests),
@@ -359,9 +387,11 @@ class CompactSummary:
             "digest": self.digest,
             "tokens": self.token_count,
             "goal_chars": len(self.goal),
+            "completed": len(self.completed),
             "files": len(self.files),
             "tests": len(self.tests),
             "errors": len(self.errors),
+            "critical_constraints": len(self.critical_constraints),
             "compacted_messages": self.compacted_messages,
         }
 
@@ -378,6 +408,7 @@ def merge_summaries(
         result = CompactSummary(
             version=COMPACT_SUMMARY_VERSION,
             goal=candidate.goal or result.goal,
+            completed=_merge_strings(result.completed, candidate.completed),
             decisions=_merge_strings(result.decisions, candidate.decisions),
             files=_merge_by_key(result.files, candidate.files, lambda item: item.path),
             commands=_merge_strings(result.commands, candidate.commands),
@@ -386,6 +417,8 @@ def merge_summaries(
             open_issues=_merge_strings(
                 result.open_issues, candidate.open_issues),
             next_steps=_merge_strings(result.next_steps, candidate.next_steps),
+            critical_constraints=_merge_strings(
+                result.critical_constraints, candidate.critical_constraints),
             handoff_notes=_merge_strings(
                 result.handoff_notes, candidate.handoff_notes),
             source=candidate.source,
@@ -406,6 +439,7 @@ def build_working_context_fallback(
 ) -> CompactSummary:
     """Build a valid handoff from the bounded Working Context snapshot."""
     goal = ""
+    completed: list[str] = []
     decisions: list[str] = []
     files: list[CompactFile] = []
     commands: list[str] = []
@@ -413,6 +447,7 @@ def build_working_context_fallback(
     errors: list[str] = []
     open_issues: list[str] = []
     next_steps: list[str] = []
+    critical_constraints: list[str] = []
     notes: list[str] = []
     for entry in getattr(snapshot, "entries", ()) or ():
         kind = str(getattr(entry, "kind", ""))
@@ -422,6 +457,8 @@ def build_working_context_fallback(
             continue
         if kind == "goal":
             goal = content
+        elif kind == "critical_constraint":
+            critical_constraints.append(content)
         elif kind == "decision":
             decisions.append(content)
         elif kind == "file":
@@ -447,6 +484,7 @@ def build_working_context_fallback(
         elif kind == "open_issue":
             open_issues.append(content)
         elif kind == "plan":
+            completed.extend(_completed_plan_steps(content, meta))
             next_steps.extend(_plan_steps(content, meta))
         elif kind == "observation":
             notes.append(content)
@@ -454,6 +492,7 @@ def build_working_context_fallback(
         notes.append(raw_model_text.strip())
     candidate = CompactSummary(
         goal=goal,
+        completed=tuple(completed),
         decisions=tuple(decisions),
         files=tuple(files),
         commands=tuple(commands),
@@ -461,6 +500,7 @@ def build_working_context_fallback(
         errors=tuple(errors),
         open_issues=tuple(open_issues),
         next_steps=tuple(next_steps),
+        critical_constraints=tuple(critical_constraints),
         handoff_notes=tuple(notes),
         source="working_context",
         generation=max(1, (previous.generation if previous else 0) + 1),
@@ -480,6 +520,7 @@ def build_history_fallback(
     """Deterministically recover high-signal facts when the summary model fails."""
     calls: dict[str, ToolCall] = {}
     goal = ""
+    completed: list[str] = []
     files: list[CompactFile] = []
     commands: list[str] = []
     tests: list[CompactTestStatus] = []
@@ -510,6 +551,7 @@ def build_history_fallback(
                     else "read" if name == "read_file" else "touched")
                 files.append(CompactFile(path=path, status=status))
             command = str(meta.get("command") or "").strip()
+            completed.extend(_completed_plan_steps(command, meta))
             if command:
                 commands.append(command)
                 if _looks_like_test(command, meta):
@@ -521,6 +563,7 @@ def build_history_fallback(
         notes.append(raw_model_text.strip())
     candidate = CompactSummary(
         goal=goal,
+        completed=tuple(completed),
         files=tuple(files),
         commands=tuple(commands),
         tests=tuple(tests),
@@ -571,15 +614,13 @@ def summary_from_history(messages: Sequence[Message]) -> Optional[CompactSummary
 def _model_contract_issues(raw: Mapping[str, Any]) -> list[str]:
     """Validate the model-facing JSON contract before coercing/bounding it."""
     issues: list[str] = []
-    if raw.get("version") != COMPACT_SUMMARY_VERSION:
-        issues.append(f"version 必须为 {COMPACT_SUMMARY_VERSION}")
     goal = raw.get("goal")
     if not isinstance(goal, str) or len(goal) > _MAX_GOAL_CHARS:
         issues.append("goal 必须是长度受限的字符串")
 
     for field in (
-        "decisions", "commands", "errors", "open_issues", "next_steps",
-        "handoff_notes",
+        "completed", "decisions", "open_issues", "next_steps",
+        "critical_constraints",
     ):
         values = raw.get(field)
         if not isinstance(values, list):
@@ -783,6 +824,23 @@ def _plan_steps(content: str, meta: Mapping[str, Any]) -> list[str]:
                 result.append(f"[{status}] {item}")
         return result
     return [line.strip("- ○▶✓ ") for line in content.splitlines() if line.strip()][:8]
+
+
+def _completed_plan_steps(content: str, meta: Mapping[str, Any]) -> list[str]:
+    items = meta.get("items")
+    statuses = meta.get("statuses")
+    if not isinstance(items, list):
+        return []
+    result = []
+    for index, item in enumerate(items[:_MAX_ITEMS]):
+        status = (
+            str(statuses[index]).lower()
+            if isinstance(statuses, list) and index < len(statuses)
+            else "pending"
+        )
+        if status == "completed":
+            result.append(_bounded(item, _MAX_ITEM_CHARS))
+    return result
 
 
 __all__ = [

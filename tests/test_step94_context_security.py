@@ -101,16 +101,14 @@ def request(workspace: Path, **overrides) -> ContextRequest:
 
 def summary_json() -> str:
     return json.dumps({
-        "version": 2,
         "goal": "Continue the long refactor safely",
+        "completed": ["kept the context v3 boundary"],
         "decisions": ["keep context v3 enabled"],
         "files": [{"path": "src/app.py", "status": "modified", "note": "work"}],
-        "commands": ["python3 -m pytest -q"],
         "tests": [{"name": "targeted", "status": "passed", "detail": "ok"}],
-        "errors": [],
         "open_issues": [],
         "next_steps": ["run full tests"],
-        "handoff_notes": ["compact-safe handoff"],
+        "critical_constraints": ["memory remains non-instruction evidence"],
     })
 
 

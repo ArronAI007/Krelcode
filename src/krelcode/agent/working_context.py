@@ -24,6 +24,7 @@ WORKING_CONTEXT_KINDS = (
     "goal",
     "plan",
     "decision",
+    "critical_constraint",
     "file",
     "command",
     "error",
@@ -38,6 +39,9 @@ _KIND_ALIASES = {
     "errors": "error",
     "observations": "observation",
     "issue": "open_issue",
+    "constraint": "critical_constraint",
+    "requirement": "critical_constraint",
+    "critical-constraint": "critical_constraint",
 }
 _KIND_PRIORITY = {
     "open_issue": 0,
@@ -46,6 +50,7 @@ _KIND_PRIORITY = {
     "plan": 3,
     "file": 4,
     "decision": 5,
+    "critical_constraint": 5,
     "command": 6,
     "observation": 7,
 }
@@ -53,6 +58,7 @@ _GROUP_TAGS = {
     "goal": "goal",
     "plan": "plan",
     "decision": "decisions",
+    "critical_constraint": "critical_constraints",
     "file": "files",
     "command": "commands",
     "error": "errors",
@@ -229,6 +235,31 @@ class WorkingContextSnapshot:
             "dropped_entries": self.dropped_entries,
             "kinds": self.counts_by_kind,
             "sequence": self.sequence,
+        }
+
+    def as_checkpoint_record(self) -> Dict[str, Any]:
+        """Return the bounded full projection persisted for resume/rewind.
+
+        Unlike :meth:`as_record`, this representation contains entry text and
+        metadata because a compacted history cannot always rebuild the exact
+        live projection. Callers must write it only to checkpoint storage that
+        applies the shared secret redactor.
+        """
+        return {
+            **self.as_record(),
+            "entries": [
+                {
+                    "id": entry.id,
+                    "kind": entry.kind,
+                    "content": entry.content,
+                    "source": entry.source,
+                    "status": entry.status,
+                    "metadata": dict(entry.metadata),
+                    "sequence": entry.sequence,
+                    "timestamp": entry.timestamp,
+                }
+                for entry in self.entries
+            ],
         }
 
 

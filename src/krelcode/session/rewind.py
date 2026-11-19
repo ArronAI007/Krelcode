@@ -38,6 +38,7 @@ from .checkpoint import (
     CheckpointRestoreError,
     RestoreTurnsResult,
 )
+from .compact_checkpoint import restore_compact_checkpoint
 from .context_checkpoint import restore_context_checkpoint
 
 
@@ -337,11 +338,12 @@ class RewindCoordinator:
         else:
             self.loop.history = self._history_with_current_system(history_before)
             if restored_compact is not None:
-                self.loop.last_compact_checkpoint = restored_compact
-            rebuild = getattr(self.loop, "rebuild_working_context", None)
-            if callable(rebuild):
-                rebuild()
-            self.loop.pending_context_refresh = True
+                restore_compact_checkpoint(self.loop, restored_compact)
+            else:
+                rebuild = getattr(self.loop, "rebuild_working_context", None)
+                if callable(rebuild):
+                    rebuild()
+                self.loop.pending_context_refresh = True
             current_plan = getattr(self.loop, "last_context_plan", None)
             if current_plan is None:
                 current_plan = ContextPlanSnapshot()

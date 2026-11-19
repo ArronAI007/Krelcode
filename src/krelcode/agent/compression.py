@@ -51,21 +51,20 @@ SUMMARY_SYSTEM_PROMPT = """\
 You are the structured compact engine for a coding agent. Return exactly one
 JSON object, with no markdown prose, matching this schema:
 {
-  "version": 2,
   "goal": "current user goal",
+  "completed": ["work that is already finished and should not be repeated"],
   "decisions": ["durable decisions"],
   "files": [{"path": "relative/path", "status": "created|modified|read|touched", "note": "why it matters"}],
-  "commands": ["commands that matter for continuation"],
   "tests": [{"name": "test command or check", "status": "passed|failed|skipped|unknown", "detail": "exit/result detail"}],
-  "errors": ["resolved or important errors"],
   "open_issues": ["unfinished work or blockers"],
   "next_steps": ["concrete next actions"],
-  "handoff_notes": ["other concise continuation notes"]
+  "critical_constraints": ["requirements, boundaries, or risks that must not be violated"]
 }
 Merge the previous summary with the new completed turns. Never drop an old
-file, test status, goal, error, or open issue unless the new evidence resolves
-or supersedes it. Keep paths and test status exact. Reply in the conversation's
-language. All fields are required; use empty arrays when unknown.
+completed item, constraint, decision, file, test status, goal, or open issue
+unless the new evidence explicitly resolves or supersedes it. Keep paths and
+test status exact. Reply in the conversation's language. All fields are
+required; use empty arrays when unknown. Do not add version or any other field.
 """
 
 SUMMARY_PREFIX = "[上下文摘要] "
@@ -567,7 +566,7 @@ class ContextManager:
             except Exception:
                 snapshot = None
         previous_json = json.dumps(
-            previous.as_dict(), ensure_ascii=False, sort_keys=True,
+            previous.as_contract_dict(), ensure_ascii=False, sort_keys=True,
             separators=(",", ":")) if previous else "{}"
         working_text = str(getattr(snapshot, "text", "") or "")
         prompt = (
@@ -632,6 +631,7 @@ def _redact_compact_summary(summary: CompactSummary, redact) -> CompactSummary:
     return replace(
         summary,
         goal=clean(summary.goal),
+        completed=tuple(clean(value) for value in summary.completed),
         decisions=tuple(clean(value) for value in summary.decisions),
         files=tuple(
             CompactFile(
@@ -653,6 +653,8 @@ def _redact_compact_summary(summary: CompactSummary, redact) -> CompactSummary:
         errors=tuple(clean(value) for value in summary.errors),
         open_issues=tuple(clean(value) for value in summary.open_issues),
         next_steps=tuple(clean(value) for value in summary.next_steps),
+        critical_constraints=tuple(
+            clean(value) for value in summary.critical_constraints),
         handoff_notes=tuple(clean(value) for value in summary.handoff_notes),
     )
 

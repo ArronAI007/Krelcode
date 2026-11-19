@@ -876,22 +876,7 @@ class ContextCheckpointCoordinator:
             session_id=session_id,
             turn_id=turn_id,
             phase=phase,
-            working_context={
-                **working.as_record(),
-                "entries": [
-                    {
-                        "id": entry.id,
-                        "kind": entry.kind,
-                        "content": entry.content,
-                        "source": entry.source,
-                        "status": entry.status,
-                        "metadata": dict(entry.metadata),
-                        "sequence": entry.sequence,
-                        "timestamp": entry.timestamp,
-                    }
-                    for entry in working.entries
-                ],
-            },
+            working_context=working.as_checkpoint_record(),
             file_hashes=file_hashes,
             workspace=workspace,
             compact_checkpoint_id=str(getattr(compact, "id", "") or ""),
