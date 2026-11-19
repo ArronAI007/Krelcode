@@ -76,19 +76,30 @@ def test_instruction_bundle_maps_policy_sources_to_fragments(tmp_path):
         fragment.content for fragment in fragments
         if fragment.layer == LAYER_L3_PROJECT_RULES
     )
-    assert by_layer[LAYER_L0_MANAGED_POLICY].content == "MANAGED RULE"
+    assert "MANAGED RULE" in by_layer[LAYER_L0_MANAGED_POLICY].content
+    assert by_layer[LAYER_L0_MANAGED_POLICY].id == "managed:rules"
     assert by_layer[LAYER_L1_BASE_AGENT].content == "BASE RULE"
     assert "USER RULE" in by_layer[LAYER_L2_USER_GLOBAL].content
     assert "PROJECT RULE" in l3_content
     assert "DIRECTORY RULE" in l3_content
-    assert "agent_definition" in by_layer[LAYER_L4_AGENT_STYLE].content
+    assert by_layer[LAYER_L2_USER_GLOBAL].id == "user:rules"
+    assert by_layer[LAYER_L4_AGENT_STYLE].id == "agent_definition:reviewer"
+    assert "DEFINITION RULE" in by_layer[LAYER_L4_AGENT_STYLE].content
     l3 = [
         fragment for fragment in fragments
         if fragment.layer == LAYER_L3_PROJECT_RULES
     ]
-    assert l3[0].source == "project_rules"
-    assert l3[1].source == "directory_rules"
-    assert all(fragment.cacheable for fragment in fragments)
+    assert l3[0].id == "project:rules"
+    assert l3[0].source == "project:rules"
+    assert l3[1].id == "directory:rules"
+    assert l3[1].source == "directory:rules"
+    assert all(
+        fragment.cacheable for fragment in fragments
+        if fragment.id != "directory:rules")
+    assert next(
+        fragment for fragment in fragments
+        if fragment.id == "directory:rules"
+    ).cacheable is False
     assert len({fragment.id for fragment in fragments}) == len(fragments)
 
 
@@ -126,7 +137,7 @@ def test_subagent_uses_prompt_assembler_and_l7_inherited_memory(tmp_path):
         assert plan is not None
         fragments = {fragment.id: fragment for fragment in plan.fragments}
         assert "subagent:base:0" in fragments
-        assert "subagent:project:0" in fragments
+        assert "project:rules" in fragments
         assert "legacy:system" not in fragments
         tool_directory = next(
             fragment for fragment in plan.fragments
@@ -148,7 +159,7 @@ def test_subagent_uses_prompt_assembler_and_l7_inherited_memory(tmp_path):
         assert catalog_fragment.source == "skills"
 
         assert "subagent:base:0" in plan.cache.stable_fragments
-        assert "subagent:project:0" in plan.cache.stable_fragments
+        assert "project:rules" in plan.cache.stable_fragments
         assert "subagent:inherited-memory" not in plan.cache.stable_fragments
         assert plan.cache.enabled
         assert plan.stable_hash == plan.cache.stable_hash

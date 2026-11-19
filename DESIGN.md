@@ -903,7 +903,11 @@ system prompt 不再由 App、Skill 热重载和 `/context refresh` 各自拼接
 ```
 Fragment sources
 ├─ core       → core:base                 locked · cacheable
-└─ workspace  → workspace:rules           toggleable · cacheable
+├─ rules      → managed:rules              L0 · static
+│              user:rules                 L2 · session
+│              project:rules              L3 · session
+│              directory:rules            L3 · request-scoped
+└─ definition → agent_definition:<name>   L4 · session
                          │
                          ▼
               PromptFragmentRegistry
@@ -1091,8 +1095,9 @@ mode_reminder                              # L12，run mode / permission mode
 ```
 
 - `environment_attachments()` 对每个非 rules section 计算 SHA-256；只有 changed/added/removed
-  section 会更新 `environment_snapshot` 与 `environment_delta`。稳定项目规则仍属于
-  `workspace:rules` Fragment，环境变化不会使 Registry generation 或 stable hash 变化。
+  section 会更新 `environment_snapshot` 与 `environment_delta`。规则按
+  `managed:rules/user:rules/project:rules` 独立登记，目录规则使用请求期
+  `directory:rules`；规则变化不会与 git/tree/date 等环境附件互相改写。
 - catalog 只消费已经加载的 Manager/Supervisor 快照，不在 Prompt 装配时扫描磁盘或 MCP；
   catalog membership 变化与正文变化分别记录在无正文 metadata 中。
 - 所有附件均 `cacheable=False`。`PromptAssembler` 将每个附件映射为一个独立
@@ -1278,7 +1283,9 @@ MemoryStore(project/knowledge)  → memory_search / memory Fragment
 与 Memory 明确分离：规则是持久行为约束，Memory 是任务事实/偏好记录。
 
 ```text
-Rule precedence (broad → specific)
+Rule precedence (constraint → specific)
+managed    /etc/krelcode/AGENTS.md | ~/.krelcode/managed/AGENTS.md
+           | <workspace>/.krelcode/managed/AGENTS.md | configured paths
 user       ~/.krelcode/AGENTS.md
 project    <workspace>/AGENTS.md | KRELCODE.md
 directory  <target ancestor>/AGENTS.md | KRELCODE.md
@@ -1289,13 +1296,18 @@ RuleLoader
   ├─ expand:   独立行 @relative/path，递归、按出现位置内联
   ├─ guard:    scope escape / sensitive files / cycles / duplicates
   ├─ bounds:   depth + file count + total character budget
-  └─ RuleBundle { content, sources, issues, targets, truncated }
+  └─ RuleStack { managed, user, project, directory: RuleBundle }
 ```
 
-- `user` 与 `project` 入口在一次会话的稳定 PromptSnapshot 中；`directory` 由独立的
-  `DirectoryRulesContextSource` 在每个模型 Step 前按当前轮路径收集，因此不会扫描整个
-  仓库，也不会把无关子树规则带进上下文。规则层按 `user → project → directory` 渲染，
-  更具体的规则靠后，表达覆盖优先级。
+- `managed/user/project` 入口在一次会话的 PromptSnapshot 中分别生成
+  `managed:rules/user:rules/project:rules`；`directory` 由
+  `DirectoryRulesContextSource` 在每个模型 Step 前按当前轮路径收集为
+  `directory:rules`，不会扫描整个仓库。Agent Definition 使用
+  `agent_definition:<name>`。规则层按 `managed → user → project → directory` 渲染；
+  managed 约束始终保留，user/project/directory 越靠后越具体。
+- 每个规则 Fragment 的 provenance 包含 scope、precedence、覆盖关系、入口/导入路径、
+  issue 与 conflict policy；`/context why project:rules` 显示最终生效来源，
+  `/context rules` 展示完整优先级。
 - 路径来源包括高置信度 `TurnIntent.target_files`、当前用户消息中的显式路径/附件，以及
   当前轮已经产生的工具参数（`path/file_path/cwd/...`）。即使目标文件尚不存在，也会从
   最近的已存在父目录开始检查规则。
@@ -1306,8 +1318,8 @@ RuleLoader
   文件、URL、循环和重复导入。单个规则文件最多 256KB，默认最多 5 层/32 个导入，
   展开后统一受 `rules_max_chars` 限制。所有失败转为不含正文的 `RuleIssue`。
 - `RuleBundle` 同时供 `ContextSection.metadata`、`/context refresh` 和诊断命令复用。
-  `/context rules` 只展示路径、scope、字符数、导入关系与 issue，不输出规则正文。
-  `/context sources` 可看到动态 `workspace:directory-rules` layer 及其 token attribution。
+  `/context rules` 只展示优先级、路径、scope、字符数、导入关系与 issue，不输出规则正文。
+  `/context sources` 可看到动态 `directory:rules` layer 及其 token attribution。
 
 ## 统一输入处理管线（Step 67）
 

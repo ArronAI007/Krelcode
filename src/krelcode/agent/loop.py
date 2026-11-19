@@ -100,7 +100,9 @@ from .context_source import (
 )
 from .context_usage import build_context_usage_snapshot
 from .fragments import (
+    is_rule_fragment,
     refresh_registry_snapshot,
+    sync_rule_fragments,
     workspace_rule_fragments,
 )
 from .intent import TurnIntent, infer_turn_intent
@@ -339,9 +341,12 @@ class AgentLoop:
         registry = getattr(self, "prompt_registry", None)
         if registry is not None:
             rules = workspace_rule_fragments(bundle)
-            current = registry.list(source="workspace:rules")
+            current = tuple(
+                fragment for fragment in registry.list()
+                if is_rule_fragment(fragment)
+            )
             if current != rules:
-                registry.replace_group("workspace_context", rules)
+                sync_rule_fragments(registry, bundle)
                 refresh_registry_snapshot(self)
         self.sync_context_attachments()
         self.pending_context_refresh = False

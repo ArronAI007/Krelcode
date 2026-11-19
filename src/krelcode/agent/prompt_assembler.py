@@ -495,6 +495,18 @@ def _context_layer_classification(
     layer: ContextLayer,
 ) -> tuple[str, str, str]:
     metadata = layer.metadata
+    prompt_layer = str(metadata.get("prompt_layer", "") or "")
+    prompt_stability = str(metadata.get("prompt_stability", "") or "")
+    prompt_trust = str(metadata.get("prompt_trust", "") or "")
+    if (
+        prompt_layer in LAYER_ORDER
+        and prompt_stability in STABILITY_ORDER
+        and prompt_trust in {
+            TRUST_MANAGED, TRUST_USER, TRUST_PROJECT,
+            TRUST_DATA, FRAGMENT_TRUST_UNTRUSTED,
+        }
+    ):
+        return prompt_layer, prompt_stability, prompt_trust
     if (
         str(metadata.get("source_role", "")).strip().lower() == "evidence"
         or bool(metadata.get("evidence_type"))

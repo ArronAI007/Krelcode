@@ -311,10 +311,10 @@ def test_build_loop_injects_directory_rule_before_first_model_call(tmp_path):
         assert "SRC_IMPORTED_RULE" in system_prompt
         rule_layers = [
             layer for layer in loop.last_context_assembly.layers
-            if layer.id == "workspace:directory-rules"
+            if layer.id == "directory:rules"
         ]
         assert len(rule_layers) == 1
-        assert rule_layers[0].source == "directory_rules"
+        assert rule_layers[0].source == "directory:rules"
     finally:
         asyncio.run(manager.shutdown())
 

@@ -1,9 +1,14 @@
 """Layered agent rules, on-demand directory rules and safe ``@import`` expansion.
 
-Rule precedence is intentionally narrow-to-broad at render time::
+Rule precedence is intentionally broad-to-specific at render time::
 
-    user (~/.krelcode/AGENTS.md) -> project (<workspace>/AGENTS.md)
+    managed (/etc or explicit managed path)
+        -> user (~/.krelcode/AGENTS.md)
+        -> project (<workspace>/AGENTS.md)
         -> directory (<workspace>/subdir/AGENTS.md)
+
+Managed constraints remain active even when a narrower rule conflicts with
+them. User, project and directory layers become progressively more specific.
 
 Only ``AGENTS.md`` or ``KRELCODE.md`` is selected at each directory, mirroring
 the existing project-rule compatibility contract.  Directory rule files are
@@ -22,6 +27,7 @@ diagnostics.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -29,6 +35,7 @@ from pathlib import Path
 from typing import Any, Iterable, List, Optional, Sequence, Set, Tuple
 
 from ..core.messages import Message
+from ..core.redact import SecretRedactor
 from ..tools.paths import read_text_file
 from ..tools.secret_guard import classify_secret_path
 
@@ -39,6 +46,7 @@ DEFAULT_IMPORT_MAX_DEPTH = 5
 DEFAULT_IMPORT_MAX_FILES = 32
 MAX_RULE_FILE_BYTES = 256_000
 TRUNCATION_MARKER = "\n…[规则内容已按字符预算截断]"
+MANAGED_INSTRUCTIONS_ENV = "KRELCODE_MANAGED_INSTRUCTIONS"
 _USER_IMPORT_BLOCKED_FILES = frozenset({"config.toml", "allow_rules.json"})
 _USER_IMPORT_BLOCKED_DIRS = frozenset({"memory", "sandbox", "sessions"})
 
@@ -64,6 +72,7 @@ _PATH_ARG_KEYS = frozenset({
 class RuleScope(str, Enum):
     """Rule ownership, ordered from broad to specific."""
 
+    MANAGED = "managed"
     USER = "user"
     PROJECT = "project"
     DIRECTORY = "directory"
@@ -151,6 +160,43 @@ class RuleBundle:
         return path.name if path is not None else "?"
 
 
+@dataclass(frozen=True)
+class RuleLayer:
+    """One independently traceable rule authority layer."""
+
+    scope: RuleScope
+    bundle: RuleBundle
+
+
+@dataclass(frozen=True)
+class RuleStack:
+    """Per-scope rules used by the shared main/subagent fragment model."""
+
+    layers: Tuple[RuleLayer, ...] = ()
+
+    def layer(self, scope: RuleScope | str) -> RuleLayer:
+        normalized = scope if isinstance(scope, RuleScope) else RuleScope(scope)
+        for item in self.layers:
+            if item.scope is normalized:
+                return item
+        return RuleLayer(normalized, RuleBundle(content=""))
+
+    @property
+    def base_layers(self) -> Tuple[RuleLayer, ...]:
+        return tuple(
+            layer for layer in self.layers
+            if layer.scope is not RuleScope.DIRECTORY
+        )
+
+    @property
+    def base_bundle(self) -> RuleBundle:
+        return _merge_rule_bundles(self.base_layers)
+
+    @property
+    def combined_bundle(self) -> RuleBundle:
+        return _merge_rule_bundles(self.layers)
+
+
 @dataclass
 class _LoadState:
     workspace_root: Path
@@ -175,26 +221,57 @@ class RuleLoader:
         home: Optional[Path] = None,
         limits: Optional[RuleLimits] = None,
         imports_enabled: bool = True,
+        managed_paths: Sequence[Path] = (),
+        redactor: Optional[SecretRedactor] = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).resolve()
         self.home = (Path.home() if home is None else Path(home)).resolve()
         self.limits = (limits or RuleLimits()).normalized()
         self.imports_enabled = imports_enabled
+        self.managed_paths = tuple(Path(path).expanduser() for path in managed_paths)
+        self.redactor = redactor
 
     def load(self, target_paths: Iterable[Path] = ()) -> RuleBundle:
-        """Load user/project rules plus directory rules for ``target_paths``."""
+        """Load managed/user/project plus targeted directory rules."""
         targets = normalize_rule_targets(self.workspace_root, target_paths)
         state = self._state()
+        self._load_managed(state)
         self._load_user(state)
         self._load_project(state)
         self._load_directories(state, targets)
         return self._finish(state, targets)
 
     def load_base(self) -> RuleBundle:
-        """Load only user and project entry layers (stable session prefix)."""
+        """Load managed, user and project entry layers."""
         state = self._state()
+        self._load_managed(state)
         self._load_user(state)
         self._load_project(state)
+        return self._finish(state, ())
+
+    def load_stack(
+        self,
+        target_paths: Iterable[Path] = (),
+        *,
+        include_directory: bool = True,
+    ) -> RuleStack:
+        """Load each authority scope independently for source attribution."""
+        layers = [
+            RuleLayer(RuleScope.MANAGED, self.load_managed()),
+            RuleLayer(RuleScope.USER, self.load_user()),
+            RuleLayer(RuleScope.PROJECT, self.load_project()),
+        ]
+        if include_directory:
+            layers.append(RuleLayer(
+                RuleScope.DIRECTORY,
+                self.load_directory(target_paths),
+            ))
+        return RuleStack(_fit_rule_layers(tuple(layers), self.limits.max_chars))
+
+    def load_managed(self) -> RuleBundle:
+        """Load administrator-controlled L0 instructions."""
+        state = self._state()
+        self._load_managed(state)
         return self._finish(state, ())
 
     def load_user(self) -> RuleBundle:
@@ -223,6 +300,31 @@ class RuleLoader:
             limits=self.limits,
             imports_enabled=self.imports_enabled,
         )
+
+    def _managed_candidates(self) -> Tuple[Path, ...]:
+        configured = os.environ.get(MANAGED_INSTRUCTIONS_ENV, "")
+        candidates = [
+            Path(raw.strip()).expanduser()
+            for raw in configured.split(os.pathsep)
+            if raw.strip()
+        ]
+        candidates.extend((
+            Path("/etc/krelcode/AGENTS.md"),
+            self.home / ".krelcode" / "managed" / "AGENTS.md",
+            self.workspace_root / ".krelcode" / "managed" / "AGENTS.md",
+        ))
+        candidates.extend(self.managed_paths)
+        return tuple(candidates)
+
+    def _load_managed(self, state: _LoadState) -> None:
+        for candidate in self._managed_candidates():
+            trusted_root = candidate.parent
+            self._load_entry(
+                state,
+                candidate,
+                RuleScope.MANAGED,
+                trusted_root=trusted_root,
+            )
 
     def _load_user(self, state: _LoadState) -> None:
         path = self.home / USER_RULE_RELPATH
@@ -391,7 +493,8 @@ class RuleLoader:
                     f"规则文件超过 {MAX_RULE_FILE_BYTES} bytes，已跳过")
                 return None
             text = read_text_file(path)
-            return text[1:] if text.startswith("\ufeff") else text
+            text = text[1:] if text.startswith("\ufeff") else text
+            return self.redactor.redact(text) if self.redactor is not None else text
         except FileNotFoundError:
             if required:
                 self._issue(state, "import-missing", path, "导入目标不存在")
@@ -425,6 +528,12 @@ class RuleLoader:
                     self.home / ".krelcode").as_posix()
             except ValueError:
                 return str(path)
+        if scope is RuleScope.MANAGED:
+            try:
+                return "~/.krelcode/" + path.relative_to(
+                    self.home / ".krelcode").as_posix()
+            except ValueError:
+                pass
         try:
             return path.relative_to(self.workspace_root).as_posix()
         except ValueError:
@@ -436,6 +545,52 @@ class RuleLoader:
     ) -> None:
         state.issues.append(RuleIssue(code=code, path=str(path), message=message))
 
+
+
+def _fit_rule_layers(
+    layers: Sequence[RuleLayer], max_chars: int,
+) -> Tuple[RuleLayer, ...]:
+    """Keep the declared precedence while bounding the combined rule budget."""
+    remaining = max(0, int(max_chars))
+    fitted: List[RuleLayer] = []
+    for layer in layers:
+        bundle = layer.bundle
+        content = bundle.content
+        if not content:
+            fitted.append(layer)
+            continue
+        if len(content) > remaining:
+            marker_size = len(TRUNCATION_MARKER)
+            keep = max(0, remaining - marker_size)
+            content = content[:keep].rstrip()
+            if content:
+                content += TRUNCATION_MARKER
+            bundle = RuleBundle(
+                content=content,
+                sources=bundle.sources,
+                issues=bundle.issues,
+                targets=bundle.targets,
+                truncated=True,
+                import_count=bundle.import_count,
+            )
+        fitted.append(RuleLayer(layer.scope, bundle))
+        remaining = max(0, remaining - len(bundle.content))
+    return tuple(fitted)
+
+
+def _merge_rule_bundles(layers: Sequence[RuleLayer]) -> RuleBundle:
+    bundles = tuple(layer.bundle for layer in layers if layer.bundle.content)
+    if not bundles:
+        return RuleBundle(content="")
+    return RuleBundle(
+        content="\n\n".join(bundle.content for bundle in bundles),
+        sources=tuple(source for bundle in bundles for source in bundle.sources),
+        issues=tuple(issue for bundle in bundles for issue in bundle.issues),
+        targets=tuple(dict.fromkeys(
+            target for bundle in bundles for target in bundle.targets)),
+        truncated=any(bundle.truncated for bundle in bundles),
+        import_count=sum(bundle.import_count for bundle in bundles),
+    )
 
 
 def _blocked_user_runtime_file(
@@ -453,6 +608,8 @@ def _blocked_user_runtime_file(
 
 
 def _heading(scope: RuleScope, display_path: str) -> str:
+    if scope is RuleScope.MANAGED:
+        return f"托管规则（来自 {display_path}，最高约束优先级）"
     if scope is RuleScope.USER:
         return f"全局规则（来自 {display_path}，务必遵守；优先级较低）"
     if scope is RuleScope.PROJECT:

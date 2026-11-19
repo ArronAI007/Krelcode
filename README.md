@@ -112,7 +112,7 @@ REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Mark
 - 记忆模型包含 `id/scope/kind/source/tags/pinned/created_at/updated_at`，kind 为 `note/preference/fact/workflow/knowledge`；作用域为 `user → project → session`（由宽到窄）。三者以有界、不可缓存的 runtime Fragment 注入，固定项优先，更具体作用域在提示中靠后且优先获得注入预算；内容明确标记为 `untrusted contextual knowledge`，不会修改 `AGENTS.md` 或伪装成用户/助手消息。
 - 每作用域最多 200 条、单条 2,000 字符，总注入最多 12 条/4,000 字符；任务运行中会要求等待当前任务结束，避免中途改变当前提示词快照。旧 project JSONL 无需迁移即可读取。
 
-行为规则按 `~/.krelcode/AGENTS.md → <workspace>/AGENTS.md → 目标目录 AGENTS.md/KRELCODE.md` 从宽到窄注入。子目录规则只在当前轮明确涉及该目录时按需加载，不会递归扫描整个仓库；规则文件中的独立一行 `@docs/team-rules.md` 会安全展开，支持嵌套导入、循环/重复检测，并拒绝作用域逃逸和 `.env`/凭据文件。`/context rules` 可查看实际入口、导入和问题诊断。
+行为规则按 `managed → ~/.krelcode/AGENTS.md → <workspace>/AGENTS.md → 目标目录 AGENTS.md/KRELCODE.md` 从约束到具体注入，分别生成 `managed:rules`、`user:rules`、`project:rules`、`directory:rules` Fragment；子代理定义使用 `agent_definition:<name>`。子目录规则只在当前轮明确涉及该目录时按需加载，不会递归扫描整个仓库；规则文件中的独立一行 `@docs/team-rules.md` 会安全展开，支持嵌套导入、循环/重复检测，并拒绝作用域逃逸和 `.env`/凭据文件。`/context rules` 可查看作用域优先级、实际入口、导入和问题诊断，`/context why <rule-id>` 可查看最终生效来源。
 
 模型需要澄清时可调用 `ask_user`：前台显示问题与选项，输入序号、完整选项或自定义文本即可继续。回答只进入 `tool_result`，不会伪装成新的用户消息。`/plan <任务>` 会进入只读 Plan 模式，让模型先调查并通过 `update_plan` 提交计划；该轮结束后计划标为待确认，`/plan approve` 恢复进入 Plan 前的权限模式并自动发起执行轮，`/plan cancel` 放弃执行。
 

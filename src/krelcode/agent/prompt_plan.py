@@ -93,6 +93,7 @@ class PromptFragmentSnapshot:
     cacheable: bool
     stable: bool
     content_hash: str
+    provenance: Mapping[str, object] = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         return {
@@ -106,6 +107,7 @@ class PromptFragmentSnapshot:
             "cacheable": self.cacheable,
             "stable": self.stable,
             "content_hash": self.content_hash,
+            "provenance": dict(self.provenance),
         }
 
     @classmethod
@@ -121,6 +123,7 @@ class PromptFragmentSnapshot:
             cacheable=bool(raw.get("cacheable", False)),
             stable=bool(raw.get("stable", False)),
             content_hash=_text(raw.get("content_hash"), 128),
+            provenance=_safe_provenance(raw.get("provenance")),
         )
 
 
@@ -349,6 +352,8 @@ class PromptPlanSnapshot:
                 cacheable=bool(getattr(fragment, "cacheable", False)),
                 stable=_text(getattr(fragment, "id", "")) in stable_ids,
                 content_hash=_content_hash(getattr(fragment, "content", "")),
+                provenance=_safe_provenance(
+                    getattr(fragment, "metadata", {})),
             )
             for fragment in runtime_fragments
         )
@@ -555,6 +560,53 @@ def _memory_hits(
                 tokens=per_hit_tokens,
             ))
     return tuple(hits.values())
+
+
+_PROVENANCE_KEYS = frozenset({
+    "source_role",
+    "instruction_source",
+    "instruction",
+    "requires_validation",
+    "evidence_type",
+    "rule_scope",
+    "rule_precedence",
+    "rule_overrides",
+    "rule_conflict_policy",
+    "rule_sources",
+    "rule_entry_sources",
+    "rule_import_count",
+    "rule_issues",
+    "rule_targets",
+    "truncated",
+})
+
+
+def _safe_provenance(raw: object) -> Mapping[str, object]:
+    if not isinstance(raw, Mapping):
+        return {}
+    return {
+        key: _provenance_value(raw.get(key))
+        for key in sorted(_PROVENANCE_KEYS)
+        if key in raw
+    }
+
+
+def _provenance_value(value: object) -> object:
+    if isinstance(value, bool) or isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        return _text(value, 500)
+    if isinstance(value, (list, tuple)):
+        return tuple(
+            _provenance_value(item)
+            for item in value[:20]
+        )
+    if isinstance(value, Mapping):
+        return {
+            _text(key, 80): _provenance_value(item)
+            for key, item in list(value.items())[:20]
+        }
+    return _text(value, 120)
 
 
 def _prompt_full_hash(

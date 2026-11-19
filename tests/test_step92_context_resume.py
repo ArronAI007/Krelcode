@@ -406,7 +406,7 @@ def test_subagent_instruction_layers_and_parent_history_are_separate(tmp_path):
     )
     kinds = {layer.kind for layer in bundle.layers}
     rendered = bundle.text
-    assert {"base", "managed-project", "user", "project", "directory"} <= kinds
+    assert {"base", "managed", "user", "project", "directory"} <= kinds
     assert "BASE SUBAGENT" in rendered
     assert "MANAGED RULE" in rendered
     assert "USER RULE" in rendered

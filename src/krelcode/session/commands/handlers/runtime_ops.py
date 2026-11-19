@@ -12,6 +12,7 @@ from ....agent.context_inspection import ContextInspectionService
 from ....agent.fragments import (
     GROUP_WORKSPACE,
     refresh_registry_snapshot,
+    rule_fragment,
     skills_fragment,
     workspace_fragments,
 )
@@ -943,12 +944,21 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
 
     if operation == "rules" and len(parts) == 1:
         loader = getattr(ctx.loop, "rule_loader", None)
-        base = getattr(getattr(ctx.loop, "workspace_context", None),
-                       "rule_bundle", None)
+        workspace = getattr(ctx.loop, "workspace_context", None)
+        base = getattr(workspace, "rule_bundle", None)
+        layers = list(getattr(workspace, "rule_layers", ()) or ())
+        if not layers and loader is not None:
+            stack = loader.load_stack(include_directory=False)
+            layers = list(stack.base_layers)
+            base = stack.base_bundle
         if base is None and loader is not None:
             base = loader.load_base()
         directory_source = getattr(ctx.loop, "directory_rule_source", None)
         directory = getattr(directory_source, "last_bundle", None)
+        if directory is not None and directory.content:
+            from ....agent.rules import RuleLayer, RuleScope
+
+            layers.append(RuleLayer(RuleScope.DIRECTORY, directory))
         bundles = [bundle for bundle in (base, directory) if bundle is not None]
         if not bundles:
             return _ok("  [rules] 规则加载未启用")
@@ -958,19 +968,37 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         lines = [
             f"  [rules] source {source_count} 个 · import {import_count} 个"
             f" · issue {issue_count} 个",
+            "  precedence: managed → user → project → directory"
+            "（后者更具体；managed 约束始终保留）",
         ]
-        for bundle in bundles:
-            for source in bundle.sources:
+        for layer in layers:
+            fragment = rule_fragment(layer)
+            if fragment is None:
+                continue
+            metadata = fragment.metadata
+            lines.append(
+                f"  [{metadata.get('rule_precedence', '?'):>2}] "
+                f"{fragment.id} · sources="
+                f"{', '.join(metadata.get('rule_entry_sources', ())) or '(none)'}"
+                f" · imports={metadata.get('rule_import_count', 0)}"
+                f" · issues={len(metadata.get('rule_issues', ()))}")
+            for source in layer.bundle.sources:
                 imported = (
                     f" · import←{source.imported_by.name}"
                     if source.imported_by else ""
                 )
                 lines.append(
-                    f"  {source.scope.value:9} {source.display_path}"
+                    f"       {source.scope.value:9} {source.display_path}"
                     f" · {source.chars} chars{imported}")
-            for issue in bundle.issues:
+            for issue in layer.bundle.issues:
                 lines.append(
-                    f"  [warn] {issue.code} · {issue.path} · {issue.message}")
+                    f"       [warn] {issue.code} · {issue.path} · {issue.message}")
+        if not layers:
+            for bundle in bundles:
+                for source in bundle.sources:
+                    lines.append(
+                        f"  {source.scope.value:9} {source.display_path}"
+                        f" · {source.chars} chars")
         return _ok(*lines)
 
     if operation == "sources":

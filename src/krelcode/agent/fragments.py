@@ -13,7 +13,9 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from ..core.messages import Message
 from .context import ContextSection, WorkspaceContext
+from .evidence import SourceRole, instruction_source_for
 from .prompts import BASE_SYSTEM_PROMPT
+from .rules import RuleLayer, RuleScope
 from .tokens import estimate_text_tokens
 
 GROUP_SYSTEM = "system"
@@ -462,7 +464,176 @@ def skills_fragment(index: str) -> Optional[PromptFragment]:
     )
 
 
+RULE_FRAGMENT_IDS = {
+    RuleScope.MANAGED: "managed:rules",
+    RuleScope.USER: "user:rules",
+    RuleScope.PROJECT: "project:rules",
+    RuleScope.DIRECTORY: "directory:rules",
+}
+_RULE_PRECEDENCE = {
+    RuleScope.MANAGED: 0,
+    RuleScope.USER: 10,
+    RuleScope.PROJECT: 20,
+    RuleScope.DIRECTORY: 30,
+}
+_RULE_SPECS = {
+    RuleScope.MANAGED: (
+        LAYER_L0_MANAGED_POLICY,
+        STABILITY_STATIC,
+        TRUST_MANAGED,
+        "managed",
+        True,
+    ),
+    RuleScope.USER: (
+        LAYER_L2_USER_GLOBAL,
+        STABILITY_SESSION,
+        TRUST_USER,
+        "user",
+        True,
+    ),
+    RuleScope.PROJECT: (
+        LAYER_L3_PROJECT_RULES,
+        STABILITY_SESSION,
+        TRUST_PROJECT,
+        "project",
+        True,
+    ),
+    RuleScope.DIRECTORY: (
+        LAYER_L3_PROJECT_RULES,
+        STABILITY_SESSION,
+        TRUST_PROJECT,
+        "project",
+        False,
+    ),
+}
+
+
+def rule_fragment(layer: RuleLayer) -> Optional[PromptFragment]:
+    """Convert one rule authority layer into its canonical fragment."""
+    bundle = layer.bundle
+    content = bundle.content.strip()
+    if not content:
+        return None
+    layer_name, stability, trust, scope, cacheable = _RULE_SPECS[layer.scope]
+    fragment_id = RULE_FRAGMENT_IDS[layer.scope]
+    precedence = _RULE_PRECEDENCE[layer.scope]
+    lower_layers = tuple(
+        RULE_FRAGMENT_IDS[item]
+        for item, rank in _RULE_PRECEDENCE.items()
+        if rank < precedence and item is not RuleScope.MANAGED
+    )
+    authority_source = instruction_source_for(
+        trust, source=fragment_id, origin=layer.scope.value)
+    metadata = {
+        "source_role": SourceRole.INSTRUCTION.value,
+        "instruction": True,
+        "instruction_source": (
+            authority_source.value
+            if authority_source is not None else "managed"
+        ),
+        "rule_scope": layer.scope.value,
+        "rule_precedence": precedence,
+        "rule_overrides": lower_layers,
+        "rule_conflict_policy": (
+            "同一规则冲突时 managed 约束始终保留；"
+            "user → project → directory 中后者更具体并优先"
+        ),
+        "rule_sources": tuple(
+            source.display_path for source in bundle.sources),
+        "rule_entry_sources": tuple(
+            source.display_path for source in bundle.sources
+            if not source.imported),
+        "rule_import_count": bundle.import_count,
+        "rule_issues": tuple({
+            "code": issue.code,
+            "path": issue.path,
+            "message": issue.message,
+        } for issue in bundle.issues),
+        "rule_targets": tuple(str(path) for path in bundle.targets),
+        "truncated": bundle.truncated,
+    }
+    return PromptFragment(
+        id=fragment_id,
+        source=fragment_id,
+        title=f"{layer.scope.value.title()} rules",
+        content=content,
+        group=GROUP_SYSTEM,
+        priority=precedence,
+        cacheable=cacheable,
+        compactable=False,
+        toggleable=False,
+        metadata=metadata,
+        scope=scope,
+        layer=layer_name,
+        stability=stability,
+        trust=trust,
+    )
+
+
+def agent_definition_fragment(
+    name: str,
+    content: str,
+) -> Optional[PromptFragment]:
+    """Build the canonical L4 agent-definition instruction fragment."""
+    fragment_id = f"agent_definition:{str(name).strip()}"
+    body = content.strip()
+    if not body or fragment_id == "agent_definition:":
+        return None
+    return PromptFragment(
+        id=fragment_id,
+        source=fragment_id,
+        title=f"Agent definition {name}",
+        content=body,
+        group=GROUP_SYSTEM,
+        priority=40,
+        cacheable=True,
+        compactable=False,
+        toggleable=False,
+        metadata={
+            "source_role": SourceRole.INSTRUCTION.value,
+            "instruction": True,
+            "instruction_source": "agent_definition",
+            "rule_scope": "agent_definition",
+            "rule_precedence": 40,
+            "rule_conflict_policy": (
+                "Agent Definition 是当前子代理的角色契约，不覆盖托管安全策略"),
+        },
+        scope="project",
+        layer=LAYER_L4_AGENT_STYLE,
+        stability=STABILITY_SESSION,
+        trust=TRUST_PROJECT,
+    )
+
+
+def is_rule_fragment(fragment: PromptFragment) -> bool:
+    return bool(fragment.metadata.get("rule_scope")) or fragment.id in {
+        *RULE_FRAGMENT_IDS.values(), "workspace:rules",
+    }
+
+
+def sync_rule_fragments(
+    registry: PromptFragmentRegistry,
+    bundle: WorkspaceContext,
+) -> tuple[PromptFragment, ...]:
+    """Replace only rule fragments while preserving unrelated registry state."""
+    for fragment in registry.list():
+        if is_rule_fragment(fragment):
+            registry.remove(fragment.id)
+    fragments = workspace_rule_fragments(bundle)
+    for fragment in fragments:
+        registry.register(fragment)
+    return fragments
+
+
 def workspace_fragments(bundle: WorkspaceContext) -> Tuple[PromptFragment, ...]:
+    """Expand real rule stacks; retain the compatibility section adapter."""
+    if bundle.rule_layers:
+        rules = workspace_rule_fragments(bundle)
+        return rules + tuple(
+            _workspace_fragment(section)
+            for section in bundle.sections
+            if section.name != "rules"
+        )
     fragments = []
     for section in bundle.sections:
         fragments.append(_workspace_fragment(section))
@@ -470,7 +641,14 @@ def workspace_fragments(bundle: WorkspaceContext) -> Tuple[PromptFragment, ...]:
 
 
 def workspace_rule_fragments(bundle: WorkspaceContext) -> Tuple[PromptFragment, ...]:
-    """Return only stable project rules; volatile workspace data is attachments."""
+    """Return canonical per-scope rule fragments for main and subagents."""
+    if bundle.rule_layers:
+        return tuple(
+            fragment for layer in bundle.rule_layers
+            for fragment in (rule_fragment(layer),)
+            if fragment is not None
+        )
+    # Compatibility for hand-built WorkspaceContext values without a RuleStack.
     return tuple(
         _workspace_fragment(section)
         for section in bundle.sections

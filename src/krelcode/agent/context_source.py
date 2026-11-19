@@ -22,9 +22,10 @@ from .fragments import (
     PromptFragment,
     PromptFragmentRegistry,
     PromptSnapshot,
+    rule_fragment,
 )
 from .intent import TurnIntent
-from .rules import RuleBundle, RuleLoader, extract_rule_targets
+from .rules import RuleBundle, RuleLayer, RuleLoader, RuleScope, extract_rule_targets
 from .tokens import estimate_text_tokens
 from .tool_pool import TurnToolPool
 
@@ -548,31 +549,30 @@ class DirectoryRulesContextSource:
         )
         bundle = self.loader.load_directory(targets)
         self.last_bundle = bundle
-        if not bundle.content:
+        prompt_fragment = rule_fragment(RuleLayer(RuleScope.DIRECTORY, bundle))
+        if prompt_fragment is None:
             return ()
-        content = bundle.content
-        sources = tuple(
-            source.display_path for source in bundle.sources if not source.imported)
+        metadata = dict(prompt_fragment.metadata)
+        metadata.update({
+            "prompt_layer": prompt_fragment.layer,
+            "prompt_stability": prompt_fragment.stability,
+            "prompt_trust": prompt_fragment.trust,
+            "rule_targets": tuple(str(path) for path in targets),
+        })
         return (ContextLayer(
-            id="workspace:directory-rules",
-            source=self.name,
-            category=CATEGORY_WORKSPACE,
-            content=content,
+            id=prompt_fragment.id,
+            source=prompt_fragment.source,
+            category=CATEGORY_SYSTEM,
+            content=prompt_fragment.content,
             trust=TRUST_TRUSTED,
             origin="directory_rule_files",
-            priority=15,
-            cacheable=False,
-            compactable=True,
-            metadata={
-                "rule_files": sources,
-                "rule_import_count": bundle.import_count,
-                "rule_issue_count": len(bundle.issues),
-                "rule_targets": tuple(str(path) for path in targets),
-                "truncated": bundle.truncated,
-            },
+            priority=prompt_fragment.priority,
+            cacheable=prompt_fragment.cacheable,
+            compactable=prompt_fragment.compactable,
+            metadata=metadata,
             token_contributions=(ContextTokenContribution(
-                "workspace:directory-rules", CATEGORY_WORKSPACE,
-                estimate_text_tokens(content)),),
+                prompt_fragment.id, CATEGORY_SYSTEM,
+                estimate_text_tokens(prompt_fragment.content)),),
         ),)
 
 

@@ -33,7 +33,7 @@ from .agent.fragments import (
     apply_prompt_snapshot,
     base_fragment,
     skills_fragment,
-    workspace_rule_fragments,
+    sync_rule_fragments,
 )
 from .agent.rules import RuleLoader
 from .agent.runtime import AgentRuntime
@@ -663,8 +663,7 @@ async def build_loop(
         workspace_root, config=output_style_config)
     prompt_registry = PromptFragmentRegistry([base_fragment()])
     if workspace_context is not None:
-        prompt_registry.replace_group(
-            "workspace_context", workspace_rule_fragments(workspace_context))
+        sync_rule_fragments(prompt_registry, workspace_context)
     # v3 keeps Memory out of the system Prompt Registry. It is assembled as a
     # separate, untrusted knowledge layer at request time.
     if context_options.engine != CONTEXT_ENGINE_V3:

@@ -46,6 +46,14 @@ def _bounded(items: Sequence[object], limit: int) -> tuple[list[object], int]:
     return list(items[:limit]), len(items) - limit
 
 
+def _join_provenance(value: object) -> str:
+    if isinstance(value, (list, tuple)):
+        normalized = [str(item) for item in value if str(item)]
+        return ", ".join(normalized) if normalized else "(none)"
+    text = str(value or "")
+    return text or "(none)"
+
+
 def _is_memory_fragment(fragment: PromptFragmentSnapshot) -> bool:
     return (
         fragment.id == "memory:scoped"
@@ -449,6 +457,33 @@ class ContextInspectionService:
                 f"{str(fragment.cacheable).lower()}"
                 f" · content hash {_short_hash(fragment.content_hash)}",
             ]
+            provenance = dict(fragment.provenance)
+            if provenance.get("source_role"):
+                lines.append(
+                    f"  authority: role={provenance.get('source_role')}"
+                    f" · instruction={str(provenance.get('instruction', False)).lower()}"
+                    f" · source={provenance.get('instruction_source', '(unknown)')}")
+            rule_scope = str(provenance.get("rule_scope", "") or "")
+            if rule_scope:
+                overrides = provenance.get("rule_overrides", ())
+                override_text = ", ".join(str(item) for item in overrides) or "(none)"
+                lines.extend((
+                    f"  effective rule source: {fragment.id}"
+                    f" · scope={rule_scope}"
+                    f" · precedence={provenance.get('rule_precedence', '?')}"
+                    f" · overrides={override_text}",
+                    f"  rule files: {_join_provenance(provenance.get('rule_sources'))}",
+                    f"  imports={provenance.get('rule_import_count', 0)}"
+                    f" · issues={len(provenance.get('rule_issues', ()))}"
+                    f" · conflict policy={provenance.get('rule_conflict_policy', '(unknown)')}",
+                ))
+                for issue in provenance.get("rule_issues", ()):
+                    if not isinstance(issue, dict):
+                        continue
+                    lines.append(
+                        f"  [rule issue] {issue.get('code', 'unknown')}"
+                        f" · {issue.get('path', '?')}"
+                        f" · {issue.get('message', '')}")
             if fragment.id in plan.dropped_items:
                 lines.append("  budget: 该 fragment 同时记录在 dropped items 中")
             for hit in plan.memory_hits:

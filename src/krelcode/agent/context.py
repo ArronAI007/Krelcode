@@ -23,6 +23,7 @@ from .rules import (
     DEFAULT_IMPORT_MAX_FILES,
     DEFAULT_RULES_MAX_CHARS,
     RuleBundle,
+    RuleLayer,
     RuleLimits,
     RuleLoader,
 )
@@ -137,6 +138,7 @@ class WorkspaceContext:
     total_tokens: int
     omitted: tuple[str, ...] = ()
     rule_bundle: Optional[RuleBundle] = None
+    rule_layers: tuple[RuleLayer, ...] = ()
 
     def summary_lines(self) -> List[str]:
         lines = [
@@ -274,6 +276,7 @@ async def build_workspace_context_bundle(
     opts = options or ContextOptions()
     sections: List[ContextSection] = list(extra_sections)
     rule_bundle: Optional[RuleBundle] = None
+    rule_layers: tuple[RuleLayer, ...] = ()
 
     if opts.include_rules:
         loader = rule_loader or RuleLoader(
@@ -282,7 +285,9 @@ async def build_workspace_context_bundle(
             limits=opts.rule_limits(),
             imports_enabled=opts.rules_imports,
         )
-        rule_bundle = loader.load_base()
+        rule_stack = loader.load_stack(include_directory=False)
+        rule_layers = rule_stack.base_layers
+        rule_bundle = rule_stack.base_bundle
         if rule_bundle.content:
             sources = ", ".join(
                 source.display_path for source in rule_bundle.sources
@@ -324,6 +329,7 @@ async def build_workspace_context_bundle(
         total_tokens=estimate_text_tokens(text),
         omitted=tuple(omitted),
         rule_bundle=rule_bundle,
+        rule_layers=rule_layers,
     )
 
 

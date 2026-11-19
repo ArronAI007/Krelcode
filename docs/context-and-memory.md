@@ -49,10 +49,15 @@ envelope 后伪造 system 标签。Memory 位于 `L7_MEMORY_EVIDENCE`、turn sta
 不会进入 cacheable stable prefix。`/context why memory:scoped` 和 `/context sources` 显示
 来源角色，但不输出正文。
 
-子代理也走同一条 `InstructionBundle → PromptFragment[] → PromptAssembler` 路径：
-managed、base、user、project/directory 和 agent definition 分别映射到 L0-L4；当前
-turn 的工具目录映射到 L5，Skill Catalog 独立映射到 L6；筛选后的 inherited memory
-作为独立的 `subagent:inherited-memory` L7 Evidence Fragment 注入。
+规则不再聚合成一个 `workspace:rules`。主 Agent 与子代理共用同一套规则模型：
+`managed:rules` → L0，`user:rules` → L2，`project:rules` 与请求期
+`directory:rules` → L3，`agent_definition:<name>` → L4。每个 Fragment 携带
+scope、优先级、入口/导入文件、issue 与覆盖关系；`/context rules` 展示生效顺序，
+`/context why <rule-id>` 展示最终生效来源与冲突策略。
+
+子代理也走同一条 `InstructionBundle → PromptFragment[] → PromptAssembler` 路径；
+当前 turn 的工具目录映射到 L5，Skill Catalog 独立映射到 L6，筛选后的 inherited
+memory 作为独立的 `subagent:inherited-memory` L7 Evidence Fragment 注入。
 子代理不复制父级完整历史，并复用与主 Agent 相同的 cache boundary、stable/dynamic hash
 和 `/context why` 诊断。
 
