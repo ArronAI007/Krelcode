@@ -21,11 +21,10 @@ from ..core.messages import ToolCall
 from ..tools.secret_guard import classify_secret_path
 from ..tools.base import (
     PermissionMode,
-    RunMode,
     ToolContext,
-    ToolSource,
 )
 from .commands import RISK_ALLOW, RISK_DENY, classify_command
+from .contract import local_read_only_tool, restricts_to_local_read_only
 from .rules import AllowRules, RuleDecision, RuleMatch
 
 
@@ -94,8 +93,7 @@ class SandboxPolicy:
         descriptor = ctx.tool_descriptor
         local_read_only = bool(
             descriptor is not None
-            and descriptor.read_only
-            and descriptor.source is not ToolSource.MCP
+            and local_read_only_tool(descriptor.source, descriptor.read_only)
         )
         rule_match = _combine_rule_matches(
             self.rules.evaluate_tool(name),
@@ -104,13 +102,7 @@ class SandboxPolicy:
         if rule_match is not None and rule_match.decision is RuleDecision.DENY:
             return deny(f"权限规则拒绝: {rule_match.reason}")
 
-        restricted = (
-            ctx.runtime.permission_mode in {
-                PermissionMode.READ_ONLY,
-                PermissionMode.PLAN,
-            }
-            or ctx.runtime.run_mode is RunMode.REVIEW
-        )
+        restricted = restricts_to_local_read_only(ctx.runtime)
         if restricted and not (local_read_only or name in READONLY_TOOLS):
             return deny(
                 "当前 read-only/plan/review 权限模式禁止有副作用的工具: "

@@ -136,6 +136,23 @@ def _evidence_scene_hash(fragments: Sequence[object]) -> str:
     return _hash(records) if records else ""
 
 
+def _mode_contract_record(
+    fragments: Sequence[object],
+) -> tuple[str, str, str, str]:
+    for fragment in fragments:
+        provenance = getattr(fragment, "provenance", {}) or {}
+        if not isinstance(provenance, Mapping):
+            continue
+        if str(provenance.get("contract_version", "") or ""):
+            return (
+                _text(provenance.get("contract_hash"), 128),
+                _text(provenance.get("run_mode"), 40),
+                _text(provenance.get("permission_mode"), 40),
+                _text(provenance.get("tool_exposure_hash"), 128),
+            )
+    return "", "", "", ""
+
+
 def _complete_request_hash(payload: Mapping[str, object]) -> str:
     return _hash(payload)
 
@@ -239,6 +256,10 @@ class ContextCacheLedger:
     instruction_hash: str = ""
     evidence_hash: str = ""
     tool_catalog_hash: str = ""
+    mode_contract_hash: str = ""
+    run_mode: str = ""
+    permission_mode: str = ""
+    tool_exposure_hash: str = ""
     attachment_generation: int = 0
     attachment_hash: str = ""
     attachment_revisions: tuple[tuple[str, int], ...] = ()
@@ -280,6 +301,7 @@ class ContextCacheLedger:
             self.instruction_hash,
             self.evidence_hash,
             self.tool_catalog_hash,
+            self.mode_contract_hash,
             self.attachment_hash,
             self.compact_checkpoint_id,
             self.working_context_sequence,
@@ -299,6 +321,10 @@ class ContextCacheLedger:
             "instruction_hash": self.instruction_hash,
             "evidence_hash": self.evidence_hash,
             "tool_catalog_hash": self.tool_catalog_hash,
+            "mode_contract_hash": self.mode_contract_hash,
+            "run_mode": self.run_mode,
+            "permission_mode": self.permission_mode,
+            "tool_exposure_hash": self.tool_exposure_hash,
             "attachment_generation": self.attachment_generation,
             "attachment_hash": self.attachment_hash,
             "attachment_revisions": self.attachment_revisions,
@@ -335,6 +361,12 @@ class ContextCacheLedger:
             if str(getattr(hit, "id", "") or "")
         ))
         policy_hash = _policy_instruction_hash(fragments)
+        (
+            mode_contract_hash,
+            run_mode,
+            permission_mode,
+            tool_exposure_hash,
+        ) = _mode_contract_record(fragments)
         instruction_hash = (
             str(getattr(prompt_plan, "instruction_hash", "") or "")
             or _instruction_scene_hash(fragments)
@@ -360,6 +392,10 @@ class ContextCacheLedger:
             evidence_hash=evidence_hash,
             tool_catalog_hash=str(
                 getattr(prompt_plan, "tool_catalog_hash", "") or ""),
+            mode_contract_hash=mode_contract_hash,
+            run_mode=run_mode,
+            permission_mode=permission_mode,
+            tool_exposure_hash=tool_exposure_hash,
             attachment_generation=generation,
             attachment_hash=attachment_hash,
             attachment_revisions=revisions,
@@ -411,6 +447,10 @@ class ContextCacheLedger:
             "instruction_hash": self.instruction_hash,
             "evidence_hash": self.evidence_hash,
             "tool_catalog_hash": self.tool_catalog_hash,
+            "mode_contract_hash": self.mode_contract_hash,
+            "run_mode": self.run_mode,
+            "permission_mode": self.permission_mode,
+            "tool_exposure_hash": self.tool_exposure_hash,
             "attachment_generation": self.attachment_generation,
             "attachment_hash": self.attachment_hash,
             "attachment_revisions": [list(item) for item in self.attachment_revisions],
@@ -452,6 +492,10 @@ class ContextCacheLedger:
             instruction_hash=_text(raw.get("instruction_hash"), 128),
             evidence_hash=_text(raw.get("evidence_hash"), 128),
             tool_catalog_hash=_text(raw.get("tool_catalog_hash"), 128),
+            mode_contract_hash=_text(raw.get("mode_contract_hash"), 128),
+            run_mode=_text(raw.get("run_mode"), 40),
+            permission_mode=_text(raw.get("permission_mode"), 40),
+            tool_exposure_hash=_text(raw.get("tool_exposure_hash"), 128),
             attachment_generation=_integer(raw.get("attachment_generation")),
             attachment_hash=_text(raw.get("attachment_hash"), 128),
             attachment_revisions=tuple(revisions),
@@ -482,7 +526,9 @@ def _compare_ledgers(
 ) -> ContextCacheLedgerDiff:
     fields = (
         "provider", "model", "stable_hash", "dynamic_hash", "instruction_hash",
-        "evidence_hash", "tool_catalog_hash", "attachment_generation",
+        "evidence_hash", "tool_catalog_hash",
+        "mode_contract_hash", "run_mode", "permission_mode",
+        "tool_exposure_hash", "attachment_generation",
         "attachment_hash", "attachment_revisions", "compact_checkpoint_id",
         "working_context_sequence", "memory_evidence_ids", "history_digest",
         "provider_request_digest", "complete_request_hash",
@@ -496,6 +542,12 @@ def _compare_ledgers(
     dynamic_changed = previous.dynamic_hash != current.dynamic_hash
     evidence_changed = previous.evidence_hash != current.evidence_hash
     tool_changed = previous.tool_catalog_hash != current.tool_catalog_hash
+    contract_changed = (
+        previous.mode_contract_hash != current.mode_contract_hash
+        or previous.run_mode != current.run_mode
+        or previous.permission_mode != current.permission_mode
+        or previous.tool_exposure_hash != current.tool_exposure_hash
+    )
     attachments_changed = (
         previous.attachment_generation != current.attachment_generation
         or previous.attachment_hash != current.attachment_hash
@@ -521,6 +573,8 @@ def _compare_ledgers(
         reasons.append("instruction_scene_changed")
     if tool_changed:
         reasons.append("tool_catalog_changed")
+    if contract_changed:
+        reasons.append("mode_permission_contract_changed")
     if attachments_changed:
         reasons.append("environment_attachments_changed")
     if memory_changed:
@@ -538,6 +592,7 @@ def _compare_ledgers(
     if dynamic_changed and not any((
         instruction_changed,
         tool_changed,
+        contract_changed,
         attachments_changed,
         evidence_changed,
         history_changed,

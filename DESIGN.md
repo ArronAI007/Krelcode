@@ -1045,8 +1045,16 @@ L7 Memory Evidence、L8 Environment/Date/Session、L9 Plan/Working Context、L10
 History、L11 Current User Request、L12 Per-turn Reminder。
 
 - L0-L9（以及动态 L12 reminder）进入 system；L10/L11 由权威历史消息承载，不会复制进 system。
-- 排序键固定为 layer → static/session/turn → priority → source/id；L0-L6 拒绝 turn fragment。
+- L5 由唯一的 `ModePermissionContract` 生成：输入是实际执行的 `RuntimeSnapshot`、过滤后的
+  `ToolPool.exposure_snapshot()`、`ApprovalPolicy` 与 `ExecutionSandbox`，正文和 diagnostics
+  metadata 共用同一 builder。契约覆盖 run/permission mode、审批优先级、DENY/ASK 例外、Plan 门禁、
+  tool/MCP allowlist、Sandbox backend/network/write scope 和 subagent 降权；子代理的 permission
+  mode、tool allowlist 与 MCP allowlist 都取父级和 Definition 的较窄边界，工具目录只能列
+  capability，不能扩权。
+- 排序键固定为 layer → static/session/turn → priority → source/id；L0-L4 承载稳定权威，L5-L9 可按请求现场使用 turn fragment，L10-L12 的 turn 语义由装配器强制校验。
 - `turn`、`data`、`untrusted` fragment 不得 `cacheable`；稳定断点只允许覆盖连续 cacheable 前缀。
+- 运行中切换权限模式会同步当前 policy snapshot、丢弃旧 turn pool、刷新 L5 attachment；下一个
+  provider step 使用新 ToolPool，stable hash 不变而 dynamic hash / contract hash 更新。
 - 当前 user 消息只出现一次，tool result 永远留在 history，不进入 system 或稳定前缀。
 - `ProviderMessages` 是 Provider 的唯一输入；`ContextAssembly` 仅作为 `/context`、Resume 与
   checkpoint 的无正文兼容视图。
@@ -1129,7 +1137,7 @@ skill_catalog_delta                        # L6，Skill 目录与本次增删
 agent_catalog_delta                        # L6，Agent Definition 目录与本次增删
 mcp_instructions_delta                     # L6，MCP initialize instructions（untrusted）
 token_budget_reminder                      # L12，当前 turn 已用/剩余预算
-mode_reminder                              # L12，run mode / permission mode
+mode_permission_contract                   # L5，权威 mode/permission/tool/Sandbox 契约
 ```
 
 - `environment_attachments()` 对每个非 rules section 计算 SHA-256；只有 changed/added/removed
@@ -1141,6 +1149,11 @@ mode_reminder                              # L12，run mode / permission mode
 - 所有附件均 `cacheable=False`。`PromptAssembler` 将每个附件映射为一个独立
   `SystemPromptBlock`，因此环境变化只改变对应 block(s) 与 `dynamic_hash`，不会改变
   `stable_hash`，也不会复制进持久 history。
+- `mode_permission_contract` 固定为 L5、managed trust、turn stability。正文只包含聚合后的
+  capability 边界，不复制工具 Schema、工作区绝对路径或审批规则正文；attachment metadata 和
+  `PromptPlanSnapshot` provenance 记录 contract/tool-exposure hash、run/permission mode、审批策略、
+  Sandbox 状态与工具排除分类。`ContextCacheLedger` 同步记录 contract hash 与 exposure hash，
+  `/context why`/`/context ledger` 可解释模式切换导致的 cache/dynamic 变化。
 - 单文件解释意图仍会过滤 `environment_snapshot/environment_delta`，避免无关目录树扩大 token
   范围。MCP instructions 标记为 `untrusted`，Skill/Agent catalog 标记为 project scope。
 - `/context attachments` 只展示 ID/revision/generation/layer/token；`/context cache` 从最近
@@ -1721,7 +1734,7 @@ Instruction 侧仍由 managed/user/project/agent-definition 分类器收口，Ev
 adapter 边界切换实现而不重写 PromptAssembler。
 
 SubagentManager 复用同一装配契约：`InstructionBundle` 先转换为带 L0-L4 来源层级的
-`PromptFragment[]`，L5 工具目录和 L6 Skill Catalog 继续由统一装配链补齐；筛选后的
+`PromptFragment[]`，L5 mode/permission contract + 工具目录和 L6 Skill Catalog 继续由统一装配链补齐；筛选后的
 L7 inherited-memory fragment 也注册到子代理自己的 `PromptFragmentRegistry`，再由同一个
 `PromptAssembler` 生成 PromptPlan/ProviderMessages。
 子代理因此拥有与主 Agent 相同的 stable/dynamic cache boundary、来源归因和 `/context why`

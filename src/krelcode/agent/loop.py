@@ -73,6 +73,10 @@ from ..llm.base import (
     ThinkingDelta,
     ToolCallReady,
 )
+from ..safety.contract import (
+    ModePermissionContract,
+    build_mode_permission_contract,
+)
 from .compression import ContextManager
 from .attachments import (
     ContextAttachmentDiff,
@@ -83,7 +87,7 @@ from .attachments import (
     date_attachment,
     environment_attachments,
     mcp_instructions_attachment,
-    mode_reminder_attachment,
+    mode_permission_contract_attachment,
     skill_catalog_attachment,
     token_budget_reminder_attachment,
 )
@@ -282,6 +286,7 @@ class AgentLoop:
         self.pending_context_refresh = False
         self.context_attachments = ContextAttachmentStore()
         self.last_attachment_diff = ContextAttachmentDiff(0, 0)
+        self.last_mode_permission_contract: Optional[ModePermissionContract] = None
         self._today_provider = today_provider
         self.last_microcompact_report: Optional[MicrocompactReport] = None
         self.compact_checkpoint_store = compact_checkpoint_store
@@ -310,6 +315,8 @@ class AgentLoop:
         )
         if self.context_manager is not None:
             self.context_manager.rebuild_state(self.history)
+        # L5 is always available, even before an app-level catalog/MCP refresh.
+        self._sync_mode_permission_contract()
 
     async def _emit(self, event: AgentEvent) -> None:
         await self.bus.emit(event)
@@ -376,6 +383,7 @@ class AgentLoop:
         include_environment: bool = True,
         include_catalogs: bool = True,
         include_mcp: bool = True,
+        include_contract: bool = True,
         include_reminders: bool = True,
     ) -> ContextAttachmentDiff:
         """Replace only attachments whose semantic content changed.
@@ -431,6 +439,9 @@ class AgentLoop:
                 mcp_instructions_attachment,
             )
 
+        if include_contract:
+            self._sync_mode_permission_contract()
+
         if include_reminders:
             try:
                 today = (
@@ -440,9 +451,6 @@ class AgentLoop:
             except Exception:
                 today = None
             self.context_attachments.upsert(date_attachment(today))
-            runtime = self._turn_tool_context.runtime
-            self.context_attachments.upsert(mode_reminder_attachment(
-                runtime.run_mode, runtime.permission_mode))
             token_budget_id = attachment_id(
                 ContextAttachmentKind.TOKEN_BUDGET_REMINDER)
             if self.token_budget is None:
@@ -455,6 +463,34 @@ class AgentLoop:
         diff = self.context_attachments.diff(previous)
         self.last_attachment_diff = diff
         return diff
+
+    def _sync_mode_permission_contract(self) -> None:
+        """Refresh the L5 contract from the same live boundary used to execute tools."""
+        item_id = attachment_id(
+            ContextAttachmentKind.MODE_PERMISSION_CONTRACT)
+        try:
+            context = self._turn_tool_context
+            contract = build_mode_permission_contract(
+                context.runtime,
+                self._current_tool_pool().exposure_snapshot(),
+                sandbox=context.sandbox,
+                sandbox_enabled=context.sandbox_enabled,
+                policy=self.policy,
+                subagent_definition=getattr(
+                    self, "subagent_definition_name", ""),
+            )
+        except Exception:
+            # Never retain a stale capability contract after a failed refresh.
+            self.last_mode_permission_contract = None
+            self.context_attachments.remove(item_id)
+            return
+        self.last_mode_permission_contract = contract
+        self.context_attachments.upsert(
+            mode_permission_contract_attachment(contract))
+        # The legacy two-line reminder is superseded by the authoritative L5
+        # contract.  Remove any state restored from an older session.
+        self.context_attachments.remove(
+            attachment_id(ContextAttachmentKind.MODE_REMINDER))
 
     def _sync_catalog_attachment(
         self,
@@ -1020,6 +1056,7 @@ class AgentLoop:
         # 无 capabilities 属性的测试替身保持旧行为（照常传 tools）。
         capabilities = getattr(self.llm, "capabilities", None)
         if capabilities is not None and not capabilities.supports_tools:
+            self._current_tool_pool().clear_advertised()
             specs = []
         else:
             specs = self._current_tool_pool().tool_specs()

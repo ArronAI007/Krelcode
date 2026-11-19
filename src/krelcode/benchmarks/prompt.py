@@ -667,6 +667,7 @@ def _stable_prefix_is_isolated(
         "attachment:environment_delta",
         "attachment:date",
         "attachment:mode_reminder",
+        "attachment:mode_permission_contract",
     })
     return (
         bool(first.stable_hash)

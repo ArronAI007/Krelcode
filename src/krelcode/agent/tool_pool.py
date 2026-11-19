@@ -13,8 +13,6 @@ from html import escape
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..tools.base import (
-    PermissionMode,
-    RunMode,
     RuntimeSnapshot,
     Tool,
     ToolCatalogMatch,
@@ -23,6 +21,11 @@ from ..tools.base import (
     ToolTier,
 )
 from ..tools.registry import ToolRegistry
+from ..safety.contract import (
+    ToolExposureSnapshot,
+    local_read_only_tool,
+    restricts_to_local_read_only,
+)
 from .intent import TurnIntent
 
 _TOOL_SEARCH_NAME = "tool_search"
@@ -33,6 +36,12 @@ class ToolPoolEntry:
     name: str
     tool: Tool
     descriptor: ToolDescriptor
+
+
+@dataclass(frozen=True)
+class ToolExclusion:
+    code: str
+    reason: str
 
 
 class TurnToolPool:
@@ -49,15 +58,19 @@ class TurnToolPool:
         intent: Optional[TurnIntent] = None,
         runtime: Optional[RuntimeSnapshot] = None,
     ) -> None:
+        self._runtime = runtime
         self._entries: Dict[str, ToolPoolEntry] = {}
         self._excluded: Dict[str, str] = {}
+        self._excluded_codes: Dict[str, str] = {}
         for tool, descriptor in registry.entries():
             exclusion = self._runtime_exclusion(tool.name, descriptor, runtime)
             if exclusion is not None:
-                self._excluded[tool.name] = exclusion
+                self._excluded[tool.name] = exclusion.reason
+                self._excluded_codes[tool.name] = exclusion.code
                 continue
             if intent is not None and not intent.allows_tool(tool.name):
                 self._excluded[tool.name] = "本轮请求意图限制了可用工具"
+                self._excluded_codes[tool.name] = "turn_intent"
                 continue
             self._entries[tool.name] = ToolPoolEntry(
                 name=tool.name, tool=tool, descriptor=descriptor)
@@ -73,45 +86,60 @@ class TurnToolPool:
         name: str,
         descriptor: ToolDescriptor,
         runtime: Optional[RuntimeSnapshot],
-    ) -> Optional[str]:
+    ) -> Optional[ToolExclusion]:
         if runtime is None:
             return None
         if name in runtime.disabled_tools:
-            return "用户在配置中禁用了该工具"
+            return ToolExclusion("disabled", "用户在配置中禁用了该工具")
         if (
             runtime.tool_allowlist is not None
             and name != _TOOL_SEARCH_NAME
-            and name not in _allowed_names(runtime.tool_allowlist)
+            and name not in normalize_tool_allowlist(runtime.tool_allowlist)
         ):
-            return "当前 Skill 的 allowed-tools 不允许该工具"
+            return ToolExclusion(
+                "tool_allowlist", "当前 Skill 的 allowed-tools 不允许该工具")
         if (
             descriptor.required_feature is not None
             and descriptor.required_feature not in runtime.features
         ):
-            return f"功能开关 {descriptor.required_feature} 未启用"
+            return ToolExclusion(
+                "feature",
+                f"功能开关 {descriptor.required_feature} 未启用",
+            )
+        if (
+            descriptor.source is ToolSource.MCP
+            and runtime.mcp_allowlist is not None
+            and descriptor.mcp_server not in runtime.mcp_allowlist
+        ):
+            return ToolExclusion(
+                "mcp_allowlist",
+                f"MCP 服务器 {descriptor.mcp_server or '?'} 不在当前允许集合",
+            )
         if (
             descriptor.run_modes is not None
             and runtime.run_mode not in descriptor.run_modes
         ):
-            return f"运行模式 {runtime.run_mode.value} 不暴露该工具"
+            return ToolExclusion(
+                "run_mode",
+                f"运行模式 {runtime.run_mode.value} 不暴露该工具",
+            )
         if (
             runtime.mcp_health_known
             and descriptor.source is ToolSource.MCP
             and descriptor.mcp_server not in runtime.alive_mcp_servers
         ):
-            return f"MCP 服务器 {descriptor.mcp_server or '?'} 不在线"
-        restricted = (
-            runtime.permission_mode in {
-                PermissionMode.READ_ONLY,
-                PermissionMode.PLAN,
-            }
-            or runtime.run_mode is RunMode.REVIEW
-        )
+            return ToolExclusion(
+                "mcp_health",
+                f"MCP 服务器 {descriptor.mcp_server or '?'} 不在线",
+            )
         # 远程 readOnlyHint 只用于调度展示，不能作为本地只读权限的凭证。
-        security_read_only = (
-            descriptor.read_only and descriptor.source is not ToolSource.MCP)
-        if restricted and not security_read_only:
-            return "当前权限/运行模式只允许本地只读工具"
+        security_read_only = local_read_only_tool(
+            descriptor.source, descriptor.read_only)
+        if restricts_to_local_read_only(runtime) and not security_read_only:
+            return ToolExclusion(
+                "permission",
+                "当前权限/运行模式只允许本地只读工具",
+            )
         return None
 
     def tool_specs(self) -> List[dict]:
@@ -126,6 +154,10 @@ class TurnToolPool:
             }
             for name in names
         ]
+
+    def clear_advertised(self) -> None:
+        """Record a provider request that carries no tool schemas."""
+        self._advertised = frozenset()
 
     def get(self, name: str) -> Optional[Tool]:
         """Return an eligible loaded tool; execution additionally checks advertise."""
@@ -187,6 +219,41 @@ class TurnToolPool:
 
     def excluded_items(self) -> Tuple[Tuple[str, str], ...]:
         return tuple((name, self._excluded[name]) for name in sorted(self._excluded))
+
+    def exposure_snapshot(self) -> ToolExposureSnapshot:
+        """Return the exact filtered capability boundary without tool schemas."""
+        excluded_by_category: Dict[str, List[str]] = {}
+        for name, code in self._excluded_codes.items():
+            excluded_by_category.setdefault(code, []).append(name)
+        runtime = self._runtime
+        return ToolExposureSnapshot(
+            total_count=len(self._entries) + len(self._excluded),
+            eligible_names=tuple(sorted(self._entries)),
+            excluded_names=tuple(sorted(self._excluded)),
+            excluded_by_category={
+                code: tuple(sorted(names))
+                for code, names in excluded_by_category.items()
+            },
+            read_only_names=tuple(sorted(
+                name for name, entry in self._entries.items()
+                if entry.descriptor.read_only
+            )),
+            mutating_names=tuple(sorted(
+                name for name, entry in self._entries.items()
+                if not entry.descriptor.read_only
+            )),
+            local_read_only_names=tuple(sorted(
+                name for name, entry in self._entries.items()
+                if local_read_only_tool(
+                    entry.descriptor.source, entry.descriptor.read_only)
+            )),
+            loaded_names=tuple(sorted(self._loaded)),
+            advertised_names=tuple(sorted(self._advertised)),
+            allowlist_active=bool(
+                runtime is not None and runtime.tool_allowlist is not None),
+            mcp_allowlist_active=bool(
+                runtime is not None and runtime.mcp_allowlist is not None),
+        )
 
     def search_catalog(
         self, query: str, *, limit: int = 5,
@@ -349,23 +416,25 @@ def _one_line(text: str, limit: int = 180) -> str:
     return compact
 
 
-_SKILL_TOOL_ALIASES = {
+TOOL_NAME_ALIASES = {
     "read": "read_file",
     "write": "write_file",
     "edit": "edit_file",
     "bash": "run_command",
     "glob": "glob",
     "grep": "grep",
-    "webfetch": "fetch",
+    "fetch": "web_fetch",
+    "webfetch": "web_fetch",
+    "websearch": "web_search",
 }
 
 
-def _allowed_names(values) -> set[str]:
+def normalize_tool_allowlist(values) -> set[str]:
+    """Keep unknown names verbatim while canonicalizing public tool aliases."""
     allowed = set()
     for raw in values:
         name = str(raw).strip()
         if not name:
             continue
-        allowed.add(name)
-        allowed.add(_SKILL_TOOL_ALIASES.get(name.lower(), name))
+        allowed.add(TOOL_NAME_ALIASES.get(name.lower(), name))
     return allowed

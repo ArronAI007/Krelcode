@@ -276,8 +276,13 @@ def test_real_request_overhead_triggers_one_compact_then_reassembles(tmp_path):
             Message.assistant(f"answer-{index}"),
         ])
     history_only = estimate_history_tokens(loop.history)
+    contract_tokens = estimate_text_tokens(
+        loop.last_mode_permission_contract.render())
     loop.context_manager = ContextManager(
-        provider, max_tokens=history_only + 490, keep_recent=2)
+        provider,
+        max_tokens=history_only + 490 + contract_tokens,
+        keep_recent=2,
+    )
     events = []
     loop.bus.subscribe(events.append)
 

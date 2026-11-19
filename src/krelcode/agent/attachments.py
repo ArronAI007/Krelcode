@@ -27,6 +27,7 @@ from .evidence import (
 from .fragments import (
     GROUP_RUNTIME,
     GROUP_SYSTEM,
+    LAYER_L5_MODE_CONTRACT,
     LAYER_L6_CATALOG,
     LAYER_L7_EVIDENCE,
     LAYER_L8_ENVIRONMENT,
@@ -44,12 +45,14 @@ from .fragments import (
     PromptFragment,
 )
 from .tokens import estimate_text_tokens
+from ..safety.contract import ModePermissionContract
 
 
 class ContextAttachmentKind(str, Enum):
     ENVIRONMENT_SNAPSHOT = "environment_snapshot"
     ENVIRONMENT_DELTA = "environment_delta"
     DATE = "date"
+    MODE_PERMISSION_CONTRACT = "mode_permission_contract"
     SKILL_CATALOG_DELTA = "skill_catalog_delta"
     AGENT_CATALOG_DELTA = "agent_catalog_delta"
     MCP_INSTRUCTIONS_DELTA = "mcp_instructions_delta"
@@ -64,6 +67,7 @@ _DEFAULT_LAYER = {
     ContextAttachmentKind.ENVIRONMENT_SNAPSHOT: LAYER_L8_ENVIRONMENT,
     ContextAttachmentKind.ENVIRONMENT_DELTA: LAYER_L8_ENVIRONMENT,
     ContextAttachmentKind.DATE: LAYER_L8_ENVIRONMENT,
+    ContextAttachmentKind.MODE_PERMISSION_CONTRACT: LAYER_L5_MODE_CONTRACT,
     ContextAttachmentKind.SKILL_CATALOG_DELTA: LAYER_L6_CATALOG,
     ContextAttachmentKind.AGENT_CATALOG_DELTA: LAYER_L6_CATALOG,
     ContextAttachmentKind.MCP_INSTRUCTIONS_DELTA: LAYER_L7_EVIDENCE,
@@ -74,6 +78,7 @@ _DEFAULT_STABILITY = {
     ContextAttachmentKind.ENVIRONMENT_SNAPSHOT: STABILITY_TURN,
     ContextAttachmentKind.ENVIRONMENT_DELTA: STABILITY_TURN,
     ContextAttachmentKind.DATE: STABILITY_SESSION,
+    ContextAttachmentKind.MODE_PERMISSION_CONTRACT: STABILITY_TURN,
     ContextAttachmentKind.SKILL_CATALOG_DELTA: STABILITY_SESSION,
     ContextAttachmentKind.AGENT_CATALOG_DELTA: STABILITY_SESSION,
     ContextAttachmentKind.MCP_INSTRUCTIONS_DELTA: STABILITY_SESSION,
@@ -84,6 +89,7 @@ _DEFAULT_TRUST = {
     ContextAttachmentKind.ENVIRONMENT_SNAPSHOT: TRUST_DATA,
     ContextAttachmentKind.ENVIRONMENT_DELTA: TRUST_DATA,
     ContextAttachmentKind.DATE: TRUST_MANAGED,
+    ContextAttachmentKind.MODE_PERMISSION_CONTRACT: TRUST_MANAGED,
     ContextAttachmentKind.SKILL_CATALOG_DELTA: TRUST_PROJECT,
     ContextAttachmentKind.AGENT_CATALOG_DELTA: TRUST_PROJECT,
     ContextAttachmentKind.MCP_INSTRUCTIONS_DELTA: TRUST_UNTRUSTED,
@@ -94,6 +100,7 @@ _DEFAULT_PRIORITY = {
     ContextAttachmentKind.ENVIRONMENT_SNAPSHOT: 20,
     ContextAttachmentKind.ENVIRONMENT_DELTA: 21,
     ContextAttachmentKind.DATE: 0,
+    ContextAttachmentKind.MODE_PERMISSION_CONTRACT: 0,
     ContextAttachmentKind.SKILL_CATALOG_DELTA: 20,
     ContextAttachmentKind.AGENT_CATALOG_DELTA: 30,
     ContextAttachmentKind.MCP_INSTRUCTIONS_DELTA: 40,
@@ -347,6 +354,20 @@ def date_attachment(value: Optional[str] = None) -> ContextAttachment:
         kind=ContextAttachmentKind.DATE,
         content=f"<date>{html.escape(current, quote=False)}</date>",
         metadata={"date": current},
+    )
+
+
+def mode_permission_contract_attachment(
+    contract: ModePermissionContract,
+) -> ContextAttachment:
+    return ContextAttachment(
+        id=attachment_id(ContextAttachmentKind.MODE_PERMISSION_CONTRACT),
+        kind=ContextAttachmentKind.MODE_PERMISSION_CONTRACT,
+        content=contract.render(),
+        scope="managed",
+        priority=0,
+        compactable=False,
+        metadata=contract.metadata(),
     )
 
 
@@ -715,6 +736,7 @@ __all__ = [
     "date_attachment",
     "environment_attachments",
     "mcp_instructions_attachment",
+    "mode_permission_contract_attachment",
     "mode_reminder_attachment",
     "skill_catalog_attachment",
     "token_budget_reminder_attachment",

@@ -163,6 +163,7 @@ class RuntimeSnapshot:
     alive_mcp_servers: FrozenSet[str] = frozenset()
     mcp_health_known: bool = False
     tool_allowlist: Optional[FrozenSet[str]] = None
+    mcp_allowlist: Optional[FrozenSet[str]] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "run_mode", RunMode(self.run_mode))
@@ -177,6 +178,9 @@ class RuntimeSnapshot:
         if self.tool_allowlist is not None:
             object.__setattr__(
                 self, "tool_allowlist", frozenset(self.tool_allowlist))
+        if self.mcp_allowlist is not None:
+            object.__setattr__(
+                self, "mcp_allowlist", frozenset(self.mcp_allowlist))
 
 
 @dataclass

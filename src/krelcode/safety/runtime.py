@@ -112,6 +112,20 @@ class RuntimePermissionManager:
                 runtime=replace(
                     turn_context.runtime, permission_mode=mode),
             )
+        # Capability filtering is part of the same permission boundary.  Drop
+        # the turn pool so the next model/tool step is rebuilt from the new
+        # runtime snapshot instead of advertising a stale write capability.
+        if hasattr(self.loop, "_active_tool_pool"):
+            self.loop._active_tool_pool = None
+        sync = getattr(self.loop, "sync_context_attachments", None)
+        if callable(sync):
+            sync(
+                include_environment=False,
+                include_catalogs=False,
+                include_mcp=False,
+                include_contract=True,
+                include_reminders=False,
+            )
 
     def status_line(self) -> str:
         return f"权限: {self.mode.value} · {MODE_LABELS[self.mode]}"

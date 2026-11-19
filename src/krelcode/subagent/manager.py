@@ -22,6 +22,7 @@ from ..agent.fragments import (
     apply_prompt_snapshot,
 )
 from ..agent.loop import DEFAULT_MAX_STEPS, AgentLoop
+from ..agent.tool_pool import normalize_tool_allowlist
 from ..agent.prompts import (
     PROMPT_PROFILE_AUTO,
     build_system_prompt,
@@ -54,6 +55,7 @@ from ..core.events import (
 from ..core.messages import Message, sanitize_history
 from ..core.redact import SecretRedactor
 from ..llm.base import LLMProvider
+from ..safety.contract import narrow_permission_mode
 from ..safety.policy import AllowAllPolicy
 from ..session.autocommit import ensure_local_exclude, git_is_repo
 from ..session.context_checkpoint import (
@@ -222,7 +224,8 @@ class SubagentManager:
         """创建并启动后台子代理。
 
         definition 指向用户定义文件；未传 isolated/fork_context 时使用定义中
-        的默认值。Definition allowlist 仅缩小工具集合，不改变审批与 Sandbox。
+        的默认值。Definition 的 permission/tool/MCP scope 只能相对父级收窄，
+        审批与 Sandbox 继续继承父级。
         """
         if self._closed:
             raise RuntimeError("SubagentManager 已关闭")
@@ -276,12 +279,12 @@ class SubagentManager:
         tools = self._restrict_memory_tools(tools, memory_ids)
         if definition_obj is not None and definition_obj.allowed_tools:
             available = {tool.name for tool in tools}
-            missing = sorted(set(definition_obj.allowed_tools) - available)
+            allowed = normalize_tool_allowlist(definition_obj.allowed_tools)
+            missing = sorted(allowed - available)
             if missing:
                 raise ValueError(
                     f"Agent Definition {definition_obj.name!r} 引用了未知工具: "
                     + ", ".join(missing))
-            allowed = set(definition_obj.allowed_tools)
             # ToolSearch is a control-plane loader. Keep it available so an
             # allowed discoverable/deferred tool can still be loaded, while the
             # runtime allowlist prevents it from exposing anything else.
@@ -292,34 +295,60 @@ class SubagentManager:
 
         self._counter += 1
         agent_id = f"a{self._counter}"
-        permission_mode = (
+        parent_runtime = self.tool_context.runtime
+        requested_permission = (
             PermissionMode(definition_obj.permission_mode)
             if definition_obj is not None and definition_obj.permission_mode
-            else self.tool_context.runtime.permission_mode
+            else parent_runtime.permission_mode
         )
-        mcp_servers = tuple(sorted(selected_mcp or ()))
+        permission_mode = narrow_permission_mode(
+            parent_runtime.permission_mode, requested_permission)
+        effective_mcp_allowlist = (
+            frozenset(selected_mcp)
+            if selected_mcp is not None
+            else parent_runtime.mcp_allowlist
+        )
+        if (
+            selected_mcp is not None
+            and parent_runtime.mcp_allowlist is not None
+        ):
+            effective_mcp_allowlist = (
+                effective_mcp_allowlist & parent_runtime.mcp_allowlist)
+            tools = _restrict_mcp_tools(tools, effective_mcp_allowlist)
+        requested_tool_allowlist = (
+            frozenset(normalize_tool_allowlist(definition_obj.allowed_tools))
+            if definition_obj is not None and definition_obj.allowed_tools
+            else parent_runtime.tool_allowlist
+        )
+        if (
+            definition_obj is not None
+            and definition_obj.allowed_tools
+            and parent_runtime.tool_allowlist is not None
+        ):
+            requested_tool_allowlist = (
+                requested_tool_allowlist
+                & frozenset(normalize_tool_allowlist(
+                    parent_runtime.tool_allowlist)))
+        mcp_servers = tuple(sorted(effective_mcp_allowlist or ()))
         worktree_path: Optional[Path] = None
         branch: Optional[str] = None
         child_runtime = replace(
-            self.tool_context.runtime,
+            parent_runtime,
             run_mode=RunMode.SUBAGENT,
             turn_id=None,
             session_id=f"subagent-{agent_id}",
-            tool_allowlist=(
-                frozenset(definition_obj.allowed_tools)
-                if definition_obj is not None and definition_obj.allowed_tools
-                else self.tool_context.runtime.tool_allowlist
-            ),
+            tool_allowlist=requested_tool_allowlist,
             permission_mode=permission_mode,
             alive_mcp_servers=(
-                frozenset(mcp_servers)
+                effective_mcp_allowlist
                 if selected_mcp is not None
-                else self.tool_context.runtime.alive_mcp_servers
+                else parent_runtime.alive_mcp_servers
             ),
             mcp_health_known=(
                 True if selected_mcp is not None
-                else self.tool_context.runtime.mcp_health_known
+                else parent_runtime.mcp_health_known
             ),
+            mcp_allowlist=effective_mcp_allowlist,
         )
         tool_context = replace(
             self.tool_context,
@@ -407,6 +436,8 @@ class SubagentManager:
         loop.prompt_profile = prompt_resolution.profile
         loop.prompt_profile_resolution = prompt_resolution
         loop.prompt_profile_name = prompt_resolution.name
+        loop.subagent_definition_name = (
+            definition_obj.name if definition_obj is not None else "")
         apply_prompt_snapshot(loop, prompt_snapshot)
 
         effective_task = task

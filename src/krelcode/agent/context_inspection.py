@@ -482,6 +482,29 @@ class ContextInspectionService:
                 lines.append(
                     f"  base hash: {provenance.get('base_prompt_hash', '')}"
                     f" · section={provenance.get('prompt_section', fragment.id)}")
+            contract_version = str(
+                provenance.get("contract_version", "") or "")
+            if contract_version:
+                lines.extend((
+                    f"  mode contract: v{contract_version}"
+                    f" · run={provenance.get('run_mode', '(unknown)')}"
+                    f" · permission={provenance.get('permission_mode', '(unknown)')}"
+                    f" · approval={provenance.get('approval_profile', '(unknown)')}",
+                    f"  sandbox: backend={provenance.get('sandbox_backend', '(unknown)')}"
+                    f" · network-controlled={provenance.get('sandbox_network_controlled', '?')}"
+                    f" (allowed={provenance.get('sandbox_network_allowed', '?')})"
+                    f" · os-enforced={provenance.get('sandbox_os_enforced', '?')}"
+                    f" · protected-paths={provenance.get('protected_paths_enforced', '?')}",
+                    f"  tool contract: eligible={provenance.get('eligible_tool_count', 0)}"
+                    f" · excluded={provenance.get('excluded_tool_count', 0)}"
+                    f" · read-only={provenance.get('read_only_tool_count', 0)}"
+                    f" · mutating={provenance.get('mutating_tool_count', 0)}"
+                    f" · local-read-only={provenance.get('local_read_only_tool_count', 0)}"
+                    f" · loaded={provenance.get('loaded_tool_count', 0)}"
+                    f" · advertised={provenance.get('advertised_tool_count', 0)}",
+                    f"  contract hash: {provenance.get('contract_hash', '')}"
+                    f" · exposure hash: {provenance.get('tool_exposure_hash', '')}",
+                ))
             rule_scope = str(provenance.get("rule_scope", "") or "")
             if rule_scope:
                 overrides = provenance.get("rule_overrides", ())
@@ -627,6 +650,8 @@ class ContextInspectionService:
             f" · instruction {_short_hash(ledger.instruction_hash)}"
             f" · evidence {_short_hash(ledger.evidence_hash)}",
             f"  tools {_short_hash(ledger.tool_catalog_hash)}"
+            f" · mode contract {_short_hash(ledger.mode_contract_hash)}"
+            f" · exposure {_short_hash(ledger.tool_exposure_hash)}"
             f" · history {_short_hash(ledger.history_digest)}"
             f" · provider request {_short_hash(ledger.provider_request_digest)}"
             f" · fidelity {ledger.wire_fidelity}",
@@ -637,6 +662,11 @@ class ContextInspectionService:
             f"  compact {ledger.compact_checkpoint_id or '(none)'}"
             f" · working context sequence {ledger.working_context_sequence}",
         ]
+        if ledger.mode_contract_hash:
+            lines.append(
+                f"  mode contract: run={ledger.run_mode or '(unknown)'}"
+                f" · permission={ledger.permission_mode or '(unknown)'}"
+                f" · hash {_short_hash(ledger.mode_contract_hash)}")
         diff = ledger.diff
         if diff.available:
             lines.append(
