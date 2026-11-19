@@ -25,10 +25,10 @@ class ToolRegistry:
         self._descriptors[tool.name] = descriptor or ToolDescriptor.from_tool(tool)
 
     def entries(self) -> List[Tuple[Tool, ToolDescriptor]]:
-        """返回一致的工具/描述符快照，供单轮工具池构建。"""
+        """返回按名称稳定排序的工具/描述符快照，供单轮工具池构建。"""
         return [
             (tool, self._descriptors[name])
-            for name, tool in self._tools.items()
+            for name, tool in sorted(self._tools.items())
         ]
 
     def descriptor(self, name: str) -> Optional[ToolDescriptor]:
@@ -65,5 +65,5 @@ class ToolRegistry:
                 "description": t.description,
                 "parameters": t.parameters,
             }
-            for t in self._tools.values()
+            for t in (self._tools[name] for name in sorted(self._tools))
         ]

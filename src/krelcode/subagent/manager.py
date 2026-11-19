@@ -243,7 +243,13 @@ class SubagentManager:
                     f"Agent Definition {definition_obj.name!r} 引用了未知工具: "
                     + ", ".join(missing))
             allowed = set(definition_obj.allowed_tools)
-            tools = [tool for tool in tools if tool.name in allowed]
+            # ToolSearch is a control-plane loader. Keep it available so an
+            # allowed discoverable/deferred tool can still be loaded, while the
+            # runtime allowlist prevents it from exposing anything else.
+            tools = [
+                tool for tool in tools
+                if tool.name in allowed or tool.name == "tool_search"
+            ]
 
         self._counter += 1
         agent_id = f"a{self._counter}"

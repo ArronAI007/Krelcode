@@ -75,7 +75,7 @@ krelcode [子命令] [选项]
 | `/permissions remove <rule-id>` | 按 ID 删除规则 |
 | `/tool-output [编号\|last]` | 列出工具输出（默认折叠）；按编号或 `last` 在灰色背景面板中展开 |
 | `/queue [delete <n>\|move <n> <m>\|clear]` | 查看或管理 `Alt+Enter` 排队的下一条消息 |
-| `/tools` | 已注册工具（含 MCP 远程与子代理工具） |
+| `/tools` | 当前动态工具池：core/discoverable/deferred、ToolSearch 已加载状态、来源与排除原因 |
 | `/model [provider/]model` | 查看/热切换模型（预算联动，失败不破坏现状） |
 | `/cost` | token 用量（本轮+累计）与估算成本 $ |
 | `/context` | 最近真实请求的 token 分项、预算、stable/volatile、memory 命中、dropped 来源、cache hash 变化、compact 水位与 checkpoint |

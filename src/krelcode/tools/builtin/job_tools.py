@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from ..base import ToolContext, ToolResult
+from ..base import ToolContext, ToolResult, ToolTier
 from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
 
 
@@ -20,6 +20,7 @@ def _manager(ctx: ToolContext):
 
 class JobStartTool:
     name = "job_start"
+    tool_tier = ToolTier.DISCOVERABLE
     description = (
         "启动一个独立的后台 Shell 任务并立即返回 job_id。任务不会随当前 turn "
         "结束而停止；用 job_output 轮询实时输出，用 job_kill 终止。适合 dev server、"
@@ -78,6 +79,7 @@ class JobStartTool:
 
 class JobOutputTool:
     name = "job_output"
+    tool_tier = ToolTier.DISCOVERABLE
     description = (
         "读取后台任务的增量输出。after_sequence 使用上次返回的 sequence 游标，"
         "避免重复读取；wait_seconds 可等待新输出或任务结束（最多 30 秒）。"
@@ -132,6 +134,7 @@ class JobOutputTool:
 
 class JobListTool:
     name = "job_list"
+    tool_tier = ToolTier.DISCOVERABLE
     description = "列出当前进程管理的后台 Shell 任务、状态、退出码与最新 sequence。"
     read_only = True
     parameters: Dict[str, Any] = {
@@ -171,6 +174,7 @@ class JobListTool:
 
 class JobKillTool:
     name = "job_kill"
+    tool_tier = ToolTier.DISCOVERABLE
     description = "终止一个由 job_start 启动的后台任务及其整个进程组。"
     parameters: Dict[str, Any] = {
         "type": "object",

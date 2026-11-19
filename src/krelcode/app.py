@@ -114,6 +114,7 @@ from .tools.builtin.repo_map import RepoMapTool
 from .tools.builtin.run_command import RunCommandTool
 from .tools.builtin.find_refs import FindRefsTool
 from .tools.builtin.time_tool import GetTimeTool
+from .tools.builtin.tool_search import ToolSearchTool
 from .tools.builtin.write_file import WriteFileTool
 from .tools.extension.ask_user import AskUserTool
 from .tools.extension.update_plan import UpdatePlanTool
@@ -129,7 +130,7 @@ def default_tools(
     lsp_manager: Optional[LSPManager] = None,
     web_runtime: Optional[WebRuntime] = None,
 ) -> List[Tool]:
-    """内置工具集（16 个 + 9 个子代理工具在 build_loop 注册）。
+    """内置工具集（17 个 + 9 个子代理工具在 build_loop 注册）。
     MCP 远程工具在运行时追加注册；传入 MemoryStore 时额外暴露只读
     ``memory_search``。"""
     tools: List[Tool] = [
@@ -137,6 +138,7 @@ def default_tools(
         RunCommandTool(), GrepTool(), GlobTool(), RepoMapTool(),
         FindRefsTool(), CheckSyntaxTool(), AskUserTool(), UpdatePlanTool(),
         JobStartTool(), JobOutputTool(), JobListTool(), JobKillTool(),
+        ToolSearchTool(),
     ]
     if memory_store is not None:
         tools.append(MemorySearchTool(memory_store))

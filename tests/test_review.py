@@ -117,10 +117,14 @@ def test_run_review_readonly_toolset_available(repo):
     (repo / "app.py").write_text("def f():\n    return 2\n", encoding="utf-8")
     provider = MockProvider(scripted=["纯文本评审，无工具调用。"])
     asyncio.run(run_review(Args(repo), llm=provider))
-    # 模型收到了只读工具 schema（可查上下文），且没有写/执行工具
+    # 核心只读工具带完整 schema；其余只读能力通过动态目录发现。
     tools = provider.tools_seen[0]
     names = {t["name"] for t in tools}
-    assert names == {"read_file", "grep", "glob", "find_refs", "repo_map"}
+    assert names == {"read_file", "grep", "glob", "tool_search"}
+    system_prompt = provider.calls[0][0].content
+    assert "find_refs [read-only]" in system_prompt
+    assert "repo_map [read-only]" in system_prompt
+    assert "tool_search(query=..., load=true)" in system_prompt
 
 
 def test_run_review_no_changes_message(repo, capsys):
@@ -150,5 +154,7 @@ def test_run_review_non_repo_friendly(tmp_path, capsys):
 
 def test_readonly_tools_have_no_write_or_exec():
     names = {t.name for t in readonly_tools()}
-    assert names == {"read_file", "grep", "glob", "find_refs", "repo_map"}
+    assert names == {
+        "read_file", "grep", "glob", "find_refs", "repo_map", "tool_search",
+    }
     assert not (names & {"write_file", "edit_file", "run_command"})

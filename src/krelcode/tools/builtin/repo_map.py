@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from ..base import ToolContext, ToolResult
+from ..base import ToolContext, ToolResult, ToolTier
 from ..fsutils import is_hidden_file, is_pruned_dir
 from ..paths import (
     PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,
@@ -35,6 +35,7 @@ JS_PATTERNS = [
 
 class RepoMapTool:
     read_only = True
+    tool_tier = ToolTier.DISCOVERABLE
     name = "repo_map"
     description = (
         "生成工作区代码地图：逐文件列出类/函数/方法符号及行号"

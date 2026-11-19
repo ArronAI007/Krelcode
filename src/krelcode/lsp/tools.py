@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
-from ..tools.base import ToolContext, ToolResult
+from ..tools.base import ToolContext, ToolResult, ToolTier
 from ..tools.secret_guard import classify_secret_path
 from .client import LSPError
 from .manager import LSPManager
@@ -17,6 +17,7 @@ MAX_ITEMS = 200
 
 class _LSPTool:
     read_only = True
+    tool_tier = ToolTier.DISCOVERABLE
 
     def __init__(self, manager: LSPManager) -> None:
         self.manager = manager

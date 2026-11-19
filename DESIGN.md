@@ -167,6 +167,14 @@ run(user_input):
 
 - **单轮工具池**：`TurnToolPool` 在一轮开始时固化 Registry 快照；provider schema、
   执行查找、动态工具目录和审批描述符共用同一份 pool，避免“隐藏 schema 但仍可执行”。
+- **动态工具目录（Step 100）**：候选集先经过 disabled/allowlist/feature/run-mode/
+  MCP-health/permission/TurnIntent 过滤器，再分为 `core`、`discoverable`、
+  `deferred` 三档。`core` 工具带完整 Schema；`discoverable` 目录只暴露名称和单行
+  描述；MCP、Plugin 默认 `deferred`。模型调用 `tool_search(query, load=true)` 时，
+  该工具只能看到过滤后的候选集，不能拿到可变 Registry。加载结果在下一模型 Step
+  才进入 provider `tools`；执行边界同时校验“已加载”和“最近一次请求已暴露”，
+  因而同一 request 内刚加载的工具不能并发执行。Registry、Schema、目录、搜索和
+  `/tools` 输出统一按工具名稳定排序，避免注册顺序改变 Prompt Cache 前缀。
 - **执行调度**：连续只读工具并发；mutating 工具和未知/被过滤工具作为 barrier 串行。
   因此 read/grep/glob/repo_map 等可提速，同时 write/edit/shell 不越过模型给出的顺序。
 - **实时事件**：只读组用 `asyncio.as_completed` 在每个工具完成时立即推送 UI，历史仍

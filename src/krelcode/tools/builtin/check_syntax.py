@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 
 import ast
 
-from ..base import ToolContext, ToolResult
+from ..base import ToolContext, ToolResult, ToolTier
 from ..fsutils import is_hidden_file, is_pruned_dir
 from ..paths import (
     PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,
@@ -24,6 +24,7 @@ MAX_ERRORS = 50
 
 class CheckSyntaxTool:
     read_only = True
+    tool_tier = ToolTier.DISCOVERABLE
     name = "check_syntax"
     description = (
         "检查工作区内 Python 文件的语法错误（ast 解析，不执行代码）。"

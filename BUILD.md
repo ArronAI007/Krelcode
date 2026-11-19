@@ -75,6 +75,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | v0.84 | 生产可用性 P1 | MCP 四类列表分页、`list_changed` 串行原子刷新、Resource Templates 与 OAuth（refresh/client credentials/metadata discovery/动态注册/PKCE/401 retry/`0600` cache）；新增 `CommandSource.CUSTOM` 和 Plugin/Custom 统一优先级；Hook 升级为 command/http/prompt 三执行器并强化 URL/Header 脱敏；Subagent Definition 支持独立 model/provider、permission-mode 和 MCP 集合。单组件失败继续隔离，所有新元数据不保存 Prompt 正文、Hook Header 或 MCP headers |
 | v0.85 | PromptAssembler 唯一入口 | Fragment 扩展 layer/stability/trust，建立 L0-L12 固定层级与 `PromptAssembler.assemble() → PromptPlan → ProviderMessages`；AgentLoop 不再用 `ContextAssembly.messages_for()` 生产请求，动态时间、工具结果、当前请求与 reminder 被隔离在稳定前缀之外，ContextAssembly 降为观测/恢复兼容视图 |
 | v0.86 | 显式 system cache boundary | `ProviderMessages` 新增 provider-neutral `SystemPromptBlocks`，逐 Fragment 保留 stable/dynamic block、双 hash 与 `cache_control` 边界；Anthropic 不再提前 join system，只在最后 stable block 标记 ephemeral，OpenAI-compatible 在 wire 层固定顺序合并但观测元数据不丢失。边界、block 数与双 hash 贯通 PreparedRequest、ContextUsageSnapshot、ContextPlanSnapshot、`/context cache` 和 TUI |
+| v0.87 | 动态工具池与 ToolSearch | `ToolTier` 将 turn 工具目录拆为 core/discoverable/deferred：core 带完整 Schema，discoverable 只暴露名称与单行描述，MCP/Plugin 默认 deferred；`tool_search` 只在已完成权限/运行模式/feature/MCP/禁用过滤的候选集内搜索并加载 Schema，新工具下一模型 Step 才可执行。Registry、Provider tools、动态目录、搜索和 `/tools` 使用名称稳定排序，避免注册顺序改变 Prompt Cache 前缀 |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -98,6 +99,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | Plugin v2 六类组件/生命周期 | `plugins/{manifest,components,manager,loader}.py` |
 | 工作区上下文注入 | `agent/context.py`（目录树/git/分层 AGENTS.md） |
 | 工具端口与注册表 | `tools/base.py` `tools/registry.py`；具体工具 `tools/builtin/`，交互工具 `tools/extension/` |
+| 动态工具池 / ToolSearch | `agent/tool_pool.py` `tools/builtin/tool_search.py` |
 | 命令风险分级/审批/写保护 | `safety/commands.py` `safety/policy.py` `safety/rules.py` |
 | 运行时权限/Plan 审批状态机 | `safety/runtime.py` |
 | MCP 客户端/传输/OAuth/热重载 | `mcp/client.py` `mcp/{stdio,sse}_transport.py` `mcp/streamable.py` `mcp/oauth.py` `mcp/supervisor.py` |

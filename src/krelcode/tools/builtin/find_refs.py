@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from ..base import ToolContext, ToolResult
+from ..base import ToolContext, ToolResult, ToolTier
 from ..fsutils import is_hidden_file, is_pruned_dir
 from ..paths import (
     PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,
@@ -68,6 +68,7 @@ class _RefVisitor(ast.NodeVisitor):
 
 class FindRefsTool:
     read_only = True
+    tool_tier = ToolTier.DISCOVERABLE
     name = "find_refs"
     description = (
         "在工作区的 Python 文件中按 ast 语法查找符号引用（类/函数/变量/方法），"

@@ -12,7 +12,7 @@ from html.parser import HTMLParser
 from typing import Any, Dict, Mapping, Optional, Protocol, Sequence
 from urllib.parse import urlencode
 
-from ..tools.base import ToolContext, ToolResult
+from ..tools.base import ToolContext, ToolResult, ToolTier
 from .http import (
     HttpResponse,
     SafeHttpClient,
@@ -152,6 +152,7 @@ class WebSearchService:
 
 class WebFetchTool:
     read_only = True
+    tool_tier = ToolTier.DISCOVERABLE
     name = "web_fetch"
     description = (
         "安全读取一个公开 http/https URL 的文本内容。拒绝 localhost、私网、"
@@ -215,6 +216,7 @@ class WebFetchTool:
 
 class WebSearchTool:
     read_only = True
+    tool_tier = ToolTier.DISCOVERABLE
     name = "web_search"
     description = (
         "搜索公开网页并返回标题、URL 和摘要。需要配置搜索后端与 API key "

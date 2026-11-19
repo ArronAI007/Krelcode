@@ -200,6 +200,7 @@ def test_scenario_3_refactor_rename(tmp_path):
         "from mathx import compute\n\nprint(compute(5))\n", encoding="utf-8")
 
     script = [
+        tc("ts1", "tool_search", query="*", limit=10),
         tc("f1", "find_refs", symbol="compute"),
         tc("e1", "edit_file", path="mathx.py", old_string="compute",
            new_string="calculate", replace_all=True),
@@ -220,9 +221,10 @@ def test_scenario_3_refactor_rename(tmp_path):
     assert "from mathx import calculate" in main and "print(calculate(5))" in main
 
     tool_msgs = [m for m in stack.loop.history if m.role == "tool"]
-    assert "[def] def compute" in tool_msgs[0].content       # find_refs 定位
-    assert "未找到匹配" in tool_msgs[3].content                # grep 零残留
-    assert "无语法错误" in tool_msgs[4].content                # check_syntax 通过
+    assert "Loaded full schema(s)" in tool_msgs[0].content   # ToolSearch 加载
+    assert "[def] def compute" in tool_msgs[1].content       # find_refs 定位
+    assert "未找到匹配" in tool_msgs[4].content                # grep 零残留
+    assert "无语法错误" in tool_msgs[5].content                # check_syntax 通过
 
     # 检查点一轮一组：undo 同时还原两个文件
     result = stack.checkpoints.undo_last()

@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import (
-    Any, Awaitable, Callable, Dict, FrozenSet, Optional, Protocol, Tuple, Union,
+    Any, Awaitable, Callable, Dict, FrozenSet, Optional, Protocol, Sequence,
+    Tuple, Union,
 )
 
 from ..core.messages import (
@@ -84,6 +85,47 @@ class PermissionMode(str, Enum):
     READ_ONLY = "read-only"
     AUTO_APPROVE = "auto-approve"
     PLAN = "plan"
+
+
+class ToolTier(str, Enum):
+    """Dynamic tool catalogue exposure level.
+
+    ``CORE`` tools always carry a full provider schema.  ``DISCOVERABLE``
+    tools advertise only a name and one-line description.  ``DEFERRED`` tools
+    stay out of the default directory and are found through ``tool_search``.
+    """
+
+    CORE = "core"
+    DISCOVERABLE = "discoverable"
+    DEFERRED = "deferred"
+
+
+@dataclass(frozen=True)
+class ToolCatalogMatch:
+    """One deterministic result returned by the active turn tool catalogue."""
+
+    name: str
+    description: str
+    tier: ToolTier
+    source: str
+    read_only: bool
+    loaded: bool
+
+
+class ToolCatalog(Protocol):
+    """Narrow catalogue port exposed to ToolSearch.
+
+    The implementation is a ``TurnToolPool``; tools never receive the mutable
+    global registry and therefore cannot bypass runtime filtering.
+    """
+
+    def search_catalog(
+        self, query: str, *, limit: int = 5,
+    ) -> Tuple[ToolCatalogMatch, ...]:
+        ...
+
+    def load_tools(self, names: Sequence[str]) -> Tuple[str, ...]:
+        ...
 
 
 @dataclass(frozen=True)
@@ -195,6 +237,7 @@ class ToolContext:
     input_requester: Optional[InputRequester] = field(default=None, repr=False)
     plan_emitter: Optional[PlanEmitter] = field(default=None, repr=False)
     shell_jobs: Any = field(default=None, repr=False)
+    tool_catalog: Optional[ToolCatalog] = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not self.sandbox_enabled:
@@ -279,15 +322,37 @@ class ToolDescriptor:
     required_feature: Optional[str] = None
     run_modes: Optional[FrozenSet[RunMode]] = None
     plugin_name: Optional[str] = None
+    tier: Optional[ToolTier] = None
+    search_terms: Tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "source", ToolSource(self.source))
+        tier = self.tier
+        if tier is None:
+            tier = (
+                ToolTier.DEFERRED
+                if self.source in {ToolSource.MCP, ToolSource.PLUGIN}
+                else ToolTier.CORE
+            )
+        object.__setattr__(self, "tier", ToolTier(tier))
         if self.run_modes is not None:
             object.__setattr__(
                 self,
                 "run_modes",
                 frozenset(RunMode(mode) for mode in self.run_modes),
             )
+        raw_terms = self.search_terms
+        if isinstance(raw_terms, str):
+            raw_terms = (raw_terms,)
+        object.__setattr__(
+            self,
+            "search_terms",
+            tuple(dict.fromkeys(
+                str(term).strip().casefold()
+                for term in (raw_terms or ())
+                if str(term).strip()
+            )),
+        )
 
     @classmethod
     def from_tool(
@@ -301,6 +366,7 @@ class ToolDescriptor:
 
     未声明 ``read_only`` 的工具按 mutating 处理，这是调度器的保守默认值。
         """
+        source = ToolSource(source)
         return cls(
             source=source,
             mcp_server=mcp_server,
@@ -308,4 +374,6 @@ class ToolDescriptor:
             required_feature=getattr(tool, "required_feature", None),
             run_modes=getattr(tool, "run_modes", None),
             plugin_name=getattr(tool, "plugin_name", None),
+            tier=getattr(tool, "tool_tier", None),
+            search_terms=getattr(tool, "search_terms", ()),
         )

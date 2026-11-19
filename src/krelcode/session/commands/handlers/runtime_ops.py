@@ -34,10 +34,30 @@ def _ok(*output: str) -> CommandResult:
 
 
 async def handle_tools(ctx: CommandContext) -> CommandResult:
-    output = []
-    for name in ctx.loop.registry.names():
-        tool = ctx.loop.registry.get(name)
-        output.append(f"  {name}: {tool.description}")
+    pool = ctx.loop.current_tool_pool()
+    output = ["  Tool catalogue（本轮权限/运行模式/MCP/功能开关过滤后）:"]
+    for entry in pool.catalog_entries():
+        tier = entry.descriptor.tier.value
+        if entry.descriptor.tier.value == "core":
+            state = "core"
+        elif pool.is_loaded(entry.name):
+            state = f"loaded:{tier}"
+        else:
+            state = tier
+        category = "read-only" if entry.descriptor.read_only else "mutating"
+        output.append(
+            f"  [{state}] {entry.name}: {entry.tool.description} "
+            f"({category}, source={entry.descriptor.source.value})")
+    excluded = pool.excluded_items()
+    if excluded:
+        output.append("  Excluded:")
+        output.extend(f"  [excluded] {name}: {reason}" for name, reason in excluded)
+    if "tool_search" in pool.names():
+        output.append(
+            "  Use [tool_search(query=..., load=true)] to load discoverable "
+            "or deferred schemas.")
+    if not pool.catalog_entries() and not excluded:
+        output.append("  （没有工具通过当前运行时过滤）")
     return _ok(*output)
 
 

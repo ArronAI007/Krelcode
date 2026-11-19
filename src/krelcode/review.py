@@ -37,6 +37,7 @@ from .tools.builtin.glob import GlobTool
 from .tools.builtin.grep import GrepTool
 from .tools.builtin.read_file import ReadFileTool
 from .tools.builtin.repo_map import RepoMapTool
+from .tools.builtin.tool_search import ToolSearchTool
 from .tools.registry import ToolRegistry
 
 MAX_DIFF_CHARS = 100_000
@@ -61,7 +62,10 @@ Rules:
 
 def readonly_tools() -> List[Any]:
     """评审模式工具集：只读，绝无写/执行能力。"""
-    return [ReadFileTool(), GrepTool(), GlobTool(), FindRefsTool(), RepoMapTool()]
+    return [
+        ReadFileTool(), GrepTool(), GlobTool(), FindRefsTool(), RepoMapTool(),
+        ToolSearchTool(),
+    ]
 
 
 async def _git_diff(root: Path, staged: bool) -> Tuple[str, str]:

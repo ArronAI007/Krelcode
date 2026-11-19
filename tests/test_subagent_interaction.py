@@ -32,6 +32,7 @@ from krelcode.subagent.tools import (
     SpawnAgentTool,
 )
 from krelcode.tools.base import ToolContext, ToolResult
+from krelcode.tools.builtin.tool_search import ToolSearchTool
 
 
 class CaptureProvider:
@@ -142,7 +143,7 @@ def test_spawn_definition_applies_prompt_and_tool_allowlist(tmp_path):
 
     manager = SubagentManager(
         llm=provider,
-        tool_factory=lambda: [GateTool(), OtherToolImpl()],
+        tool_factory=lambda: [ToolSearchTool(), GateTool(), OtherToolImpl()],
         tool_context=ToolContext(workspace_root=tmp_path),
         bus=EventBus(),
         definitions=definitions,
@@ -150,7 +151,8 @@ def test_spawn_definition_applies_prompt_and_tool_allowlist(tmp_path):
     handle = asyncio.run(_spawn_and_wait(manager, definition="reviewer"))
     assert handle.definition == "reviewer"
     assert "Review carefully." in provider.last_system
-    assert [item["name"] for item in provider.last_tools] == ["slow"]
+    assert [item["name"] for item in provider.last_tools] == [
+        "slow", "tool_search"]
     assert handle.sidechain_path is not None and handle.sidechain_path.is_file()
 
     (agents / "bad.md").write_text(

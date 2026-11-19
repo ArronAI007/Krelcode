@@ -400,6 +400,7 @@ class AgentLoop:
             intent=self._turn_intent,
             runtime=self._turn_tool_context.runtime,
         )
+        self._active_tool_pool.authorize_direct(name)
         try:
             return await self._run_stream_tool(call)
         except asyncio.CancelledError:
@@ -957,6 +958,10 @@ class AgentLoop:
             )
         return self._active_tool_pool
 
+    def current_tool_pool(self) -> TurnToolPool:
+        """Public, read-mostly view used by /tools and diagnostics."""
+        return self._current_tool_pool()
+
     # -- 内部：执行一批工具调用 -------------------------------------------------
 
     async def _apply_tool_results(
@@ -1080,20 +1085,21 @@ class AgentLoop:
         # 1) 单轮工具池是执行边界：未暴露给模型的工具绝不能进入审批/执行。
         pool = self._current_tool_pool()
         tool = pool.get(tool_call.name)
-        if tool is None:
-            excluded = pool.excluded_reason(tool_call.name)
-            if excluded is not None:
+        if tool is None or not pool.is_executable(tool_call.name):
+            reason = pool.unavailable_reason(tool_call.name)
+            if reason is not None:
                 return ToolResult(
                     content=(
-                        f"工具在本轮不可用: {tool_call.name}（{excluded}；"
-                        f"本轮可用工具: {', '.join(pool.names()) or '无'}）"
+                        f"工具在本轮不可用: {tool_call.name}（{reason}；"
+                        "当前已暴露工具: "
+                        f"{', '.join(pool.advertised_names()) or '无'}）"
                     ),
                     is_error=True,
                 )
             return ToolResult(
                 content=(
                     f"未知工具: {tool_call.name}（本轮可用工具: "
-                    f"{', '.join(pool.names()) or '无'}）"
+                    f"{', '.join(pool.advertised_names()) or '无'}）"
                 ),
                 is_error=True,
             )
@@ -1177,6 +1183,7 @@ class AgentLoop:
         execution_ctx = replace(
             self._turn_tool_context,
             tool_descriptor=pool.descriptor(tool_call.name),
+            tool_catalog=pool,
             progress_emitter=emit_progress,
             output_emitter=emit_output,
             input_requester=request_user_input,
