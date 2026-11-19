@@ -1,9 +1,11 @@
 """llm 层门面：统一 Provider 机制的公开入口。"""
 
 from .base import (
+    EVIDENCE_BLOCKS_META_KEY,
     FINISH_LENGTH,
     FINISH_STOP,
     FINISH_TOOLS,
+    EvidenceBlock,
     LLMEvent,
     LLMProvider,
     PreparedLLMProvider,
@@ -19,6 +21,7 @@ from .base import (
     ToolSpec,
     cache_segment,
     collect,
+    explicit_evidence_blocks,
     normalize_usage,
     prepare_http_request,
     resolve_system_prompt_blocks,
@@ -36,7 +39,8 @@ from .transport import Transport, TransportResponse, UrllibTransport
 __all__ = [
     "LLMProvider", "PreparedLLMProvider", "PreparedLLMRequest",
     "LLMEvent", "TextDelta", "StreamFinished", "ToolSpec",
-    "SystemPromptBlock", "SystemPromptBlocks",
+    "SystemPromptBlock", "SystemPromptBlocks", "EvidenceBlock",
+    "EVIDENCE_BLOCKS_META_KEY", "explicit_evidence_blocks",
     "ToolCallStartedDelta", "ToolCallArgumentsDelta", "ToolCallReady",
     "ProviderCapabilities", "collect", "normalize_usage",
     "prepare_http_request", "cache_segment", "stable_system_prefix",

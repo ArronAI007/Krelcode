@@ -262,6 +262,7 @@ class AgentLoop:
                 self, "prompt_registry", None),
         )
         self.last_prompt_plan: PromptPlan | None = None
+        self.last_provider_messages = None
         self.last_context_assembly = None
         self.last_context_snapshot = None
         self.previous_context_snapshot = None
@@ -312,6 +313,7 @@ class AgentLoop:
         """清空历史，只保留系统提示词。"""
         self.history = self.history[:1] if self.history and self.history[0].role == "system" else []
         self.last_prompt_plan = None
+        self.last_provider_messages = None
         self.last_context_assembly = None
         self.last_context_snapshot = None
         self.previous_context_snapshot = None
@@ -931,6 +933,7 @@ class AgentLoop:
         )
         provider_messages = self.prompt_assembler.provider_messages(
             prompt_plan, tools=tools)
+        self.last_provider_messages = provider_messages
         messages = list(provider_messages.messages)
         prepared: Optional[PreparedLLMRequest] = None
         prepare = getattr(self.llm, "prepare_request", None)

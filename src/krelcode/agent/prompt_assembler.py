@@ -15,7 +15,11 @@ from typing import Callable, Mapping, Optional, Sequence, Tuple
 
 from ..core.messages import Message
 from ..llm.base import (
+    EVIDENCE_BLOCKS_META_KEY,
+    SYSTEM_BLOCK_CHANNEL_EVIDENCE,
+    SYSTEM_BLOCK_CHANNEL_INSTRUCTION,
     SYSTEM_PROMPT_BLOCKS_META_KEY,
+    EvidenceBlock,
     SystemPromptBlock,
     SystemPromptBlocks,
 )
@@ -94,6 +98,14 @@ class ProviderMessages:
     tools: Tuple[Mapping[str, object], ...] = ()
     cache_boundary: Optional[PromptCacheBoundary] = None
     system_blocks: Optional[SystemPromptBlocks] = None
+    instruction_blocks: Tuple[SystemPromptBlock, ...] = ()
+    evidence_blocks: Tuple[EvidenceBlock, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "messages", tuple(self.messages))
+        object.__setattr__(self, "tools", tuple(self.tools))
+        object.__setattr__(self, "instruction_blocks", tuple(self.instruction_blocks))
+        object.__setattr__(self, "evidence_blocks", tuple(self.evidence_blocks))
 
     @property
     def stable_hash(self) -> str:
@@ -116,12 +128,35 @@ class ProviderMessages:
         ).hexdigest()
 
     @property
-    def provider_meta(self) -> Optional[Mapping[str, object]]:
-        if self.cache_boundary is None or not self.cache_boundary.enabled:
-            return None
+    def instruction_hash(self) -> str:
+        return self.system_blocks.instruction_hash if self.system_blocks else ""
+
+    @property
+    def evidence_hash(self) -> str:
+        return self.system_blocks.evidence_hash if self.system_blocks else ""
+
+    def channel_record(self) -> Mapping[str, object]:
+        """Content-free observability for the provider-neutral channels."""
         return {
-            "prompt_cache_boundaries": [self.cache_boundary.offset],
+            "instruction_blocks": [
+                block.as_record() for block in self.instruction_blocks],
+            "evidence_blocks": [
+                block.as_record() for block in self.evidence_blocks],
+            "instruction_hash": self.instruction_hash,
+            "evidence_hash": self.evidence_hash,
+            "cache_boundary": (
+                self.cache_boundary.offset
+                if self.cache_boundary is not None else 0),
         }
+
+    @property
+    def provider_meta(self) -> Optional[Mapping[str, object]]:
+        metadata: dict[str, object] = {}
+        if self.cache_boundary is not None and self.cache_boundary.enabled:
+            metadata["prompt_cache_boundaries"] = [self.cache_boundary.offset]
+        if self.evidence_blocks:
+            metadata[EVIDENCE_BLOCKS_META_KEY] = self.evidence_blocks
+        return metadata or None
 
 
 @dataclass(frozen=True)
@@ -171,6 +206,30 @@ class PromptPlan:
                 if self.system_blocks is not None else ())
 
     @property
+    def instruction_blocks(self) -> Tuple[SystemPromptBlock, ...]:
+        return (self.system_blocks.instruction_blocks
+                if self.system_blocks is not None else ())
+
+    @property
+    def evidence_blocks(self) -> Tuple[EvidenceBlock, ...]:
+        return tuple(
+            EvidenceBlock.from_system_block(block)
+            for block in (
+                self.system_blocks.evidence_system_blocks
+                if self.system_blocks is not None else ())
+        )
+
+    @property
+    def instruction_hash(self) -> str:
+        return (self.system_blocks.instruction_hash
+                if self.system_blocks is not None else "")
+
+    @property
+    def evidence_hash(self) -> str:
+        return (self.system_blocks.evidence_hash
+                if self.system_blocks is not None else "")
+
+    @property
     def dynamic_hash(self) -> str:
         return self.cache.dynamic_hash
 
@@ -194,6 +253,8 @@ class PromptPlan:
         return [
             f"prompt plan {self.engine or 'v3'} · fragment {len(self.fragments)} 个"
             f"（稳定 {stable} / 动态 {volatile}）",
+            f"provider channels: instruction {len(self.instruction_blocks)}"
+            f" · evidence {len(self.evidence_blocks)}",
             (
                 f"cache boundary: {self.cache.offset} chars"
                 f" · stable hash {self.cache.stable_hash[:12]}"
@@ -349,10 +410,13 @@ class PromptAssembler:
         tools: Optional[Sequence[Mapping[str, object]]] = None,
     ) -> ProviderMessages:
         messages = list(plan.history)
+        evidence_blocks = plan.evidence_blocks
         if plan.system_text:
             provider_meta = dict(plan.provider_meta or {})
             if plan.system_blocks is not None:
                 provider_meta[SYSTEM_PROMPT_BLOCKS_META_KEY] = plan.system_blocks
+            if evidence_blocks:
+                provider_meta[EVIDENCE_BLOCKS_META_KEY] = evidence_blocks
             system = Message.system(
                 plan.system_text,
                 provider_meta=provider_meta or None,
@@ -363,6 +427,8 @@ class PromptAssembler:
             tools=tuple(tools or ()),
             cache_boundary=plan.cache,
             system_blocks=plan.system_blocks,
+            instruction_blocks=plan.instruction_blocks,
+            evidence_blocks=evidence_blocks,
         )
 
     def _snapshot_from_registry(self) -> Optional[PromptSnapshot]:
@@ -745,6 +811,8 @@ def _build_system_prompt_blocks(
         content = _wire_fragment_content(fragment)
         if not content:
             continue
+        channel = _fragment_channel(fragment)
+        metadata = _prompt_block_metadata(fragment)
         block = SystemPromptBlock(
             id=fragment.id,
             text=content,
@@ -752,6 +820,15 @@ def _build_system_prompt_blocks(
             stability=fragment.stability,
             trust=fragment.trust,
             cacheable=fragment.cacheable,
+            channel=channel,
+            scope=fragment.scope,
+            evidence_type=(
+                str(metadata.get("evidence_type", "") or "")
+                if channel == SYSTEM_BLOCK_CHANNEL_EVIDENCE else ""),
+            requires_validation=(
+                bool(metadata.get("requires_validation", True))
+                if channel == SYSTEM_BLOCK_CHANNEL_EVIDENCE else False),
+            metadata=metadata,
         )
         if stable_open and fragment.cacheable:
             stable.append(block)
@@ -763,6 +840,44 @@ def _build_system_prompt_blocks(
         dynamic_system_blocks=tuple(dynamic),
     )
     return blocks
+
+
+_PROMPT_BLOCK_METADATA_KEYS = frozenset({
+    "source_role",
+    "instruction",
+    "instruction_source",
+    "evidence_type",
+    "evidence_sources",
+    "evidence_ids",
+    "evidence_count",
+    "evidence_origin",
+    "requires_validation",
+    "confidence_min",
+    "confidence_max",
+    "mcp_server",
+    "mcp_servers",
+})
+
+
+def _fragment_channel(fragment: PromptFragment) -> str:
+    metadata = fragment.metadata
+    if (
+        str(metadata.get("source_role", "") or "").strip().lower()
+        == SourceRole.EVIDENCE.value
+        or bool(metadata.get("evidence_type"))
+        or fragment.layer == LAYER_L7_EVIDENCE
+    ):
+        return SYSTEM_BLOCK_CHANNEL_EVIDENCE
+    return SYSTEM_BLOCK_CHANNEL_INSTRUCTION
+
+
+def _prompt_block_metadata(fragment: PromptFragment) -> dict[str, object]:
+    """Keep only inspectable provenance; never copy arbitrary rule/tool data."""
+    return {
+        key: value
+        for key, value in fragment.metadata.items()
+        if key in _PROMPT_BLOCK_METADATA_KEYS
+    }
 
 
 def _render_system_fragments(

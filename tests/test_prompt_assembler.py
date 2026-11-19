@@ -41,7 +41,13 @@ from krelcode.agent.context_usage import build_context_usage_snapshot
 from krelcode.agent.loop import AgentLoop
 from krelcode.agent.prompt_assembler import PromptAssembler, PromptAssemblyRequest
 from krelcode.core.messages import Message, ToolCall
-from krelcode.llm import SystemPromptBlock, SystemPromptBlocks
+from krelcode.llm import (
+    EVIDENCE_BLOCKS_META_KEY,
+    EvidenceBlock,
+    SystemPromptBlock,
+    SystemPromptBlocks,
+    explicit_evidence_blocks,
+)
 from krelcode.llm.providers.anthropic import AnthropicProvider
 from krelcode.llm.providers.mock import MockProvider
 from krelcode.llm.providers.openai import OpenAIProvider, to_openai_messages
@@ -336,7 +342,20 @@ def test_public_system_prompt_block_contract_is_provider_neutral():
     assert blocks.stable_hash == hashlib.sha256(b"STABLE").hexdigest()
     assert blocks.dynamic_hash == hashlib.sha256(b"DYNAMIC").hexdigest()
     assert blocks.cache_control_block_index == 0
+    assert [block.id for block in blocks.instruction_blocks] == [
+        "stable", "dynamic"]
+    assert blocks.evidence_system_blocks == ()
+    assert blocks.instruction_hash
+    assert blocks.evidence_hash == ""
     assert "STABLE" not in json.dumps(blocks.as_record(), ensure_ascii=False)
+
+    with pytest.raises(ValueError, match="evidence block 不得进入稳定缓存前缀"):
+        SystemPromptBlocks(
+            stable_system_blocks=(SystemPromptBlock(
+                id="evidence", text="EVIDENCE", channel="evidence",
+                requires_validation=True),),
+            dynamic_system_blocks=(),
+        )
 
 
 def test_agent_loop_uses_prompt_assembler_as_production_entry(tmp_path):
@@ -352,6 +371,9 @@ def test_agent_loop_uses_prompt_assembler_as_production_entry(tmp_path):
     assert asyncio.run(loop.run("hello", turn_id="turn-p0")) == "done"
     assert loop.last_prompt_plan is not None
     assert loop.last_prompt_plan.system_text.startswith("SYSTEM")
+    assert loop.last_provider_messages is not None
+    assert loop.last_provider_messages.messages[0].content == (
+        loop.last_prompt_plan.system_text)
     assert provider.calls[0][0].content == loop.last_prompt_plan.system_text
 
 
@@ -394,6 +416,83 @@ def test_prompt_plan_exposes_stable_and_dynamic_system_blocks(tmp_path):
     assert provider_messages.full_hash == plan.full_hash
     assert provider_messages.messages[0].provider_meta[
         "system_prompt_blocks"] is blocks
+
+
+def test_provider_messages_preserve_instruction_and_evidence_channels(tmp_path):
+    registry = PromptFragmentRegistry([
+        base_fragment(),
+        PromptFragment(
+            id="project", source="project", title="Project", content="PROJECT",
+            layer=LAYER_L3_PROJECT_RULES, cacheable=True,
+            stability=STABILITY_STATIC, trust=TRUST_PROJECT,
+        ),
+    ])
+    memory = ContextLayer(
+        id="memory:scoped",
+        source="memory",
+        category=CATEGORY_MEMORY,
+        content=(
+            "[Evidence: Memory]\n"
+            "source: manual\n"
+            "requires_validation: true\n\nMEMORY FACT"
+        ),
+        trust=TRUST_UNTRUSTED,
+        priority=10,
+        metadata={
+            "source_role": "evidence",
+            "evidence_type": "memory",
+            "evidence_ids": ("memory-1",),
+            "evidence_origin": "scoped_memory",
+            "requires_validation": True,
+            "confidence_min": 0.8,
+            "confidence_max": 0.8,
+        },
+    )
+    assembler, plan = assemble(
+        tmp_path,
+        registry,
+        history=(Message.user("CURRENT"),),
+        layers=(memory,),
+    )
+    provider_messages = assembler.provider_messages(plan)
+
+    assert [block.id for block in provider_messages.instruction_blocks] == [
+        "core:base", "project"]
+    assert [block.id for block in provider_messages.evidence_blocks] == [
+        "memory:scoped"]
+    evidence = provider_messages.evidence_blocks[0]
+    assert isinstance(evidence, EvidenceBlock)
+    assert evidence.evidence_type == "memory"
+    assert evidence.requires_validation is True
+    assert evidence.scope == "session"
+    assert evidence.origin == "scoped_memory"
+    assert "MEMORY FACT" in evidence.text
+    assert evidence.as_record().get("metadata") is None
+    assert "MEMORY FACT" not in plan.stable_prefix
+    assert plan.instruction_hash == provider_messages.instruction_hash
+    assert plan.evidence_hash == provider_messages.evidence_hash
+    assert plan.evidence_hash
+
+    system_message = provider_messages.messages[0]
+    assert system_message.content == plan.system_text
+    assert system_message.provider_meta[EVIDENCE_BLOCKS_META_KEY] == (
+        provider_messages.evidence_blocks)
+    assert explicit_evidence_blocks(provider_messages.messages) == (
+        provider_messages.evidence_blocks)
+    assert provider_messages.provider_meta[EVIDENCE_BLOCKS_META_KEY] == (
+        provider_messages.evidence_blocks)
+
+    provider = OpenAIProvider(model="deepseek-chat", api_key="k")
+    prepared = provider.prepare_request(provider_messages.messages, None)
+    payload = json.loads(provider.build_request(
+        provider_messages.messages, None)["body"])
+    system_wire = next(
+        item for item in payload["messages"] if item["role"] == "system")
+    assert system_wire["content"] == plan.system_text
+    assert prepared.instruction_system_block_count == 2
+    assert prepared.evidence_system_block_count == 1
+    assert prepared.instruction_hash == plan.instruction_hash
+    assert prepared.evidence_hash == plan.evidence_hash
 
 
 def test_prompt_plan_exposes_omitted_fragment_ids(tmp_path):

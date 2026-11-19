@@ -87,10 +87,9 @@ class ToolCall:
 class Message:
     """一条对话消息。四种 role：system / user / assistant / tool。
 
-    provider_meta：不透明的 provider 私有状态（如 Anthropic 扩展思考的
-    thinking 块与签名——多轮工具调用时 API 要求原样回传）。
-    约定：只有产生它的 provider adapter 可以读写；core/agent/tools
-    对其内容零感知，仅负责携带与持久化（session codec）。
+    provider_meta：不透明的 provider/请求装配状态，例如 Anthropic thinking
+    签名、显式 system/evidence block 通道。约定：只有产生它的 adapter 或
+    PromptAssembler 可以读写；core/tools 仅负责携带与持久化。
     """
 
     role: str

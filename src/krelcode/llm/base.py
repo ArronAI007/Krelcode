@@ -43,12 +43,20 @@ USAGE_CACHE_CREATION = "cache_creation"  # 写入缓存的 input tokens（溢价
 ToolSpec = Dict[str, object]  # {"name": str, "description": str, "parameters": dict}
 
 SYSTEM_PROMPT_BLOCKS_META_KEY = "system_prompt_blocks"
+EVIDENCE_BLOCKS_META_KEY = "evidence_blocks"
 SYSTEM_BLOCK_STABILITY = ("static", "session", "turn")
+SYSTEM_BLOCK_CHANNELS = ("instruction", "evidence")
+SYSTEM_BLOCK_CHANNEL_INSTRUCTION = "instruction"
+SYSTEM_BLOCK_CHANNEL_EVIDENCE = "evidence"
 
 
 @dataclass(frozen=True)
 class SystemPromptBlock:
-    """One provider-neutral system text block before wire serialization."""
+    """One provider-neutral system-bound block before wire serialization.
+
+    ``channel`` keeps instruction authority separate from evidence while legacy
+    providers may still receive both through one merged system message.
+    """
 
     id: str
     text: str
@@ -56,14 +64,24 @@ class SystemPromptBlock:
     stability: str = "static"
     trust: str = "managed"
     cacheable: bool = False
+    channel: str = SYSTEM_BLOCK_CHANNEL_INSTRUCTION
+    scope: str = ""
+    evidence_type: str = ""
+    requires_validation: bool = False
+    metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.id:
             raise ValueError("system block 必须包含非空 id")
         if self.stability not in SYSTEM_BLOCK_STABILITY:
             raise ValueError(f"未知 system block stability: {self.stability}")
+        if self.channel not in SYSTEM_BLOCK_CHANNELS:
+            raise ValueError(f"未知 system block channel: {self.channel}")
         if self.stability == "turn" and self.cacheable:
             raise ValueError(f"turn system block 不允许 cacheable: {self.id}")
+        if self.channel == SYSTEM_BLOCK_CHANNEL_EVIDENCE and self.cacheable:
+            raise ValueError(f"evidence block 不允许 cacheable: {self.id}")
+        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
     @property
     def chars(self) -> int:
@@ -80,9 +98,78 @@ class SystemPromptBlock:
             "stability": self.stability,
             "trust": self.trust,
             "cacheable": self.cacheable,
+            "channel": self.channel,
+            "scope": self.scope,
+            "evidence_type": self.evidence_type,
+            "requires_validation": self.requires_validation,
             "chars": self.chars,
             "hash": self.hash,
         }
+
+
+@dataclass(frozen=True)
+class EvidenceBlock:
+    """A provider-neutral, non-instruction evidence payload.
+
+    Current providers may still serialize the text inside a system message for
+    compatibility.  This object preserves authority, provenance and validation
+    requirements independently of that wire choice.
+    """
+
+    id: str
+    text: str
+    source: str = ""
+    evidence_type: str = ""
+    scope: str = ""
+    origin: str = ""
+    trust: str = "untrusted"
+    requires_validation: bool = True
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            raise ValueError("evidence block 必须包含非空 id")
+        if not self.text.strip():
+            raise ValueError(f"evidence block 不能为空: {self.id}")
+        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+
+    @property
+    def chars(self) -> int:
+        return len(self.text)
+
+    @property
+    def hash(self) -> str:
+        return hashlib.sha256(self.text.encode("utf-8")).hexdigest()
+
+    def as_record(self) -> Dict[str, object]:
+        return {
+            "id": self.id,
+            "source": self.source,
+            "evidence_type": self.evidence_type,
+            "scope": self.scope,
+            "origin": self.origin,
+            "trust": self.trust,
+            "requires_validation": self.requires_validation,
+            "chars": self.chars,
+            "hash": self.hash,
+        }
+
+    @classmethod
+    def from_system_block(cls, block: SystemPromptBlock) -> "EvidenceBlock":
+        if block.channel != SYSTEM_BLOCK_CHANNEL_EVIDENCE:
+            raise ValueError(f"system block 不是 evidence channel: {block.id}")
+        metadata = dict(block.metadata)
+        return cls(
+            id=block.id,
+            text=block.text,
+            source=block.source,
+            evidence_type=block.evidence_type,
+            scope=block.scope,
+            origin=str(metadata.get("evidence_origin", "") or ""),
+            trust=block.trust,
+            requires_validation=block.requires_validation,
+            metadata=metadata,
+        )
 
 
 @dataclass(frozen=True)
@@ -119,6 +206,11 @@ class SystemPromptBlocks:
                 hashlib.sha256(dynamic_text.encode("utf-8")).hexdigest()
                 if dynamic_text else "",
             )
+        if any(
+            block.channel == SYSTEM_BLOCK_CHANNEL_EVIDENCE
+            for block in self.stable_system_blocks
+        ):
+            raise ValueError("evidence block 不得进入稳定缓存前缀")
         # Providers place the explicit cache breakpoint after the complete
         # stable prefix (on its last non-empty block).
         boundary = len(stable_text) if stable_text else 0
@@ -138,6 +230,34 @@ class SystemPromptBlocks:
     def merged_text(self) -> str:
         return self.separator.join(
             text for text in (self.stable_text, self.dynamic_text) if text)
+
+    @property
+    def instruction_blocks(self) -> Tuple[SystemPromptBlock, ...]:
+        return tuple(
+            block for block in (
+                *self.stable_system_blocks, *self.dynamic_system_blocks)
+            if block.channel == SYSTEM_BLOCK_CHANNEL_INSTRUCTION
+        )
+
+    @property
+    def evidence_system_blocks(self) -> Tuple[SystemPromptBlock, ...]:
+        return tuple(
+            block for block in (
+                *self.stable_system_blocks, *self.dynamic_system_blocks)
+            if block.channel == SYSTEM_BLOCK_CHANNEL_EVIDENCE
+        )
+
+    @property
+    def instruction_hash(self) -> str:
+        text = self.separator.join(
+            block.text for block in self.instruction_blocks if block.text)
+        return hashlib.sha256(text.encode("utf-8")).hexdigest() if text else ""
+
+    @property
+    def evidence_hash(self) -> str:
+        text = self.separator.join(
+            block.text for block in self.evidence_system_blocks if block.text)
+        return hashlib.sha256(text.encode("utf-8")).hexdigest() if text else ""
 
     @property
     def stable_chars(self) -> int:
@@ -167,6 +287,10 @@ class SystemPromptBlocks:
             "dynamic_chars": self.dynamic_chars,
             "cache_control_boundary": self.cache_control_boundary,
             "cache_control_block_index": self.cache_control_block_index,
+            "instruction_block_count": len(self.instruction_blocks),
+            "evidence_block_count": len(self.evidence_system_blocks),
+            "instruction_hash": self.instruction_hash,
+            "evidence_hash": self.evidence_hash,
         }
 
 
@@ -273,6 +397,10 @@ class PreparedLLMRequest:
     stable_system_block_count: int = 0
     dynamic_system_block_count: int = 0
     cache_control_boundary: int = 0
+    instruction_system_block_count: int = 0
+    evidence_system_block_count: int = 0
+    instruction_hash: str = ""
+    evidence_hash: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
@@ -299,7 +427,8 @@ class PreparedLLMRequest:
             f"request_body_tokens={self.request_body_tokens}, "
             f"output_limit_tokens={self.output_limit_tokens}, "
             f"cache_mode={self.cache_mode!r}, "
-            f"cache_segments={len(self.cache_segments)})"
+            f"cache_segments={len(self.cache_segments)}, "
+            f"evidence_blocks={self.evidence_system_block_count})"
         )
 
 
@@ -396,6 +525,18 @@ def prepare_http_request(
         cache_control_boundary=(
             system_prompt_blocks.cache_control_boundary
             if system_prompt_blocks is not None else 0),
+        instruction_system_block_count=(
+            len(system_prompt_blocks.instruction_blocks)
+            if system_prompt_blocks is not None else 0),
+        evidence_system_block_count=(
+            len(system_prompt_blocks.evidence_system_blocks)
+            if system_prompt_blocks is not None else 0),
+        instruction_hash=(
+            system_prompt_blocks.instruction_hash
+            if system_prompt_blocks is not None else ""),
+        evidence_hash=(
+            system_prompt_blocks.evidence_hash
+            if system_prompt_blocks is not None else ""),
     )
 
 
@@ -425,6 +566,28 @@ def explicit_system_prompt_blocks(
         if isinstance(blocks, SystemPromptBlocks):
             return blocks
     return None
+
+
+def explicit_evidence_blocks(
+    messages: Sequence[Message],
+) -> Tuple[EvidenceBlock, ...]:
+    """Read the provider-neutral evidence channel carried beside legacy text."""
+    for message in messages:
+        if message.role != "system":
+            continue
+        blocks = (message.provider_meta or {}).get(EVIDENCE_BLOCKS_META_KEY)
+        if isinstance(blocks, (list, tuple)) and all(
+            isinstance(block, EvidenceBlock) for block in blocks
+        ):
+            return tuple(blocks)
+        system_blocks = (message.provider_meta or {}).get(
+            SYSTEM_PROMPT_BLOCKS_META_KEY)
+        if isinstance(system_blocks, SystemPromptBlocks):
+            return tuple(
+                EvidenceBlock.from_system_block(block)
+                for block in system_blocks.evidence_system_blocks
+            )
+    return ()
 
 
 def resolve_system_prompt_blocks(

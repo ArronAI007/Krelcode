@@ -36,6 +36,15 @@ diff。`ContextPlanSnapshot` 持久化该快照，所以 `/context plan|why|cach
 `cache_control: ephemeral`；OpenAI-compatible 在 wire 阶段按 stable → dynamic 合并为一个
 system message，但观测层仍保留原始 block 边界与 hash。该元数据不包含 Prompt 正文。
 
+同一层还显式保留 `instruction_blocks` 与 `evidence_blocks`。Evidence block 带
+`evidence_type/scope/origin/requires_validation` 和独立 `evidence_hash`，固定不可缓存且
+不能进入 stable prefix；instruction block 保留自己的 source/channel。为兼容现有
+OpenAI/DeepSeek、Anthropic 与 Gemini wire format，Evidence 文本暂时仍合并进 system
+message；system message 的 provider metadata 与 `PreparedLLMRequest` 会继续携带证据通道
+及两类 block 计数，后续 adapter 可在不修改 PromptAssembler 的情况下改用原生通道。
+Tool Result 仍留在 `messages` 中使用 provider 原生 tool 语义；`evidence_blocks` 只承载
+Memory/Web/MCP 等需要进入 system-bound context 的 Evidence。
+
 来源权威分为两组，互不混用：
 
 | 来源角色 | 允许来源 | 行为 |

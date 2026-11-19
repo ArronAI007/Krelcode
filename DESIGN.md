@@ -1054,7 +1054,23 @@ History、L11 Current User Request、L12 Per-turn Reminder。
 ## 显式 system cache boundary（Step 99）
 
 Provider 层不再把 system prompt 当作一个不透明字符串。`PromptAssembler` 先产出 provider-
-neutral 契约：
+neutral 契约。`ProviderMessages` 在兼容字段之上显式保留请求通道：
+
+```text
+ProviderMessages
+├─ instruction_blocks[]      # 行为约束，保留 source/channel
+├─ evidence_blocks[]         # Memory/Web/MCP 等待验证材料
+├─ messages[]                # user/assistant/tool 语义消息
+├─ tools[]
+├─ cache_boundary
+└─ system_blocks             # wire 兼容视图：stable + dynamic
+```
+
+当前尚未要求所有 Provider wire format 都支持独立 evidence role，因此 Evidence 文本仍会
+进入合并后的 system message；但 channel、evidence type、scope、validation 要求、独立
+hash 和 lineage 不再丢失。OpenAI/Anthropic/Gemini adapter 仍消费 `system_blocks`，
+不会因为该 contract 扩展而改变请求 body。Tool Result 仍保持 provider 原生 tool message
+语义，不搬进 `evidence_blocks`；该通道当前承载 Memory/Web/MCP 等 system-bound evidence。
 
 ```text
 SystemPromptBlocks
@@ -1074,6 +1090,11 @@ SystemPromptBlocks
 - `stable_hash` 只覆盖 stable block 文本，动态环境、Working Context、Memory 或 reminder
   变化不会使其改变；`dynamic_hash` 单独追踪动态尾部。hash、block 数量和 source/id 可进入
   `/context plan|cache`、TUI、JSONL、stream-json 与 SDK，但任何记录都不包含 block 正文。
+- `SystemPromptBlock.channel` 固定为 `instruction|evidence`；Evidence block 禁止
+  `cacheable`，也禁止进入 stable prefix。`ProviderMessages` 同时提供
+  `instruction_blocks/evidence_blocks`、独立 `instruction_hash/evidence_hash` 与无正文
+  `channel_record()`。`PreparedLLMRequest` 继续记录两类 block count/hash，便于 adapter
+  在不改变 wire 的情况下验证通道是否被正确保留。
 - 旧 Provider、旧 system message 或只有 `prompt_cache_boundaries` 的调用由
   `resolve_system_prompt_blocks()` 生成兼容视图：显式 block 优先，否则从 system 消息按固定
   顺序恢复 stable/dynamic 视图。生产请求仍只允许由 `PromptAssembler` 产生显式 block。
@@ -1674,6 +1695,13 @@ Memory 不再拥有独立的 authority 语义：
 
 Instruction 侧仍由 managed/user/project/agent-definition 分类器收口，Evidence 分类器对
 `data`/`untrusted` 输入返回无指令来源，避免两套 taxonomy 在后继 adapter 中漂移。
+
+`ProviderMessages` 现在显式保留 `instruction_blocks` 与 `evidence_blocks`。后者携带
+`evidence_type/scope/origin/requires_validation` 和不含正文的 provenance metadata；
+为兼容现有 HTTP payload，Evidence 暂时仍与动态 instruction 一起序列化到 system 文本，
+同时通过 `EvidenceBlock`、system-message provider metadata、`SystemPromptBlocks` hash 与
+`PreparedLLMRequest` 计数保留独立通道。后续 provider 若原生支持 evidence role，可在
+adapter 边界切换实现而不重写 PromptAssembler。
 
 SubagentManager 复用同一装配契约：`InstructionBundle` 先转换为带 L0-L4 来源层级的
 `PromptFragment[]`，L5 工具目录和 L6 Skill Catalog 继续由统一装配链补齐；筛选后的
