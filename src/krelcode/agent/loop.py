@@ -359,6 +359,15 @@ class AgentLoop:
                 refresh_registry_snapshot(self)
         self.sync_context_attachments()
         self.pending_context_refresh = False
+        # Refresh can replace the system shell/provider metadata.  Keep the
+        # restored ContextPlan tied to the authoritative live history instead
+        # of leaving a pre-refresh digest on the session.
+        current_plan = getattr(self, "last_context_plan", None)
+        if current_plan is not None:
+            self.last_context_plan = replace(
+                current_plan,
+                history_digest=history_digest(self.history),
+            )
         return bundle
 
     def sync_context_attachments(

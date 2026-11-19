@@ -72,7 +72,7 @@ krelcode               # 进入 REPL
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（沙箱内 1219 通过，2 个本地端口测试自动跳过）
+# 运行全部测试（沙箱内 1272 通过，2 个本地端口测试自动跳过）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -97,6 +97,41 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --mode
 #   model = "claude-sonnet-4-5"
 #   api_key_env = "ANTHROPIC_API_KEY"
 ```
+
+### Prompt / Context Benchmark（P2）
+
+P2 提供统一、离线、内容轻量的 Prompt Benchmark Harness，直接驱动生产组件，
+不维护第二套 Prompt 组装逻辑：
+
+```bash
+# 全部 9 个执行面（包含 Python SDK 子进程）
+PYTHONPATH=src python -m krelcode.benchmarks.prompt
+
+# 跳过 SDK；适合快速本地回归与没有子进程权限的 CI
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --no-sdk
+
+# 只跑一个场景，或输出机器可读报告
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --case compact --no-sdk
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --json > prompt-benchmark.json
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --list --json
+```
+
+覆盖 `main`、`headless`、`stream-json`、`sdk`、`subagent`、`resume`、
+`fork`、`rewind`、`compact` 九个执行面，并验收八项指标：
+
+1. 单文件任务不加载无关 git/tree/环境快照。
+2. Memory 只进入 L7 Evidence，不改变 Instruction hash。
+3. Managed → User → Project → Directory 规则覆盖顺序稳定。
+4. 子代理不继承父代理完整 history。
+5. 子代理 Memory 保持 Evidence 角色。
+6. 动态 Memory/附件不污染 stable cache prefix。
+7. Compact 的 checkpoint、结构化摘要和请求现场可恢复。
+8. 实际 Provider wire digest 与 Cache Ledger 一致（可用于精确比对的执行面）。
+
+报告只包含 Fragment ID/source/scope、token 数、hash、计数、checkpoint ID 和
+每个 check 的通过状态；不包含 Prompt、规则/Memory 正文、工具 Schema、
+history 或请求体正文。任一 case 失败不会隐藏其他 case，CLI 以非零退出码结束。
+Benchmark 不访问网络，也不要求 API key。
 
 REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`（当前工具池的 core/discoverable/deferred/loaded/excluded 状态）、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp [reload|auth <server>]`（状态、热重载、OAuth + PKCE 授权）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>|install|update|enable|disable|remove ...]`（插件生命周期）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/lsp`（语言服务器状态）、`/web`（网页工具安全配置）、`/output-style [list|show <name>|reload|off|<name>]`（声明式输出样式）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|fragments|enable|disable|toggle|reset|cache|ledger|refresh]`（请求 token 分项、来源归因、Fragment 启停、缓存边界与工作区重采）、`/memory [list [scope]|show|add <text> --scope|search|pin|unpin|forget|mode|review|migrate]`（分层记忆、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
 
