@@ -906,7 +906,7 @@ Fragment sources
 ├─ rules      → managed:rules              L0 · static
 │              user:rules                 L2 · session
 │              project:rules              L3 · session
-│              directory:rules            L3 · request-scoped
+│              directory:rules            L3 · request-selected · cacheable
 └─ definition → agent_definition:<name>   L4 · session
                          │
                          ▼
@@ -1143,7 +1143,8 @@ mode_permission_contract                   # L5，权威 mode/permission/tool/Sa
 - `environment_attachments()` 对每个非 rules section 计算 SHA-256；只有 changed/added/removed
   section 会更新 `environment_snapshot` 与 `environment_delta`。规则按
   `managed:rules/user:rules/project:rules` 独立登记，目录规则使用请求期
-  `directory:rules`；规则变化不会与 git/tree/date 等环境附件互相改写。
+  `directory:rules`；目录规则命中后进入 L3 cacheable 前缀，不会在 L3 形成断点并阻断后续
+  L4-L9 稳定块。规则内容变化会正常更新 stable hash，但不会与 git/tree/date 等环境附件互相改写。
 - catalog 只消费已经加载的 Manager/Supervisor 快照，不在 Prompt 装配时扫描磁盘或 MCP；
   catalog membership 变化与正文变化分别记录在无正文 metadata 中。
 - 所有附件均 `cacheable=False`。`PromptAssembler` 将每个附件映射为一个独立
@@ -1370,7 +1371,8 @@ RuleLoader
   展开后统一受 `rules_max_chars` 限制。所有失败转为不含正文的 `RuleIssue`。
 - `RuleBundle` 同时供 `ContextSection.metadata`、`/context refresh` 和诊断命令复用。
   `/context rules` 只展示优先级、路径、scope、字符数、导入关系与 issue，不输出规则正文。
-  `/context sources` 可看到动态 `directory:rules` layer 及其 token attribution。
+  `/context sources` 可看到按需加载的 `directory:rules` layer 及其 token attribution；
+  命中后它与 project rules 同处 L3 cacheable prefix，后续 L4-L9 稳定块不会被降级为动态块。
 
 ## 统一输入处理管线（Step 67）
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 from krelcode.agent.context_inspection import ContextInspectionService
 from krelcode.agent.fragments import (
@@ -93,13 +92,7 @@ def test_instruction_bundle_maps_policy_sources_to_fragments(tmp_path):
     assert l3[0].source == "project:rules"
     assert l3[1].id == "directory:rules"
     assert l3[1].source == "directory:rules"
-    assert all(
-        fragment.cacheable for fragment in fragments
-        if fragment.id != "directory:rules")
-    assert next(
-        fragment for fragment in fragments
-        if fragment.id == "directory:rules"
-    ).cacheable is False
+    assert all(fragment.cacheable for fragment in fragments)
     assert len({fragment.id for fragment in fragments}) == len(fragments)
 
 

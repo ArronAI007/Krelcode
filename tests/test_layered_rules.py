@@ -6,11 +6,22 @@ import asyncio
 from pathlib import Path
 
 from krelcode.agent.context import ContextOptions, build_workspace_context_bundle
+from krelcode.agent.context_assembler import ContextAssembler
 from krelcode.agent.context_source import (
     ContextRequest,
     DirectoryRulesContextSource,
 )
+from krelcode.agent.fragments import (
+    STABILITY_SESSION,
+    PromptFragmentRegistry,
+    agent_definition_fragment,
+    base_fragment,
+)
 from krelcode.agent.intent import TurnIntent
+from krelcode.agent.prompt_assembler import (
+    PromptAssembler,
+    PromptAssemblyRequest,
+)
 from krelcode.agent.rules import (
     RuleLimits,
     RuleLoader,
@@ -194,8 +205,50 @@ def test_directory_context_source_uses_current_turn_paths_only(tmp_path):
     assert len(layers) == 1
     assert "SRC_RULE" in layers[0].content
     assert "TESTS_RULE" not in layers[0].content
-    assert layers[0].cacheable is False
+    assert layers[0].cacheable is True
     assert source.last_bundle.entry_count == 1
+
+
+def test_directory_rules_join_l3_cacheable_prefix_before_l4(tmp_path):
+    home = _home(tmp_path)
+    ws = tmp_path / "repo"
+    (ws / "src").mkdir(parents=True)
+    (ws / "src" / "AGENTS.md").write_text(
+        "DIRECTORY_RULE", encoding="utf-8")
+    registry = PromptFragmentRegistry([
+        base_fragment(),
+        agent_definition_fragment("reviewer", "DEFINITION_RULE"),
+    ])
+    assembler = PromptAssembler(
+        ContextAssembler([
+            DirectoryRulesContextSource(RuleLoader(ws, home=home)),
+        ]),
+        registry_provider=lambda: registry,
+    )
+    snapshot = registry.snapshot()
+    plan = asyncio.run(assembler.assemble(PromptAssemblyRequest(
+        context_request=ContextRequest(
+            turn_id="directory-cache",
+            step=1,
+            history=(Message.user("fix src/main.py"),),
+            workspace_root=ws,
+            prompt_snapshot=snapshot,
+        ),
+        prompt_snapshot=snapshot,
+    )))
+
+    stable_ids = plan.cache.stable_fragments
+    assert "directory:rules" in stable_ids
+    assert "agent_definition:reviewer" in stable_ids
+    assert stable_ids.index("directory:rules") < stable_ids.index(
+        "agent_definition:reviewer")
+    directory = next(
+        fragment for fragment in plan.fragments
+        if fragment.id == "directory:rules")
+    assert directory.cacheable is True
+    assert directory.stability == STABILITY_SESSION
+    assert plan.system_text.index("DIRECTORY_RULE") < plan.system_text.index(
+        "DEFINITION_RULE")
 
 
 def test_extract_rule_targets_reads_intent_attachments_and_tool_arguments(tmp_path):

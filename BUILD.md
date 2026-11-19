@@ -65,7 +65,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | v0.74 | 请求级 Context 观测 | token 分项、预算、cache 边界与 hash 从真实 provider-bound 请求派生；精简快照贯通 UI/JSONL/stream-json/SDK，且不包含 Prompt 正文 |
 | v0.75 | Context assembly 边界 | 临时 system context 不再由 AgentLoop 手拼，统一经 ContextSource/ContextAssembler；分类/priority/注册顺序确定结果，单个可选来源失败只留下异常类型诊断，不让整轮请求失效 |
 | v0.76 | Memory 分层作用域 | 记忆从单文件项目笔记升级为 user/project/session 三作用域结构化记录；文件位置决定 scope，旧 JSONL 原位兼容，session 生命周期跟随 setup/fork/resume，注入预算优先更具体作用域 |
-| v0.77 | 规则分层与按需加载 | user/project 规则进入稳定前缀，目录规则只按当前轮目标路径加载，避免 monorepo 全树扫描；@import 从提示词拼接中独立为有来源、有预算、可诊断的安全解析器，拒绝逃逸/敏感文件/循环，并明确规则与 Memory 的职责边界 |
+| v0.77 | 规则分层与按需加载 | user/project 规则进入稳定前缀，目录规则只按当前轮目标路径加载，避免 monorepo 全树扫描；命中后的 `directory:rules` 进入 L3 cacheable prefix，不会因其 L3 位置阻断后续 L4-L9 稳定块。@import 从提示词拼接中独立为有来源、有预算、可诊断的安全解析器，拒绝逃逸/敏感文件/循环，并明确规则与 Memory 的职责边界 |
 | v0.78 | 真实请求装配与预算 | Snapshot 不再只看统一 Message：Provider 先构造可复用的 PreparedRequest，再从最终 wire body 提取字节/token/hash/缓存段；压缩同时使用完整输入与真实输出预留，超限只重新装配一次。旧 Provider 通过 estimated 回退保持兼容 |
 | v0.79 | Working Context 与 Tool Microcompact | 当前任务事实从长期 Memory 分离为 bounded/redacted session store；真实预算链路先做零 LLM 工具分级压缩，保护当前轮/错误/写编辑/计划，仍超限才摘要。工具结构化元数据可随会话恢复，微压缩事件贯通 UI/JSONL/stream-json |
 | v0.80 | Structured Compact v2 | compact 从自由摘要升级为严格 schema 的 goal/completed/decisions/files/tests/open issues/next steps/critical constraints；失败时 Working Context 降级、旧摘要合并、turn 边界与高低水位控制，pre-compact history、精确 Working Context 与文件 Hash 持久化后由 Rewind 恢复和失效校验。可观测元数据贯通 UI/JSONL/stream-json，避免历史和工具结果反复摘要 |

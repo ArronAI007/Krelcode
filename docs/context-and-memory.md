@@ -62,7 +62,9 @@ envelope 后伪造 system 标签。Memory 位于 `L7_MEMORY_EVIDENCE`、turn sta
 `managed:rules` → L0，`user:rules` → L2，`project:rules` 与请求期
 `directory:rules` → L3，`agent_definition:<name>` → L4。每个 Fragment 携带
 scope、优先级、入口/导入文件、issue 与覆盖关系；`/context rules` 展示生效顺序，
-`/context why <rule-id>` 展示最终生效来源与冲突策略。
+`/context why <rule-id>` 展示最终生效来源与冲突策略。目录规则按当前 turn 的目标路径
+选择，命中后与 project rules 一起进入 L3 cacheable prefix；目录规则内容变化会更新
+stable hash，但不会把后续 L4-L9 稳定块挤到动态尾部。
 
 子代理也走同一条 `InstructionBundle → PromptFragment[] → PromptAssembler` 路径；
 当前 turn 的工具目录映射到 L5，Skill Catalog 独立映射到 L6，筛选后的 inherited

@@ -636,7 +636,7 @@ _RULE_SPECS = {
         STABILITY_SESSION,
         TRUST_PROJECT,
         "project",
-        False,
+        True,
     ),
 }
 
