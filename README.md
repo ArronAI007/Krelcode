@@ -100,24 +100,28 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --mode
 
 ### Prompt / Context Benchmark（P2）
 
-P2 提供统一、离线、内容轻量的 Prompt Benchmark Harness，直接驱动生产组件，
-不维护第二套 Prompt 组装逻辑：
+Benchmark 分为两层：默认的离线结构基线用于 CI，`--live` 则使用真实模型、
+真实工具循环和真实文件系统验证行为。两层都直接复用生产 `AgentLoop` 与
+`PromptAssembler`，不维护第二套 Prompt 组装逻辑。
 
 ```bash
-# 全部 9 个执行面（包含 Python SDK 子进程）
+# 离线结构基线：9 个执行面，包含 Python SDK 子进程
 PYTHONPATH=src python -m krelcode.benchmarks.prompt
 
-# 跳过 SDK；适合快速本地回归与没有子进程权限的 CI
+# 快速本地回归（跳过 SDK）；该层不访问网络
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --no-sdk
-
-# 只跑一个场景，或输出机器可读报告
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --case compact --no-sdk
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --json > prompt-benchmark.json
-PYTHONPATH=src python -m krelcode.benchmarks.prompt --list --json
+
+# 真实模型行为 Benchmark：provider/model 来自现有分层配置
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --list
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --trials 3
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --case read-scope --json
+python -m krelcode.benchmarks.prompt --live --provider openai --model deepseek-chat --trials 3
 ```
 
-覆盖 `main`、`headless`、`stream-json`、`sdk`、`subagent`、`resume`、
-`fork`、`rewind`、`compact` 九个执行面，并验收八项指标：
+离线层覆盖 `main`、`headless`、`stream-json`、`sdk`、`subagent`、`resume`、
+`fork`、`rewind`、`compact` 九个执行面，并验收八项结构指标：
 
 1. 单文件任务不加载无关 git/tree/环境快照。
 2. Memory 只进入 L7 Evidence，不改变 Instruction hash。
@@ -128,10 +132,24 @@ PYTHONPATH=src python -m krelcode.benchmarks.prompt --list --json
 7. Compact 的 checkpoint、结构化摘要和请求现场可恢复。
 8. 实际 Provider wire digest 与 Cache Ledger 一致（可用于精确比对的执行面）。
 
-报告只包含 Fragment ID/source/scope、token 数、hash、计数、checkpoint ID 和
-每个 check 的通过状态；不包含 Prompt、规则/Memory 正文、工具 Schema、
-history 或请求体正文。任一 case 失败不会隐藏其他 case，CLI 以非零退出码结束。
-Benchmark 不访问网络，也不要求 API key。
+`--live` 的五个客观场景：
+
+1. `read-scope`：必须读取指定文件并报告真实值，同时不得扫描无关源码。
+2. `edit-verify`：必须实际修改文件、执行指定测试并取得退出码 0。
+3. `instruction-precedence`：Managed/User/Project/Directory 冲突时遵循最高权威。
+4. `evidence-injection`：抵抗 Memory/文件注入，以仓库事实为准且不修改保护文件。
+5. `compact-continuation`：结构化 compact 后仍保留文件、返回值和测试状态。
+
+每个 trial 使用独立临时 workspace 与临时 HOME，真实工具受 `SandboxPolicy` 和运行时
+Sandbox 约束；Provider 配置在进入隔离现场前解析，API key 不会复制进 workspace，
+也不会进入工具环境或报告。判定只使用文件 hash、工具轨迹、测试退出码、最终答案事实
+token 和 workspace diff，不使用第二个 LLM Judge。报告默认隐藏 Model 答案和工具参数；
+只有显式 `--include-content` 才包含它们。
+
+离线报告只包含 Fragment ID/source/scope、token 数、hash、计数、checkpoint ID 和
+每个 check 的通过状态。Live 报告还包含 pass@k、trial 稳定性、工具调用数、输入/
+输出 token、耗时、失败原因和 workspace diff 摘要。任一 case/trial 失败不会隐藏其他
+结果，CLI 以非零退出码结束。
 
 ### 生产级 Base Prompt 与模型 profile
 

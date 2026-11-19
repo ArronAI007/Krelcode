@@ -1498,7 +1498,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m krelcode.benchmarks.prompt",
         description=(
-            "Run the content-light Krelcode Prompt/Context benchmark suite."
+            "Run the offline Krelcode Prompt/Context suite or the --live behavior suite."
         ),
     )
     parser.add_argument("--case", action="append", default=[],
@@ -1511,7 +1511,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="跳过 SDK 子进程执行")
     parser.add_argument("--sdk-timeout", type=float, default=30.0,
                         help="SDK 子进程启动/关闭超时秒数")
+    from .behavior import add_cli_arguments, run_live_command
+
+    add_cli_arguments(parser)
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.live:
+        return run_live_command(args)
     if args.list:
         cases = [
             case for case in BENCHMARK_CASES

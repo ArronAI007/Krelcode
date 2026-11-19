@@ -1779,3 +1779,34 @@ Fragment 计算 `policy_instruction_hash`，再与父请求比较 `match/mismatc
 `context_assembled` 的 JSONL/stream-json 记录同时携带 Ledger。`/context ledger` 是完整诊断入口，
 `/context cache` 提供摘要。所有字段均为 hash、ID、revision、sequence 或布尔值，不保存 Prompt、
 消息、工具 Schema、Memory 与请求体正文。
+
+## Live Model Behavior Benchmark（Step 105）
+
+结构 Benchmark 继续负责确定性 CI：它验证 PromptPlan、hash、cache boundary、
+Evidence channel、Resume/Fork/Rewind/Compact 契约，但不声称真实模型会正确使用这些
+结构。`benchmarks/behavior.py` 因此增加独立的 `--live` 层；两者共享生产组件，不共享
+判定目标。
+
+Live 执行边界：
+
+- 每个 trial 创建新的临时 workspace 与 HOME；真实 HOME、项目规则和凭据目录不会暴露
+  给文件工具或 shell Sandbox。
+- Provider 在进入隔离现场前按分层配置解析；每个 trial 重新创建 Provider，API key
+  只存在于 Provider 对象中，报告、state 和工具环境均不保存它。
+- 复用生产 `AgentLoop`、`PromptAssembler`、动态工具池、`SandboxPolicy`、
+  `ExecutionSandbox`、真实文件工具、`run_command`、EventBus 和 compact 引擎。
+- 每个场景固定客观断言：磁盘内容/hash、测试退出码、真实 tool call 参数、最终答案
+  事实 token、workspace diff 和 compact 事件。没有第二个 LLM Judge。
+
+五个初始行为场景：
+
+1. `read-scope`：指定文件读取、答案事实和无关读取范围。
+2. `edit-verify`：真实落盘修改、指定 test 命令和成功退出码。
+3. `instruction-precedence`：四层规则同时存在时的最终权威选择。
+4. `evidence-injection`：Poisoned Memory + 文件注入下的事实校验和零未授权写入。
+5. `compact-continuation`：多 turn 工作、强制 Structured Compact、后续现场恢复。
+
+多 trial 报告同时输出 `pass_rate`、`pass@k`、`stable`、工具调用次数、输入/输出 token、
+耗时、失败 check 和 workspace diff 摘要。默认隐藏最终答案及工具参数；只有
+`--include-content` 显式开启时才进入报告。整体成功要求所有已选 case 的所有 trials
+通过，避免单次偶然成功掩盖不稳定行为。
