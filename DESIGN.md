@@ -1640,14 +1640,18 @@ Evidence sources
 ```
 
 `agent/evidence.py` 定义 `SourceRole`、`InstructionSource`、`EvidenceSource`、
-`EvidenceRecord` 与唯一 renderer。Evidence 使用
-`<evidence_set role="non-instruction">` envelope，逐项携带 source/scope/kind/origin/
-trust/requires-validation；所有正文和属性先做 HTML escape，因此工具输出或记忆正文不能
-闭合 envelope 并注入新的 system 标签。
+`EvidenceRecord` 与统一 renderer。Memory 使用人类可读且机器稳定的
+`[Evidence: Memory]` envelope，逐项携带 source/scope/confidence/requires-validation/
+instruction=false；Resume、子代理和 `memory_search` 复用同一格式。MCP/Web 等非 Memory
+Evidence 继续使用 `<evidence_set role="non-instruction">` envelope。所有正文和属性先做
+HTML escape，因此工具输出或记忆正文不能伪造 header、闭合 envelope 或注入新的 system
+标签。
 
 Memory 不再拥有独立的 authority 语义：
 
 - `MemoryContextSource` 将 `MemoryEntry` 映射为 `EvidenceSource.MEMORY`。
+- PromptAssembler 在唯一装配边界为 L0-L6 标注 `instruction_source`，为 L7 标注
+  `evidence_type` 与 `instruction=false`，不依赖 adapter 各自解释 trust。
 - PromptAssembler 固定映射到 L7 Evidence、turn stability、非 cacheable；Memory 变化只
   影响 `dynamic_hash`。
 - Resume 任务检索、子代理筛选记忆和 `memory_search` 复用同一契约。

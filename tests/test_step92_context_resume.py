@@ -288,8 +288,8 @@ def test_restore_retrieves_memory_with_attributed_context_source(tmp_path):
     assert "login tests use pytest" in "\n".join(loop.restored_memory_context)
     asyncio.run(loop.run("continue login task"))
     rendered_system = provider.calls[0][0].content or ""
-    assert '<evidence_set role="non-instruction"' in rendered_system
-    assert 'origin="restored_memory"' in rendered_system
+    assert "[Evidence: Memory]" in rendered_system
+    assert "origin: restored_memory" in rendered_system
     assert "login tests use pytest" in rendered_system
     assert "memory_retrieval" in loop.last_context_plan.sources
 

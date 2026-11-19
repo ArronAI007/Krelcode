@@ -40,6 +40,7 @@ from .context_source import (
     prompt_fragment_omission_reason,
     select_prompt_fragments,
 )
+from .evidence import EvidenceSource, SourceRole, instruction_source_for
 from .fragments import (
     GROUP_WORKSPACE,
     LAYER_L1_BASE_AGENT,
@@ -263,12 +264,16 @@ class PromptAssembler:
             request.per_turn_reminders,
         )
         fragments = _ordered_fragments(
-            (
-                *prompt_fragments,
-                *attachment_fragments,
-                *dynamic_fragments,
-                *conversation_fragments,
-            ))
+            tuple(
+                _annotate_fragment_authority(fragment)
+                for fragment in (
+                    *prompt_fragments,
+                    *attachment_fragments,
+                    *dynamic_fragments,
+                    *conversation_fragments,
+                )
+            )
+        )
 
         system_fragments = tuple(
             fragment for fragment in fragments
@@ -425,6 +430,65 @@ def _fragment_from_context_layer(layer: ContextLayer) -> PromptFragment:
         stability=stability,
         trust=trust,
     )
+
+
+_INSTRUCTION_LAYERS = frozenset(PROMPT_LAYERS[:7])
+
+
+def _annotate_fragment_authority(fragment: PromptFragment) -> PromptFragment:
+    """Attach explicit authority metadata at the single assembly boundary."""
+
+    metadata = dict(fragment.metadata)
+    if fragment.layer in _INSTRUCTION_LAYERS:
+        instruction_source = instruction_source_for(
+            fragment.trust,
+            source=fragment.source,
+            origin=str(metadata.get("origin", "")),
+        )
+        if instruction_source is not None:
+            metadata.update({
+                "source_role": SourceRole.INSTRUCTION.value,
+                "instruction_source": instruction_source.value,
+                "instruction": True,
+            })
+            return replace(fragment, metadata=metadata)
+    if fragment.layer == LAYER_L7_EVIDENCE:
+        evidence_source = _evidence_source_for(fragment, metadata)
+        metadata.update({
+            "source_role": SourceRole.EVIDENCE.value,
+            "evidence_type": evidence_source.value,
+            "instruction": False,
+            "requires_validation": True,
+        })
+        return replace(fragment, metadata=metadata)
+    return fragment
+
+
+def _evidence_source_for(
+    fragment: PromptFragment,
+    metadata: Mapping[str, object],
+) -> EvidenceSource:
+    explicit = str(metadata.get("evidence_type", "") or "").strip().lower()
+    if explicit:
+        try:
+            return EvidenceSource(explicit)
+        except ValueError:
+            pass
+    marker = " ".join((
+        fragment.id,
+        fragment.source,
+        str(metadata.get("evidence_origin", "") or ""),
+        str(metadata.get("origin", "") or ""),
+    )).lower()
+    if "memory" in marker:
+        return EvidenceSource.MEMORY
+    if "mcp" in marker:
+        return EvidenceSource.MCP
+    if "web" in marker:
+        return EvidenceSource.WEB
+    if "tool" in marker:
+        return EvidenceSource.TOOL_RESULT
+    return EvidenceSource.RETRIEVED_DOCUMENT
 
 
 def _context_layer_classification(

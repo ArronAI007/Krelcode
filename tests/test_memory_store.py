@@ -173,12 +173,12 @@ def test_scoped_context_prioritizes_specific_scopes_and_keeps_order(tmp_path):
     project_at = context.index("project-rule")
     session_at = context.index("session-rule")
     assert user_at < project_at < session_at
-    assert context.count("<evidence ") == 3
-    assert 'scope="user"' in context
-    assert 'scope="project"' in context
-    assert 'scope="session"' in context
-    assert 'role="non-instruction"' in context
-    assert "more specific scopes take precedence" in context
+    assert context.count("[Evidence: Memory]") == 3
+    assert "scope: user" in context
+    assert "scope: project" in context
+    assert "scope: session" in context
+    assert "requires_validation: true" in context
+    assert "instruction: false" in context
 
 
 def test_session_scope_flushes_to_bound_session_file(tmp_path):

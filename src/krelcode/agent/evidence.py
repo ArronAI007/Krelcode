@@ -84,6 +84,7 @@ class EvidenceRecord:
     scope: str = "session"
     kind: str = "evidence"
     trust: str = "untrusted"
+    confidence: float = 0.5
     requires_validation: bool = True
     origin: str = ""
     metadata: Mapping[str, object] = field(default_factory=dict)
@@ -105,12 +106,23 @@ class EvidenceRecord:
         if trust not in EVIDENCE_TRUST_LEVELS:
             raise ValueError(
                 f"evidence trust 必须是 {sorted(EVIDENCE_TRUST_LEVELS)}: {trust}")
+        try:
+            confidence = float(self.confidence)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("evidence confidence 必须是 0..1 数值") from exc
+        if not 0.0 <= confidence <= 1.0:
+            raise ValueError("evidence confidence 必须在 0..1 之间")
+        if source is EvidenceSource.MEMORY and not self.requires_validation:
+            raise ValueError("memory evidence 必须 requires_validation=true")
         object.__setattr__(self, "id", evidence_id)
         object.__setattr__(self, "source", source)
         object.__setattr__(self, "content", content)
         object.__setattr__(self, "scope", str(self.scope or "session"))
         object.__setattr__(self, "kind", str(self.kind or "evidence"))
         object.__setattr__(self, "trust", trust)
+        object.__setattr__(self, "confidence", confidence)
+        object.__setattr__(
+            self, "requires_validation", bool(self.requires_validation))
         object.__setattr__(
             self, "metadata", MappingProxyType(dict(self.metadata or {})))
 
@@ -129,6 +141,8 @@ def render_evidence_set(
     items = tuple(records)
     if not items:
         return ""
+    if all(item.source is EvidenceSource.MEMORY for item in items):
+        return render_memory_evidence_set(items, origin=origin)
     source_types = {item.source_value for item in items}
     trust_levels = {item.trust for item in items}
     source_type = next(iter(source_types)) if len(source_types) == 1 else "mixed"
@@ -167,6 +181,48 @@ def render_evidence_set(
     return "\n".join(lines)
 
 
+def render_memory_evidence_set(
+    records: Sequence[EvidenceRecord],
+    *,
+    origin: str = "",
+) -> str:
+    """Render memory using the stable, human-readable Evidence contract.
+
+    Memory is deliberately emitted as labelled data rather than an instruction
+    or a second system message. Metadata fields are flattened to one line so
+    untrusted values cannot forge additional evidence headers.
+    """
+
+    blocks: list[str] = []
+    for record in records:
+        if record.source is not EvidenceSource.MEMORY:
+            raise ValueError("render_memory_evidence_set 只接受 Memory evidence")
+        source = _one_line(record.origin or origin or "memory")
+        scope = _one_line(record.scope)
+        evidence_id = _one_line(record.id)
+        kind = _one_line(record.kind)
+        lines = [
+            "[Evidence: Memory]",
+            f"source: {source}",
+            f"scope: {scope}",
+            f"confidence: {record.confidence:.2f}",
+            "requires_validation: true",
+            "instruction: false",
+            f"id: {evidence_id}",
+            f"kind: {kind}",
+        ]
+        if origin:
+            lines.append(f"origin: {_one_line(origin)}")
+        if record.metadata.get("pinned") is not None:
+            lines.append(
+                "pinned: "
+                f"{str(bool(record.metadata.get('pinned'))).lower()}"
+            )
+        lines.extend(("", html.escape(record.content, quote=False)))
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
 def evidence_metadata(
     records: Sequence[EvidenceRecord],
     *,
@@ -185,6 +241,10 @@ def evidence_metadata(
         "evidence_ids": tuple(item.id for item in items),
         "evidence_count": len(items),
         "requires_validation": any(item.requires_validation for item in items),
+        "confidence_min": min(
+            (item.confidence for item in items), default=0.0),
+        "confidence_max": max(
+            (item.confidence for item in items), default=0.0),
         "instruction": False,
     }
     if origin:
@@ -208,6 +268,9 @@ def evidence_record_from_memory(
     kind = getattr(entry, "kind", "note")
     raw_metadata = getattr(entry, "metadata", {})
     entry_metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
+    raw_confidence = getattr(entry, "confidence", None)
+    if raw_confidence is None:
+        raw_confidence = entry_metadata.get("confidence", 0.5)
     tags = tuple(str(item) for item in getattr(entry, "tags", ()) or ())
     metadata = {
         "pinned": bool(getattr(entry, "pinned", False)),
@@ -223,6 +286,7 @@ def evidence_record_from_memory(
         scope=str(getattr(scope, "value", scope) or "project"),
         kind=str(getattr(kind, "value", kind) or "note"),
         trust="untrusted",
+        confidence=float(raw_confidence),
         requires_validation=True,
         origin=str(getattr(entry, "source", "") or "memory"),
         metadata=metadata,
@@ -242,6 +306,10 @@ def _attributes(values: Mapping[str, object]) -> str:
     return " ".join(rendered)
 
 
+def _one_line(value: object) -> str:
+    return " ".join(str(value or "").split())
+
+
 __all__ = [
     "EVIDENCE_TRUST_LEVELS",
     "EvidenceRecord",
@@ -252,4 +320,5 @@ __all__ = [
     "evidence_record_from_memory",
     "instruction_source_for",
     "render_evidence_set",
+    "render_memory_evidence_set",
 ]
