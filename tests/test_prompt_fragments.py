@@ -288,7 +288,7 @@ def test_context_refresh_updates_attachments_without_growing_stable_prefix(tmp_p
 
 
 def test_anthropic_uses_fragment_cache_boundary_for_system_blocks():
-    provider = AnthropicProvider(model="claude-x", api_key="k")
+    provider = AnthropicProvider(model="claude-x", api_key="k", cache_min_tokens=0)
     messages = [
         Message.system(
             "STABLE\n\nDYNAMIC",

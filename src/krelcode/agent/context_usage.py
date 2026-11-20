@@ -137,6 +137,9 @@ def build_context_usage_snapshot(
         source_count = 0
     prepared_segments = (
         prepared_request.cache_segments if prepared_request is not None else ())
+    breakpoint_plan = (
+        prepared_request.cache_breakpoint_plan
+        if prepared_request is not None else None)
     if prepared_request is not None:
         if prepared_request.stable_cache_chars:
             cache_boundary_chars = prepared_request.stable_cache_chars
@@ -145,9 +148,11 @@ def build_context_usage_snapshot(
         if prepared_request.dynamic_cache_hash:
             dynamic_hash = prepared_request.dynamic_cache_hash
         if stable_tokens == 0:
-            stable_tokens = sum(
-                segment.tokens for segment in prepared_segments
-                if segment.kind == "system")
+            stable_tokens = max(
+                (segment.tokens for segment in prepared_segments
+                 if segment.kind == "system"),
+                default=0,
+            )
     stable_tokens = min(stable_tokens, estimated)
     window = model_context_window
     if output_reserve_tokens is not None:
@@ -162,12 +167,18 @@ def build_context_usage_snapshot(
         (budget_tokens is None or estimated <= int(budget_tokens))
         and (window is None or estimated + reserve <= int(window))
     )
-    tool_cacheable_tokens = sum(
-        segment.tokens for segment in prepared_segments
-        if segment.kind == "tools")
-    message_cacheable_tokens = sum(
-        segment.tokens for segment in prepared_segments
-        if segment.kind == "messages")
+    tool_cacheable_tokens = max(
+        (segment.tokens for segment in prepared_segments
+         if segment.kind == "tools"),
+        default=0,
+    )
+    message_cacheable_tokens = max(
+        (segment.tokens for segment in prepared_segments
+         if segment.kind == "messages"),
+        default=0,
+    )
+    breakpoint_plan_record = (
+        breakpoint_plan.as_record() if breakpoint_plan is not None else {})
     return ContextUsageSnapshot(
         turn_id=turn_id,
         step=step,
@@ -238,6 +249,15 @@ def build_context_usage_snapshot(
             prepared_request.cache_negotiation.max_breakpoints
             if prepared_request is not None
             and prepared_request.cache_negotiation is not None else 0),
+        cache_breakpoint_count=(
+            breakpoint_plan.breakpoint_count
+            if breakpoint_plan is not None else 0),
+        cache_breakpoint_skipped_count=(
+            len(breakpoint_plan.skipped)
+            if breakpoint_plan is not None else 0),
+        cache_breakpoint_strategy=(
+            breakpoint_plan.strategy if breakpoint_plan is not None else ""),
+        cache_breakpoint_plan=breakpoint_plan_record,
         request_body_bytes=(
             prepared_request.body_bytes if prepared_request is not None else 0),
         request_body_tokens=(

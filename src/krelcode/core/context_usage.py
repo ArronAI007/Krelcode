@@ -21,14 +21,20 @@ class CacheSegmentSnapshot:
     chars: int = 0
     digest: str = ""
     cache_control: bool = False
+    id: str = ""
+    stability: str = ""
+    cumulative_tokens: int = 0
 
     def as_record(self) -> Dict[str, object]:
         return {
+            "id": self.id,
             "kind": self.kind,
             "tokens": self.tokens,
             "chars": self.chars,
             "digest": self.digest,
             "cache_control": self.cache_control,
+            "stability": self.stability,
+            "cumulative_tokens": self.cumulative_tokens,
         }
 
 
@@ -74,6 +80,10 @@ class ContextUsageSnapshot:
     cache_supported_modes: Tuple[str, ...] = ()
     cache_fallback: bool = False
     cache_max_breakpoints: int = 0
+    cache_breakpoint_count: int = 0
+    cache_breakpoint_skipped_count: int = 0
+    cache_breakpoint_strategy: str = ""
+    cache_breakpoint_plan: Mapping[str, object] = field(default_factory=dict)
     request_body_bytes: int = 0
     request_body_tokens: int = 0
     wire_overhead_tokens: int = 0
@@ -93,6 +103,9 @@ class ContextUsageSnapshot:
         object.__setattr__(self, "cache_segments", tuple(self.cache_segments))
         object.__setattr__(
             self, "cache_supported_modes", tuple(self.cache_supported_modes))
+        object.__setattr__(
+            self, "cache_breakpoint_plan",
+            MappingProxyType(dict(self.cache_breakpoint_plan)))
 
     @property
     def total_tokens(self) -> int:
@@ -157,6 +170,10 @@ class ContextUsageSnapshot:
             "cache_supported_modes": list(self.cache_supported_modes),
             "cache_fallback": self.cache_fallback,
             "cache_max_breakpoints": self.cache_max_breakpoints,
+            "cache_breakpoint_count": self.cache_breakpoint_count,
+            "cache_breakpoint_skipped_count": self.cache_breakpoint_skipped_count,
+            "cache_breakpoint_strategy": self.cache_breakpoint_strategy,
+            "cache_breakpoint_plan": dict(self.cache_breakpoint_plan),
             "request_body_bytes": self.request_body_bytes,
             "request_body_tokens": self.request_body_tokens,
             "wire_overhead_tokens": self.wire_overhead_tokens,

@@ -29,6 +29,7 @@ from ..core.context_usage import CacheSegmentSnapshot
 from ..core.messages import Message, ToolCall
 from ..core.tokens import estimate_text_tokens
 from .cache import CacheCapabilities, CacheNegotiation
+from .cache_planner import CacheBreakpointPlan
 
 # 规范化 finish_reason
 FINISH_STOP = "stop"
@@ -457,6 +458,7 @@ class PreparedLLMRequest:
     instruction_hash: str = ""
     evidence_hash: str = ""
     cache_negotiation: Optional[CacheNegotiation] = None
+    cache_breakpoint_plan: Optional[CacheBreakpointPlan] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
@@ -490,6 +492,7 @@ class PreparedLLMRequest:
             f"cache_mode={self.cache_mode!r}, "
             f"cache_requested={getattr(self.cache_negotiation, 'requested_mode', '')!r}, "
             f"cache_segments={len(self.cache_segments)}, "
+            f"cache_breakpoints={self.cache_breakpoint_plan.breakpoint_count if self.cache_breakpoint_plan else 0}, "
             f"evidence_blocks={self.evidence_block_count})"
         )
 
@@ -544,6 +547,7 @@ def prepare_http_request(
     system_prompt_blocks: Optional[SystemPromptBlocks] = None,
     evidence_channel: Optional[EvidenceChannel] = None,
     cache_negotiation: Optional[CacheNegotiation] = None,
+    cache_breakpoint_plan: Optional[CacheBreakpointPlan] = None,
 ) -> PreparedLLMRequest:
     """Convert a provider's built HTTP request into the public prepared contract."""
     body = request.get("body")
@@ -614,6 +618,7 @@ def prepare_http_request(
             evidence_channel.hash
             if evidence_channel is not None else ""),
         cache_negotiation=cache_negotiation,
+        cache_breakpoint_plan=cache_breakpoint_plan,
     )
 
 

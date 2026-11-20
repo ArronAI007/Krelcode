@@ -52,7 +52,7 @@ def _empty_sse_openai():
 def test_anthropic_prepared_snapshot_tracks_all_three_cache_segments_without_content():
     provider = AnthropicProvider(
         model="claude-x", api_key="sk-ant-secret", prompt_cache=True,
-        transport=FakeTransport(b""))
+        cache_min_tokens=0, transport=FakeTransport(b""))
     messages = [
         Message.system(
             "STABLE SENTINEL\n\nDYNAMIC SENTINEL",
@@ -83,15 +83,17 @@ def test_anthropic_prepared_snapshot_tracks_all_three_cache_segments_without_con
     assert snapshot.output_reserve_tokens == provider.max_tokens
     assert snapshot.output_limit_tokens == provider.max_tokens
     assert [segment.kind for segment in snapshot.cache_segments] == [
-        "system", "tools", "messages"]
-    assert snapshot.cache_segment_count == 3
-    assert snapshot.cache_control_segment_count == 3
+        "tools", "system", "messages", "messages"]
+    assert snapshot.cache_segment_count == 4
+    assert snapshot.cache_control_segment_count == 4
+    assert snapshot.cache_breakpoint_count == 4
+    assert snapshot.cache_breakpoint_strategy == "adaptive-prefix-v1"
     assert snapshot.tool_cacheable_tokens > 0
     assert snapshot.message_cacheable_tokens > 0
     stable = "STABLE SENTINEL"
     assert snapshot.stable_hash == hashlib.sha256(stable.encode()).hexdigest()
     assert snapshot.cache_boundary_chars == len(stable)
-    assert snapshot.cache_segments[0].digest == snapshot.stable_hash
+    assert snapshot.cache_segments[1].digest == snapshot.stable_hash
 
     record = json.dumps(snapshot.as_record(), ensure_ascii=False)
     assert "STABLE SENTINEL" not in record

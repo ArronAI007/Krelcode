@@ -5,12 +5,12 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（Step 107）
+## 1. 项目统计（Step 108）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 61,263 行（Python，**零第三方运行时依赖**） |
-| 测试 | 31,620 行 / 134 个测试文件 / 1,377 个通过用例 + 2 个本地端口集成 skip |
+| 源码 | 62,080 行（Python，**零第三方运行时依赖**） |
+| 测试 | 31,924 行 / 135 个测试文件 / 1,386 个通过用例 + 2 个本地端口集成 skip |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 16 + 只读 `memory_search`（装配 MemoryStore 时）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
@@ -20,13 +20,13 @@
 源码按层分布：
 
 ```
-agent 15450 · session 11708 · benchmarks 5614 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4320
-ui 3963 · llm 3134 · tools 3130 · safety 2861 · mcp 2679 · subagent 2342
-lsp 1295 · plugins 1105 · core 1006 · skills 957 · web 891 · jobs 582 · entrypoints 226
+agent 15489 · session 11715 · benchmarks 5703 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4320
+ui 3965 · llm 3797 · tools 3130 · safety 2861 · mcp 2679 · subagent 2342
+lsp 1295 · plugins 1105 · core 1023 · skills 957 · web 891 · jobs 582 · entrypoints 226
 ```
 
-core 只有 1006 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
-测试代码量约为源码的 52%，覆盖协议、安全边界与端到端行为。
+core 只有 1023 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
+测试代码量约为源码的 51%，覆盖协议、安全边界与端到端行为。
 
 ## 2. 关键架构决策时间线
 
@@ -86,6 +86,7 @@ core 只有 1006 行——内核保持极小、能力在边缘，正是当初对
 | v0.95 | Failure-trajectory Prompt tuning | 新增确定性失败轨迹归因器：从 failed checks、真实工具轨迹、Workflow、runtime error 和实际 active Fragment 映射到 core/tool_playbook/workflow/rule 来源，生成带风险、证据、受影响 case 与回归步骤的 Prompt 调优候选；`--tune/--tune-output` 输出内容轻量报告，固定 `auto_apply=false`，provider/runtime 故障不会伪造 Prompt 修复建议 |
 | v0.96 | Provider 缓存能力协商 | `ProviderCapabilities.cache` 声明 none/implicit/explicit、显式断点上限和缓存 usage 字段；统一的 `CacheCapabilities.negotiate()` 将 TOML `prompt_cache = auto/on/off/implicit/explicit` 与真实模型能力解析为 `CacheNegotiation`，再由 adapter 生成 wire。Anthropic 仅走 explicit，OpenAI/DeepSeek 与 Gemini 2.5+ 走 server-managed implicit；不支持的 explicit 请求会显式降级。requested/effective/reason/fallback/支持模式与最大断点贯通 PreparedRequest、ContextUsageSnapshot、`/context`、TUI、JSONL/stream-json/SDK；Gemini `cachedContentTokenCount` 同步归一为 `cache_read` |
 | v0.97 | Prompt Parity Contract 与 Benchmark v3 | 冻结 8 个 parity 维度、16 个真实行为 case、每 case 至少 3 trials 的发布门禁；新增 content-light `PromptParityBaseline`、原子保存/加载、hash/字段白名单校验与 fail-closed `--gate`。Live suite 新增最小编辑、权限拒绝、Plan gate、ToolSearch 延迟加载、MCP 注入、失败测试恢复、bounded refactor、Resume 现场刷新、Fork Memory 隔离与第二轮 cache hit 场景 |
+| v0.98 | 自适应 Cache Breakpoint Planner | Anthropic 不再固定写死三个断点。新增 content-light `CacheBreakpointCandidate/Plan/Planner`，在最终 wire 的 tools → stable system → messages 顺序上选择稳定锚点、移动 frontier 与均匀历史 checkpoint，严格服从 Provider 最大断点数；Sonnet/Opus 默认 1024、Haiku 2048 tokens 阈值，`cache_min_tokens` 可覆盖，低于阈值不写 `cache_control`。plan 的选中/跳过原因、token、stability 与 digest 贯通 PreparedRequest、ContextUsageSnapshot、`/context cache`、TUI、JSONL/stream-json/SDK |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -94,6 +95,7 @@ core 只有 1006 行——内核保持极小、能力在边缘，正是当初对
 | 消息/事件/错误类型 | `core/messages.py` `core/events.py` `core/errors.py` |
 | Provider 抽象与事件流契约 | `llm/base.py`（TextDelta/ThinkingDelta/StreamFinished） |
 | 显式 system block / cache boundary 契约 | `llm/base.py`（SystemPromptBlock/SystemPromptBlocks） |
+| 自适应 explicit cache 断点规划 | `llm/cache_planner.py`（adaptive-prefix-v1） |
 | SSE/传输桥 | `llm/transport.py`；MCP 侧 `mcp/sseparse.py` `mcp/http_connector.py` |
 | 各 wire format 翻译 | `llm/providers/{openai,anthropic,gemini}.py` |
 | 重试 | `llm/retry.py`（RetryingProvider 装饰器） |

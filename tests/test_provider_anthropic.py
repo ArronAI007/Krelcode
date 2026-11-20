@@ -169,7 +169,7 @@ async def _events(provider):
 
 def test_prompt_cache_default_enabled_and_breakpoints():
     """默认开启：tools 末尾 / system / 最后一条消息末尾共 3 个 ephemeral 断点。"""
-    provider = AnthropicProvider(model="claude-x", api_key="k")
+    provider = AnthropicProvider(model="claude-x", api_key="k", cache_min_tokens=0)
     assert provider.prompt_cache is True
     req = provider.build_request(
         [Message.system("S"), Message.user("hi")], TOOLS)
@@ -187,7 +187,7 @@ def test_prompt_cache_default_enabled_and_breakpoints():
 
 def test_prompt_cache_marks_last_block_of_tool_result_message():
     """最后一条是 tool 结果（blocks 列表）→ 断点打在最后一个 block 上。"""
-    provider = AnthropicProvider(model="claude-x", api_key="k")
+    provider = AnthropicProvider(model="claude-x", api_key="k", cache_min_tokens=0)
     history = [
         Message.user("几点"),
         Message.assistant(tool_calls=[ToolCall("t1", "get_time", {})]),

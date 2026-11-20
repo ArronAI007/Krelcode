@@ -293,10 +293,13 @@ persistent history
   `request_input + output_reserve <= model_window`。`output_reserve` 在 Provider 已知
   真实输出上限时使用该值；旧 Provider 才退化为 `window - context_budget`。
 - 缓存模式先由 Provider/model 能力与用户 `prompt_cache` 偏好协商，再从最终 wire payload
-  提取 segment。Anthropic 的 system 稳定 block、最后一个 tool schema、最后一条 message
-  block 均最多 3 个显式 `cache_control` 断点；OpenAI/DeepSeek 标记为 `implicit`
-  prefix-cache 机会；Gemini 2.5+ 标记为 server-managed `implicit`，旧模型为 `none`。
-  segment 只保存 kind/token/char/hash，不保存正文。
+  运行 `adaptive-prefix-v1` planner 并提取 segment。Anthropic 在 tools、stable system 与
+  messages 的最终前缀顺序中选择不超过 4 个显式 `cache_control` 断点：优先稳定
+  tools/system 锚点和当前消息 frontier，剩余槽位用于历史中段 checkpoint；低于模型最小
+  缓存长度时不写该断点；dynamic system 虽不可缓存，仍计入其后的消息前缀长度。
+  OpenAI/DeepSeek 标记为 `implicit` prefix-cache 机会；Gemini 2.5+
+  标记为 server-managed `implicit`，旧模型为 `none`。segment 只保存
+  kind/token/char/hash/stability/cumulative tokens，不保存正文。
 - 自动压缩最多执行“探测 → compact → 重新装配”一次。若历史太短或没有可压缩中段，快照
   会以 `input_fits=false` 明确暴露越限，而不是反复压缩或伪造成功。
 - `ContextUsageSnapshot` 新增 provider/wire fidelity/cache mode/body bytes/body tokens/
@@ -950,9 +953,10 @@ Step 101 后，`skills:index` 与 `workspace:git/tree` 不再写入 Registry；�
   attachment 承载，变化只改变请求 `dynamic_hash`，不会使 Registry 或规则缓存失效。
 - legacy snapshot 仍通过 `Message.provider_meta.prompt_cache_boundaries` 暴露字符
   offset；生产路径由 `ProviderMessages.system_blocks` 携带显式
-  `stable_system_blocks/dynamic_system_blocks`。Anthropic 原样保留 block 数组，只在最后
-  一个 stable block 上设置 `cache_control: ephemeral`；OpenAI/DeepSeek 等兼容端点按
-  stable → dynamic 固定顺序合并，但仍保留 block 计数、边界与双 hash 供观测。
+  `stable_system_blocks/dynamic_system_blocks`。Anthropic 原样保留 block 数组，由
+  `CacheBreakpointPlanner` 根据最终 wire、Provider 上限和模型最小阈值在 stable block 上
+  设置零到多个 `cache_control: ephemeral`；OpenAI/DeepSeek 等兼容端点按 stable → dynamic
+  固定顺序合并，但仍保留 block 计数、边界与双 hash 供观测。
 - App 启动、Skill 热重载、session restore 与 `/context refresh` 全部回到同一快照路径。
   workspace group/source 替换先完整校验再提交，避免冲突时留下半更新状态。
 - `/context` 展示 Fragment/source 汇总；`/context enable|disable|toggle` 修改后立即重建
@@ -1112,9 +1116,10 @@ SystemPromptBlocks
 └─ cache_control_boundary
 ```
 
-- Anthropic 保留 block 数组，不提前 join；每个 stable block 独立序列化，只有最后一个
-  stable block 获得 `cache_control: {"type": "ephemeral"}`。没有 stable block 时不生成显式
-  断点，所有 dynamic block 保持无 `cache_control`。
+- Anthropic 保留 block 数组，不提前 join；每个 stable block 独立序列化。显式
+  `cache_control: {"type": "ephemeral"}` 由 Step 108 planner 在最终 wire 上决定，可在
+  多个 stable system block、tools 与历史消息上形成不超过 Provider 上限的断点。没有
+  stable block、低于最小缓存长度或缓存关闭时，不生成显式断点；dynamic block 永不缓存。
 - OpenAI-compatible 按 stable → dynamic 固定顺序合并成一个 system message。合并只发生在
   adapter 的 wire 序列化阶段，`PreparedLLMRequest`、`ContextUsageSnapshot` 与
   `ContextPlanSnapshot` 仍记录原始 block 数、边界和 `stable_hash/dynamic_hash`。
@@ -1168,6 +1173,45 @@ Provider adapter
   原因、布尔值和计数，不包含 Prompt、工具 Schema、headers 或 API key。
 - Gemini usage 的 `cachedContentTokenCount` 与 OpenAI `cached_tokens` 一样归一为
   `cache_read`，并从 inclusive `input_tokens` 中扣除，保持跨 Provider 成本语义一致。
+
+## 自适应 Cache Breakpoint Planner（Step 108）
+
+固定三个断点的问题在于：短请求会浪费 Provider 限制，长会话又无法把断点放在真正有复用
+价值的历史区间。Step 108 将“能力协商”和“断点布局”拆开：
+
+```text
+final Anthropic wire payload
+  → CacheBreakpointCandidate[]
+      tools / stable system block / message
+      order + item/block index + cumulative tokens + digest
+  → CacheBreakpointPlanner(mode, max_breakpoints, minimum_cacheable_tokens)
+      ├─ moving frontier
+      ├─ stable system anchor
+      ├─ tools anchor
+      ├─ evenly spaced history checkpoints
+      └─ capacity + below-minimum skips
+  → CacheBreakpointPlan
+      selected breakpoints / skipped reasons / strategy / token coverage
+  → cache_control markers
+  → PreparedLLMRequest.cache_breakpoint_plan
+  → ContextUsageSnapshot / TUI / JSONL / stream-json / SDK
+```
+
+选择规则：
+
+1. 单槽位总是选择最终 wire frontier，因为它覆盖此前全部前缀。
+2. 多槽位先保留最新 stable system 与 tools 锚点；system 前缀天然包含更早的 tools。
+3. 再为历史消息选择均匀分布的 checkpoint，最后才使用更早 stable system 槽位。
+4. 所有候选按最终 wire 顺序稳定排序；相同请求得到完全相同的 plan。
+5. `max_breakpoints` 来自 `CacheNegotiation`，绝不写超 Provider 上限。
+6. Sonnet/Opus 默认最小 1024 tokens、Haiku 2048；`cache_min_tokens=0` 显式覆盖。
+7. 低于阈值、缓存关闭或 Provider 非 explicit 时 fail-closed，不生成 `cache_control`；
+   单个候选的累计前缀不足阈值时跳过该候选，不因更长尾部而保留无效断点。
+
+`CacheBreakpointPlan.as_record()` 只包含 strategy、reason、候选 ID、kind、索引、token、
+字符数、digest、stability、anchor/moving 标志和跳过原因，不包含 Prompt、工具 Schema、
+消息正文或凭据。实际发送后的 `CacheSegmentSnapshot` 也从最终 wire 反向解析，校验 plan
+与 wire 一致；TUI 与 `/context cache` 展示断点数量、累计 token、stability 和 hash。
 
 ## 增量 Context Attachment（Step 101）
 
@@ -1634,10 +1678,10 @@ runner 可在 cli 层增加独立动态导入项，而无需把对应实现拉�
 
 ## 成本感知（Step 30）
 
-- **Anthropic prompt caching**（adapter 内实现，其他层零感知）：`auto/true` 默认协商开启，
-  3 个 ephemeral 断点——tools 最后一个声明、system（block 化）、
-  最后一条消息的最后一个 content block（str content 自动转 block；
-  tool_result 合并消息只标末块）；`prompt_cache = false`（TOML）可关。
+- **Anthropic prompt caching**（adapter 内实现，其他层零感知）：`auto/true` 默认协商开启；
+  Step 108 起由 `adaptive-prefix-v1` planner 在 tools、stable system 与 messages 上选择
+  零到四个 ephemeral 断点（str content 自动转 block；tool_result 合并消息只标末块）；
+  `prompt_cache = false`（TOML）可关。
   缓存命中 input 按 ~10% 计价，长会话成本大幅下降；
   usage 新增规范化键 cache_read / cache_creation
 - **模型目录**（agent/pricing.py）：价目 + 上下文窗口双表，共享「精确→最长前缀」

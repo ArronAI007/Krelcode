@@ -42,6 +42,15 @@ from .cache import (
     CacheNegotiation,
     normalize_cache_preference,
 )
+from .cache_planner import (
+    CACHE_BREAKPOINT_PLANNER_VERSION,
+    CACHE_BREAKPOINT_STRATEGY,
+    CacheBreakpointCandidate,
+    CacheBreakpointPlan,
+    CacheBreakpointPlanner,
+    DEFAULT_CACHE_BREAKPOINT_PLANNER,
+    plan_cache_breakpoints,
+)
 from .providers.anthropic import AnthropicProvider
 from .providers.gemini import GeminiProvider
 from .providers.mock import MockProvider
@@ -56,6 +65,9 @@ __all__ = [
     "LLMEvent", "TextDelta", "StreamFinished", "ToolSpec",
     "SystemPromptBlock", "SystemPromptBlocks", "EvidenceBlock", "EvidenceChannel",
     "CacheCapabilities", "CacheNegotiation", "normalize_cache_preference",
+    "CacheBreakpointCandidate", "CacheBreakpointPlan", "CacheBreakpointPlanner",
+    "DEFAULT_CACHE_BREAKPOINT_PLANNER", "plan_cache_breakpoints",
+    "CACHE_BREAKPOINT_PLANNER_VERSION", "CACHE_BREAKPOINT_STRATEGY",
     "CACHE_MODE_NONE", "CACHE_MODE_IMPLICIT", "CACHE_MODE_EXPLICIT",
     "CACHE_PREFERENCE_AUTO", "CACHE_PREFERENCE_ON", "CACHE_PREFERENCE_OFF",
     "EVIDENCE_BLOCKS_META_KEY", "explicit_evidence_blocks",

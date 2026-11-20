@@ -109,6 +109,7 @@ prompt_cache = "auto"      # auto / on / off / implicit / explicit
 
 [providers.anthropic]
 prompt_cache = "auto"      # 能力允许时协商为 explicit cache_control
+cache_min_tokens = 1024    # 可选；覆盖模型默认最小缓存前缀
 
 [providers.gemini]
 prompt_cache = "auto"      # Gemini 2.5+ 协商为 server-managed implicit
@@ -116,8 +117,11 @@ prompt_cache = "auto"      # Gemini 2.5+ 协商为 server-managed implicit
 
 `true/false` 仍分别等价于 `on/off`。协商结果、降级原因、支持模式与最大断点写入
 `PreparedLLMRequest`/`ContextUsageSnapshot`，可用 `/context` 或 `/context cache` 查看。
-OpenAI-compatible/DeepSeek 的隐式缓存由服务端管理，`off` 只能阻止 Krelcode 依赖和报告该
-机会，不能强制服务端关闭缓存。
+Anthropic explicit cache 由 `adaptive-prefix-v1` planner 选择：优先保留 tools/system 稳定
+锚点与移动中的最新消息 frontier，剩余槽位用于历史中段 checkpoint；默认 Sonnet/Opus 最小
+1024 tokens、Haiku 2048 tokens，可通过 `cache_min_tokens` 覆盖；不足阈值的单个候选会
+被跳过。OpenAI-compatible/DeepSeek
+的隐式缓存由服务端管理，`off` 只能阻止 Krelcode 依赖和报告该机会，不能强制服务端关闭缓存。
 
 ### Prompt / Context Benchmark（P2）
 

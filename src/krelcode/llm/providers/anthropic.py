@@ -15,11 +15,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Tuple
 
+from ...core.context_usage import CacheSegmentSnapshot
 from ...core.errors import ConfigError, LLMHTTPError
+from ...core.tokens import estimate_text_tokens
 from ...core.messages import (
     INVALID_ARGUMENTS_KEY,
     ImageBlock,
@@ -37,12 +40,23 @@ from ..base import (
     FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, EvidenceChannel, LLMEvent,
     PreparedLLMRequest, ProviderCapabilities, StreamFinished, TextDelta, ThinkingDelta,
     ToolCallArgumentsDelta, ToolCallReady, ToolCallStartedDelta, ToolSpec,
-    SystemPromptBlocks, cache_segment, normalize_usage, prepare_http_request,
+    SystemPromptBlocks, normalize_usage, prepare_http_request,
     resolve_evidence_channel, resolve_system_prompt_blocks,
 )
 from ..cache import (
     CACHE_MODE_EXPLICIT, CacheCapabilities,
     normalize_cache_preference,
+)
+from ..cache_planner import (
+    CACHE_BREAKPOINT_KIND_MESSAGES,
+    CACHE_BREAKPOINT_KIND_SYSTEM,
+    CACHE_BREAKPOINT_KIND_TOOLS,
+    CACHE_BREAKPOINT_STABILITY_SESSION,
+    CACHE_BREAKPOINT_STABILITY_STATIC,
+    CACHE_BREAKPOINT_STABILITY_TURN,
+    CacheBreakpointCandidate,
+    CacheBreakpointPlan,
+    DEFAULT_CACHE_BREAKPOINT_PLANNER,
 )
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
@@ -155,27 +169,161 @@ def to_anthropic_request_messages(
     return system, wire
 
 
-def _anthropic_system_blocks(
-    blocks: SystemPromptBlocks,
-    *,
-    prompt_cache: bool,
-) -> List[Dict[str, Any]]:
-    """Preserve the explicit block array; only the stable boundary is cacheable."""
+def _anthropic_system_blocks(blocks: SystemPromptBlocks) -> List[Dict[str, Any]]:
+    """Preserve the explicit block array; planning adds cache markers later."""
     wire: List[Dict[str, Any]] = []
     for block in blocks.stable_system_blocks:
-        if not block.text:
-            continue
-        item: Dict[str, Any] = {"type": "text", "text": block.text}
-        wire.append(item)
-    if prompt_cache and wire:
-        wire[-1]["cache_control"] = {"type": "ephemeral"}
+        if block.text:
+            wire.append({"type": "text", "text": block.text})
     for block in blocks.dynamic_system_blocks:
         if block.text:
             wire.append({"type": "text", "text": block.text})
     return wire
 
 
-def _tool_result_block(block: Dict[str, Any]) -> Dict[str, Any]:
+def minimum_cacheable_tokens_for_model(model: str) -> int:
+    """Return the documented Anthropic minimum cacheable prefix for a model."""
+    normalized = str(model or "").strip().lower()
+    if "haiku" in normalized:
+        return 2048
+    return 1024
+
+
+def _wire_text(value: object) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _cache_breakpoint_candidates(
+    payload: Dict[str, Any],
+    *,
+    stable_system_block_count: int,
+) -> Tuple[CacheBreakpointCandidate, ...]:
+    """Translate one final Anthropic wire request into ordered prefix candidates."""
+    candidates: List[CacheBreakpointCandidate] = []
+    cumulative_tokens = 0
+    order = 0
+
+    def append_candidate(
+        *,
+        candidate_id: str,
+        kind: str,
+        item_index: int,
+        block_index: int,
+        text: str,
+        stability: str,
+        anchor: bool,
+        moving: bool,
+    ) -> None:
+        nonlocal cumulative_tokens, order
+        tokens = estimate_text_tokens(text) if text else 0
+        cumulative_tokens += tokens
+        candidates.append(CacheBreakpointCandidate(
+            id=candidate_id,
+            kind=kind,
+            order=order,
+            item_index=item_index,
+            block_index=block_index,
+            cumulative_tokens=cumulative_tokens,
+            incremental_tokens=tokens,
+            chars=len(text),
+            digest=hashlib.sha256(text.encode("utf-8")).hexdigest() if text else "",
+            stability=stability,
+            anchor=anchor,
+            moving=moving,
+        ))
+        order += 1
+
+    def accumulate_only(text: str) -> None:
+        nonlocal cumulative_tokens
+        cumulative_tokens += estimate_text_tokens(text) if text else 0
+
+    tools = payload.get("tools")
+    if isinstance(tools, list) and tools:
+        append_candidate(
+            candidate_id=f"tools:{len(tools) - 1}",
+            kind=CACHE_BREAKPOINT_KIND_TOOLS,
+            item_index=len(tools) - 1,
+            block_index=-1,
+            text=_wire_text(tools),
+            stability=CACHE_BREAKPOINT_STABILITY_STATIC,
+            anchor=True,
+            moving=False,
+        )
+
+    system = payload.get("system")
+    if isinstance(system, list):
+        stable_limit = max(0, min(int(stable_system_block_count), len(system)))
+        for index, block in enumerate(system[:stable_limit]):
+            append_candidate(
+                candidate_id=f"system:{index}",
+                kind=CACHE_BREAKPOINT_KIND_SYSTEM,
+                item_index=index,
+                block_index=index,
+                text=_wire_text(block),
+                stability=CACHE_BREAKPOINT_STABILITY_STATIC,
+                anchor=True,
+                moving=False,
+            )
+        # Dynamic system blocks are never cache anchors, but they still sit in
+        # the final wire prefix before messages. Include their tokens when
+        # calculating message checkpoint positions and the cache threshold.
+        for block in system[stable_limit:]:
+            accumulate_only(_wire_text(block))
+
+    messages = payload.get("messages")
+    if isinstance(messages, list):
+        last_index = len(messages) - 1
+        for index, message in enumerate(messages):
+            append_candidate(
+                candidate_id=f"messages:{index}",
+                kind=CACHE_BREAKPOINT_KIND_MESSAGES,
+                item_index=index,
+                block_index=-1,
+                text=_wire_text(message),
+                stability=(
+                    CACHE_BREAKPOINT_STABILITY_TURN
+                    if index == last_index
+                    else CACHE_BREAKPOINT_STABILITY_SESSION
+                ),
+                anchor=False,
+                moving=True,
+            )
+    return tuple(candidates)
+
+
+def _apply_cache_breakpoints(
+    payload: Dict[str, Any],
+    plan: CacheBreakpointPlan,
+) -> None:
+    tools = payload.get("tools")
+    system = payload.get("system")
+    messages = payload.get("messages")
+    for breakpoint in plan.breakpoints:
+        if breakpoint.kind == CACHE_BREAKPOINT_KIND_TOOLS:
+            if isinstance(tools, list) and 0 <= breakpoint.item_index < len(tools):
+                target = tools[breakpoint.item_index]
+                if isinstance(target, dict):
+                    target["cache_control"] = {"type": "ephemeral"}
+        elif breakpoint.kind == CACHE_BREAKPOINT_KIND_SYSTEM:
+            if isinstance(system, list) and 0 <= breakpoint.item_index < len(system):
+                target = system[breakpoint.item_index]
+                if isinstance(target, dict):
+                    target["cache_control"] = {"type": "ephemeral"}
+        elif breakpoint.kind == CACHE_BREAKPOINT_KIND_MESSAGES:
+            if (
+                isinstance(messages, list)
+                and 0 <= breakpoint.item_index < len(messages)
+                and isinstance(messages[breakpoint.item_index], dict)
+            ):
+                _mark_last_block_cacheable(messages[breakpoint.item_index])
+
+
+def _tool_result_block(block: object) -> Dict[str, Any]:
     if isinstance(block, TextBlock):
         return {"type": "text", "text": block.text}
     if isinstance(block, ImageBlock):
@@ -234,7 +382,8 @@ class AnthropicProvider:
         ),
     )
     # TOML [providers.anthropic] 中除标准字段外、构造函数额外接受的键
-    EXTRA_CONFIG_KEYS = ("max_tokens", "prompt_cache", "thinking_budget")
+    EXTRA_CONFIG_KEYS = (
+        "max_tokens", "prompt_cache", "cache_min_tokens", "thinking_budget")
 
     DEFAULT_BASE_URL = "https://api.anthropic.com"
     DEFAULT_MODEL = "claude-sonnet-4-5"
@@ -248,6 +397,7 @@ class AnthropicProvider:
         timeout: float = 120.0,
         max_tokens: Optional[int] = None,
         prompt_cache: object = True,
+        cache_min_tokens: Optional[int] = None,
         thinking_budget: Optional[int] = None,
         generation: Optional[Dict[str, Any]] = None,
         transport: Optional[Transport] = None,
@@ -263,6 +413,10 @@ class AnthropicProvider:
         self.cache_negotiation = self.capabilities.cache.negotiate(
             self.cache_preference)
         self.prompt_cache = self.cache_negotiation.uses_explicit_control
+        self.cache_min_tokens = (
+            minimum_cacheable_tokens_for_model(self.model)
+            if cache_min_tokens is None else max(0, int(cache_min_tokens))
+        )
         # 扩展思考预算（None=不启用）。启用时 Anthropic 要求
         # max_tokens > budget_tokens，build_request 会自动保证。
         self.thinking_budget = thinking_budget
@@ -300,18 +454,25 @@ class AnthropicProvider:
             payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
             if max_tokens <= budget:
                 payload["max_tokens"] = budget + 1024        # 必须大于思考预算
-        # prompt caching：3 个 ephemeral 断点（tools 末尾 / system / 最后一条消息末尾）。
-        # 缓存命中部分按 ~10% 计价，长会话显著省钱；不足最小缓存长度时服务端自动忽略，无害。
+        stable_system_wire_count = 0
         if system_blocks is not None:
-            payload["system"] = _anthropic_system_blocks(
-                system_blocks, prompt_cache=self.prompt_cache)
+            payload["system"] = _anthropic_system_blocks(system_blocks)
+            stable_system_wire_count = sum(
+                1 for block in system_blocks.stable_system_blocks if block.text)
         if tools:
-            tool_defs = tool_specs_to_anthropic(tools)
-            if self.prompt_cache and tool_defs:
-                tool_defs[-1]["cache_control"] = {"type": "ephemeral"}
-            payload["tools"] = tool_defs
-        if self.prompt_cache and wire_messages:
-            _mark_last_block_cacheable(wire_messages[-1])
+            payload["tools"] = tool_specs_to_anthropic(tools)
+
+        candidates = _cache_breakpoint_candidates(
+            payload,
+            stable_system_block_count=stable_system_wire_count,
+        )
+        cache_plan = DEFAULT_CACHE_BREAKPOINT_PLANNER.plan(
+            candidates,
+            mode=self.cache_negotiation.effective_mode,
+            max_breakpoints=self.cache_negotiation.max_breakpoints,
+            minimum_cacheable_tokens=self.cache_min_tokens,
+        )
+        _apply_cache_breakpoints(payload, cache_plan)
         return {
             "url": f"{self.base_url}/v1/messages",
             "headers": {
@@ -320,6 +481,7 @@ class AnthropicProvider:
                 "anthropic-version": ANTHROPIC_VERSION,
             },
             "body": json.dumps(payload).encode("utf-8"),
+            "cache_plan": cache_plan,
         }
 
     # -- LLMProvider 端口实现 ---------------------------------------------------
@@ -339,9 +501,14 @@ class AnthropicProvider:
             cache_all_without_boundary=self.prompt_cache,
         )
         evidence_channel = resolve_evidence_channel(messages, evidence)
-        segments, _, _ = _anthropic_cache_segments(payload)
-        stable_chars = blocks.stable_chars if blocks is not None else 0
-        stable_hash = blocks.stable_hash if blocks is not None else ""
+        segments, marker_chars, marker_hash = _anthropic_cache_segments(payload)
+        cache_plan = request.get("cache_plan")
+        if not isinstance(cache_plan, CacheBreakpointPlan):
+            cache_plan = None
+        stable_chars = marker_chars or (
+            blocks.stable_chars if blocks is not None else 0)
+        stable_hash = marker_hash or (
+            blocks.stable_hash if blocks is not None else "")
         return prepare_http_request(
             provider=self.name,
             model=self.model,
@@ -354,6 +521,7 @@ class AnthropicProvider:
             system_prompt_blocks=blocks,
             evidence_channel=evidence_channel,
             cache_negotiation=self.cache_negotiation,
+            cache_breakpoint_plan=cache_plan,
         )
 
     async def stream(
@@ -509,48 +677,91 @@ class AnthropicProvider:
 
 def _anthropic_cache_segments(
     payload: Dict[str, Any],
-) -> Tuple[List[Any], int, str]:
-    """Extract content-free cache attribution from the final system/tools/messages."""
-    segments: List[Any] = []
-    system = payload.get("system")
+) -> Tuple[List[CacheSegmentSnapshot], int, str]:
+    """Extract content-free attribution from every final wire breakpoint."""
+    segments: List[CacheSegmentSnapshot] = []
+    prefix_tokens = 0
     stable_chars = 0
     stable_hash = ""
+
+    tools = payload.get("tools")
+    if isinstance(tools, list):
+        for index, item in enumerate(tools):
+            text = _wire_text(item)
+            prefix_tokens += estimate_text_tokens(text)
+            if not isinstance(item, dict) or not item.get("cache_control"):
+                continue
+            segment_text = _wire_text(tools[:index + 1])
+            segments.append(CacheSegmentSnapshot(
+                id=f"tools:{index}",
+                kind="tools",
+                tokens=estimate_text_tokens(segment_text),
+                chars=len(segment_text),
+                digest=hashlib.sha256(
+                    segment_text.encode("utf-8")).hexdigest(),
+                cache_control=True,
+                stability=CACHE_BREAKPOINT_STABILITY_STATIC,
+                cumulative_tokens=prefix_tokens,
+            ))
+
+    system = payload.get("system")
     if isinstance(system, list):
-        stable_parts: List[str] = []
-        for block in system:
+        system_parts: List[str] = []
+        for index, block in enumerate(system):
+            text = _wire_text(block)
+            prefix_tokens += estimate_text_tokens(text)
             if not isinstance(block, dict):
                 continue
-            text = str(block.get("text") or "")
-            if text:
-                stable_parts.append(text)
+            block_text = str(block.get("text") or "")
+            if block_text:
+                system_parts.append(block_text)
             if not block.get("cache_control"):
                 continue
-            stable = "\n\n".join(stable_parts)
-            segment = cache_segment("system", stable, cache_control=True)
+            segment_text = "\n\n".join(system_parts)
+            segment = CacheSegmentSnapshot(
+                id=f"system:{index}",
+                kind="system",
+                tokens=estimate_text_tokens(segment_text),
+                chars=len(segment_text),
+                digest=hashlib.sha256(
+                    segment_text.encode("utf-8")).hexdigest(),
+                cache_control=True,
+                stability=CACHE_BREAKPOINT_STABILITY_STATIC,
+                cumulative_tokens=prefix_tokens,
+            )
             segments.append(segment)
             stable_chars = segment.chars
             stable_hash = segment.digest
-            break
-    tools = payload.get("tools")
-    if isinstance(tools, list) and tools:
-        last = tools[-1]
-        if isinstance(last, dict) and last.get("cache_control"):
-            segments.append(cache_segment(
-                "tools", json.dumps(tools, ensure_ascii=False),
-                cache_control=True))
+
     messages = payload.get("messages")
-    if isinstance(messages, list) and messages:
-        last_message = messages[-1]
-        content = last_message.get("content") if isinstance(last_message, dict) else None
-        marked = (
-            isinstance(content, list) and content
-            and isinstance(content[-1], dict)
-            and bool(content[-1].get("cache_control"))
-        )
-        if marked:
-            segments.append(cache_segment(
-                "messages", json.dumps(messages, ensure_ascii=False),
-                cache_control=True))
+    if isinstance(messages, list):
+        for index, message in enumerate(messages):
+            text = _wire_text(message)
+            prefix_tokens += estimate_text_tokens(text)
+            content = message.get("content") if isinstance(message, dict) else None
+            marked = (
+                isinstance(content, list) and content
+                and isinstance(content[-1], dict)
+                and bool(content[-1].get("cache_control"))
+            )
+            if not marked:
+                continue
+            segment_text = _wire_text(messages[:index + 1])
+            segments.append(CacheSegmentSnapshot(
+                id=f"messages:{index}",
+                kind="messages",
+                tokens=estimate_text_tokens(segment_text),
+                chars=len(segment_text),
+                digest=hashlib.sha256(
+                    segment_text.encode("utf-8")).hexdigest(),
+                cache_control=True,
+                stability=(
+                    CACHE_BREAKPOINT_STABILITY_TURN
+                    if index == len(messages) - 1
+                    else CACHE_BREAKPOINT_STABILITY_SESSION
+                ),
+                cumulative_tokens=prefix_tokens,
+            ))
     return segments, stable_chars, stable_hash
 
 

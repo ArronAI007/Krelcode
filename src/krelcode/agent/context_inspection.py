@@ -762,7 +762,25 @@ class ContextInspectionService:
             f" ({snapshot.cache_control_segment_count} explicit)",
             f"  cacheable tools {snapshot.tool_cacheable_tokens}"
             f" · messages {snapshot.message_cacheable_tokens}",
+            f"  breakpoint plan {snapshot.cache_breakpoint_count}"
+            f"/{snapshot.cache_max_breakpoints}"
+            f" · strategy {snapshot.cache_breakpoint_strategy or '(none)'}"
+            f" · skipped {snapshot.cache_breakpoint_skipped_count}"
+            f" · minimum "
+            f"{snapshot.cache_breakpoint_plan.get('minimum_cacheable_tokens', 0)}"
+            f" tokens",
         ])
+        raw_breakpoints = snapshot.cache_breakpoint_plan.get("breakpoints", ())
+        if isinstance(raw_breakpoints, (list, tuple)):
+            for breakpoint in raw_breakpoints:
+                if not isinstance(breakpoint, dict):
+                    continue
+                lines.append(
+                    f"  [breakpoint] {breakpoint.get('id', '?')}"
+                    f" · {breakpoint.get('stability', '?')}"
+                    f" · cumulative {breakpoint.get('cumulative_tokens', 0)} tokens"
+                    f" · +{breakpoint.get('incremental_tokens', 0)}"
+                    f" · {_short_hash(str(breakpoint.get('digest', '')))}")
         if previous is not None:
             lines.append(
                 f"  previous stable {_short_hash(previous.stable_hash)}"
@@ -771,6 +789,7 @@ class ContextInspectionService:
             lines.append(
                 f"  [{segment.kind}] {segment.tokens} tokens"
                 f" · {segment.chars} chars"
+                f" · {segment.stability or 'unknown'}"
                 f" · {'cache_control' if segment.cache_control else 'implicit'}"
                 f" · {_short_hash(segment.digest)}")
         if len(snapshot.cache_segments) > 30:

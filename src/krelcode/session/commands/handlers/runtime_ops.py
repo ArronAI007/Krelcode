@@ -1169,6 +1169,13 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             f"{', '.join(snapshot.cache_supported_modes) or '(unknown)'}"
             f" · max breakpoints {snapshot.cache_max_breakpoints}"
             f" · fallback {'yes' if snapshot.cache_fallback else 'no'}",
+            f"  breakpoint planner: {snapshot.cache_breakpoint_strategy or '未启用'}"
+            f" · selected {snapshot.cache_breakpoint_count}"
+            f"/{snapshot.cache_max_breakpoints}"
+            f" · skipped {snapshot.cache_breakpoint_skipped_count}"
+            f" · minimum "
+            f"{snapshot.cache_breakpoint_plan.get('minimum_cacheable_tokens', 0)}"
+            f" tokens",
             f"  stable hash: {snapshot.stable_hash or '(none)'}",
             f"  dynamic hash: {snapshot.dynamic_hash or '(none)'}",
             f"  evidence channel: {snapshot.evidence_block_count} blocks"

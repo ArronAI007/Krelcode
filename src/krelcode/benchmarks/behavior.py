@@ -914,7 +914,14 @@ def _seed_edit_verify(workspace: Path, _home: Path) -> tuple[MemorySeed, ...]:
     _write(workspace / "src" / "__init__.py", "")
     _write(workspace / "src" / "a.py",
            "def answer():\n    return 42\n")
-    _write(workspace / "tests" / "__init__.py", "")
+    # The recovery benchmark intentionally edits 42 -> 43 (same source size)
+    # immediately after the failing run. Disable timestamp pyc writes in the
+    # isolated workspace so the passing rerun cannot load stale bytecode when
+    # both runs land in the same filesystem timestamp tick.
+    _write(
+        workspace / "tests" / "__init__.py",
+        "import sys\n\nsys.dont_write_bytecode = True\n",
+    )
     _write(
         workspace / "tests" / "test_a.py",
         "import unittest\n\n"

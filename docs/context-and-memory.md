@@ -32,7 +32,8 @@ diff。`ContextPlanSnapshot` 持久化该快照，所以 `/context plan|why|cach
 
 `ProviderMessages` 同时携带显式 `SystemPromptBlocks`：连续可缓存的 Fragment 进入
 `stable_system_blocks`，其余进入 `dynamic_system_blocks`，并分别计算 `stable_hash` 与
-`dynamic_hash`。Anthropic 保留 block 数组且只在最后一个 stable block 设置
+`dynamic_hash`。Anthropic 保留 block 数组，并由自适应 cache breakpoint planner 在
+tools、stable system 与 messages 的最终 wire 前缀上选择不超过 Provider 上限的
 `cache_control: ephemeral`；OpenAI-compatible 在 wire 阶段按 stable → dynamic 合并为一个
 system message，但观测层仍保留原始 block 边界与 hash。该元数据不包含 Prompt 正文。
 
@@ -130,7 +131,7 @@ auto_threshold = 0.80
 - 输入 token、预算、使用率、模型窗口与输出预留；
 - `system/workspace/memory/history/runtime/tools/overhead` 分项；
 - stable/volatile token 与 cache boundary；
-- stable 与 dynamic system block 数、`cache_control` 边界；
+- stable 与 dynamic system block 数、`cache_control` 边界、断点计划数量与策略；
 - stable/dynamic/full hash，以及相对上一请求是否变化；
 - 贡献 token 最多的来源；
 - 实际注入的记忆条数、作用域和 token；
@@ -171,8 +172,11 @@ Fragment、layer、source 和 category 列表都有数量上限；超大 Context
 
 `sources` 查看 layer 顺序、来源 token、cache 属性、source issue 和 dropped item。
 `cache` 查看 stable/dynamic block 数、stable/dynamic/full hash、工具目录 hash、与上一请求
-相比的 hash/flag/token 差值、`cache_control` 字符边界、显式缓存段数量，以及各 segment 的
-token/字符/哈希。Anthropic 的断点位于最后一个 stable block；OpenAI-compatible 只合并 wire
+相比的 hash/flag/token 差值、`cache_control` 字符边界、断点策略/选中数与跳过数、显式缓存
+段数量，以及各 segment 的 token/字符/稳定性/累计 token/哈希。Anthropic 使用
+`adaptive-prefix-v1`：稳定 system/tools 作为锚点，最新消息作为移动 frontier，剩余槽位给
+历史中段 checkpoint；候选累计前缀低于模型最小缓存长度时跳过该断点，dynamic system 仍计入
+后续消息前缀。OpenAI-compatible 只合并 wire
 system message，不会丢失这组边界元数据。`/context cache` 从最近 `PromptPlan` 列出包含
 attachment 在内的 stable/volatile Fragment；`/context attachments` 则列出动态附件的 kind、
 revision、generation、layer 与 token，均不输出正文。
@@ -458,7 +462,7 @@ compact_checkpoint context_compressed context_microcompacted
 | Context 面板没有数据 | 先发起一次模型请求；没有真实请求时只显示历史估算 |
 | cache hash 每次变化 | `/context ledger` 看 machine-readable miss 原因；`/context cache` 查看 stable segment |
 | dynamic hash 每次变化但 stable hash 不变 | 属于正常动态尾部变化；检查 `/context cache` 的 block 数与边界，确认规则没有进入 dynamic block |
-| Anthropic 没有缓存命中 | 确认至少存在 stable block；只有一个 stable block 时 `cache_control` 必须落在该 block，没有 stable block 时不会生成显式断点 |
+| Anthropic 没有缓存命中 | `/context cache` 检查 `adaptive-prefix-v1` 的 selected/skipped、最小 token 阈值与断点位置；短于 Sonnet/Opus 1024 或 Haiku 2048 tokens 时不会生成显式断点 |
 | token 异常高 | `/context` 看分项，`/context sources` 看 layer，`/context why <id>` 看 attribution |
 | Memory 未注入 | `/memory list` 确认作用域，`/memory search` 检查检索，`/context` 看命中数；注入还受条数/字符预算限制 |
 | Auto Memory 不写入 | `auto` 模式仍要求达到阈值且无冲突；用 `/memory review` 检查 pending 原因 |

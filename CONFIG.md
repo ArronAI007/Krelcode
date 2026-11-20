@@ -251,7 +251,8 @@ generation = { temperature = 0.3 }   # 生成参数透传（三家通用）
 model = "claude-sonnet-4-5"
 api_key_env = "ANTHROPIC_API_KEY"
 max_tokens = 4096
-prompt_cache = "auto"                # 协商后使用 system/tools/messages 显式断点
+prompt_cache = "auto"                # 协商后使用自适应显式断点
+cache_min_tokens = 1024              # 可选；Sonnet/Opus 默认 1024，Haiku 默认 2048
 thinking_budget = 10000              # 扩展思考（≥1024；缺省不启用）
 
 [providers.gemini]
@@ -392,10 +393,18 @@ Provider/model 的 `CacheCapabilities`，再协商出实际 `effective_mode`：
   `cache_negotiation_reason=explicit_unsupported_fell_back_to_implicit`；
 - `implicit`：只接受 server-managed 缓存，不会意外给 Anthropic 增加显式断点。
 
+Anthropic 的 explicit 缓存使用 `adaptive-prefix-v1` planner，而不是固定写死三个断点。
+Planner 在最终 wire 顺序中按 tools → stable system → messages 计算候选前缀，优先选择最新
+system 与 tools 稳定锚点、当前消息 frontier，再用剩余槽位选择历史中段 checkpoint；始终
+遵守 Provider 的 `max_breakpoints`。默认最小缓存前缀为 Sonnet/Opus 1024 tokens、
+Haiku 2048 tokens；`cache_min_tokens` 可覆盖该值，设为 `0` 可用于离线测试或确知模型
+支持更短前缀的兼容端点。单个候选的累计前缀低于阈值时不会写入该候选的 `cache_control`，
+并记录 fail-closed reason。
+
 兼容旧配置：布尔值 `true` / `false` 分别等价于 `on` / `off`。非法值会在启动时以
-`ConfigError` 失败。实际 requested/effective mode、协商原因、fallback、支持模式和最大
-断点数可通过 `/context` 与 `/context cache` 查看，均由真实 `PreparedLLMRequest` 派生，
-不包含 Prompt、headers 或 API key。
+`ConfigError` 失败。实际 requested/effective mode、协商原因、fallback、支持模式、断点
+数量/位置/hash、跳过原因和最小 token 阈值可通过 `/context` 与 `/context cache` 查看，
+均由真实 `PreparedLLMRequest` 派生，不包含 Prompt、工具正文、headers 或 API key。
 
 `[prompt].profile = "auto"` 先按模型名做最长模式匹配（例如 `deepseek-*`、
 `claude-*`、`gpt-*`、`gemini-*`），再按 Provider family 匹配，最后回退到

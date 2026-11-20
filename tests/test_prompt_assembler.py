@@ -269,7 +269,7 @@ def test_provider_messages_feed_anthropic_cache_boundary(tmp_path):
         history=(Message.user("CURRENT"),),
     )
     provider_messages = assembler.provider_messages(plan)
-    provider = AnthropicProvider(model="claude-x", api_key="k")
+    provider = AnthropicProvider(model="claude-x", api_key="k", cache_min_tokens=0)
 
     payload = json.loads(
         provider.build_request(provider_messages.messages, None)["body"])
@@ -621,7 +621,7 @@ def test_anthropic_preserves_each_stable_system_block_and_boundary(tmp_path):
     assembler, plan = assemble(
         tmp_path, registry, history=(Message.user("CURRENT"),))
     provider_messages = assembler.provider_messages(plan)
-    provider = AnthropicProvider(model="claude-x", api_key="k")
+    provider = AnthropicProvider(model="claude-x", api_key="k", cache_min_tokens=0)
 
     request = provider.build_request(provider_messages.messages, None)
     payload = json.loads(request["body"])
@@ -632,7 +632,7 @@ def test_anthropic_preserves_each_stable_system_block_and_boundary(tmp_path):
         plan.stable_system_blocks[1].text,
         plan.dynamic_system_blocks[0].text,
     ]
-    assert "cache_control" not in payload["system"][0]
+    assert payload["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert payload["system"][1]["cache_control"] == {"type": "ephemeral"}
     assert "cache_control" not in payload["system"][2]
     assert prepared.stable_system_block_count == 2
