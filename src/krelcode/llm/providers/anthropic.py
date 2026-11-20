@@ -40,6 +40,10 @@ from ..base import (
     SystemPromptBlocks, cache_segment, normalize_usage, prepare_http_request,
     resolve_evidence_channel, resolve_system_prompt_blocks,
 )
+from ..cache import (
+    CACHE_MODE_EXPLICIT, CacheCapabilities,
+    normalize_cache_preference,
+)
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
 )
@@ -220,6 +224,14 @@ class AnthropicProvider:
         supports_tools=True,
         supports_streaming=True,
         supports_evidence_channel=True,
+        cache=CacheCapabilities(
+            modes=(CACHE_MODE_EXPLICIT,),
+            preferred_mode=CACHE_MODE_EXPLICIT,
+            max_breakpoints=4,
+            reports_cache_read=True,
+            reports_cache_creation=True,
+            supports_ttl=True,
+        ),
     )
     # TOML [providers.anthropic] 中除标准字段外、构造函数额外接受的键
     EXTRA_CONFIG_KEYS = ("max_tokens", "prompt_cache", "thinking_budget")
@@ -235,7 +247,7 @@ class AnthropicProvider:
         base_url: Optional[str] = None,
         timeout: float = 120.0,
         max_tokens: Optional[int] = None,
-        prompt_cache: bool = True,
+        prompt_cache: object = True,
         thinking_budget: Optional[int] = None,
         generation: Optional[Dict[str, Any]] = None,
         transport: Optional[Transport] = None,
@@ -247,7 +259,10 @@ class AnthropicProvider:
         ).rstrip("/")
         self.timeout = timeout
         self.max_tokens = max_tokens or self.DEFAULT_MAX_TOKENS
-        self.prompt_cache = prompt_cache
+        self.cache_preference = normalize_cache_preference(prompt_cache)
+        self.cache_negotiation = self.capabilities.cache.negotiate(
+            self.cache_preference)
+        self.prompt_cache = self.cache_negotiation.uses_explicit_control
         # 扩展思考预算（None=不启用）。启用时 Anthropic 要求
         # max_tokens > budget_tokens，build_request 会自动保证。
         self.thinking_budget = thinking_budget
@@ -338,6 +353,7 @@ class AnthropicProvider:
             stable_cache_hash=stable_hash,
             system_prompt_blocks=blocks,
             evidence_channel=evidence_channel,
+            cache_negotiation=self.cache_negotiation,
         )
 
     async def stream(
@@ -426,26 +442,26 @@ class AnthropicProvider:
                             slot["signature"] = delta.get("signature")
                     elif dtype == "input_json_delta":
                         wire_index = int(event.get("index", 0))
-                        index = tool_ordinals.get(wire_index)
-                        if index is None:
+                        tool_index = tool_ordinals.get(wire_index)
+                        if tool_index is None:
                             continue
-                        slot = tool_blocks.get(index)
+                        slot = tool_blocks.get(tool_index)
                         if slot is not None:
                             partial_json = delta.get("partial_json") or ""
                             if partial_json:
                                 slot["json"] += partial_json
                                 yield ToolCallArgumentsDelta(
-                                    index=index, partial_json=partial_json)
+                                    index=tool_index, partial_json=partial_json)
                 elif etype == "content_block_stop":
                     wire_index = int(event.get("index", 0))
-                    index = tool_ordinals.get(wire_index)
-                    if index is None:
+                    tool_index = tool_ordinals.get(wire_index)
+                    if tool_index is None:
                         continue
-                    slot = tool_blocks.get(index)
-                    if slot is not None and index not in ready_tools:
-                        ready_tools.add(index)
+                    slot = tool_blocks.get(tool_index)
+                    if slot is not None and tool_index not in ready_tools:
+                        ready_tools.add(tool_index)
                         yield ToolCallReady(
-                            index=index,
+                            index=tool_index,
                             tool_call=ToolCall(
                                 id=slot["id"],
                                 name=slot["name"],

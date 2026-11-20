@@ -113,7 +113,7 @@ def test_openai_and_gemini_snapshots_match_exact_wire_body():
                 model="gemini-2.5-flash", api_key="gem",
                 transport=FakeTransport(sse(
                     {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}))),
-            "none",
+            "implicit",
         ),
     ]
     messages = [

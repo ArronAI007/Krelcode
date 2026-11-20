@@ -1157,12 +1157,18 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             f" · tool schema {snapshot.tool_schema_tokens}"
             f" · overhead {snapshot.overhead_tokens}",
             f"  缓存: {snapshot.cache_mode}"
+            f" · requested {snapshot.cache_requested_mode or 'unknown'}"
+            f" · {snapshot.cache_negotiation_reason or 'unavailable'}"
             f" · stable blocks {snapshot.stable_system_block_count}"
             f" · dynamic blocks {snapshot.dynamic_system_block_count}"
             f" · stable {snapshot.stable_tokens}"
             f" · volatile {snapshot.volatile_tokens}"
             f" · boundary {snapshot.cache_boundary_chars} chars"
             f" · segments {snapshot.cache_segment_count}",
+            f"  cache capabilities: "
+            f"{', '.join(snapshot.cache_supported_modes) or '(unknown)'}"
+            f" · max breakpoints {snapshot.cache_max_breakpoints}"
+            f" · fallback {'yes' if snapshot.cache_fallback else 'no'}",
             f"  stable hash: {snapshot.stable_hash or '(none)'}",
             f"  dynamic hash: {snapshot.dynamic_hash or '(none)'}",
             f"  evidence channel: {snapshot.evidence_block_count} blocks"

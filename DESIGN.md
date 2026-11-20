@@ -235,7 +235,10 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   与 `EXTRA_CONFIG_KEYS`（构造函数额外接受的 TOML 键）声明自己，工厂 generic 组装
 - **装饰器透明性**：`RetryingProvider` 用 `__getattr__` 代理 inner 的 `api_key`/`base_url`
   等属性——否则脱敏层经包装链看不到真实 key，安全网会静默失效（Step 51 修复）
-- **能力协商**：`ProviderCapabilities.supports_tools` 为 False 时 AgentLoop 不传 tools
+- **能力协商**：`ProviderCapabilities.supports_tools` 为 False 时 AgentLoop 不传 tools；
+  `ProviderCapabilities.cache` 独立声明 none/implicit/explicit、显式断点上限和缓存 usage
+  字段。`CacheCapabilities.negotiate()` 把用户偏好解析为不可变 `CacheNegotiation`，adapter
+  只按 effective mode 生成 wire，不在不支持的端点上写 `cache_control`。
 - **可复用请求能力**（Step 88）：支持预算治理的 adapter 额外实现
   `prepare_request() -> PreparedLLMRequest` 与 `stream_prepared()`。前者一次性完成
   messages/tools → wire payload，后者只执行该不可变请求；URL/headers/body 不进入 repr
@@ -289,10 +292,11 @@ persistent history
 - 输入预算与模型窗口分开约束：`request_input <= context_budget`，且
   `request_input + output_reserve <= model_window`。`output_reserve` 在 Provider 已知
   真实输出上限时使用该值；旧 Provider 才退化为 `window - context_budget`。
-- Anthropic 的缓存段来自最终 wire payload：system 稳定 block、最后一个 tool schema、
-  最后一条 message block，均最多 3 个显式 `cache_control` 断点。OpenAI/DeepSeek 标记为
-  `implicit` prefix-cache 机会；Gemini 标记 `none`。segment 只保存 kind/token/char/hash，
-  不保存正文。
+- 缓存模式先由 Provider/model 能力与用户 `prompt_cache` 偏好协商，再从最终 wire payload
+  提取 segment。Anthropic 的 system 稳定 block、最后一个 tool schema、最后一条 message
+  block 均最多 3 个显式 `cache_control` 断点；OpenAI/DeepSeek 标记为 `implicit`
+  prefix-cache 机会；Gemini 2.5+ 标记为 server-managed `implicit`，旧模型为 `none`。
+  segment 只保存 kind/token/char/hash，不保存正文。
 - 自动压缩最多执行“探测 → compact → 重新装配”一次。若历史太短或没有可压缩中段，快照
   会以 `input_fits=false` 明确暴露越限，而不是反复压缩或伪造成功。
 - `ContextUsageSnapshot` 新增 provider/wire fidelity/cache mode/body bytes/body tokens/
@@ -1128,6 +1132,43 @@ SystemPromptBlocks
   `resolve_system_prompt_blocks()` 生成兼容视图：显式 block 优先，否则从 system 消息按固定
   顺序恢复 stable/dynamic 视图。生产请求仍只允许由 `PromptAssembler` 产生显式 block。
 
+## Provider 缓存能力协商（Step 106）
+
+缓存能力与用户意图分离，避免把某一家 provider 的请求字段写进共享 Agent 层：
+
+```text
+Provider adapter
+  └─ ProviderCapabilities.cache
+       ├─ modes = none / implicit / explicit
+       ├─ preferred_mode
+       ├─ max_breakpoints
+       └─ reports_cache_read / reports_cache_creation / supports_ttl
+                    +
+[providers.*].prompt_cache
+       auto | on | off | implicit | explicit
+                    ↓
+            CacheCapabilities.negotiate()
+                    ↓
+            CacheNegotiation
+              requested_mode / effective_mode / supported_modes
+              reason / fallback / max_breakpoints
+                    ↓
+            PreparedLLMRequest
+                    ↓
+      ContextUsageSnapshot / JSONL / stream-json / SDK
+```
+
+- `auto` / `on` 选择能力允许的最强模式；Anthropic 为 `explicit`，OpenAI-compatible/
+  DeepSeek 与 Gemini 2.5+ 为 server-managed `implicit`。
+- 请求 `explicit` 但只支持 implicit 时显式降级并标记
+  `explicit_unsupported_fell_back_to_implicit`；请求 `implicit` 不会反向启用显式控制。
+- `off` / `false` 阻止 Krelcode 生成显式控制并关闭本端缓存段观测；普通 OpenAI-compatible
+  API 无法强制服务端停止隐式前缀缓存，因此不会声称已经关闭服务端缓存。
+- adapter 的 build/wire path 只读取 `cache_negotiation.effective_mode`。观测字段只包含模式、
+  原因、布尔值和计数，不包含 Prompt、工具 Schema、headers 或 API key。
+- Gemini usage 的 `cachedContentTokenCount` 与 OpenAI `cached_tokens` 一样归一为
+  `cache_read`，并从 inclusive `input_tokens` 中扣除，保持跨 Provider 成本语义一致。
+
 ## 增量 Context Attachment（Step 101）
 
 动态上下文不再作为一个整体重建 system prompt。`ContextAttachmentStore` 为每个易变来源分配
@@ -1593,7 +1634,7 @@ runner 可在 cli 层增加独立动态导入项，而无需把对应实现拉�
 
 ## 成本感知（Step 30）
 
-- **Anthropic prompt caching**（adapter 内实现，其他层零感知）：默认开启，
+- **Anthropic prompt caching**（adapter 内实现，其他层零感知）：`auto/true` 默认协商开启，
   3 个 ephemeral 断点——tools 最后一个声明、system（block 化）、
   最后一条消息的最后一个 content block（str content 自动转 block；
   tool_result 合并消息只标末块）；`prompt_cache = false`（TOML）可关。
@@ -1605,6 +1646,8 @@ runner 可在 cli 层增加独立动态导入项，而无需把对应实现拉�
 - **OpenAI 缓存 usage 归一**：prompt_tokens_details.cached_tokens →
   cache_read，且从 input_tokens 扣除——统一为 Anthropic 语义（input 不含缓存），
   成本公式对两家一致且不双计；total_tokens 保留 provider 原值
+- **Gemini 缓存 usage 归一**：`cachedContentTokenCount` → `cache_read`，同样从
+  `input_tokens` 扣除；Gemini 2.5+ 默认只协商 server-managed implicit cache。
 - **价目表与成本估算**（agent/pricing.py）：内置主流型号 USD/1M 参考价
   （标注为估算，非计费依据）；匹配规则精确 → **最长前缀**
   （gpt-4o-mini-2024-07-18 → mini 价而非 gpt-4o 价）；未知模型返回 None，

@@ -5,12 +5,12 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（Step 94）
+## 1. 项目统计（Step 106）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 39,707 行（Python，**零第三方运行时依赖**） |
-| 测试 | 24,379 行 / 112 个测试文件 / 1,148 个用例（离线 1,146 + 本地端口集成 2） |
+| 源码 | 59,489 行（Python，**零第三方运行时依赖**） |
+| 测试 | 30,807 行 / 133 个测试文件 / 1,359 个通过用例 + 2 个本地端口集成 skip |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 16 + 只读 `memory_search`（装配 MemoryStore 时）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
@@ -84,6 +84,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | v0.93 | 任务类型 Workflow Fragment | 新增确定性 `TaskWorkflowClassifier + TaskWorkflowCatalog`：每轮从 general、bug-fix、feature、refactor、explanation、review、test-verification、repository-exploration 中选择一个 L9 Workflow。分类忽略附件正文与 fenced code，显式文件解释 Intent 优先；Workflow 作为 turn/managed instruction 注入，不改变稳定缓存前缀、不可 compact，并通过 PromptPlan provenance 暴露 task type/confidence/signals/version/content hash |
 | v0.94 | Live Model Behavior Benchmark v2 | `--live` 使用真实 Provider、生产 `AgentLoop`、隔离 HOME/workspace、真实工具与 Sandbox 执行六个客观行为场景；新增 `review-no-edit` Workflow 验收。每个 trial 有独立超时与 timeout/provider/sandbox/configuration/internal 错误分类，报告加入 stability/pass@k、工具/token/cache/成本、失败分布、Krelcode/Python/平台/Sandbox 配置和 suite hash，默认不保存答案与工具参数正文 |
 | v0.95 | Failure-trajectory Prompt tuning | 新增确定性失败轨迹归因器：从 failed checks、真实工具轨迹、Workflow、runtime error 和实际 active Fragment 映射到 core/tool_playbook/workflow/rule 来源，生成带风险、证据、受影响 case 与回归步骤的 Prompt 调优候选；`--tune/--tune-output` 输出内容轻量报告，固定 `auto_apply=false`，provider/runtime 故障不会伪造 Prompt 修复建议 |
+| v0.96 | Provider 缓存能力协商 | `ProviderCapabilities.cache` 声明 none/implicit/explicit、显式断点上限和缓存 usage 字段；统一的 `CacheCapabilities.negotiate()` 将 TOML `prompt_cache = auto/on/off/implicit/explicit` 与真实模型能力解析为 `CacheNegotiation`，再由 adapter 生成 wire。Anthropic 仅走 explicit，OpenAI/DeepSeek 与 Gemini 2.5+ 走 server-managed implicit；不支持的 explicit 请求会显式降级。requested/effective/reason/fallback/支持模式与最大断点贯通 PreparedRequest、ContextUsageSnapshot、`/context`、TUI、JSONL/stream-json/SDK；Gemini `cachedContentTokenCount` 同步归一为 `cache_read` |
 
 ## 3. 文件导览（能力 → 位置）
 

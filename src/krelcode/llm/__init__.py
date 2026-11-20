@@ -31,6 +31,17 @@ from .base import (
     stable_system_prefix,
     supports_keyword_argument,
 )
+from .cache import (
+    CACHE_MODE_EXPLICIT,
+    CACHE_MODE_IMPLICIT,
+    CACHE_MODE_NONE,
+    CACHE_PREFERENCE_AUTO,
+    CACHE_PREFERENCE_OFF,
+    CACHE_PREFERENCE_ON,
+    CacheCapabilities,
+    CacheNegotiation,
+    normalize_cache_preference,
+)
 from .providers.anthropic import AnthropicProvider
 from .providers.gemini import GeminiProvider
 from .providers.mock import MockProvider
@@ -44,6 +55,9 @@ __all__ = [
     "LLMProvider", "PreparedLLMProvider", "PreparedLLMRequest",
     "LLMEvent", "TextDelta", "StreamFinished", "ToolSpec",
     "SystemPromptBlock", "SystemPromptBlocks", "EvidenceBlock", "EvidenceChannel",
+    "CacheCapabilities", "CacheNegotiation", "normalize_cache_preference",
+    "CACHE_MODE_NONE", "CACHE_MODE_IMPLICIT", "CACHE_MODE_EXPLICIT",
+    "CACHE_PREFERENCE_AUTO", "CACHE_PREFERENCE_ON", "CACHE_PREFERENCE_OFF",
     "EVIDENCE_BLOCKS_META_KEY", "explicit_evidence_blocks",
     "explicit_evidence_channel", "resolve_evidence_channel",
     "ToolCallStartedDelta", "ToolCallArgumentsDelta", "ToolCallReady",

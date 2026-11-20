@@ -39,6 +39,9 @@ from ..base import (
     normalize_usage, prepare_http_request, resolve_evidence_channel,
     resolve_system_prompt_blocks,
 )
+from ..cache import (
+    CACHE_MODE_IMPLICIT, CacheCapabilities, normalize_cache_preference,
+)
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
 )
@@ -165,6 +168,19 @@ def tool_specs_to_gemini(tools: Sequence[ToolSpec]) -> List[Dict[str, Any]]:
 _FINISH_MAP = {"STOP": FINISH_STOP, "MAX_TOKENS": FINISH_LENGTH}
 
 
+def _cache_capabilities_for_model(model: str) -> CacheCapabilities:
+    name = model.strip().lower().rsplit("/", 1)[-1]
+    # Gemini 2.5+ enables implicit prefix caching server-side.  Older models
+    # require the separate cachedContents API, which this adapter does not use.
+    if name.startswith(("gemini-2.5", "gemini-3")):
+        return CacheCapabilities(
+            modes=(CACHE_MODE_IMPLICIT,),
+            preferred_mode=CACHE_MODE_IMPLICIT,
+            reports_cache_read=True,
+        )
+    return CacheCapabilities()
+
+
 # ---------------------------------------------------------------------------
 # Provider
 # ---------------------------------------------------------------------------
@@ -176,6 +192,7 @@ class GeminiProvider:
         supports_streaming=True,
         supports_evidence_channel=True,
     )
+    EXTRA_CONFIG_KEYS = ("prompt_cache",)
 
     DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com"
     DEFAULT_MODEL = "gemini-2.5-flash"
@@ -186,6 +203,7 @@ class GeminiProvider:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: float = 120.0,
+        prompt_cache: object = "auto",
         generation: Optional[Dict[str, Any]] = None,
         transport: Optional[Transport] = None,
     ) -> None:
@@ -197,6 +215,16 @@ class GeminiProvider:
             base_url or os.environ.get("GEMINI_BASE_URL") or self.DEFAULT_BASE_URL
         ).rstrip("/")
         self.timeout = timeout
+        self.capabilities = ProviderCapabilities(
+            supports_tools=True,
+            supports_streaming=True,
+            supports_evidence_channel=True,
+            cache=_cache_capabilities_for_model(self.model),
+        )
+        self.cache_preference = normalize_cache_preference(prompt_cache)
+        self.cache_negotiation = self.capabilities.cache.negotiate(
+            self.cache_preference)
+        self.prompt_cache = self.cache_negotiation.enabled
         self._transport: Transport = transport or UrllibTransport()
 
     # -- 请求构造（纯函数，可单测） ------------------------------------------------------
@@ -247,6 +275,9 @@ class GeminiProvider:
         generation = payload.get("generationConfig") or {}
         blocks = resolve_system_prompt_blocks(messages)
         evidence_channel = resolve_evidence_channel(messages, evidence)
+        segments = ()
+        if self.cache_negotiation.enabled:
+            segments = _gemini_cache_segments(payload, blocks=blocks)
         return prepare_http_request(
             provider=self.name,
             model=self.model,
@@ -254,9 +285,13 @@ class GeminiProvider:
             output_limit_tokens=int(
                 generation.get("maxOutputTokens")
                 or generation.get("max_output_tokens") or 0),
-            cache_mode="none",
+            cache_mode=(
+                self.cache_negotiation.effective_mode
+                if segments else "none"),
+            cache_segments=segments,
             system_prompt_blocks=blocks,
             evidence_channel=evidence_channel,
+            cache_negotiation=self.cache_negotiation,
         )
 
     async def stream(
@@ -298,6 +333,8 @@ class GeminiProvider:
                         "input_tokens": meta.get("promptTokenCount", 0),
                         "output_tokens": meta.get("candidatesTokenCount", 0),
                         "total_tokens": meta.get("totalTokenCount", 0),
+                        "cachedContentTokenCount": meta.get(
+                            "cachedContentTokenCount", 0),
                     })
                 for candidate in chunk.get("candidates") or []:
                     content = candidate.get("content") or {}
@@ -336,8 +373,8 @@ class GeminiProvider:
             if tool_calls:
                 normalized = FINISH_TOOLS       # Gemini 带调用时 finishReason 也是 STOP
             else:
-                normalized = _FINISH_MAP.get(finish_reason or "", 
-                                             (finish_reason or "").lower() or None)
+                raw_finish = finish_reason or ""
+                normalized = _FINISH_MAP.get(raw_finish, raw_finish.lower() or None)
             message = Message.assistant(
                 "".join(content_parts) or None,
                 tool_calls=tool_calls or None,
@@ -345,3 +382,29 @@ class GeminiProvider:
             yield StreamFinished(message=message, finish_reason=normalized, usage=usage)
         finally:
             resp.close()
+
+
+def _gemini_cache_segments(
+    payload: Dict[str, Any],
+    *,
+    blocks=None,
+):
+    """Describe Gemini's server-managed implicit prefix cache opportunity."""
+    from ..base import cache_segment
+
+    segments = []
+    stable = blocks.stable_text if blocks is not None else ""
+    if stable:
+        segments.append(cache_segment(
+            "system", stable, cache_control=False))
+    tools = payload.get("tools")
+    if isinstance(tools, list) and tools:
+        segments.append(cache_segment(
+            "tools", json.dumps(tools, ensure_ascii=False),
+            cache_control=False))
+    contents = payload.get("contents")
+    if isinstance(contents, list) and contents:
+        segments.append(cache_segment(
+            "messages", json.dumps(contents, ensure_ascii=False),
+            cache_control=False))
+    return tuple(segments)

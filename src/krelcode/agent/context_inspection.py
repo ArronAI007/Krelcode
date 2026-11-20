@@ -744,7 +744,13 @@ class ContextInspectionService:
             f" · dynamic blocks {snapshot.dynamic_system_block_count}"
             f" · stable {snapshot.stable_tokens}"
             f" · volatile {snapshot.volatile_tokens}"
-            f" · mode {snapshot.cache_mode}",
+            f" · mode {snapshot.cache_mode}"
+            f" ({snapshot.cache_requested_mode or 'unknown'}"
+            f" → {snapshot.cache_negotiation_reason or 'unavailable'})",
+            f"  capabilities: "
+            f"{', '.join(snapshot.cache_supported_modes) or '(unknown)'}"
+            f" · max breakpoints {snapshot.cache_max_breakpoints}"
+            f" · fallback {'yes' if snapshot.cache_fallback else 'no'}",
             f"  stable hash {_short_hash(snapshot.stable_hash)}"
             f" · dynamic hash {_short_hash(snapshot.dynamic_hash)}"
             f" · full hash {_short_hash(snapshot.full_hash)}",

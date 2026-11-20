@@ -28,6 +28,7 @@ from typing import (
 from ..core.context_usage import CacheSegmentSnapshot
 from ..core.messages import Message, ToolCall
 from ..core.tokens import estimate_text_tokens
+from .cache import CacheCapabilities, CacheNegotiation
 
 # 规范化 finish_reason
 FINISH_STOP = "stop"
@@ -416,6 +417,11 @@ class ProviderCapabilities:
     supports_tools: bool = True
     supports_streaming: bool = True
     supports_evidence_channel: bool = False
+    cache: CacheCapabilities = field(default_factory=CacheCapabilities)
+
+    @property
+    def supports_prompt_cache(self) -> bool:
+        return self.cache.supports_cache
 
 
 @dataclass(frozen=True)
@@ -450,6 +456,7 @@ class PreparedLLMRequest:
     evidence_anchor_message_index: int = -1
     instruction_hash: str = ""
     evidence_hash: str = ""
+    cache_negotiation: Optional[CacheNegotiation] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
@@ -481,6 +488,7 @@ class PreparedLLMRequest:
             f"request_body_tokens={self.request_body_tokens}, "
             f"output_limit_tokens={self.output_limit_tokens}, "
             f"cache_mode={self.cache_mode!r}, "
+            f"cache_requested={getattr(self.cache_negotiation, 'requested_mode', '')!r}, "
             f"cache_segments={len(self.cache_segments)}, "
             f"evidence_blocks={self.evidence_block_count})"
         )
@@ -527,7 +535,7 @@ def prepare_http_request(
     model: str,
     request: Mapping[str, Any],
     output_limit_tokens: int = 0,
-    cache_mode: str = "none",
+    cache_mode: Optional[str] = None,
     cache_segments: Sequence[CacheSegmentSnapshot] = (),
     stable_cache_chars: int = 0,
     stable_cache_hash: str = "",
@@ -535,6 +543,7 @@ def prepare_http_request(
     dynamic_cache_hash: str = "",
     system_prompt_blocks: Optional[SystemPromptBlocks] = None,
     evidence_channel: Optional[EvidenceChannel] = None,
+    cache_negotiation: Optional[CacheNegotiation] = None,
 ) -> PreparedLLMRequest:
     """Convert a provider's built HTTP request into the public prepared contract."""
     body = request.get("body")
@@ -552,6 +561,10 @@ def prepare_http_request(
         stable_cache_hash
         or (system_prompt_blocks.stable_hash
             if system_prompt_blocks is not None else ""))
+    if cache_mode is None:
+        cache_mode = (
+            cache_negotiation.effective_mode
+            if cache_negotiation is not None else "none")
     return PreparedLLMRequest(
         provider=provider,
         model=model,
@@ -600,6 +613,7 @@ def prepare_http_request(
         evidence_hash=(
             evidence_channel.hash
             if evidence_channel is not None else ""),
+        cache_negotiation=cache_negotiation,
     )
 
 
@@ -769,10 +783,17 @@ def normalize_usage(raw: Dict[str, Any]) -> Dict[str, int]:
     out: Dict[str, int] = {}
     details = raw.get("prompt_tokens_details")
     cached = details.get("cached_tokens") if isinstance(details, dict) else None
+    if cached is None:
+        cached = raw.get("cachedContentTokenCount")
 
     if "input_tokens" in raw or "prompt_tokens" in raw:
         value = raw.get("input_tokens", raw.get("prompt_tokens", 0)) or 0
-        if cached and "prompt_tokens" in raw:      # OpenAI：从 input 中扣除
+        if cached and (
+            "prompt_tokens" in raw or "cachedContentTokenCount" in raw
+        ):
+            # OpenAI and Gemini report prompt/cache totals inclusively while
+            # Krelcode normalizes ``input_tokens`` to Anthropic-style
+            # exclusive accounting.
             value = max(0, int(value) - int(cached))
         out[USAGE_INPUT] = value
     if "output_tokens" in raw or "completion_tokens" in raw:

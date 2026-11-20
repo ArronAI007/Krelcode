@@ -27,6 +27,9 @@ from ..base import (
     SystemPromptBlocks, cache_segment, normalize_usage, prepare_http_request,
     resolve_evidence_channel, resolve_system_prompt_blocks,
 )
+from ..cache import (
+    CACHE_MODE_IMPLICIT, CacheCapabilities, normalize_cache_preference,
+)
 from ..transport import (
     Transport, UrllibTransport, aread, asend, parse_json_event, sse_data_events,
 )
@@ -177,10 +180,16 @@ class OpenAIProvider:
         supports_tools=True,
         supports_streaming=True,
         supports_evidence_channel=True,
+        cache=CacheCapabilities(
+            modes=(CACHE_MODE_IMPLICIT,),
+            preferred_mode=CACHE_MODE_IMPLICIT,
+            reports_cache_read=True,
+        ),
     )
 
     DEFAULT_BASE_URL = "https://api.openai.com/v1"
     DEFAULT_MODEL = "gpt-4o-mini"
+    EXTRA_CONFIG_KEYS = ("prompt_cache",)
 
     def __init__(
         self,
@@ -188,6 +197,7 @@ class OpenAIProvider:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: float = 120.0,
+        prompt_cache: object = "auto",
         generation: Optional[Dict[str, Any]] = None,
         transport: Optional[Transport] = None,
     ) -> None:
@@ -198,6 +208,10 @@ class OpenAIProvider:
             base_url or os.environ.get("OPENAI_BASE_URL") or self.DEFAULT_BASE_URL
         ).rstrip("/")
         self.timeout = timeout
+        self.cache_preference = normalize_cache_preference(prompt_cache)
+        self.cache_negotiation = self.capabilities.cache.negotiate(
+            self.cache_preference)
+        self.prompt_cache = self.cache_negotiation.enabled
         self._transport: Transport = transport or UrllibTransport()
 
     # -- 请求构造（纯函数，可单测） ---------------------------------------------
@@ -245,8 +259,11 @@ class OpenAIProvider:
         payload = json.loads(request["body"].decode("utf-8"))
         blocks = resolve_system_prompt_blocks(messages)
         evidence_channel = resolve_evidence_channel(messages, evidence)
-        segments, stable_chars, stable_hash = _openai_cache_segments(
-            payload, blocks=blocks)
+        if self.cache_negotiation.enabled:
+            segments, stable_chars, stable_hash = _openai_cache_segments(
+                payload, blocks=blocks)
+        else:
+            segments, stable_chars, stable_hash = (), 0, ""
         return prepare_http_request(
             provider=self.name,
             model=self.model,
@@ -260,6 +277,7 @@ class OpenAIProvider:
             stable_cache_hash=stable_hash,
             system_prompt_blocks=blocks,
             evidence_channel=evidence_channel,
+            cache_negotiation=self.cache_negotiation,
         )
 
     async def stream(

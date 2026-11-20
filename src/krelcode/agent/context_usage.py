@@ -218,6 +218,26 @@ def build_context_usage_snapshot(
         cache_mode=(
             prepared_request.cache_mode
             if prepared_request is not None else "estimated"),
+        cache_requested_mode=(
+            prepared_request.cache_negotiation.requested_mode
+            if prepared_request is not None
+            and prepared_request.cache_negotiation is not None else ""),
+        cache_negotiation_reason=(
+            prepared_request.cache_negotiation.reason
+            if prepared_request is not None
+            and prepared_request.cache_negotiation is not None else ""),
+        cache_supported_modes=(
+            prepared_request.cache_negotiation.supported_modes
+            if prepared_request is not None
+            and prepared_request.cache_negotiation is not None else ()),
+        cache_fallback=(
+            prepared_request.cache_negotiation.fallback
+            if prepared_request is not None
+            and prepared_request.cache_negotiation is not None else False),
+        cache_max_breakpoints=(
+            prepared_request.cache_negotiation.max_breakpoints
+            if prepared_request is not None
+            and prepared_request.cache_negotiation is not None else 0),
         request_body_bytes=(
             prepared_request.body_bytes if prepared_request is not None else 0),
         request_body_tokens=(

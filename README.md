@@ -72,7 +72,7 @@ krelcode               # 进入 REPL
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（沙箱内 1284 通过，2 个本地端口测试自动跳过）
+# 运行全部测试（沙箱内 1359 通过，2 个本地端口测试自动跳过）
 # *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
@@ -97,6 +97,27 @@ PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --mode
 #   model = "claude-sonnet-4-5"
 #   api_key_env = "ANTHROPIC_API_KEY"
 ```
+
+### Provider 缓存能力协商
+
+缓存不由模型名或 adapter 直接猜死。Provider 声明 `none/implicit/explicit` 能力、最大显式
+断点和 usage 字段，配置只提供偏好：
+
+```toml
+[providers.openai]          # 也适用于 DeepSeek 等 OpenAI-compatible 端点
+prompt_cache = "auto"      # auto / on / off / implicit / explicit
+
+[providers.anthropic]
+prompt_cache = "auto"      # 能力允许时协商为 explicit cache_control
+
+[providers.gemini]
+prompt_cache = "auto"      # Gemini 2.5+ 协商为 server-managed implicit
+```
+
+`true/false` 仍分别等价于 `on/off`。协商结果、降级原因、支持模式与最大断点写入
+`PreparedLLMRequest`/`ContextUsageSnapshot`，可用 `/context` 或 `/context cache` 查看。
+OpenAI-compatible/DeepSeek 的隐式缓存由服务端管理，`off` 只能阻止 Krelcode 依赖和报告该
+机会，不能强制服务端关闭缓存。
 
 ### Prompt / Context Benchmark（P2）
 

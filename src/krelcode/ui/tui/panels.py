@@ -171,6 +171,8 @@ def build_panels(
                 f"/{snapshot.dynamic_system_block_count}"
                 f" · control {snapshot.cache_control_boundary} chars"
                 f" · {snapshot.cache_mode} {snapshot.cache_segment_count}"
+                f" · {snapshot.cache_requested_mode or 'unknown'}"
+                f"{' fallback' if snapshot.cache_fallback else ''}"
                 f" · hash {'changed' if state.context_cache_changed else 'same'}",
             ),
             PanelItem(

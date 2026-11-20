@@ -69,6 +69,11 @@ class ContextUsageSnapshot:
     provider: str = ""
     wire_fidelity: str = "estimated"
     cache_mode: str = "estimated"
+    cache_requested_mode: str = ""
+    cache_negotiation_reason: str = ""
+    cache_supported_modes: Tuple[str, ...] = ()
+    cache_fallback: bool = False
+    cache_max_breakpoints: int = 0
     request_body_bytes: int = 0
     request_body_tokens: int = 0
     wire_overhead_tokens: int = 0
@@ -86,6 +91,8 @@ class ContextUsageSnapshot:
         object.__setattr__(
             self, "source_tokens", MappingProxyType(dict(self.source_tokens)))
         object.__setattr__(self, "cache_segments", tuple(self.cache_segments))
+        object.__setattr__(
+            self, "cache_supported_modes", tuple(self.cache_supported_modes))
 
     @property
     def total_tokens(self) -> int:
@@ -145,6 +152,11 @@ class ContextUsageSnapshot:
             "provider": self.provider,
             "wire_fidelity": self.wire_fidelity,
             "cache_mode": self.cache_mode,
+            "cache_requested_mode": self.cache_requested_mode,
+            "cache_negotiation_reason": self.cache_negotiation_reason,
+            "cache_supported_modes": list(self.cache_supported_modes),
+            "cache_fallback": self.cache_fallback,
+            "cache_max_breakpoints": self.cache_max_breakpoints,
             "request_body_bytes": self.request_body_bytes,
             "request_body_tokens": self.request_body_tokens,
             "wire_overhead_tokens": self.wire_overhead_tokens,

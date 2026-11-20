@@ -21,6 +21,7 @@ CONFIG_TEMPLATE = '''# Krelcode 配置（默认按 user → project → local �
 # model = "gpt-4o-mini"
 # base_url = "https://api.openai.com/v1"   # 任意 OpenAI 兼容端点
 api_key_env = "OPENAI_API_KEY"
+# prompt_cache = "auto"                   # auto / on / off / implicit / explicit
 # generation = { temperature = 0.3 }       # 生成参数透传（top_p、max_tokens…）
 
 # ---- DeepSeek 示例（OpenAI 兼容端点）：取消注释并置顶 default_provider = "openai" ----
@@ -32,12 +33,13 @@ api_key_env = "OPENAI_API_KEY"
 [providers.anthropic]
 # model = "claude-sonnet-4-5"
 api_key_env = "ANTHROPIC_API_KEY"
-# prompt_cache = true      # 提示缓存（默认开）：长会话可省 ~90% 重复输入成本
+# prompt_cache = "auto"    # 能力协商为 explicit cache_control（true 等价 on）
 # thinking_budget = 10000  # 扩展思考预算（tokens，>=1024；缺省不启用）
 
 [providers.gemini]
 # model = "gemini-2.5-flash"
 api_key_env = "GEMINI_API_KEY"
+# prompt_cache = "auto"    # Gemini 2.5+ 协商为 server-managed implicit cache
 
 # ---- 运行时 Sandbox（命令 / Skill 脚本子进程）----
 # [sandbox]

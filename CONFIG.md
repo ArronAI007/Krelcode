@@ -244,18 +244,20 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-..."                   # 不建议明文；优先 api_key_env
 api_key_env = "OPENAI_API_KEY"
 timeout = 120
+prompt_cache = "auto"                # auto / on / off / implicit / explicit
 generation = { temperature = 0.3 }   # 生成参数透传（三家通用）
 
 [providers.anthropic]
 model = "claude-sonnet-4-5"
 api_key_env = "ANTHROPIC_API_KEY"
 max_tokens = 4096
-prompt_cache = true                  # system/tools/messages 三段 ephemeral 缓存（默认开）
+prompt_cache = "auto"                # 协商后使用 system/tools/messages 显式断点
 thinking_budget = 10000              # 扩展思考（≥1024；缺省不启用）
 
 [providers.gemini]
 model = "gemini-2.5-flash"
 api_key_env = "GEMINI_API_KEY"       # GOOGLE_API_KEY 兜底
+prompt_cache = "auto"                # 2.5+ 协商为 server-managed implicit cache
 
 [sandbox]
 backend = "auto"                     # auto / static / seatbelt / bubblewrap
@@ -377,7 +379,23 @@ Working Context 与 Hook runtime context 只作为 data-not-instructions 注入�
 请求实际使用的引擎。
 
 配置优先级：**显式 CLI 旗标 > TOML > 环境变量 > 内置默认**。
-未知键进 `extra` 透传（如 anthropic 的 prompt_cache/thinking_budget）。
+未知键进 `extra` 透传（如 anthropic 的 thinking_budget）。
+
+`prompt_cache` 是“用户偏好”，不是直接写死 provider wire 的开关。Krelcode 先读取当前
+Provider/model 的 `CacheCapabilities`，再协商出实际 `effective_mode`：
+
+- `auto` / `on`：选择该 Provider 支持的最强缓存模式；Anthropic 为 `explicit`，
+  OpenAI-compatible/DeepSeek 与 Gemini 2.5+ 为 server-managed `implicit`；
+- `off` / `false`：不生成显式缓存控制，也不把缓存段计入本端观测；服务端自身的隐式
+  前缀缓存无法通过普通 OpenAI-compatible API 强制关闭；
+- `explicit`：显式 `cache_control` 不受支持时可降级为 `implicit`，并记录
+  `cache_negotiation_reason=explicit_unsupported_fell_back_to_implicit`；
+- `implicit`：只接受 server-managed 缓存，不会意外给 Anthropic 增加显式断点。
+
+兼容旧配置：布尔值 `true` / `false` 分别等价于 `on` / `off`。非法值会在启动时以
+`ConfigError` 失败。实际 requested/effective mode、协商原因、fallback、支持模式和最大
+断点数可通过 `/context` 与 `/context cache` 查看，均由真实 `PreparedLLMRequest` 派生，
+不包含 Prompt、headers 或 API key。
 
 `[prompt].profile = "auto"` 先按模型名做最长模式匹配（例如 `deepseek-*`、
 `claude-*`、`gpt-*`、`gemini-*`），再按 Provider family 匹配，最后回退到
