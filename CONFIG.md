@@ -81,6 +81,7 @@ krelcode [子命令] [选项]
 | `/context` | 最近真实请求的 token 分项、预算、stable/volatile、memory 命中、dropped 来源、cache hash 变化、compact 水位与 checkpoint |
 | `/context plan` | 查看最近请求的逐 Fragment source/scope/token、stable/volatile 分布、cache boundary、stable/dynamic/full hash、工具目录 hash、裁剪原因、Memory 命中与上一请求 diff |
 | `/context why <id>` | 解释 Fragment/source/Memory entry/layer/token-source/omitted item 的归因、位置、哈希、cache/compact 属性与裁剪原因；不输出正文 |
+| `/context why tool_playbook:<id>` | 查看工具级 Playbook 的 L5/session/cache 属性、工具族、本轮 active tools、定义版本与内容 hash；不输出完整 Prompt 正文 |
 | `/context sources` | 查看已注册 ContextSource、最近装配 layer 顺序、来源 token、cache 属性、dropped item 与有界错误诊断 |
 | `/context rules` | 查看 user/project/directory 规则入口、@import 来源、字符数与越界/循环/敏感文件问题 |
 | `/context attachments` | 查看动态 Context Attachment 的 ID、kind、revision、generation、layer 与 token；不输出附件正文 |

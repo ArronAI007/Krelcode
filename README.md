@@ -241,6 +241,12 @@ transport = "sse"
 
 ToolSearch 只搜索已通过运行时过滤的候选集，不能加载被禁用、离线 MCP、当前 run mode 不支持或权限模式禁止的工具。新加载的工具从下一次模型请求开始进入 `tools`，同一 Step 不能执行；工具名、Provider schema、目录和搜索结果全部按名称稳定排序，注册顺序变化不会改变 Prompt Cache 前缀。`/tools` 会显示每个工具的 tier、loaded 状态和排除原因。
 
+### 工具级 Prompt Playbook
+
+具有 Playbook 的工具只有实际进入本轮 Provider `tools` 参数后，才会由独立 `ToolPlaybookCatalog` 注入对应的 L5 操作规则。Playbook 按工具族拆分（读取、仓库检索、编辑、命令验证、计划、ToolSearch、后台任务、子代理、LSP、Web、Memory），只渲染本轮真实可用的工具说明：被权限模式、运行模式、Intent、功能开关或 allowlist 过滤的工具不会泄漏其操作指令；discoverable/deferred 工具也只有在加载并进入下一次请求后才获得 Playbook。
+
+Playbook Fragment 使用 `tool_playbook:<id>` 来源、`managed` 信任级别和 session 稳定层，可进入缓存前缀但不可压缩、不可手动切换。其 token 计入 Context 预算，`/context plan|why|cache` 可查看 active tools、playbook content hash 和缓存归属。工具池或 Provider 能力变化会同时改变 Playbook 内容与工具目录 hash，避免提示词描述的能力和真实 Schema 不一致。
+
 ### P2：差异化能力
 
 - **LSP 客户端**：配置 `[lsp].enabled = true` 后，按扩展名懒启动语言服务器；提供

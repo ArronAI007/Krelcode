@@ -77,6 +77,10 @@ from .fragments import (
 )
 from .tokens import estimate_text_tokens
 from .prompt_plan import PromptOmissionSnapshot
+from .tool_playbooks import (
+    DEFAULT_TOOL_PLAYBOOK_CATALOG,
+    ToolPlaybookCatalog,
+)
 
 
 @dataclass(frozen=True)
@@ -267,10 +271,13 @@ class PromptAssembler:
         registry_provider: Optional[
             Callable[[], Optional[PromptFragmentRegistry]]
         ] = None,
+        tool_playbook_catalog: Optional[ToolPlaybookCatalog] = None,
     ) -> None:
         self.context_assembler = context_assembler or ContextAssembler(
             default_context_sources())
         self.registry_provider = registry_provider
+        self.tool_playbook_catalog = (
+            tool_playbook_catalog or DEFAULT_TOOL_PLAYBOOK_CATALOG)
         self.engine = str(
             getattr(self.context_assembler, "engine", "v3") or "v3")
 
@@ -285,6 +292,9 @@ class PromptAssembler:
             snapshot, context_request)
         prompt_omissions = _prompt_omission_details(
             snapshot, context_request, omitted)
+        playbook_fragments = self.tool_playbook_catalog.fragments_for_tools(
+            _advertised_tool_names(
+                request.tools, context_request.tool_pool))
         attachment_fragments, attachment_omissions = _select_attachment_fragments(
             request.attachments, context_request)
         if not scope_filter and any(
@@ -323,6 +333,7 @@ class PromptAssembler:
                 _annotate_fragment_authority(fragment)
                 for fragment in (
                     *prompt_fragments,
+                    *playbook_fragments,
                     *attachment_fragments,
                     *dynamic_fragments,
                     *conversation_fragments,
@@ -365,7 +376,10 @@ class PromptAssembler:
         )
         layers = _layer_plans(fragments)
         registry_and_attachment_fragments = (
-            *prompt_fragments, *attachment_fragments)
+            *prompt_fragments,
+            *playbook_fragments,
+            *attachment_fragments,
+        )
         contributions = _token_contributions(
             registry_and_attachment_fragments,
             dynamic_assembly.token_contributions,
@@ -712,6 +726,26 @@ def _current_user_message(history: Sequence[Message]) -> Optional[Message]:
     return None
 
 
+def _advertised_tool_names(
+    tools: Sequence[Mapping[str, object]],
+    tool_pool: object,
+) -> Tuple[str, ...]:
+    """Return tools whose schemas are actually visible in this model request."""
+    names = {
+        str(tool.get("name", "")).strip()
+        for tool in tools
+        if str(tool.get("name", "")).strip()
+    }
+    if names:
+        return tuple(sorted(names))
+    if tool_pool is None:
+        return ()
+    advertised_names = getattr(tool_pool, "advertised_names", None)
+    if callable(advertised_names):
+        return tuple(str(name) for name in advertised_names())
+    return ()
+
+
 def _conversation_fragments(
     history: Sequence[Message],
     current_user: Optional[Message],
@@ -914,6 +948,12 @@ _PROMPT_BLOCK_METADATA_KEYS = frozenset({
     "prompt_provider",
     "prompt_model",
     "base_prompt_hash",
+    "tool_playbook",
+    "tool_playbook_version",
+    "tool_playbook_hash",
+    "tool_playbook_content_hash",
+    "tool_playbook_tools",
+    "tool_playbook_active_tools",
     "mcp_server",
     "mcp_servers",
     "attachment_id",

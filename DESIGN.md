@@ -36,6 +36,7 @@ src/krelcode/
 │   ├── loop.py       # AgentLoop：单轮模型-工具循环
 │   ├── context.py    # Context v3 配置：分层工作区上下文与 token 预算
 │   ├── tool_pool.py  # TurnToolPool：每轮工具快照与动态目录
+│   ├── tool_playbooks.py # 工具级 L5 操作规则与 advertised tools 选择
 │   └── prompts.py    # 系统提示词组装
 ├── tools/       # 工具层（实现 Tool 端口）
 │   ├── base.py       # Tool 协议 + ToolResult + ToolContext
@@ -1218,6 +1219,9 @@ layer 正文。`ContextUsageSnapshot.source_count` 只统计实际贡献了非�
 Context v3 以 `PromptAssembler` 为唯一请求级装配入口，`ContextAssembler` 保留为来源收集与
 `ContextAssembly` 兼容归因层，同时把“来源”和“信任”拆开：
 
+- `ToolPlaybookCatalog` 只根据本轮 Provider 实际 advertised 的工具生成 L5 操作规则；
+  disable、权限/运行模式过滤、Intent 收窄和尚未加载的 deferred 工具不会获得 Playbook，
+  避免提示词能力与真实工具边界不一致。
 - `[context].engine` 默认 `v3`；`legacy`（别名 `v2`）只保留一个发布周期用于回退，
   未知值 fail-safe 回落 v3。engine 写入 `ContextAssembly`、`ContextPlanSnapshot` 和
   `ContextUsageSnapshot`，`/context` 与 stream-json 都可确认实际路径。
