@@ -7,6 +7,7 @@ __all__ = [
     "BEHAVIOR_CASES",
     "BENCHMARK_CASES",
     "PROMPT_BENCHMARK_SCHEMA_VERSION",
+    "PROMPT_TUNING_SCHEMA_VERSION",
     "BehaviorBenchmarkRunner",
     "BehaviorCase",
     "BehaviorCheck",
@@ -14,6 +15,9 @@ __all__ = [
     "BehaviorMetric",
     "BehaviorReport",
     "BehaviorTrialResult",
+    "FailureAttribution",
+    "FailureCause",
+    "FailureTrajectoryAnalyzer",
     "PromptBenchmarkCase",
     "PromptBenchmarkCheck",
     "PromptBenchmarkMetric",
@@ -21,6 +25,10 @@ __all__ = [
     "PromptBenchmarkReport",
     "PromptBenchmarkResult",
     "PromptBenchmarkRunner",
+    "PromptTuningCandidate",
+    "PromptTuningReport",
+    "TuningRisk",
+    "analyze_failure_trajectories",
     "main",
 ]
 
@@ -32,6 +40,13 @@ def __getattr__(name: str):
         from . import behavior
 
         return getattr(behavior, name)
+    if (
+        name.startswith(("Failure", "PromptTuning", "Tuning", "PROMPT_TUNING_"))
+        or name == "analyze_failure_trajectories"
+    ):
+        from . import tuning
+
+        return getattr(tuning, name)
     from . import prompt
 
     return getattr(prompt, name)

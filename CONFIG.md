@@ -71,6 +71,8 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `--live-max-steps` | `14` | 每个 Agent turn 的最大模型/工具步数 |
 | `--sandbox-backend` | `auto` | `auto/static/seatbelt/bubblewrap` |
 | `--include-content` | 关闭 | 在报告中包含最终答案与工具参数；默认仅输出计数、hash 和检查结果 |
+| `--tune` | 关闭 | 根据失败 trial 的工具轨迹与 checks 生成人工审核用 Prompt 调优候选 |
+| `--tune-output` | — | 将内容轻量的 tuning JSON 写入指定文件；不自动修改任何 Prompt |
 
 ## 2. REPL 命令
 

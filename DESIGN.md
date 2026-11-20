@@ -1825,3 +1825,24 @@ Live 执行边界：
 耗时、失败 check 和 workspace diff 摘要。默认隐藏最终答案及工具参数；只有
 `--include-content` 显式开启时才进入报告。整体成功要求所有已选 case 的所有 trials
 通过，避免单次偶然成功掩盖不稳定行为。
+
+### Failure-trajectory Prompt tuning（Step 106）
+
+`benchmarks/tuning.py` 把失败 trial 转成可审计的 Prompt 调优候选。输入只使用 objective
+check、真实工具名/路径/退出码、Workflow、稳定错误类型和实际装配的 Fragment ID；默认
+不使用最终答案正文，也不把工具输出直接复制进 tuning 报告。
+
+归因规则是确定性的，并映射到真正拥有该行为的 Prompt 来源：
+
+- `trajectory_scope` → `core:base:tool-discipline` 与当前 active 的读取/搜索 Playbook；
+- required tool / test verification → tool-discipline、verification 或 command-execution；
+- unsafe mutation → tool-discipline 与 workspace-edit；
+- Workflow mismatch → 期望的 `workflow:*` 定义和分类信号；
+- instruction authority / evidence injection → safety、规则来源或 memory Playbook；
+- compact handoff → operating-loop 与 completion。
+
+候选包含目标来源、建议指令、风险等级、受影响 case、轨迹证据和回归步骤。当前设计固定
+`auto_apply=false`：禁止 benchmark 因单次失败自动改写生产 Prompt。人工修改目标来源后，
+必须重跑失败 case、原先稳定 case 和完整 live suite，确认失败指标消失且没有 cache、
+安全、工具范围或既有行为回归。Provider/runtime 错误只做 error-kind 归因，不伪造
+Prompt 修复建议。

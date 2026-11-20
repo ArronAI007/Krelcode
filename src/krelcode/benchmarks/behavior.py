@@ -630,8 +630,21 @@ class BehaviorSession:
         if loop is None or loop.last_context_plan is None:
             return {}
         plan = loop.last_context_plan.prompt_plan
+        active_prompt_fragments = tuple(
+            fragment.id for fragment in plan.fragments
+            if fragment.id.startswith((
+                "core:base",
+                "tool_playbook:",
+                "workflow:",
+                "managed:rules",
+                "user:rules",
+                "project:rules",
+                "directory:rules",
+            ))
+        )
         return {
             "prompt_fragments": len(plan.fragments),
+            "active_prompt_fragments": active_prompt_fragments,
             "stable_tokens": plan.stable_tokens,
             "volatile_tokens": plan.volatile_tokens,
             "cache_boundary_chars": plan.cache_boundary_chars,
@@ -819,7 +832,7 @@ class BehaviorBenchmarkRunner:
                         trial=trial,
                         passed=bool(checks) and all(
                             check.passed for check in checks),
-                        checks=checks,
+                        checks=tuple(checks),
                         answer=session.redactor.redact(outcome.answer),
                         tools=session.observer.tools,
                         usage={
@@ -1538,6 +1551,12 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> None:
         "--include-content", action="store_true",
         help="在 live 报告中包含最终答案和工具参数（默认隐藏）")
     parser.add_argument(
+        "--tune", action="store_true",
+        help="根据失败轨迹生成需人工审核的 Prompt 调优候选")
+    parser.add_argument(
+        "--tune-output", default=None,
+        help="将 Prompt 调优候选 JSON 写入指定文件")
+    parser.add_argument(
         "--live-max-steps", type=int, default=14,
         help="每个 live 模型轮次允许的最大代理步数")
     parser.add_argument(
@@ -1626,13 +1645,42 @@ def run_live_command(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     include_content = bool(getattr(args, "include_content", False))
+    tuning_report = None
+    if getattr(args, "tune", False) or getattr(args, "tune_output", None):
+        from .tuning import analyze_failure_trajectories
+
+        tuning_report = analyze_failure_trajectories(report)
+    tune_output = getattr(args, "tune_output", None)
+    if tuning_report is not None and tune_output:
+        try:
+            output_path = Path(tune_output).expanduser()
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                json.dumps(
+                    tuning_report.as_dict(),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            print(f"无法写入 tuning report: {_safe_error(exc)}", file=sys.stderr)
+            return 2
+        if not getattr(args, "json", False):
+            print(f"Prompt tuning report: {output_path}")
     if getattr(args, "json", False):
-        print(json.dumps(
-            report.as_dict(include_content=include_content),
-            ensure_ascii=False, indent=2,
-        ))
+        payload: object = report.as_dict(include_content=include_content)
+        if tuning_report is not None and getattr(args, "tune", False):
+            payload = {
+                "benchmark": payload,
+                "tuning": tuning_report.as_dict(),
+            }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         print(_text_report(report, include_content=include_content))
+        if tuning_report is not None and getattr(args, "tune", False):
+            print()
+            print(tuning_report.render_text())
     return 0 if report.passed else 1
 
 

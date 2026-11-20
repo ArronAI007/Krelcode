@@ -118,6 +118,8 @@ PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --list
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --trials 3
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --case read-scope --json
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --trial-timeout 180
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --trials 3 --tune
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --tune-output tuning.json
 python -m krelcode.benchmarks.prompt --live --provider openai --model deepseek-chat --trials 3
 ```
 
@@ -154,6 +156,13 @@ token 和 workspace diff，不使用第二个 LLM Judge。报告默认隐藏 Mod
 输出 token、缓存、估算成本、耗时、稳定错误分类（timeout/provider/sandbox/
 configuration/internal）、Krelcode/Python 版本、Sandbox 配置与 suite hash。
 任一 case/trial 失败不会隐藏其他结果，CLI 以非零退出码结束。
+
+`--tune` 会读取失败 trial 的 objective check、真实工具轨迹、Workflow、错误类型和
+当前实际装配的 Fragment ID，生成按 `core:base:*`、`tool_playbook:*`、
+`workflow:*` 或规则来源归因的 Prompt 调优候选。候选包含建议指令、风险等级、
+受影响 case、证据和回归验证步骤；`--tune-output` 可将候选写入 JSON。
+调优器不会自动修改生产 Prompt，必须人工审核后修改对应来源并重跑相同场景与全量
+Benchmark，避免单次失败导致 Prompt 过拟合或权限/安全约束被意外削弱。
 
 ### 生产级 Base Prompt 与模型 profile
 
