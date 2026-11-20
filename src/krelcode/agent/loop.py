@@ -928,6 +928,7 @@ class AgentLoop:
         self,
         *,
         step: int,
+        prompt_specs: list,
         specs: list,
         tools,
     ):
@@ -964,7 +965,7 @@ class AgentLoop:
             PromptAssemblyRequest(
                 context_request=context_request,
                 prompt_snapshot=getattr(self, "prompt_snapshot", None),
-                tools=tuple(tools or ()),
+                tools=tuple(prompt_specs or ()),
                 attachments=attachment_snapshot.items,
             ))
         context_assembly = prompt_plan.context_assembly
@@ -981,7 +982,7 @@ class AgentLoop:
             turn_id=self._current_turn_id,
             step=step,
             history_digest=current_history_digest,
-            tools=tuple(tools or ()),
+            tools=tuple(prompt_specs or ()),
             dropped_items=_context_dropped_items(self),
             previous=previous_prompt_plan,
         )
@@ -996,7 +997,7 @@ class AgentLoop:
             prompt_plan=prompt_plan_snapshot,
         )
         provider_messages = self.prompt_assembler.provider_messages(
-            prompt_plan, tools=tools)
+            prompt_plan, tools=tuple(specs or ()))
         self.last_provider_messages = provider_messages
         messages = list(provider_messages.messages)
         prepared: Optional[PreparedLLMRequest] = None
@@ -1078,14 +1079,21 @@ class AgentLoop:
         # 能力协商：provider 声明不支持 tools 时不 advertise，避免 400。
         # 无 capabilities 属性的测试替身保持旧行为（照常传 tools）。
         capabilities = getattr(self.llm, "capabilities", None)
+        tool_pool = self._current_tool_pool()
         if capabilities is not None and not capabilities.supports_tools:
-            self._current_tool_pool().clear_advertised()
+            tool_pool.clear_advertised()
+            prompt_specs = []
             specs = []
         else:
-            specs = self._current_tool_pool().tool_specs()
+            prompt_specs = tool_pool.prompt_specs()
+            specs = tool_pool.tool_specs()
         tools = specs or None
         messages, context_assembly, prepared = await self._build_llm_request(
-            step=step, specs=specs, tools=tools)
+            step=step,
+            prompt_specs=prompt_specs,
+            specs=specs,
+            tools=tools,
+        )
         context_snapshot = self._request_snapshot(
             step=step, specs=specs, messages=messages,
             context_assembly=context_assembly, prepared=prepared)
@@ -1097,7 +1105,11 @@ class AgentLoop:
             micro_report = await self.microcompact_tools(trigger="auto")
             if micro_report.changed:
                 messages, context_assembly, prepared = await self._build_llm_request(
-                    step=step, specs=specs, tools=tools)
+                    step=step,
+                    prompt_specs=prompt_specs,
+                    specs=specs,
+                    tools=tools,
+                )
                 context_snapshot = self._request_snapshot(
                     step=step, specs=specs, messages=messages,
                     context_assembly=context_assembly, prepared=prepared)
@@ -1113,7 +1125,11 @@ class AgentLoop:
                 )
                 if changed:
                     messages, context_assembly, prepared = await self._build_llm_request(
-                        step=step, specs=specs, tools=tools)
+                        step=step,
+                        prompt_specs=prompt_specs,
+                        specs=specs,
+                        tools=tools,
+                    )
                     context_snapshot = self._request_snapshot(
                         step=step, specs=specs, messages=messages,
                         context_assembly=context_assembly, prepared=prepared)

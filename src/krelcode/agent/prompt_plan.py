@@ -13,6 +13,8 @@ import json
 from dataclasses import dataclass, field, replace
 from typing import Mapping, Optional, Sequence
 
+from ..tools.prompt import ToolPromptSpec
+
 
 _MEMORY_LAYER = "L7_MEMORY_EVIDENCE"
 _MEMORY_SOURCES = frozenset({
@@ -77,6 +79,20 @@ def tool_catalog_hash(tools: Sequence[object]) -> str:
     normalized = [_tool_payload(tool) for tool in tools]
     normalized.sort(key=lambda item: str(item.get("name", "")))
     return _hash(normalized)
+
+
+def _tool_prompt_spec_record(tool: object) -> Mapping[str, object]:
+    """Normalize one tool into a content-free ToolPromptSpec record."""
+    if isinstance(tool, ToolPromptSpec):
+        return tool.as_record()
+    if isinstance(tool, Mapping):
+        return ToolPromptSpec.from_mapping(tool).as_record()
+    as_record = getattr(tool, "as_record", None)
+    if callable(as_record):
+        value = as_record()
+        if isinstance(value, Mapping):
+            return dict(value)
+    return ToolPromptSpec.from_tool(tool).as_record()
 
 
 @dataclass(frozen=True)
@@ -317,6 +333,7 @@ class PromptPlanSnapshot:
     history_digest: str = ""
     tool_catalog_hash: str = ""
     tool_count: int = 0
+    tool_prompt_specs: tuple[Mapping[str, object], ...] = ()
     memory_hits: tuple[PromptMemoryHitSnapshot, ...] = ()
     diff: PromptPlanDiff = field(default_factory=PromptPlanDiff)
 
@@ -374,6 +391,8 @@ class PromptPlanSnapshot:
         all_omitted = _dedupe_omissions((*omitted, *budget_omissions))
         memory_hits = _memory_hits(runtime_fragments)
         tool_hash = tool_catalog_hash(tools)
+        tool_prompt_specs = tuple(
+            _tool_prompt_spec_record(tool) for tool in tools)
         stable_tokens = sum(
             fragment.tokens for fragment in fragments if fragment.stable)
         fragment_tokens = sum(fragment.tokens for fragment in fragments)
@@ -411,6 +430,7 @@ class PromptPlanSnapshot:
             history_digest=str(history_digest or ""),
             tool_catalog_hash=tool_hash,
             tool_count=len(tools),
+            tool_prompt_specs=tool_prompt_specs,
             memory_hits=memory_hits,
         )
         return _with_diff(snapshot, previous)
@@ -436,6 +456,8 @@ class PromptPlanSnapshot:
             "history_digest": self.history_digest,
             "tool_catalog_hash": self.tool_catalog_hash,
             "tool_count": self.tool_count,
+            "tool_prompt_specs": [
+                dict(item) for item in self.tool_prompt_specs],
             "memory_hits": [item.as_dict() for item in self.memory_hits],
             "diff": self.diff.as_dict(),
         }
@@ -477,6 +499,7 @@ class PromptPlanSnapshot:
             history_digest=_text(raw.get("history_digest"), 128),
             tool_catalog_hash=_text(raw.get("tool_catalog_hash"), 128),
             tool_count=_integer(raw.get("tool_count")),
+            tool_prompt_specs=mappings("tool_prompt_specs"),
             memory_hits=tuple(
                 PromptMemoryHitSnapshot.from_dict(item)
                 for item in mappings("memory_hits")

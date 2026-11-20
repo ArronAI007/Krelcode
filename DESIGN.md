@@ -1208,6 +1208,49 @@ final Anthropic wire payload
 7. 低于阈值、缓存关闭或 Provider 非 explicit 时 fail-closed，不生成 `cache_control`；
    单个候选的累计前缀不足阈值时跳过该候选，不因更长尾部而保留无效断点。
 
+## ToolPromptSpec 统一工具契约（Step 109）
+
+工具此前同时由执行对象、动态目录和 Provider Schema 分别描述，容易出现“名字相同但描述/别名/操作规则漂移”的问题。Step 109 将模型可见部分收敛为一个不可变契约：
+
+```text
+Tool                         ToolDescriptor                 ToolPromptSpec
+执行实例                      source/tier/权限/运行模式       name + Provider description
+execute(args, ctx)            read_only/mcp_server            parameters(JSON Schema)
+                                                              instructions / when / examples
+                                                              aliases / source / version
+                                                              playbook metadata
+        \___________________________ Registry ___________________________/
+                                      │
+                              TurnToolPool snapshot
+                       ┌──────────────┼────────────────┐
+                 Provider wire   system catalogue   ToolSearch
+             name/description/     单行描述/别名        schema load
+                 parameters
+                                      │
+                              PromptAssembler
+                                      │
+                    L5 Tool Playbook（同一 spec 的 guidance）
+```
+
+关键边界：
+
+- `ToolPromptSpec.as_tool_spec()` 是 Provider wire 的唯一 schema 投影，只包含
+  `name/description/parameters`；操作指令、when/exclusion 和示例不得塞回 wire schema。
+- `wire_hash` 只覆盖 Provider 字节；`content_hash` 覆盖全部模型可见 guidance。两者同时记录，
+  可区分“工具 Schema 变化”和“仅 Playbook 文案变化”。
+- `ToolPlaybookCatalog` 从实际 advertised specs 选择 guidance。内置工具族由工具名匹配，
+  自定义工具可使用 `playbook_id` 分组或自动获得 `tool_playbook:tool:<name>`；已知工具的显式
+  description 不会被默认族 guidance 覆盖。
+- `ToolRegistry` 拒绝 Tool 与 spec 名称不一致；旧工具未提供显式 spec 时由 `from_tool()`
+  生成兼容 spec，空 description 以稳定的 `Tool <name>` 占位，避免破坏第三方/测试替身注册。
+- `TurnToolPool.tool_specs()`、`search_catalog()`、`system_hint()` 和 PromptAssembler 使用同一份
+  snapshot；因此被权限、运行模式、feature、MCP health、allowlist 或 TurnIntent 排除的工具
+  不会泄漏 Schema、描述、别名或 Playbook。
+- `PromptPlanSnapshot.tool_prompt_specs`、`ProviderMessages.tool_prompt_specs` 和
+  `channel_record()` 只保留 name/source/version、计数、别名、playbook ID 与 hash；`/context plan`
+  和 `/context why <tool|tool:<name>>` 可展示 wire/content hash，但不渲染描述、Schema、指令或
+  示例正文。
+
 `CacheBreakpointPlan.as_record()` 只包含 strategy、reason、候选 ID、kind、索引、token、
 字符数、digest、stability、anchor/moving 标志和跳过原因，不包含 Prompt、工具 Schema、
 消息正文或凭据。实际发送后的 `CacheSegmentSnapshot` 也从最终 wire 反向解析，校验 plan

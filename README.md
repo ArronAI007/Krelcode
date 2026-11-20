@@ -311,6 +311,8 @@ ToolSearch 只搜索已通过运行时过滤的候选集，不能加载被禁用
 
 Playbook Fragment 使用 `tool_playbook:<id>` 来源、`managed` 信任级别和 session 稳定层，可进入缓存前缀但不可压缩、不可手动切换。其 token 计入 Context 预算，`/context plan|why|cache` 可查看 active tools、playbook content hash 和缓存归属。工具池或 Provider 能力变化会同时改变 Playbook 内容与工具目录 hash，避免提示词描述的能力和真实 Schema 不一致。
 
+`ToolPromptSpec` 是工具模型面向的唯一来源：Provider Schema、工具描述、操作指令、when-to-use/exclusion、示例和别名都从同一个对象派生。`Tool` 不再承担 Prompt 语义，`ToolDescriptor` 继续只负责 source、权限、tier 和运行模式；Registry 生成的 legacy spec 仍兼容没有显式 PromptSpec 的旧工具。Provider 只接收 `name/description/parameters`，操作说明由 PromptAssembler 放入 L5 Playbook；`wire_hash` 与 `content_hash` 可用于判断是 wire Schema 变化还是仅 guidance 变化。
+
 ### 任务类型 Workflow Fragment
 
 每个用户 turn 在进入模型前只做一次确定性任务分类，并选择一个 L9 Workflow Fragment：`general`、`bug-fix`、`feature-implementation`、`refactor`、`code-explanation`、`code-review`、`test-verification` 或 `repository-exploration`。Workflow 提供该任务类型的执行顺序、完成条件和禁止项，例如 bug fix 必须先建立失败证据、定位根因、最小修复并做回归验证；code review 必须按风险排序、给出文件/行号证据且不得擅自修改代码。

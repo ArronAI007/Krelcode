@@ -34,6 +34,21 @@ def test_registry_rejects_duplicate():
         pass
 
 
+def test_registry_tolerates_legacy_empty_description():
+    class LegacyTool:
+        name = "legacy"
+        description = ""
+        parameters = {}
+
+    registry = ToolRegistry([LegacyTool()])
+
+    assert registry.tool_specs() == [{
+        "name": "legacy",
+        "description": "Tool legacy",
+        "parameters": {},
+    }]
+
+
 def test_get_time_returns_iso_string():
     result = asyncio.run(GetTimeTool().execute({}, CTX))
     assert not result.is_error

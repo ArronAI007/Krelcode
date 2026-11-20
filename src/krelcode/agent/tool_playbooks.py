@@ -9,6 +9,7 @@ the runtime has hidden.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from html import escape
 from typing import Iterable, Optional, Sequence, Tuple
@@ -21,6 +22,7 @@ from .fragments import (
     TRUST_MANAGED,
     PromptFragment,
 )
+from ..tools.prompt import ToolPromptSpec
 
 TOOL_PLAYBOOK_VERSION = "1"
 TOOL_PLAYBOOK_SOURCE_PREFIX = "tool_playbook:"
@@ -83,9 +85,13 @@ class ToolPlaybook:
 class SelectedToolPlaybook:
     playbook: ToolPlaybook
     active_tools: Tuple[str, ...]
+    prompt_specs: Tuple[ToolPromptSpec, ...] = ()
 
     @property
     def content(self) -> str:
+        if self.prompt_specs:
+            return _render_prompt_spec_playbook(
+                self.playbook, self.prompt_specs)
         active = set(self.active_tools)
         guidance = tuple(
             item for item in self.playbook.guidance if item.tool in active)
@@ -122,6 +128,7 @@ class ToolPlaybookCatalog:
                     raise ValueError(
                         f"工具 {tool} 同时属于 playbook {previous} 和 {playbook.id}")
                 owners[tool] = playbook.id
+        self._owners = owners
 
     @property
     def playbooks(self) -> Tuple[ToolPlaybook, ...]:
@@ -151,6 +158,107 @@ class ToolPlaybookCatalog:
         return tuple(
             self._fragment(selected)
             for selected in self.select(tool_names)
+        )
+
+    def enrich_prompt_spec(self, spec: ToolPromptSpec) -> ToolPromptSpec:
+        """Attach default family guidance without mutating the tool's spec."""
+        if spec.playbook_id:
+            return spec
+        owner_id = self._owners.get(spec.name)
+        if owner_id is None:
+            return spec
+        playbook = next(
+            item for item in self._playbooks if item.id == owner_id)
+        guidance = next(
+            item.text for item in playbook.guidance if item.tool == spec.name)
+        return spec.with_playbook(
+            playbook_id=playbook.id,
+            playbook_title=playbook.title,
+            playbook_priority=playbook.priority,
+            playbook_version=playbook.version,
+            fallback_instructions=guidance,
+        )
+
+    def resolve_prompt_specs(
+        self, specs: Iterable[ToolPromptSpec],
+    ) -> Tuple[ToolPromptSpec, ...]:
+        """Return the exact enriched specs shared by prompt and schema views."""
+        return tuple(sorted(
+            (self.enrich_prompt_spec(spec) for spec in specs),
+            key=lambda item: item.name,
+        ))
+
+    def fragments_for_prompt_specs(
+        self, specs: Iterable[ToolPromptSpec],
+    ) -> Tuple[PromptFragment, ...]:
+        """Render L5 guidance from the same specs used for provider schemas."""
+        enriched = self.resolve_prompt_specs(specs)
+        selected: list[SelectedToolPlaybook] = []
+        for playbook in self.playbooks:
+            members = tuple(
+                spec for spec in enriched
+                if spec.playbook_id == playbook.id)
+            if members:
+                selected.append(SelectedToolPlaybook(
+                    playbook=playbook,
+                    active_tools=tuple(item.name for item in members),
+                    prompt_specs=members,
+                ))
+
+        built_in_ids = {item.id for item in self._playbooks}
+        custom_groups: dict[str, list[ToolPromptSpec]] = {}
+        for spec in enriched:
+            if spec.playbook_id and spec.playbook_id not in built_in_ids:
+                custom_groups.setdefault(spec.playbook_id, []).append(spec)
+        for group_id, members_list in sorted(custom_groups.items()):
+            members = tuple(sorted(members_list, key=lambda item: item.name))
+            lead = members[0]
+            playbook = ToolPlaybook(
+                id=group_id,
+                title=lead.playbook_title or group_id,
+                priority=lead.playbook_priority,
+                version=lead.playbook_version or TOOL_PLAYBOOK_VERSION,
+                guidance=tuple(
+                    ToolGuidance(item.name, "Custom tool guidance")
+                    for item in members
+                ),
+            )
+            selected.append(SelectedToolPlaybook(
+                playbook=playbook,
+                active_tools=tuple(item.name for item in members),
+                prompt_specs=members,
+            ))
+
+        # A custom/plugin tool may carry its own guidance without belonging to
+        # a built-in family. Give it a deterministic standalone playbook so the
+        # prompt and schema still share one source.
+        ungrouped = tuple(
+            spec for spec in enriched
+            if not spec.playbook_id
+            and (
+                spec.instructions
+                or spec.when_to_use
+                or spec.when_not_to_use
+                or spec.examples
+            )
+        )
+        for spec in ungrouped:
+            playbook = ToolPlaybook(
+                id=f"tool:{spec.name}",
+                title=f"{spec.name} guidance",
+                priority=500,
+                version=spec.version,
+                guidance=(ToolGuidance(spec.name, "Custom tool guidance"),),
+            )
+            selected.append(SelectedToolPlaybook(
+                playbook=playbook,
+                active_tools=(spec.name,),
+                prompt_specs=(spec,),
+            ))
+        return tuple(
+            self._fragment(item)
+            for item in sorted(
+                selected, key=lambda item: (item.playbook.priority, item.playbook.id))
         )
 
     @staticmethod
@@ -185,6 +293,44 @@ class ToolPlaybookCatalog:
             stability=STABILITY_SESSION,
             trust=TRUST_MANAGED,
         )
+
+
+def _render_prompt_spec_playbook(
+    playbook: ToolPlaybook,
+    specs: Sequence[ToolPromptSpec],
+) -> str:
+    lines = [
+        (
+            f'<tool_playbook id="{escape(playbook.id)}" '
+            f'version="{escape(playbook.version)}">'
+        ),
+        f"Purpose: {playbook.title}",
+    ]
+    for spec in specs:
+        lines.append(f'<tool name="{escape(spec.name)}">')
+        if spec.instructions:
+            lines.append(spec.instructions)
+        if spec.when_to_use:
+            lines.append("When to use:")
+            lines.extend(f"- {escape(item)}" for item in spec.when_to_use)
+        if spec.when_not_to_use:
+            lines.append("Do not use when:")
+            lines.extend(f"- {escape(item)}" for item in spec.when_not_to_use)
+        for example in spec.examples:
+            lines.append(f'<example title="{escape(example.title)}">')
+            lines.append(
+                "<input>"
+                + escape(json.dumps(
+                    example.input, ensure_ascii=False, sort_keys=True))
+                + "</input>"
+            )
+            if example.description:
+                lines.append(
+                    f"<description>{escape(example.description)}</description>")
+            lines.append("</example>")
+        lines.append("</tool>")
+    lines.append("</tool_playbook>")
+    return "\n".join(lines)
 
 
 TOOL_PLAYBOOKS: Tuple[ToolPlaybook, ...] = (

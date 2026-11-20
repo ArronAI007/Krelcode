@@ -21,6 +21,7 @@ from ..tools.base import (
     ToolTier,
 )
 from ..tools.registry import ToolRegistry
+from ..tools.prompt import ToolPromptSpec
 from ..safety.contract import (
     ToolExposureSnapshot,
     local_read_only_tool,
@@ -36,6 +37,7 @@ class ToolPoolEntry:
     name: str
     tool: Tool
     descriptor: ToolDescriptor
+    prompt_spec: ToolPromptSpec
 
 
 @dataclass(frozen=True)
@@ -62,7 +64,7 @@ class TurnToolPool:
         self._entries: Dict[str, ToolPoolEntry] = {}
         self._excluded: Dict[str, str] = {}
         self._excluded_codes: Dict[str, str] = {}
-        for tool, descriptor in registry.entries():
+        for tool, descriptor, prompt_spec in registry.prompt_entries():
             exclusion = self._runtime_exclusion(tool.name, descriptor, runtime)
             if exclusion is not None:
                 self._excluded[tool.name] = exclusion.reason
@@ -73,7 +75,11 @@ class TurnToolPool:
                 self._excluded_codes[tool.name] = "turn_intent"
                 continue
             self._entries[tool.name] = ToolPoolEntry(
-                name=tool.name, tool=tool, descriptor=descriptor)
+                name=tool.name,
+                tool=tool,
+                descriptor=descriptor,
+                prompt_spec=prompt_spec,
+            )
 
         self._loaded = frozenset(
             name for name, entry in self._entries.items()
@@ -144,15 +150,15 @@ class TurnToolPool:
 
     def tool_specs(self) -> List[dict]:
         """Return sorted full schemas and record this request's execute boundary."""
-        names = tuple(sorted(self._loaded))
-        self._advertised = frozenset(names)
+        specs = self.prompt_specs()
+        self._advertised = frozenset(spec.name for spec in specs)
+        return [spec.as_tool_spec() for spec in specs]
+
+    def prompt_specs(self) -> List[ToolPromptSpec]:
+        """Return the canonical model-facing specs for loaded tools."""
         return [
-            {
-                "name": self._entries[name].tool.name,
-                "description": self._entries[name].tool.description,
-                "parameters": self._entries[name].tool.parameters,
-            }
-            for name in names
+            self._entries[name].prompt_spec
+            for name in sorted(self._loaded)
         ]
 
     def clear_advertised(self) -> None:
@@ -169,6 +175,10 @@ class TurnToolPool:
     def descriptor(self, name: str) -> Optional[ToolDescriptor]:
         entry = self._entries.get(name)
         return entry.descriptor if entry is not None else None
+
+    def prompt_spec(self, name: str) -> Optional[ToolPromptSpec]:
+        entry = self._entries.get(name)
+        return entry.prompt_spec if entry is not None else None
 
     def entry(self, name: str) -> Optional[ToolPoolEntry]:
         return self._entries.get(name)
@@ -274,7 +284,7 @@ class TurnToolPool:
             score = _catalog_score(normalized, tokens, entry)
             if score <= 0:
                 continue
-            description = _one_line(entry.tool.description or "")
+            description = _one_line(entry.prompt_spec.description)
             scored.append((score, name, ToolCatalogMatch(
                 name=name,
                 description=description,
@@ -347,7 +357,7 @@ class TurnToolPool:
                 "`load=true` before calling one:")
             for entry in discoverable:
                 description = _one_line(
-                    entry.tool.description or "", description_limit)
+                    entry.prompt_spec.description, description_limit)
                 category = "read-only" if entry.descriptor.read_only else "mutating"
                 lines.append(
                     f"- {escape(entry.name)} [{category}]: {escape(description)}")
@@ -377,12 +387,15 @@ def _catalog_score(
 ) -> int:
     name = entry.name.casefold()
     name_words = name.replace("_", " ").replace("-", " ")
-    description = _one_line(entry.tool.description or "").casefold()
+    description = _one_line(entry.prompt_spec.description).casefold()
     terms = tuple(entry.descriptor.search_terms)
+    aliases = entry.prompt_spec.aliases
 
     score = 0
     if normalized_query in {name, name_words}:
         score += 1_000
+    elif normalized_query in aliases:
+        score += 900
     elif normalized_query in name_words:
         score += 480
     elif normalized_query in description:
@@ -395,6 +408,8 @@ def _catalog_score(
         token_score = 0
         if token == name:
             token_score = 400
+        elif token in aliases:
+            token_score = 340
         elif token in name_words:
             token_score = 260
         elif any(token == term for term in terms):

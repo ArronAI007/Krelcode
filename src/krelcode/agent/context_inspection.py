@@ -9,7 +9,7 @@ already retained by ``AgentLoop``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 from .context_source import ContextAssembly, ContextLayer
 from .context_plan import ContextPlanSnapshot
@@ -61,6 +61,14 @@ def _is_memory_fragment(fragment: PromptFragmentSnapshot) -> bool:
             "memory", "memory_retrieval", "inherited_memory",
         }
     )
+
+
+def _int_value(value: object) -> int:
+    """Read a bounded integer from a persisted ToolPromptSpec record."""
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _layer_memory_metadata(layer: ContextLayer) -> tuple[tuple[str, ...], dict[str, int], int]:
@@ -247,6 +255,7 @@ class ContextInspectionService:
         ):
             lines.extend(self._prompt_distribution_lines(
                 request_plan, fragment_limit=fragment_limit))
+            lines.extend(self._prompt_tool_spec_lines(request_plan))
             lines.extend(self._prompt_omission_lines(request_plan))
             lines.extend(self._prompt_memory_lines(request_plan))
             lines.extend(self._prompt_diff_lines(request_plan))
@@ -360,6 +369,50 @@ class ContextInspectionService:
         ]
         return lines
 
+    def _prompt_tool_spec_lines(
+        self,
+        plan: PromptPlanSnapshot,
+        *,
+        records: Optional[Sequence[Mapping[str, object]]] = None,
+        limit: int = 100,
+    ) -> list[str]:
+        """Render content-free ToolPromptSpec diagnostics.
+
+        Tool descriptions, JSON Schemas, instructions and example bodies are
+        intentionally omitted. The record is enough to explain which model
+        contract was active, whether its wire projection changed and how much
+        guidance accompanied it.
+        """
+        source = tuple(records) if records is not None else tuple(
+            plan.tool_prompt_specs)
+        if not source:
+            return []
+        shown, omitted = _bounded(source, limit)
+        lines = [
+            f"  tool prompt specs: {len(source)}"
+            f" · records shown {len(shown)}"
+        ]
+        for record in shown:
+            if not isinstance(record, Mapping):
+                continue
+            name = str(record.get("name", "") or "(unknown)")
+            playbook = str(record.get("playbook_id", "") or "(none)")
+            when_to_use = _int_value(record.get("when_to_use_count"))
+            when_not_to_use = _int_value(record.get("when_not_to_use_count"))
+            examples = _int_value(record.get("example_count"))
+            lines.append(
+                f"  [tool] {name}"
+                f" · source={str(record.get('source', '') or '(unknown)')}"
+                f" · playbook={playbook}"
+                f" · guidance={when_to_use}+{when_not_to_use}"
+                f" · instructions={_int_value(record.get('instructions_chars'))} chars"
+                f" · examples={examples}"
+                f" · wire={_short_hash(str(record.get('wire_hash', '') or ''))}"
+                f" · content={_short_hash(str(record.get('content_hash', '') or ''))}")
+        if omitted:
+            lines.append(f"  … 另有 {omitted} 个 tool prompt spec 未展示")
+        return lines
+
     def why_lines(self, target: str) -> list[str]:
         needle = str(target or "").strip()
         if not needle:
@@ -445,6 +498,16 @@ class ContextInspectionService:
     ) -> tuple[bool, list[str]]:
         if plan is None:
             return False, []
+        tool_specs = [
+            item for item in plan.tool_prompt_specs
+            if needle in {
+                str(item.get("name", "")),
+                f"tool:{item.get('name', '')}",
+                f"tool_prompt_spec:{item.get('name', '')}",
+            }
+        ]
+        if tool_specs:
+            return True, self._prompt_tool_spec_lines(plan, records=tool_specs)
         fragment_exact = [
             item for item in plan.fragments
             if needle == item.id or needle == item.source

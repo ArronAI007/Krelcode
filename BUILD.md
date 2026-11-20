@@ -5,12 +5,12 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（Step 108）
+## 1. 项目统计（Step 109）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 62,080 行（Python，**零第三方运行时依赖**） |
-| 测试 | 31,924 行 / 135 个测试文件 / 1,386 个通过用例 + 2 个本地端口集成 skip |
+| 源码 | 62,734 行（Python，**零第三方运行时依赖**） |
+| 测试 | 32,216 行 / 136 个测试文件 / 1,394 个通过用例 + 2 个本地端口集成 skip |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 16 + 只读 `memory_search`（装配 MemoryStore 时）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
@@ -87,6 +87,7 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 | v0.96 | Provider 缓存能力协商 | `ProviderCapabilities.cache` 声明 none/implicit/explicit、显式断点上限和缓存 usage 字段；统一的 `CacheCapabilities.negotiate()` 将 TOML `prompt_cache = auto/on/off/implicit/explicit` 与真实模型能力解析为 `CacheNegotiation`，再由 adapter 生成 wire。Anthropic 仅走 explicit，OpenAI/DeepSeek 与 Gemini 2.5+ 走 server-managed implicit；不支持的 explicit 请求会显式降级。requested/effective/reason/fallback/支持模式与最大断点贯通 PreparedRequest、ContextUsageSnapshot、`/context`、TUI、JSONL/stream-json/SDK；Gemini `cachedContentTokenCount` 同步归一为 `cache_read` |
 | v0.97 | Prompt Parity Contract 与 Benchmark v3 | 冻结 8 个 parity 维度、16 个真实行为 case、每 case 至少 3 trials 的发布门禁；新增 content-light `PromptParityBaseline`、原子保存/加载、hash/字段白名单校验与 fail-closed `--gate`。Live suite 新增最小编辑、权限拒绝、Plan gate、ToolSearch 延迟加载、MCP 注入、失败测试恢复、bounded refactor、Resume 现场刷新、Fork Memory 隔离与第二轮 cache hit 场景 |
 | v0.98 | 自适应 Cache Breakpoint Planner | Anthropic 不再固定写死三个断点。新增 content-light `CacheBreakpointCandidate/Plan/Planner`，在最终 wire 的 tools → stable system → messages 顺序上选择稳定锚点、移动 frontier 与均匀历史 checkpoint，严格服从 Provider 最大断点数；Sonnet/Opus 默认 1024、Haiku 2048 tokens 阈值，`cache_min_tokens` 可覆盖，低于阈值不写 `cache_control`。plan 的选中/跳过原因、token、stability 与 digest 贯通 PreparedRequest、ContextUsageSnapshot、`/context cache`、TUI、JSONL/stream-json/SDK |
+| v0.99 | ToolPromptSpec 统一工具契约 | 新增 `ToolPromptSpec`，把 Provider description/Schema、工具指令、when/exclusion、示例、别名、来源/版本和 Playbook 元数据收敛为单一来源。`Tool` 保持执行职责，`ToolDescriptor` 保持安全/路由职责；Registry、TurnToolPool、ToolSearch、PromptAssembler 和 L5 Playbook 共用同一 spec。Provider wire 只接收 name/description/parameters，`wire_hash/content_hash` 贯通 PromptPlan/ProviderMessages/`/context`，所有观测字段不含工具正文。旧工具空 description 使用稳定占位，兼容历史注册 |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -111,7 +112,7 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 | 扩展来源目录/配置分层 | `extensions.py` `config.py` |
 | Plugin v2 六类组件/生命周期 | `plugins/{manifest,components,manager,loader}.py` |
 | 工作区上下文注入 | `agent/context.py`（目录树/git/分层 AGENTS.md） |
-| 工具端口与注册表 | `tools/base.py` `tools/registry.py`；具体工具 `tools/builtin/`，交互工具 `tools/extension/` |
+| 工具端口、PromptSpec 与注册表 | `tools/base.py` `tools/prompt.py` `tools/registry.py`；具体工具 `tools/builtin/`，交互工具 `tools/extension/` |
 | 动态工具池 / ToolSearch | `agent/tool_pool.py` `tools/builtin/tool_search.py` |
 | 命令风险分级/审批/写保护 | `safety/commands.py` `safety/policy.py` `safety/rules.py` |
 | 运行时权限/Plan 审批状态机 | `safety/runtime.py` |

@@ -23,6 +23,7 @@ from ..llm.base import (
     SystemPromptBlock,
     SystemPromptBlocks,
 )
+from ..tools.prompt import ToolPromptSpec
 from .attachments import (
     ContextAttachment,
     ContextAttachmentKind,
@@ -90,7 +91,7 @@ class PromptAssemblyRequest:
 
     context_request: ContextRequest
     prompt_snapshot: Optional[PromptSnapshot] = None
-    tools: Tuple[Mapping[str, object], ...] = ()
+    tools: Tuple[object, ...] = ()
     per_turn_reminders: Tuple[str, ...] = ()
     attachments: Tuple[ContextAttachment, ...] = ()
 
@@ -105,12 +106,15 @@ class ProviderMessages:
     system_blocks: Optional[SystemPromptBlocks] = None
     instruction_blocks: Tuple[SystemPromptBlock, ...] = ()
     evidence_channel: EvidenceChannel = EvidenceChannel()
+    tool_prompt_specs: Tuple[ToolPromptSpec, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "messages", tuple(self.messages))
         object.__setattr__(self, "tools", tuple(self.tools))
         object.__setattr__(self, "instruction_blocks", tuple(self.instruction_blocks))
         object.__setattr__(self, "evidence_channel", self.evidence_channel)
+        object.__setattr__(
+            self, "tool_prompt_specs", tuple(self.tool_prompt_specs))
 
     @property
     def evidence_blocks(self) -> Tuple[EvidenceBlock, ...]:
@@ -157,6 +161,8 @@ class ProviderMessages:
             "cache_boundary": (
                 self.cache_boundary.offset
                 if self.cache_boundary is not None else 0),
+            "tool_prompt_specs": [
+                spec.as_record() for spec in self.tool_prompt_specs],
         }
 
     @property
@@ -195,6 +201,7 @@ class PromptPlan:
     omitted_details: Tuple[PromptOmissionSnapshot, ...] = ()
     issues: Tuple[ContextSourceIssue, ...] = ()
     context_assembly: Optional[ContextAssembly] = None
+    tool_prompt_specs: Tuple[ToolPromptSpec, ...] = ()
 
     @property
     def cache_boundary(self) -> int:
@@ -297,13 +304,19 @@ class PromptAssembler:
         prompt_omissions = _prompt_omission_details(
             snapshot, context_request, omitted)
         current_user = _current_user_message(context_request.history)
+        tool_prompt_specs = self.tool_playbook_catalog.resolve_prompt_specs(
+            _normalize_tool_prompt_specs(request.tools))
         workflow_fragments = ()
         if context_request.task_workflow is not None:
             workflow_fragments = (self.task_workflow_catalog.fragment(
                 context_request.task_workflow),)
-        playbook_fragments = self.tool_playbook_catalog.fragments_for_tools(
-            _advertised_tool_names(
-                request.tools, context_request.tool_pool))
+        playbook_fragments = (
+            self.tool_playbook_catalog.fragments_for_prompt_specs(
+                tool_prompt_specs)
+            if tool_prompt_specs else
+            self.tool_playbook_catalog.fragments_for_tools(
+                _advertised_tool_names((), context_request.tool_pool))
+        )
         attachment_fragments, attachment_omissions = _select_attachment_fragments(
             request.attachments, context_request)
         if not scope_filter and any(
@@ -429,6 +442,7 @@ class PromptAssembler:
             omitted_details=all_omissions,
             issues=dynamic_assembly.issues,
             context_assembly=assembly,
+            tool_prompt_specs=tool_prompt_specs,
         )
 
     def provider_messages(
@@ -460,6 +474,7 @@ class PromptAssembler:
             system_blocks=plan.system_blocks,
             instruction_blocks=plan.instruction_blocks,
             evidence_channel=evidence_channel,
+            tool_prompt_specs=plan.tool_prompt_specs,
         )
 
     def _snapshot_from_registry(self) -> Optional[PromptSnapshot]:
@@ -737,14 +752,22 @@ def _current_user_message(history: Sequence[Message]) -> Optional[Message]:
 
 
 def _advertised_tool_names(
-    tools: Sequence[Mapping[str, object]],
+    tools: Sequence[object],
     tool_pool: object,
 ) -> Tuple[str, ...]:
     """Return tools whose schemas are actually visible in this model request."""
     names = {
-        str(tool.get("name", "")).strip()
+        str(
+            tool.get("name", "")
+            if isinstance(tool, Mapping)
+            else getattr(tool, "name", "")
+        ).strip()
         for tool in tools
-        if str(tool.get("name", "")).strip()
+        if str(
+            tool.get("name", "")
+            if isinstance(tool, Mapping)
+            else getattr(tool, "name", "")
+        ).strip()
     }
     if names:
         return tuple(sorted(names))
@@ -754,6 +777,25 @@ def _advertised_tool_names(
     if callable(advertised_names):
         return tuple(str(name) for name in advertised_names())
     return ()
+
+
+def _normalize_tool_prompt_specs(
+    tools: Sequence[object],
+) -> Tuple[ToolPromptSpec, ...]:
+    normalized: list[ToolPromptSpec] = []
+    seen: set[str] = set()
+    for tool in tools:
+        if isinstance(tool, ToolPromptSpec):
+            spec = tool
+        elif isinstance(tool, Mapping):
+            spec = ToolPromptSpec.from_mapping(tool)
+        else:
+            spec = ToolPromptSpec.from_tool(tool)
+        if spec.name in seen:
+            raise ValueError(f"ToolPromptSpec 名称重复: {spec.name}")
+        seen.add(spec.name)
+        normalized.append(spec)
+    return tuple(sorted(normalized, key=lambda item: item.name))
 
 
 def _conversation_fragments(
