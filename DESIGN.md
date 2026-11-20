@@ -1855,7 +1855,7 @@ Live 执行边界：
 - `review-no-edit` 同时验证 `code-review` Workflow 是否被选中，以及模型能否只读定位
   真实缺陷、报告行号且保持 workspace 不变。
 
-六个行为场景：
+v2 最初六个行为场景（Step 107 已扩展为十六个）：
 
 1. `read-scope`：指定文件读取、答案事实和无关读取范围。
 2. `edit-verify`：真实落盘修改、指定 test 命令和成功退出码。
@@ -1889,3 +1889,43 @@ check、真实工具名/路径/退出码、Workflow、稳定错误类型和实�
 必须重跑失败 case、原先稳定 case 和完整 live suite，确认失败指标消失且没有 cache、
 安全、工具范围或既有行为回归。Provider/runtime 错误只做 error-kind 归因，不伪造
 Prompt 修复建议。
+
+## Prompt Parity Contract 与 Benchmark v3（Step 107）
+
+Claude Code 的 Prompt 正文不是公开接口，因此 Krelcode 把“Prompt Parity”定义为可审计
+的架构与真实行为契约，而不是 Prompt 字符串相似度。`benchmarks/parity.py` 冻结了
+architecture、permissions、evidence、cache、subagents、compact、recovery、leakage
+八个维度、16 个 live case、每 case 最少 3 trials 以及 content-light baseline schema。
+
+Frozen contract：
+
+- 唯一装配路径必须是 `PromptAssembler -> PromptPlan -> ProviderMessages`；
+- L0-L12 来源层级、Instruction/Evidence 分权与 stable/dynamic cache boundary 不可漂移；
+- ToolPool 与 ApprovalPolicy 必须在执行前共享同一权限边界；
+- Memory/MCP/Tool/Web/Retrieval 只能进入 Evidence channel；
+- Subagent 不继承父级完整 history，sidechain 不自动回注 main；
+- Compact、Resume、Fork、Rewind 必须恢复同一份可验证现场；
+- baseline/gate 只能包含 hash、ID、计数和 pass/stability 元数据。
+
+Step 107 将 live benchmark 从 v2 的 6 个场景扩展为 v3 的 16 个场景，新增最小编辑、
+permission deny、Plan gate、ToolSearch deferred loading、MCP instruction injection、
+失败测试恢复、bounded refactor、resume workspace refresh、fork Memory isolation 和
+second-turn cache hit。所有 case 继续复用生产 `AgentLoop`、真实工具、Sandbox 和隔离
+workspace/HOME。
+
+`PromptParityBaseline` 只能由完整、全部稳定且至少 3 trials 的 report 创建；保存与加载
+采用原子 JSON，加载时校验 `baseline_hash`、固定字段白名单与
+`contains_prompt_content=false`，拒绝任何 Prompt、答案、工具参数、历史或凭据字段。
+`evaluate_prompt_parity()` 对 contract hash、baseline schema/contract、provider/model、
+suite hash、case manifest、trial floor、case pass@k/stability、整体 report、runtime error
+和 content-light policy 逐项 fail-closed。只有全部 check 通过时才返回
+`PromptParityStatus.ALIGNED`。
+
+契约 hash 被固定为：
+
+```text
+8d9c1a9f68a24113ce7a3f42595bf13005a4286ae0f641547775d84e5495262a
+```
+
+任何语义变更都必须显式更新 contract version/hash，并通过同 commit 的 parity 测试与
+新的真实模型 baseline/gate；不能通过修改 baseline 或降低 trial floor 静默放宽。

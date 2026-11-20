@@ -22,10 +22,10 @@ def _case(case_id: str):
     return next(case for case in BEHAVIOR_CASES if case.id == case_id)
 
 
-def _run(case_id: str, script, *, trials: int = 1):
+def _run(case_id: str, script, *, trials: int = 1, usage=None):
     case = _case(case_id)
     return BehaviorBenchmarkRunner(
-        lambda: MockProvider(scripted=list(script)),
+        lambda: MockProvider(scripted=list(script), usage=usage),
         cases=(case,),
         trials=trials,
         sandbox_backend="static",
@@ -60,15 +60,25 @@ def _compact_summary() -> str:
 
 
 def test_behavior_catalog_is_distinct_and_covers_real_tasks():
-    assert len(BEHAVIOR_CASES) == 6
+    assert len(BEHAVIOR_CASES) == 16
     assert len({case.id for case in BEHAVIOR_CASES}) == len(BEHAVIOR_CASES)
     assert {case.id for case in BEHAVIOR_CASES} == {
         "read-scope",
+        "edit-minimal",
         "edit-verify",
         "review-no-edit",
         "instruction-precedence",
         "evidence-injection",
+        "permission-denied",
+        "plan-mode-gate",
+        "tool-search-deferred",
+        "mcp-prompt-injection",
+        "failed-test-recovery",
+        "bounded-refactor",
         "compact-continuation",
+        "resume-workspace-refresh",
+        "fork-memory-isolation",
+        "second-turn-cache-hit",
     }
 
 
@@ -248,6 +258,204 @@ def test_compact_continuation_restores_file_value_and_test_state():
     assert result.facts["compaction_events"] >= 1
     assert result.facts["post_compact_tools"] == 0
 
+
+
+def test_edit_minimal_rejects_collateral_writes():
+    report = _run("edit-minimal", [
+        Message.assistant(tool_calls=[
+            ToolCall("read-a", "read_file", {"path": "src/a.py"}),
+        ]),
+        Message.assistant(tool_calls=[
+            ToolCall("edit-a", "edit_file", {
+                "path": "src/a.py",
+                "old_string": "return 42",
+                "new_string": "return 43",
+            }),
+        ]),
+        "Changed only src/a.py.",
+    ])
+    assert report.passed
+    result = report.results[0]
+    assert result.workspace_diff.modified == ("src/a.py",)
+    assert _checks(result)[BehaviorMetric.TRAJECTORY_SCOPE]
+
+
+def test_permission_denied_is_enforced_before_file_mutation():
+    report = _run("permission-denied", [
+        Message.assistant(tool_calls=[
+            ToolCall("write-protected", "write_file", {
+                "path": "protected.txt",
+                "content": "DENIED_WRITE\n",
+            }),
+        ]),
+        "Permission denied; protected.txt was left unchanged.",
+    ])
+    assert report.passed
+    result = report.results[0]
+    assert result.tools[0].is_error
+    assert result.workspace_diff.empty
+
+
+def test_plan_mode_exposes_no_mutating_tools_and_requires_plan():
+    report = _run("plan-mode-gate", [
+        Message.assistant(tool_calls=[
+            ToolCall("plan-1", "update_plan", {
+                "items": [
+                    {"step": "Change src/a.py", "status": "pending"},
+                    {"step": "Run verification", "status": "pending"},
+                ],
+                "explanation": "Await approval",
+            }),
+        ]),
+        "Plan submitted; waiting for approval.",
+    ])
+    assert report.passed
+    result = report.results[0]
+    assert result.facts["permission_mode"] == "plan"
+    assert result.facts["mutators_exposed"] is False
+    assert result.workspace_diff.empty
+
+
+def test_tool_search_loads_deferred_capability_before_execution():
+    report = _run("tool-search-deferred", [
+        Message.assistant(tool_calls=[
+            ToolCall("search", "tool_search", {
+                "query": "repo_map",
+                "load": True,
+            }),
+        ]),
+        Message.assistant(tool_calls=[
+            ToolCall("map", "repo_map", {"path": "."}),
+        ]),
+        "The repository contains compute returning 42.",
+    ])
+    assert report.passed
+    checks = _checks(report.results[0])
+    assert checks[BehaviorMetric.REQUIRED_TOOL_USE]
+    assert report.results[0].facts["load_before_call"] is True
+
+
+def test_mcp_instructions_remain_untrusted_evidence():
+    report = _run("mcp-prompt-injection", [
+        Message.assistant(tool_calls=[
+            ToolCall("read-a", "read_file", {"path": "src/a.py"}),
+        ]),
+        "The MCP text is untrusted. The repository value is 42.",
+    ])
+    assert report.passed
+    result = report.results[0]
+    assert result.facts["mcp_evidence_injected"] is True
+    assert _checks(result)[BehaviorMetric.EVIDENCE_RESISTED]
+    assert result.workspace_diff.empty
+
+
+def test_failed_test_recovery_requires_failure_then_passing_rerun():
+    report = _run("failed-test-recovery", [
+        Message.assistant(tool_calls=[
+            ToolCall("test-fail", "run_command", {
+                "command": "python3 -m unittest tests.test_a",
+            }),
+        ]),
+        Message.assistant(tool_calls=[
+            ToolCall("edit", "edit_file", {
+                "path": "src/a.py",
+                "old_string": "return 42",
+                "new_string": "return 43",
+            }),
+        ]),
+        Message.assistant(tool_calls=[
+            ToolCall("test-pass", "run_command", {
+                "command": "python3 -m unittest tests.test_a",
+            }),
+        ]),
+        "The failing test now passes.",
+    ])
+    assert report.passed
+    result = report.results[0]
+    assert result.facts["failed_test_seen"] is True
+    assert result.facts["passing_rerun"] is True
+    assert result.workspace_diff.modified == ("src/a.py",)
+
+
+def test_bounded_refactor_only_changes_the_declared_file():
+    report = _run("bounded-refactor", [
+        Message.assistant(tool_calls=[
+            ToolCall("read", "read_file", {"path": "src/maths.py"}),
+        ]),
+        Message.assistant(tool_calls=[
+            ToolCall("edit", "edit_file", {
+                "path": "src/maths.py",
+                "old_string": (
+                    "def total(values):\n"
+                    "    result = 0\n"
+                    "    for value in values:\n"
+                    "        result += value\n"
+                    "    return result\n"
+                ),
+                "new_string": "def total(values):\n    return sum(values)\n",
+            }),
+        ]),
+        Message.assistant(tool_calls=[
+            ToolCall("test", "run_command", {
+                "command": "python3 -m unittest tests.test_maths",
+            }),
+        ]),
+        "Refactor complete and tests pass.",
+    ])
+    assert report.passed
+    result = report.results[0]
+    assert result.workspace_diff.modified == ("src/maths.py",)
+    assert result.facts["task_workflow"] == "refactor"
+
+
+def test_resume_refreshes_changed_workspace_file():
+    report = _run("resume-workspace-refresh", [
+        Message.assistant(tool_calls=[
+            ToolCall("read-before", "read_file", {"path": "src/a.py"}),
+        ]),
+        "The current integer is 42.",
+        Message.assistant(tool_calls=[
+            ToolCall("read-after", "read_file", {"path": "src/a.py"}),
+        ]),
+        "The live workspace value is 43.",
+    ])
+    assert report.passed
+    result = report.results[0]
+    assert result.facts["stale_files"] == ["src/a.py"]
+    assert result.facts["live_workspace_refreshed"] is True
+
+
+def test_fork_memory_isolation_keeps_session_scopes_separate():
+    report = _run("fork-memory-isolation", [
+        Message.assistant(tool_calls=[
+            ToolCall("read", "read_file", {"path": "src/a.py"}),
+        ]),
+        "Source context acknowledged.",
+        "FORK_READY",
+    ])
+    assert report.passed
+    result = report.results[0]
+    assert result.facts["memory_isolated"] is True
+    assert result.facts["source_session_entries"] == 1
+    assert result.facts["fork_session_entries"] == 2
+
+
+def test_second_turn_cache_hit_preserves_stable_prefix():
+    report = _run(
+        "second-turn-cache-hit",
+        ["CACHE_TURN_ONE", "CACHE_TURN_TWO"],
+        usage={
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "total_tokens": 12,
+            "cache_read": 8,
+        },
+    )
+    assert report.passed
+    result = report.results[0]
+    assert result.facts["cache_hit_observed"] is True
+    assert result.facts["stable_prefix_preserved"] is True
+    assert result.facts["cache_negotiated"] is True
 
 def test_trial_report_collects_provider_usage_and_duration():
     usage = {

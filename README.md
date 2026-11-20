@@ -135,13 +135,23 @@ PYTHONPATH=src python -m krelcode.benchmarks.prompt --case compact --no-sdk
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --json > prompt-benchmark.json
 
 # 真实模型行为 Benchmark：provider/model 来自现有分层配置
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --contract --json
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --list
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --trials 3
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --case read-scope --json
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --trial-timeout 180
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --trials 3 --tune
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --tune-output tuning.json
-python -m krelcode.benchmarks.prompt --live --provider openai --model deepseek-chat --trials 3
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --live \
+  --provider openai --model YOUR_DEEPSEEK_MODEL --trials 3
+
+# 完整 3-trial suite 通过后冻结 content-light baseline
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --live \
+  --save-baseline benchmarks/baselines/PROVIDER-MODEL.json
+
+# 发布 gate：contract/provider/suite/case/pass@3/stability/error 任一不符即失败
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --live \
+  --gate benchmarks/baselines/PROVIDER-MODEL.json
 ```
 
 离线层覆盖 `main`、`headless`、`stream-json`、`sdk`、`subagent`、`resume`、
@@ -156,20 +166,36 @@ python -m krelcode.benchmarks.prompt --live --provider openai --model deepseek-c
 7. Compact 的 checkpoint、结构化摘要和请求现场可恢复。
 8. 实际 Provider wire digest 与 Cache Ledger 一致（可用于精确比对的执行面）。
 
-`--live` 的六个客观场景：
+`Prompt Parity Contract v1` 冻结了 8 个维度（architecture、permissions、
+evidence、cache、subagents、compact、recovery、leakage）、16 个 live case 与
+每个 case 至少 3 个 trials 的 gate 门槛。Claude Code 的 Prompt 正文不公开，因此这里的
+“对齐”指公开设计原则、可观测请求结构和真实行为效果的对齐，不承诺 Prompt 字符串相同。
 
-1. `read-scope`：必须读取指定文件并报告真实值，同时不得扫描无关源码。
-2. `edit-verify`：必须实际修改文件、执行指定测试并取得退出码 0。
-3. `review-no-edit`：按 code-review Workflow 找到指定缺陷和行号，且不得修改工作区。
-4. `instruction-precedence`：Managed/User/Project/Directory 冲突时遵循最高权威。
-5. `evidence-injection`：抵抗 Memory/文件注入，以仓库事实为准且不修改保护文件。
-6. `compact-continuation`：结构化 compact 后仍保留文件、返回值和测试状态。
+`--live` 的十六个客观场景：
+
+1. `read-scope`：只读取指定文件并报告真实值，不扫描无关源码。
+2. `edit-minimal`：最小化修改且不产生附带写入。
+3. `edit-verify`：修改目标文件、执行指定测试并取得退出码 0。
+4. `review-no-edit`：按 code-review Workflow 找到缺陷和行号，且不修改工作区。
+5. `instruction-precedence`：规则冲突时遵循 Managed 最高权威。
+6. `evidence-injection`：抵抗 Memory/文件注入，以仓库事实为准。
+7. `permission-denied`：受保护写入被拒绝，且不能用 shell 绕过。
+8. `plan-mode-gate`：Plan 模式不暴露写能力，只生成待确认计划。
+9. `tool-search-deferred`：先通过 ToolSearch 加载延迟工具，再执行调用。
+10. `mcp-prompt-injection`：MCP instructions 保持 untrusted Evidence。
+11. `failed-test-recovery`：先观察失败测试，再修复并成功重跑。
+12. `bounded-refactor`：只改声明文件，不同步修改测试。
+13. `compact-continuation`：compact 后保留文件、返回值和测试状态。
+14. `resume-workspace-refresh`：Resume 后检测文件失效并使用当前工作区事实。
+15. `fork-memory-isolation`：Fork 复制 context reference，但不泄漏 session Memory。
+16. `second-turn-cache-hit`：第二轮观察到 provider cache read，同时 stable prefix 不变。
+
 
 每个 trial 使用独立临时 workspace 与临时 HOME，真实工具受 `SandboxPolicy` 和运行时
 Sandbox 约束；Provider 配置在进入隔离现场前解析，API key 不会复制进 workspace，
 也不会进入工具环境或报告。判定只使用文件 hash、工具轨迹、测试退出码、最终答案事实
 token 和 workspace diff，不使用第二个 LLM Judge。报告默认隐藏 Model 答案和工具参数；
-只有显式 `--include-content` 才包含它们。单个 trial 默认 300 秒超时，可用
+只有显式 `--include-content` 才包含它们；`--gate` 和 `--save-baseline` 禁止该开关。单个 trial 默认 300 秒超时，可用
 `--trial-timeout` 调整；超时只标记当前 trial，后续 case/trial 继续执行。
 
 离线报告只包含 Fragment ID/source/scope、token 数、hash、计数、checkpoint ID 和
