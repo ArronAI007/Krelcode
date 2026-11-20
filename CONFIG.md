@@ -60,6 +60,18 @@ krelcode [子命令] [选项]
 | `--auto-commit` | — | 每轮有变更自动 git 提交 |
 | `--version` | — | 打印版本退出 |
 
+Live Model Behavior Benchmark 使用独立 CLI：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--live` | — | 启用真实模型行为层；provider/model 来自用户 → project → local → managed 配置 |
+| `--live --list` | — | 列出 6 个行为场景，不读取 API key |
+| `--trials` | `1` | 每个场景独立 trial 数，限制 1-20 |
+| `--trial-timeout` | `300` | 单个 trial 总超时秒数；超时只失败当前 trial |
+| `--live-max-steps` | `14` | 每个 Agent turn 的最大模型/工具步数 |
+| `--sandbox-backend` | `auto` | `auto/static/seatbelt/bubblewrap` |
+| `--include-content` | 关闭 | 在报告中包含最终答案与工具参数；默认仅输出计数、hash 和检查结果 |
+
 ## 2. REPL 命令
 
 | 命令 | 说明 |

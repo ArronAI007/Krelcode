@@ -10,6 +10,7 @@ __all__ = [
     "BehaviorBenchmarkRunner",
     "BehaviorCase",
     "BehaviorCheck",
+    "BehaviorErrorKind",
     "BehaviorMetric",
     "BehaviorReport",
     "BehaviorTrialResult",

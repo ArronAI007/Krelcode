@@ -82,6 +82,7 @@ core 只有 894 行——内核保持极小、能力在边缘，正是当初对�
 | v0.91 | L5 Mode/Permission Contract | `ModePermissionContract` 由实际 RuntimeSnapshot、过滤后的 ToolPool、ApprovalPolicy 与 ExecutionSandbox 单一生成；主 Agent、子代理、REPL/print/JSON/SDK/review 共用 L5 attachment。运行时 AUTO_APPROVE 与显式 ASK 例外进入 approval 摘要；子代理的 permission/tool/MCP scope 只能相对父级收窄。模式切换会重建工具池并刷新 contract hash，但不改变 stable prefix；contract/exposure hash 贯通 PromptPlan、ContextCacheLedger、`/context why` 与 `/context ledger` |
 | v0.92 | 工具级 Prompt Playbook | 新增独立 `ToolPlaybookCatalog`：由 Provider 实际 advertised tools 选择读取、搜索、编辑、命令验证、计划、ToolSearch、后台 Job、Subagent、LSP、Web 与 Memory 的 L5 操作规则。Playbook 只渲染本轮可用工具，按工具族稳定排序、session cacheable、不可 compact/toggle，并携带 active tools/version/content hash 进入 PromptPlan、ProviderMessages、token accounting 与 `/context why`；禁用、过滤或未加载工具的指令不会泄漏 |
 | v0.93 | 任务类型 Workflow Fragment | 新增确定性 `TaskWorkflowClassifier + TaskWorkflowCatalog`：每轮从 general、bug-fix、feature、refactor、explanation、review、test-verification、repository-exploration 中选择一个 L9 Workflow。分类忽略附件正文与 fenced code，显式文件解释 Intent 优先；Workflow 作为 turn/managed instruction 注入，不改变稳定缓存前缀、不可 compact，并通过 PromptPlan provenance 暴露 task type/confidence/signals/version/content hash |
+| v0.94 | Live Model Behavior Benchmark v2 | `--live` 使用真实 Provider、生产 `AgentLoop`、隔离 HOME/workspace、真实工具与 Sandbox 执行六个客观行为场景；新增 `review-no-edit` Workflow 验收。每个 trial 有独立超时与 timeout/provider/sandbox/configuration/internal 错误分类，报告加入 stability/pass@k、工具/token/cache/成本、失败分布、Krelcode/Python/平台/Sandbox 配置和 suite hash，默认不保存答案与工具参数正文 |
 
 ## 3. 文件导览（能力 → 位置）
 

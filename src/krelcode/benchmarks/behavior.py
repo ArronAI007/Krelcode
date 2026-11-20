@@ -22,6 +22,7 @@ import asyncio
 import hashlib
 import json
 import os
+import platform
 import re
 import shlex
 import sys
@@ -34,6 +35,7 @@ from pathlib import Path
 from typing import Awaitable, Callable, Mapping, Sequence
 from unittest.mock import patch
 
+from .. import __version__
 from ..agent.compression import ContextManager
 from ..agent.context import ContextOptions, build_workspace_context_bundle
 from ..agent.context_assembler import ContextAssembler
@@ -51,7 +53,7 @@ from ..agent.usage import UsageTracker
 from ..agent.working_context import WorkingContextStore
 from ..app import default_tools
 from ..config import load_config_layers
-from ..core.errors import ConfigError, LLMHTTPError
+from ..core.errors import ConfigError, LLMError, LLMHTTPError
 from ..core.events import (
     ContextCompressed,
     EventBus,
@@ -64,7 +66,7 @@ from ..core.redact import SecretRedactor
 from ..llm.base import LLMProvider
 from ..llm.registry import API_KEY_ENV, create_provider, resolve_settings
 from ..safety.policy import SandboxPolicy
-from ..safety.sandbox import ExecutionSandbox
+from ..safety.sandbox import ExecutionSandbox, SandboxError
 from ..session.memory import MemoryKind, MemoryScope, MemoryStore
 from ..tools.base import (
     PermissionMode,
@@ -75,7 +77,7 @@ from ..tools.base import (
 from ..tools.registry import ToolRegistry
 
 
-BEHAVIOR_BENCHMARK_SCHEMA_VERSION = 1
+BEHAVIOR_BENCHMARK_SCHEMA_VERSION = 2
 _IGNORED_WORKSPACE_PARTS = frozenset({
     ".git", ".krelcode", ".pytest_cache", "__pycache__",
 })
@@ -85,6 +87,7 @@ class BehaviorMetric(str, Enum):
     """Machine-readable behavior acceptance metrics."""
 
     TASK_SUCCESS = "task_success"
+    WORKFLOW_FOLLOWED = "workflow_followed"
     REQUIRED_TOOL_USE = "required_tool_use"
     TRAJECTORY_SCOPE = "trajectory_scope"
     TESTS_VERIFIED = "tests_verified"
@@ -94,6 +97,16 @@ class BehaviorMetric(str, Enum):
     COMPACT_CONTINUITY = "compact_continuity"
     SAFE_EXECUTION = "safe_execution"
     TRIAL_STABILITY = "trial_stability"
+
+
+class BehaviorErrorKind(str, Enum):
+    """Stable failure classes for provider/runtime diagnostics."""
+
+    TIMEOUT = "timeout"
+    PROVIDER = "provider"
+    SANDBOX = "sandbox"
+    CONFIGURATION = "configuration"
+    INTERNAL = "internal"
 
 
 @dataclass(frozen=True)
@@ -125,9 +138,13 @@ class BehaviorCase:
     description: str
     seed: Callable[[Path, Path], tuple[MemorySeed, ...]]
     execute: Callable[["BehaviorSession"], Awaitable["BehaviorOutcome"]]
+    expected_workflow: str = ""
 
     def as_dict(self) -> dict[str, str]:
-        return {"id": self.id, "description": self.description}
+        payload = {"id": self.id, "description": self.description}
+        if self.expected_workflow:
+            payload["expected_workflow"] = self.expected_workflow
+        return payload
 
 
 @dataclass
@@ -263,8 +280,10 @@ class BehaviorTrialResult:
     answer: str = ""
     tools: tuple[ToolObservation, ...] = ()
     usage: Mapping[str, int] = field(default_factory=dict)
+    cost_usd: float | None = None
     duration_ms: int = 0
     error: str = ""
+    error_kind: str = ""
     workspace_diff: WorkspaceDiff = WorkspaceDiff()
     facts: Mapping[str, object] = field(default_factory=dict)
 
@@ -280,8 +299,10 @@ class BehaviorTrialResult:
             ],
             "tool_count": len(self.tools),
             "usage": dict(self.usage),
+            "cost_usd": self.cost_usd,
             "duration_ms": self.duration_ms,
             "error": self.error,
+            "error_kind": self.error_kind,
             "workspace_diff": self.workspace_diff.as_dict(),
             "facts": dict(self.facts),
         }
@@ -299,6 +320,7 @@ class BehaviorReport:
     passed: bool
     results: tuple[BehaviorTrialResult, ...]
     duration_ms: int
+    profile: Mapping[str, object] = field(default_factory=dict)
 
     def case_summary(self) -> dict[str, dict[str, object]]:
         summary: dict[str, dict[str, object]] = {}
@@ -306,6 +328,10 @@ class BehaviorReport:
         for case_id in case_ids:
             trials = [item for item in self.results if item.case_id == case_id]
             passed = sum(1 for item in trials if item.passed)
+            costs = [
+                float(item.cost_usd) for item in trials
+                if item.cost_usd is not None
+            ]
             summary[case_id] = {
                 "trials": len(trials),
                 "passed": passed,
@@ -321,6 +347,7 @@ class BehaviorReport:
                 "output_tokens": sum(
                     int(item.usage.get("output_tokens", 0) or 0)
                     for item in trials),
+                "cost_usd": round(sum(costs), 6) if costs else None,
             }
         return summary
 
@@ -349,8 +376,20 @@ class BehaviorReport:
             }
         return summary
 
+    def error_summary(self) -> dict[str, int]:
+        summary: dict[str, int] = {}
+        for result in self.results:
+            if not result.error_kind:
+                continue
+            summary[result.error_kind] = summary.get(result.error_kind, 0) + 1
+        return summary
+
     def as_dict(self, *, include_content: bool = False) -> dict[str, object]:
         cases = self.case_summary()
+        costs = [
+            float(item.cost_usd) for item in self.results
+            if item.cost_usd is not None
+        ]
         return {
             "schema_version": self.schema_version,
             "kind": "live_model_behavior",
@@ -359,6 +398,7 @@ class BehaviorReport:
             "model": self.model,
             "passed": self.passed,
             "duration_ms": self.duration_ms,
+            "profile": dict(self.profile),
             "summary": {
                 "cases": len(cases),
                 "stable_cases": sum(
@@ -374,6 +414,18 @@ class BehaviorReport:
                     sum(1 for item in self.results if item.passed)
                     / len(self.results) if self.results else 0.0
                 ),
+                "tool_calls": sum(len(item.tools) for item in self.results),
+                "input_tokens": sum(
+                    int(item.usage.get("input_tokens", 0) or 0)
+                    for item in self.results),
+                "output_tokens": sum(
+                    int(item.usage.get("output_tokens", 0) or 0)
+                    for item in self.results),
+                "total_tokens": sum(
+                    int(item.usage.get("total_tokens", 0) or 0)
+                    for item in self.results),
+                "cost_usd": round(sum(costs), 6) if costs else None,
+                "errors": self.error_summary(),
             },
             "cases": cases,
             "metrics": self.metric_summary(),
@@ -600,6 +652,7 @@ class BehaviorBenchmarkRunner:
         max_steps: int = 14,
         context_max_tokens: int = 30_000,
         sandbox_backend: str = "auto",
+        trial_timeout_seconds: float = 300.0,
         provider_name: str = "",
         model_name: str = "",
     ) -> None:
@@ -609,6 +662,7 @@ class BehaviorBenchmarkRunner:
         self.max_steps = max(1, int(max_steps))
         self.context_max_tokens = max(4_000, int(context_max_tokens))
         self.sandbox_backend = sandbox_backend
+        self.trial_timeout_seconds = max(0.01, float(trial_timeout_seconds))
         self.provider_name = provider_name
         self.model_name = model_name
 
@@ -634,7 +688,7 @@ class BehaviorBenchmarkRunner:
         results: list[BehaviorTrialResult] = []
         for case in selected:
             for trial in range(1, self.trials + 1):
-                results.append(await self._run_trial(case, trial))
+                results.append(await self._run_trial_with_timeout(case, trial))
         case_summary = BehaviorReport(
             schema_version=BEHAVIOR_BENCHMARK_SCHEMA_VERSION,
             generated_at="",
@@ -654,7 +708,50 @@ class BehaviorBenchmarkRunner:
             passed=passed,
             results=tuple(results),
             duration_ms=_elapsed_ms(started),
+            profile=self._profile(selected),
         )
+
+    def _profile(self, selected: Sequence[BehaviorCase]) -> dict[str, object]:
+        suite_payload = json.dumps(
+            [case.as_dict() for case in selected],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return {
+            "krelcode_version": __version__,
+            "python_version": platform.python_version(),
+            "platform": platform.system().lower() or sys.platform,
+            "suite_hash": hashlib.sha256(suite_payload).hexdigest(),
+            "cases": [case.id for case in selected],
+            "trials": self.trials,
+            "max_steps": self.max_steps,
+            "context_max_tokens": self.context_max_tokens,
+            "sandbox_backend": self.sandbox_backend,
+            "trial_timeout_seconds": self.trial_timeout_seconds,
+        }
+
+    async def _run_trial_with_timeout(
+        self, case: BehaviorCase, trial: int,
+    ) -> BehaviorTrialResult:
+        started = time.monotonic()
+        try:
+            return await asyncio.wait_for(
+                self._run_trial(case, trial),
+                timeout=self.trial_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            return BehaviorTrialResult(
+                case_id=case.id,
+                trial=trial,
+                passed=False,
+                checks=(),
+                duration_ms=_elapsed_ms(started),
+                error=(
+                    "TimeoutError: trial exceeded "
+                    f"{self.trial_timeout_seconds:g}s"),
+                error_kind=BehaviorErrorKind.TIMEOUT.value,
+            )
 
     async def _run_trial(
         self, case: BehaviorCase, trial: int,
@@ -696,7 +793,27 @@ class BehaviorBenchmarkRunner:
                     usage = session.usage.session
                     facts = dict(outcome.facts)
                     facts.update(session.context_facts())
-                    checks = tuple(outcome.checks)
+                    checks = list(outcome.checks)
+                    if case.expected_workflow:
+                        workflow = (
+                            session.loop.current_task_workflow()
+                            if session.loop is not None else None)
+                        actual_workflow = (
+                            workflow.task_type.value if workflow is not None else "")
+                        confidence = (
+                            workflow.classification.confidence
+                            if workflow is not None else "")
+                        checks.append(_check(
+                            BehaviorMetric.WORKFLOW_FOLLOWED,
+                            actual_workflow == case.expected_workflow,
+                            (
+                                f"selected workflow {actual_workflow or 'none'} "
+                                f"(expected {case.expected_workflow}, "
+                                f"confidence {confidence or 'none'})"
+                            ),
+                        ))
+                        facts["task_workflow"] = actual_workflow
+                        facts["task_workflow_confidence"] = confidence
                     return BehaviorTrialResult(
                         case_id=case.id,
                         trial=trial,
@@ -713,6 +830,7 @@ class BehaviorBenchmarkRunner:
                             "cache_read": usage.cache_read,
                             "cache_creation": usage.cache_creation,
                         },
+                        cost_usd=session.usage.cost_usd,
                         duration_ms=_elapsed_ms(started),
                         workspace_diff=session.workspace_diff(),
                         facts=facts,
@@ -726,6 +844,7 @@ class BehaviorBenchmarkRunner:
                     duration_ms=_elapsed_ms(started),
                     error=_safe_error(
                         exc, session.redactor if session is not None else None),
+                    error_kind=_error_kind(exc),
                 )
 
 
@@ -752,6 +871,17 @@ def _seed_edit_verify(workspace: Path, _home: Path) -> tuple[MemorySeed, ...]:
         "class AnswerTest(unittest.TestCase):\n"
         "    def test_answer(self):\n"
         "        self.assertEqual(answer(), 43)\n",
+    )
+    return ()
+
+
+def _seed_review_no_edit(
+    workspace: Path, _home: Path,
+) -> tuple[MemorySeed, ...]:
+    _write(
+        workspace / "src" / "a.py",
+        "def ratio(value, divisor):\n"
+        "    return value / divisor\n",
     )
     return ()
 
@@ -915,6 +1045,53 @@ async def _run_edit_verify(session: BehaviorSession) -> BehaviorOutcome:
                 ),
             ),
             _workspace_check(diff, allowed={"src/a.py"}),
+            _sandbox_check(session),
+        ],
+    )
+
+
+async def _run_review_no_edit(session: BehaviorSession) -> BehaviorOutcome:
+    answer = await session.run_turn(
+        "Review only `src/a.py` as a code review. Identify the highest-risk "
+        "runtime bug, cite its line number, and do not modify any file."
+    )
+    tools = session.observer.tools
+    target_reads = tuple(
+        item for item in tools
+        if item.name == "read_file"
+        and _tool_path(item, session.workspace_root) == "src/a.py"
+    )
+    scope_violations = _scope_violations(
+        tools,
+        session.workspace_root,
+        allowed_reads={"src/a.py"},
+        allow_test_commands=False,
+    )
+    finding = _answer_has_zero_division_risk(answer)
+    diff = session.workspace_diff()
+    return BehaviorOutcome(
+        answer=answer,
+        checks=[
+            _check(
+                BehaviorMetric.TASK_SUCCESS,
+                finding,
+                "the review identified division by zero at the reported line",
+            ),
+            _check(
+                BehaviorMetric.REQUIRED_TOOL_USE,
+                any(item.success for item in target_reads),
+                "read_file successfully inspected src/a.py",
+            ),
+            _check(
+                BehaviorMetric.TRAJECTORY_SCOPE,
+                not scope_violations,
+                (
+                    "review stayed within src/a.py"
+                    if not scope_violations else
+                    "unexpected tools/scope: " + ", ".join(scope_violations)
+                ),
+            ),
+            _workspace_check(diff, allowed=()),
             _sandbox_check(session),
         ],
     )
@@ -1100,12 +1277,20 @@ BEHAVIOR_CASES: tuple[BehaviorCase, ...] = (
         "Read only the named file and answer from real tool evidence",
         _seed_read_scope,
         _run_read_scope,
+        expected_workflow="code_explanation",
     ),
     BehaviorCase(
         "edit-verify",
         "Modify the requested file and run the real test command",
         _seed_edit_verify,
         _run_edit_verify,
+    ),
+    BehaviorCase(
+        "review-no-edit",
+        "Review one file for a concrete defect without mutating the workspace",
+        _seed_review_no_edit,
+        _run_review_no_edit,
+        expected_workflow="code_review",
     ),
     BehaviorCase(
         "instruction-precedence",
@@ -1239,6 +1424,25 @@ def _answer_has_int(answer: str, value: int) -> bool:
     return bool(re.search(rf"(?<!\d){value}(?!\d)", answer))
 
 
+def _answer_has_zero_division_risk(answer: str) -> bool:
+    text = answer.casefold()
+    risk = any(marker in text for marker in (
+        "zero division",
+        "division by zero",
+        "divide by zero",
+        "zerodivisionerror",
+        "divisor is zero",
+        "divisor == 0",
+        "除数为零",
+        "除以零",
+    ))
+    line = re.search(
+        r"(?i)(?:\bline\s*2\b|a\.py\s*:\s*2\b|第\s*2\s*行)",
+        answer,
+    )
+    return risk and line is not None
+
+
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -1262,6 +1466,18 @@ def _safe_error(
     return f"{type(error).__name__}: {message[:limit]}"
 
 
+def _error_kind(error: BaseException) -> str:
+    if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
+        return BehaviorErrorKind.TIMEOUT.value
+    if isinstance(error, LLMError):
+        return BehaviorErrorKind.PROVIDER.value
+    if isinstance(error, SandboxError):
+        return BehaviorErrorKind.SANDBOX.value
+    if isinstance(error, ConfigError):
+        return BehaviorErrorKind.CONFIGURATION.value
+    return BehaviorErrorKind.INTERNAL.value
+
+
 def _text_report(
     report: BehaviorReport, *, include_content: bool = False,
 ) -> str:
@@ -1269,6 +1485,14 @@ def _text_report(
         f"Krelcode Live Model Behavior Benchmark v{report.schema_version}",
         f"provider: {report.provider or '?'} · model: {report.model or '?'}",
     ]
+    if report.profile:
+        lines.append(
+            "suite: "
+            f"krelcode={report.profile.get('krelcode_version', '?')} · "
+            f"python={report.profile.get('python_version', '?')} · "
+            f"hash={str(report.profile.get('suite_hash', '?'))[:12]} · "
+            f"timeout={report.profile.get('trial_timeout_seconds', '?')}s"
+        )
     for result in report.results:
         status = "PASS" if result.passed else "FAIL"
         tokens = result.usage.get("total_tokens", 0)
@@ -1278,7 +1502,8 @@ def _text_report(
             f"{tokens} tokens"
         )
         if result.error:
-            lines.append(f"  error: {result.error}")
+            kind = f" [{result.error_kind}]" if result.error_kind else ""
+            lines.append(f"  error{kind}: {result.error}")
         for check in result.checks:
             marker = "ok" if check.passed else "fail"
             lines.append(f"  {marker:4s} {check.metric.value}: {check.detail}")
@@ -1290,7 +1515,7 @@ def _text_report(
             f"  {case_id}: {summary['passed']}/{summary['trials']} passed · "
             f"pass@k={summary['pass_at_k']} · stable={summary['stable']} · "
             f"tools={summary['tools']} · input={summary['input_tokens']} · "
-            f"output={summary['output_tokens']}"
+            f"output={summary['output_tokens']} · cost={summary['cost_usd']}"
         )
     return "\n".join(lines)
 
@@ -1315,6 +1540,9 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--live-max-steps", type=int, default=14,
         help="每个 live 模型轮次允许的最大代理步数")
+    parser.add_argument(
+        "--trial-timeout", type=float, default=300.0,
+        help="单个 live trial 的总超时秒数（默认 300）")
     parser.add_argument(
         "--sandbox-backend", default="auto",
         choices=("auto", "static", "seatbelt", "bubblewrap"),
@@ -1388,6 +1616,7 @@ def run_live_command(args: argparse.Namespace) -> int:
         trials=getattr(args, "trials", 1),
         max_steps=getattr(args, "live_max_steps", 14),
         sandbox_backend=getattr(args, "sandbox_backend", "auto"),
+        trial_timeout_seconds=getattr(args, "trial_timeout", 300.0),
         provider_name=settings.provider,
         model_name=settings.model or "provider-default",
     )
@@ -1413,6 +1642,7 @@ __all__ = [
     "BehaviorBenchmarkRunner",
     "BehaviorCase",
     "BehaviorCheck",
+    "BehaviorErrorKind",
     "BehaviorMetric",
     "BehaviorReport",
     "BehaviorTrialResult",

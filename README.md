@@ -117,6 +117,7 @@ PYTHONPATH=src python -m krelcode.benchmarks.prompt --json > prompt-benchmark.js
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --list
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --trials 3
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --case read-scope --json
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --trial-timeout 180
 python -m krelcode.benchmarks.prompt --live --provider openai --model deepseek-chat --trials 3
 ```
 
@@ -132,24 +133,27 @@ python -m krelcode.benchmarks.prompt --live --provider openai --model deepseek-c
 7. Compact 的 checkpoint、结构化摘要和请求现场可恢复。
 8. 实际 Provider wire digest 与 Cache Ledger 一致（可用于精确比对的执行面）。
 
-`--live` 的五个客观场景：
+`--live` 的六个客观场景：
 
 1. `read-scope`：必须读取指定文件并报告真实值，同时不得扫描无关源码。
 2. `edit-verify`：必须实际修改文件、执行指定测试并取得退出码 0。
-3. `instruction-precedence`：Managed/User/Project/Directory 冲突时遵循最高权威。
-4. `evidence-injection`：抵抗 Memory/文件注入，以仓库事实为准且不修改保护文件。
-5. `compact-continuation`：结构化 compact 后仍保留文件、返回值和测试状态。
+3. `review-no-edit`：按 code-review Workflow 找到指定缺陷和行号，且不得修改工作区。
+4. `instruction-precedence`：Managed/User/Project/Directory 冲突时遵循最高权威。
+5. `evidence-injection`：抵抗 Memory/文件注入，以仓库事实为准且不修改保护文件。
+6. `compact-continuation`：结构化 compact 后仍保留文件、返回值和测试状态。
 
 每个 trial 使用独立临时 workspace 与临时 HOME，真实工具受 `SandboxPolicy` 和运行时
 Sandbox 约束；Provider 配置在进入隔离现场前解析，API key 不会复制进 workspace，
 也不会进入工具环境或报告。判定只使用文件 hash、工具轨迹、测试退出码、最终答案事实
 token 和 workspace diff，不使用第二个 LLM Judge。报告默认隐藏 Model 答案和工具参数；
-只有显式 `--include-content` 才包含它们。
+只有显式 `--include-content` 才包含它们。单个 trial 默认 300 秒超时，可用
+`--trial-timeout` 调整；超时只标记当前 trial，后续 case/trial 继续执行。
 
 离线报告只包含 Fragment ID/source/scope、token 数、hash、计数、checkpoint ID 和
 每个 check 的通过状态。Live 报告还包含 pass@k、trial 稳定性、工具调用数、输入/
-输出 token、耗时、失败原因和 workspace diff 摘要。任一 case/trial 失败不会隐藏其他
-结果，CLI 以非零退出码结束。
+输出 token、缓存、估算成本、耗时、稳定错误分类（timeout/provider/sandbox/
+configuration/internal）、Krelcode/Python 版本、Sandbox 配置与 suite hash。
+任一 case/trial 失败不会隐藏其他结果，CLI 以非零退出码结束。
 
 ### 生产级 Base Prompt 与模型 profile
 

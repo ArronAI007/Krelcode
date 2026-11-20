@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from krelcode.benchmarks import (
     BEHAVIOR_BENCHMARK_SCHEMA_VERSION,
     BEHAVIOR_CASES,
     BehaviorBenchmarkRunner,
+    BehaviorErrorKind,
     BehaviorMetric,
 )
 from krelcode.benchmarks import prompt as benchmark_prompt
@@ -58,15 +60,39 @@ def _compact_summary() -> str:
 
 
 def test_behavior_catalog_is_distinct_and_covers_real_tasks():
-    assert len(BEHAVIOR_CASES) == 5
+    assert len(BEHAVIOR_CASES) == 6
     assert len({case.id for case in BEHAVIOR_CASES}) == len(BEHAVIOR_CASES)
     assert {case.id for case in BEHAVIOR_CASES} == {
         "read-scope",
         "edit-verify",
+        "review-no-edit",
         "instruction-precedence",
         "evidence-injection",
         "compact-continuation",
     }
+
+
+def test_review_case_finds_bug_without_modifying_workspace():
+    good = _run("review-no-edit", [
+        Message.assistant(tool_calls=[
+            ToolCall("read-a", "read_file", {"path": "src/a.py"}),
+        ]),
+        "Line 2 can raise ZeroDivisionError when divisor is zero.",
+    ])
+    assert good.passed
+    checks = _checks(good.results[0])
+    assert checks[BehaviorMetric.WORKFLOW_FOLLOWED]
+    assert good.results[0].workspace_diff.empty
+    assert good.results[0].facts["task_workflow"] == "code_review"
+
+    no_finding = _run("review-no-edit", [
+        Message.assistant(tool_calls=[
+            ToolCall("read-a", "read_file", {"path": "src/a.py"}),
+        ]),
+        "The code looks fine.",
+    ])
+    assert not no_finding.passed
+    assert not _checks(no_finding.results[0])[BehaviorMetric.TASK_SUCCESS]
 
 
 def test_read_scope_requires_real_target_read_and_rejects_noise_reads():
@@ -229,8 +255,8 @@ def test_trial_report_collects_provider_usage_and_duration():
         "output_tokens": 5,
         "total_tokens": 15,
     }
-    report = BehaviorBenchmarkRunner(
-        lambda: MockProvider(
+    def provider():
+        result = MockProvider(
             scripted=[
                 Message.assistant(tool_calls=[
                     ToolCall("read-a", "read_file", {"path": "src/a.py"}),
@@ -238,7 +264,12 @@ def test_trial_report_collects_provider_usage_and_duration():
                 "42",
             ],
             usage=usage,
-        ),
+        )
+        result.model = "gpt-4o-mini"
+        return result
+
+    report = BehaviorBenchmarkRunner(
+        provider,
         cases=(_case("read-scope"),),
         sandbox_backend="static",
     ).run()
@@ -247,6 +278,8 @@ def test_trial_report_collects_provider_usage_and_duration():
     assert result.usage["input_tokens"] == 20
     assert result.usage["output_tokens"] == 10
     assert result.usage["total_tokens"] == 30
+    assert result.cost_usd is not None and result.cost_usd > 0
+    assert report.case_summary()["read-scope"]["cost_usd"] == result.cost_usd
     assert result.duration_ms >= 0
 
 
@@ -270,6 +303,12 @@ def test_report_is_content_light_by_default():
         report.as_dict(include_content=True), ensure_ascii=False)
     assert "ANSWER_MARKER_42" in shown
 
+    payload = report.as_dict()
+    assert payload["profile"]["krelcode_version"]
+    assert len(payload["profile"]["suite_hash"]) == 64
+    assert payload["profile"]["trial_timeout_seconds"] == 300.0
+    assert payload["summary"]["tool_calls"] == 2
+
 
 def test_provider_http_error_body_is_not_copied_into_report():
     def fail_provider():
@@ -286,8 +325,33 @@ def test_provider_http_error_body_is_not_copied_into_report():
     ).run()
     encoded = json.dumps(report.as_dict(include_content=True))
     assert "HTTP 500" in encoded
+    assert report.results[0].error_kind == BehaviorErrorKind.PROVIDER.value
     assert "sk-secret-123" not in encoded
     assert "private repository text" not in encoded
+
+
+def test_trial_timeout_is_reported_and_does_not_abort_suite():
+    class HangingProvider(MockProvider):
+        async def stream(self, messages, tools=None, *, evidence=None):
+            await asyncio.sleep(10)
+            if False:  # pragma: no cover - keep this an async generator
+                yield None
+
+    report = BehaviorBenchmarkRunner(
+        HangingProvider,
+        cases=(_case("read-scope"),),
+        trials=2,
+        sandbox_backend="static",
+        trial_timeout_seconds=0.05,
+    ).run()
+
+    assert not report.passed
+    assert len(report.results) == 2
+    assert all(
+        result.error_kind == BehaviorErrorKind.TIMEOUT.value
+        for result in report.results
+    )
+    assert report.error_summary() == {BehaviorErrorKind.TIMEOUT.value: 2}
 
 
 def test_live_cli_list_does_not_require_credentials(capsys):

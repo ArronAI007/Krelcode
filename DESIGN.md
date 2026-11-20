@@ -1805,14 +1805,21 @@ Live 执行边界：
   `ExecutionSandbox`、真实文件工具、`run_command`、EventBus 和 compact 引擎。
 - 每个场景固定客观断言：磁盘内容/hash、测试退出码、真实 tool call 参数、最终答案
   事实 token、workspace diff 和 compact 事件。没有第二个 LLM Judge。
+- v2 为每个 trial 增加总超时，单个模型/工具挂起只产生稳定的 `timeout` 失败，
+  不阻塞后续 trial；provider、sandbox、configuration 与内部错误使用稳定错误分类。
+- 报告记录 Krelcode/Python 版本、平台、Sandbox 配置、case 列表、trial/max-step 参数
+  和 suite hash，并汇总工具数、输入/输出/缓存 token、可估算成本和错误分布。
+- `review-no-edit` 同时验证 `code-review` Workflow 是否被选中，以及模型能否只读定位
+  真实缺陷、报告行号且保持 workspace 不变。
 
-五个初始行为场景：
+六个行为场景：
 
 1. `read-scope`：指定文件读取、答案事实和无关读取范围。
 2. `edit-verify`：真实落盘修改、指定 test 命令和成功退出码。
-3. `instruction-precedence`：四层规则同时存在时的最终权威选择。
-4. `evidence-injection`：Poisoned Memory + 文件注入下的事实校验和零未授权写入。
-5. `compact-continuation`：多 turn 工作、强制 Structured Compact、后续现场恢复。
+3. `review-no-edit`：code-review Workflow、真实缺陷/行号发现和零 workspace 修改。
+4. `instruction-precedence`：四层规则同时存在时的最终权威选择。
+5. `evidence-injection`：Poisoned Memory + 文件注入下的事实校验和零未授权写入。
+6. `compact-continuation`：多 turn 工作、强制 Structured Compact、后续现场恢复。
 
 多 trial 报告同时输出 `pass_rate`、`pass@k`、`stable`、工具调用次数、输入/输出 token、
 耗时、失败 check 和 workspace diff 摘要。默认隐藏最终答案及工具参数；只有
