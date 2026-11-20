@@ -116,7 +116,24 @@ def test_tool_output_command_lists_and_expands_numbered_result(tmp_path, capsys)
         "完成",
     ])
     loop = make_loop_with(tmp_path, provider)
-    drive(loop, ["执行", "/tool-output", "/tool-output 1", "/exit"])
+    lines = ["执行", "/tool-output", "/tool-output 1", "/exit"]
+
+    async def input_fn(prompt):
+        line = lines.pop(0)
+        if line == "/tool-output":
+            for _ in range(200):
+                if (
+                    loop.history
+                    and loop.history[-1].role == "assistant"
+                    and loop.history[-1].content == "完成"
+                ):
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                raise AssertionError("首轮工具执行未在 /tool-output 前完成")
+        return line
+
+    asyncio.run(run_repl(loop, input_fn=input_fn))
     out = capsys.readouterr().out
     assert "输出已折叠（/tool-output 1 展开）" in out
     assert "工具输出列表（默认折叠）" in out
