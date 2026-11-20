@@ -247,6 +247,12 @@ ToolSearch 只搜索已通过运行时过滤的候选集，不能加载被禁用
 
 Playbook Fragment 使用 `tool_playbook:<id>` 来源、`managed` 信任级别和 session 稳定层，可进入缓存前缀但不可压缩、不可手动切换。其 token 计入 Context 预算，`/context plan|why|cache` 可查看 active tools、playbook content hash 和缓存归属。工具池或 Provider 能力变化会同时改变 Playbook 内容与工具目录 hash，避免提示词描述的能力和真实 Schema 不一致。
 
+### 任务类型 Workflow Fragment
+
+每个用户 turn 在进入模型前只做一次确定性任务分类，并选择一个 L9 Workflow Fragment：`general`、`bug-fix`、`feature-implementation`、`refactor`、`code-explanation`、`code-review`、`test-verification` 或 `repository-exploration`。Workflow 提供该任务类型的执行顺序、完成条件和禁止项，例如 bug fix 必须先建立失败证据、定位根因、最小修复并做回归验证；code review 必须按风险排序、给出文件/行号证据且不得擅自修改代码。
+
+Workflow 是 turn 级 `managed` instruction，不进入稳定缓存前缀，也不会被 compact 删除。分类只读取用户指令正文，忽略附件正文和 fenced code；显式“解释指定文件”的 TurnIntent 优先映射到 `code-explanation`。分类结果、置信度、命中信号、Workflow 版本与内容 hash 进入 PromptPlan/ProviderMessages 和 `/context why workflow:<id>`，方便解释某轮为什么采用了该执行策略。
+
 ### P2：差异化能力
 
 - **LSP 客户端**：配置 `[lsp].enabled = true` 后，按扩展名懒启动语言服务器；提供

@@ -88,6 +88,12 @@ def _action_dominates_read(intent_text: str) -> bool:
     return False
 
 
+def instruction_text(user_input: str) -> str:
+    """Return bounded user prose without attachment bodies or fenced examples."""
+    prose = _ATTACHED_FILE_RE.sub(" ", str(user_input or ""))
+    return _CODE_FENCE_RE.sub(" ", prose)[:_INTENT_TEXT_LIMIT]
+
+
 @dataclass(frozen=True)
 class TurnIntent:
     """一次用户请求的结构化意图。"""
@@ -135,10 +141,8 @@ class TurnIntent:
 def infer_turn_intent(workspace_root: Path, user_input: str) -> TurnIntent:
     """保守识别高置信度的“仅解释明确文件”请求。"""
     attached_paths = _ATTACHED_FILE_RE.findall(user_input)
-    # 附件正文可能包含“修改/测试”等词，不能参与意图判断。
-    prose = _ATTACHED_FILE_RE.sub(" ", user_input)
-    # 评审/代码粘贴场景的大段 fenced code 不是用户指令，不参与意图判断。
-    prose = _CODE_FENCE_RE.sub(" ", prose)[:_INTENT_TEXT_LIMIT]
+    # 附件正文和 fenced code 可能包含“修改/测试”等词，不参与指令判断。
+    prose = instruction_text(user_input)
     path_matches = _FILE_PATH_RE.findall(prose) + attached_paths
     intent_text = prose
     for match in path_matches:

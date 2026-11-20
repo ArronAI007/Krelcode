@@ -14,6 +14,7 @@ from krelcode.agent.context_usage import build_context_usage_snapshot
 from krelcode.agent.loop import AgentLoop
 from krelcode.agent.query import QueryEvent
 from krelcode.agent.tokens import estimate_history_tokens, estimate_text_tokens
+from krelcode.agent.workflows import select_task_workflow
 from krelcode.core.context_usage import CacheSegmentSnapshot
 from krelcode.core.events import ContextAssembled, ContextCompressed
 from krelcode.core.messages import Message
@@ -278,9 +279,11 @@ def test_real_request_overhead_triggers_one_compact_then_reassembles(tmp_path):
     history_only = estimate_history_tokens(loop.history)
     contract_tokens = estimate_text_tokens(
         loop.last_mode_permission_contract.render())
+    workflow_tokens = estimate_text_tokens(
+        select_task_workflow("final question").content)
     loop.context_manager = ContextManager(
         provider,
-        max_tokens=history_only + 490 + contract_tokens,
+        max_tokens=history_only + 490 + contract_tokens + workflow_tokens,
         keep_recent=2,
     )
     events = []

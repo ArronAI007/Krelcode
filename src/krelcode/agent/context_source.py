@@ -30,6 +30,7 @@ from .tokens import estimate_text_tokens
 from .tool_pool import TurnToolPool
 
 if TYPE_CHECKING:
+    from .workflows import TaskWorkflowSelection
     from .working_context import WorkingContextSnapshot
 
 CATEGORY_SYSTEM = "system"
@@ -113,6 +114,7 @@ class ContextRequest:
     prompt_snapshot: Optional[PromptSnapshot] = None
     tool_pool: Optional[TurnToolPool] = None
     intent: Optional[TurnIntent] = None
+    task_workflow: Optional["TaskWorkflowSelection"] = None
     runtime_context: Tuple[str, ...] = ()
     working_context: Optional["WorkingContextSnapshot"] = None
     relevant_memory: Tuple[str, ...] = ()

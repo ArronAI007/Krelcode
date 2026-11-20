@@ -37,6 +37,7 @@ src/krelcode/
 │   ├── context.py    # Context v3 配置：分层工作区上下文与 token 预算
 │   ├── tool_pool.py  # TurnToolPool：每轮工具快照与动态目录
 │   ├── tool_playbooks.py # 工具级 L5 操作规则与 advertised tools 选择
+│   ├── workflows.py  # 任务分类、L9 Workflow Fragment 与执行策略
 │   └── prompts.py    # 系统提示词组装
 ├── tools/       # 工具层（实现 Tool 端口）
 │   ├── base.py       # Tool 协议 + ToolResult + ToolContext
@@ -1222,6 +1223,9 @@ Context v3 以 `PromptAssembler` 为唯一请求级装配入口，`ContextAssemb
 - `ToolPlaybookCatalog` 只根据本轮 Provider 实际 advertised 的工具生成 L5 操作规则；
   disable、权限/运行模式过滤、Intent 收窄和尚未加载的 deferred 工具不会获得 Playbook，
   避免提示词能力与真实工具边界不一致。
+- `TaskWorkflowClassifier` 在 turn 开始时只分类一次，`TaskWorkflowCatalog` 从固定任务类型
+  中选择一个 L9 turn/managed Workflow；附件正文与代码围栏不参与分类，显式文件解释 Intent
+  优先。Workflow 进入 dynamic hash，但不改变 Base Prompt 与工具 Playbook 的稳定缓存前缀。
 - `[context].engine` 默认 `v3`；`legacy`（别名 `v2`）只保留一个发布周期用于回退，
   未知值 fail-safe 回落 v3。engine 写入 `ContextAssembly`、`ContextPlanSnapshot` 和
   `ContextUsageSnapshot`，`/context` 与 stream-json 都可确认实际路径。

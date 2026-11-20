@@ -81,6 +81,7 @@ from .tool_playbooks import (
     DEFAULT_TOOL_PLAYBOOK_CATALOG,
     ToolPlaybookCatalog,
 )
+from .workflows import DEFAULT_TASK_WORKFLOW_CATALOG, TaskWorkflowCatalog
 
 
 @dataclass(frozen=True)
@@ -272,12 +273,15 @@ class PromptAssembler:
             Callable[[], Optional[PromptFragmentRegistry]]
         ] = None,
         tool_playbook_catalog: Optional[ToolPlaybookCatalog] = None,
+        task_workflow_catalog: Optional[TaskWorkflowCatalog] = None,
     ) -> None:
         self.context_assembler = context_assembler or ContextAssembler(
             default_context_sources())
         self.registry_provider = registry_provider
         self.tool_playbook_catalog = (
             tool_playbook_catalog or DEFAULT_TOOL_PLAYBOOK_CATALOG)
+        self.task_workflow_catalog = (
+            task_workflow_catalog or DEFAULT_TASK_WORKFLOW_CATALOG)
         self.engine = str(
             getattr(self.context_assembler, "engine", "v3") or "v3")
 
@@ -292,6 +296,11 @@ class PromptAssembler:
             snapshot, context_request)
         prompt_omissions = _prompt_omission_details(
             snapshot, context_request, omitted)
+        current_user = _current_user_message(context_request.history)
+        workflow_fragments = ()
+        if context_request.task_workflow is not None:
+            workflow_fragments = (self.task_workflow_catalog.fragment(
+                context_request.task_workflow),)
         playbook_fragments = self.tool_playbook_catalog.fragments_for_tools(
             _advertised_tool_names(
                 request.tools, context_request.tool_pool))
@@ -322,7 +331,6 @@ class PromptAssembler:
             for layer in dynamic_assembly.layers
         )
 
-        current_user = _current_user_message(context_request.history)
         conversation_fragments = _conversation_fragments(
             context_request.history,
             current_user,
@@ -334,6 +342,7 @@ class PromptAssembler:
                 for fragment in (
                     *prompt_fragments,
                     *playbook_fragments,
+                    *workflow_fragments,
                     *attachment_fragments,
                     *dynamic_fragments,
                     *conversation_fragments,
@@ -378,6 +387,7 @@ class PromptAssembler:
         registry_and_attachment_fragments = (
             *prompt_fragments,
             *playbook_fragments,
+            *workflow_fragments,
             *attachment_fragments,
         )
         contributions = _token_contributions(
@@ -954,6 +964,13 @@ _PROMPT_BLOCK_METADATA_KEYS = frozenset({
     "tool_playbook_content_hash",
     "tool_playbook_tools",
     "tool_playbook_active_tools",
+    "task_workflow",
+    "task_workflow_version",
+    "task_workflow_hash",
+    "task_workflow_content_hash",
+    "task_type",
+    "task_confidence",
+    "task_signals",
     "mcp_server",
     "mcp_servers",
     "attachment_id",

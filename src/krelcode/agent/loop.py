@@ -112,6 +112,7 @@ from .fragments import (
     workspace_rule_fragments,
 )
 from .intent import TurnIntent, infer_turn_intent
+from .workflows import TaskWorkflowSelection, select_task_workflow
 from .pricing import match_context_window
 from .prompt_assembler import (
     PromptAssembler,
@@ -301,6 +302,7 @@ class AgentLoop:
         self._token_total = 0
         self._failure_counts: Dict[str, int] = {}
         self._turn_intent = TurnIntent()
+        self._turn_workflow: Optional[TaskWorkflowSelection] = None
         self._active_tool_pool: Optional[TurnToolPool] = None
         self._turn_tool_context = tool_context
         self._turn_abort_signal = TurnAbortSignal()
@@ -325,6 +327,8 @@ class AgentLoop:
     def reset(self) -> None:
         """清空历史，只保留系统提示词。"""
         self.history = self.history[:1] if self.history and self.history[0].role == "system" else []
+        self._turn_intent = TurnIntent()
+        self._turn_workflow = None
         self.last_prompt_plan = None
         self.last_provider_messages = None
         self.last_context_assembly = None
@@ -565,6 +569,7 @@ class AgentLoop:
             raise RuntimeError("Agent 正在执行查询，不能并发启动直接工具")
         saved_context = self._turn_tool_context
         saved_intent = self._turn_intent
+        saved_workflow = self._turn_workflow
         saved_pool = self._active_tool_pool
         saved_abort = self._turn_abort_signal
         saved_turn_id = self._current_turn_id
@@ -576,6 +581,7 @@ class AgentLoop:
         )
         self._begin_turn(direct_turn)
         self._turn_intent = TurnIntent()
+        self._turn_workflow = None
         self._active_tool_pool = TurnToolPool(
             self.registry,
             intent=self._turn_intent,
@@ -590,6 +596,7 @@ class AgentLoop:
         finally:
             self._turn_tool_context = saved_context
             self._turn_intent = saved_intent
+            self._turn_workflow = saved_workflow
             self._active_tool_pool = saved_pool
             self._turn_abort_signal = saved_abort
             self._current_turn_id = saved_turn_id
@@ -622,6 +629,8 @@ class AgentLoop:
         self._token_total = 0
         self._turn_intent = infer_turn_intent(
             self.tool_context.workspace_root, user_input)
+        self._turn_workflow = select_task_workflow(
+            user_input, intent=self._turn_intent)
         self.working_context_store.begin_turn(
             self._current_turn_id, user_input)
         # 一轮只构建一次：后续每个模型 step 和每次工具执行共用同一份能力快照。
@@ -708,6 +717,7 @@ class AgentLoop:
     ) -> None:
         resolved_turn_id = turn_id or f"turn-{next(self._turn_counter)}"
         self._current_turn_id = resolved_turn_id
+        self._turn_workflow = None
         self._turn_abort_signal = TurnAbortSignal()
         snapshot = self.tool_context.runtime
         if self.runtime_snapshot_provider is not None:
@@ -945,6 +955,7 @@ class AgentLoop:
             prompt_snapshot=getattr(self, "prompt_snapshot", None),
             tool_pool=self._current_tool_pool(),
             intent=self._turn_intent,
+            task_workflow=self._turn_workflow,
             runtime_context=tuple(self.runtime_context),
             working_context=self.working_context_store.snapshot(),
             relevant_memory=tuple(self.restored_memory_context),
@@ -1219,6 +1230,10 @@ class AgentLoop:
     def current_tool_pool(self) -> TurnToolPool:
         """Public, read-mostly view used by /tools and diagnostics."""
         return self._current_tool_pool()
+
+    def current_task_workflow(self) -> Optional[TaskWorkflowSelection]:
+        """Return the workflow selected for the current turn, if any."""
+        return self._turn_workflow
 
     # -- 内部：执行一批工具调用 -------------------------------------------------
 
