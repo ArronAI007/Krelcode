@@ -1,7 +1,6 @@
 """Step 23 测试：子代理增强——历史消毒、interrupt 打断、wait_many、多 id 工具。"""
 
 import asyncio
-import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -78,9 +77,32 @@ class SleepyTool:
     parameters: Dict[str, Any] = {
         "type": "object", "properties": {"s": {"type": "number"}}, "required": ["s"]}
 
+    def __init__(self, tracker=None) -> None:
+        self.tracker = tracker
+
     async def execute(self, args, ctx) -> ToolResult:
-        await asyncio.sleep(float(args.get("s", 0)))
+        seconds = float(args.get("s", 0))
+        if self.tracker is not None:
+            await self.tracker.sleep(seconds)
+        else:
+            await asyncio.sleep(seconds)
         return ToolResult(content="slept")
+
+
+class ConcurrencyTracker:
+    """Record actual overlap without depending on process wall-clock speed."""
+
+    def __init__(self) -> None:
+        self.active = 0
+        self.max_active = 0
+
+    async def sleep(self, seconds: float) -> None:
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            await asyncio.sleep(seconds)
+        finally:
+            self.active -= 1
 
 
 def make_manager(llm, tools=None, bus=None) -> SubagentManager:
@@ -202,14 +224,16 @@ def test_send_tool_interrupt_param():
 
 def test_wait_many_parallel():
     async def go():
-        mgr = make_manager(SleepyProvider(seconds=0.2))
+        tracker = ConcurrencyTracker()
+        mgr = make_manager(
+            SleepyProvider(seconds=0.2),
+            tools=[SleepyTool(tracker=tracker)],
+        )
         await mgr.spawn("t1")
         await mgr.spawn("t2")
-        start = time.monotonic()
         handles = await mgr.wait_many(["a1", "a2"], timeout=5)
-        elapsed = time.monotonic() - start
         assert [h.status for h in handles] == ["completed", "completed"]
-        assert elapsed < 0.6, f"两个 0.2s 子代理应并行，实际 {elapsed:.2f}s"
+        assert tracker.max_active == 2
         await mgr.shutdown()
     asyncio.run(go())
 
