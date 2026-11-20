@@ -5,7 +5,6 @@
 """
 
 import asyncio
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -73,7 +72,12 @@ class SleepyTool:
     parameters: Dict[str, Any] = {
         "type": "object", "properties": {"s": {"type": "number"}}, "required": ["s"]}
 
+    def __init__(self, barrier: Optional[asyncio.Barrier] = None):
+        self.barrier = barrier
+
     async def execute(self, args, ctx) -> ToolResult:
+        if self.barrier is not None:
+            await asyncio.wait_for(self.barrier.wait(), timeout=2)
         await asyncio.sleep(float(args.get("s", 0)))
         return ToolResult(content="slept")
 
@@ -190,15 +194,15 @@ def test_send_input_while_running_queues():
 
 def test_parallel_children():
     async def go():
-        mgr = make_manager(SleepyProvider(seconds=0.25))
-        start = time.monotonic()
+        # A barrier directly proves that all children reach the tool together;
+        # a wall-clock threshold becomes flaky on loaded CI machines.
+        barrier = asyncio.Barrier(3)
+        sleepy = SleepyTool(barrier=barrier)
+        mgr = make_manager(SleepyProvider(seconds=0.25), tools=[sleepy])
         for i in range(3):
             await mgr.spawn(f"并行任务{i}")
-        for aid in ("a1", "a2", "a3"):
-            h = await mgr.wait(aid, timeout=5)
-            assert h.status == "completed"
-        elapsed = time.monotonic() - start
-        assert elapsed < 0.7, f"三个 0.25s 子任务应并行，实际 {elapsed:.2f}s"
+        handles = await mgr.wait_many(["a1", "a2", "a3"], timeout=5)
+        assert [handle.status for handle in handles] == ["completed"] * 3
         await mgr.shutdown()
     asyncio.run(go())
 
