@@ -5,13 +5,13 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（Step 111）
+## 1. 项目统计（Step 112）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 64,765 行（Python，**零第三方运行时依赖**） |
-| 测试 | 32,980 行 / 138 个测试文件 / 1,418 个通过用例 + 2 个本地端口集成 skip |
-| 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
+| 源码 | 66,316 行（Python，**零第三方运行时依赖**） |
+| 测试 | 33,430 行 / 143 个测试文件 / 1,428 个通过用例 + 2 个本地端口集成 skip |
+| 提交 | 158 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 16 + 只读 `memory_search`（装配 MemoryStore 时）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
 | CLI 入口 | REPL 对话 · -m 单次（text/json/stream-json）· stream-json 持久会话 · Python SDK · doctor · init · review |
@@ -20,13 +20,13 @@
 源码按层分布：
 
 ```
-agent 17566 · session 11719 · benchmarks 5905 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4353
+agent 17566 · session 11719 · benchmarks 7456 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4353
 ui 3965 · llm 3797 · tools 3479 · safety 2861 · mcp 2679 · subagent 2362
 lsp 1295 · plugins 1105 · core 1023 · skills 957 · web 891 · jobs 582 · entrypoints 226
 ```
 
 core 只有 1023 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
-测试代码量约为源码的 51%，覆盖协议、安全边界与端到端行为。
+测试代码量约为源码的 50%，覆盖协议、安全边界与端到端行为。
 
 ## 2. 关键架构决策时间线
 
@@ -91,6 +91,7 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 | v1.00 | Prompt Conflict Analyzer | 最终 Prompt 排序后做无模型、content-light 的跨层冲突分析：识别直接否定、显式对立值和条件冲突，固定 Managed → Mode Contract → Base → Directory → Project → User → Style → Working → Reminder 权威顺序；同权冲突不按 ID 裁决。中英文分句/CJK bigram、代码围栏过滤、主题候选索引与有界缓存把基础 Prompt 分析降到约 2ms。报告贯通 PromptPlan、Provider channel、Snapshot 与 `/context conflicts|why`，只保存来源、分类、winner、置信度和 hash，不保存指令正文，也不改变 Provider `full_hash` |
 | v1.01 | Prompt Release 与 Profile 校准 | 新增不可变 `PromptRelease` 与内容无关 release hash；`ModelProfileCalibration` 绑定真实 live baseline 的 release/profile/contract/suite/provider/model，支持精确与最长 pattern scope。运行时 `calibrated/uncalibrated/stale` 可见，calibration 不进入指令通道；主 Agent、`/model`、子代理、`/context why` 与 Benchmark report 共用身份链。Baseline schema v2 嵌入 calibration，gate 对 Release/Profile/contract/frozen-suite/state 漂移 fail-closed |
 
+| v1.02 | 最终完全对齐验收 | 新增 `benchmarks/acceptance.py`：冻结 17 个 requirement/12 个 capability area，以 static/runtime/offline/live 四层证据执行 18 个 required checks。最终 `accepted` 要求 9 个离线生产面、运行时探针、冻结 Prompt Release/Parity contract/suite 和 fresh 的真实 provider report/gate 同时通过；Live 校验独立核对 16-case × 至少 3-trial、stability/pass@k、runtime error、24h 时效和 gate-report 时序，不信任裸 `passed=true`。缺 Live Gate 只能 `pending_live`（退出 2），任何 required 失败为 `failed`（退出 1）；最终 JSON 再执行 content-light 自检与异常/凭据内容清除，统一入口为 `--live --gate <baseline> --final-acceptance` |
 ## 3. 文件导览（能力 → 位置）
 
 | 想找什么 | 去哪里 |
@@ -136,6 +137,7 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 | WebFetch / WebSearch | `web/http.py` `web/tools.py` |
 | TypeScript SDK | `typescript-sdk/src/index.ts` |
 | 全局安装/升级/卸载 | `install.sh` |
+| 最终 fail-closed 验收 | `benchmarks/acceptance.py` |
 
 ## 4. 测试方法论
 
@@ -158,9 +160,9 @@ SSE/Streamable 的真实 http.server 集成用 socket bind 探测自动 skip。
 脚本化驱动 4 个典型任务（修 bug+git+安全 / 子代理委派 / 重构改名 /
 自我修正+写保护），断言工作区最终状态、审计痕迹与行为不变量。
 
-## 5. 真模型验收（待执行）
+## 5. 真模型验收（需要 key 与 accepted baseline）
 
-离线套件验证「机制」，真模型验证「行为」。配好 key 后运行：
+离线套件验证「机制」，真模型验证「行为」。快速 smoke test 可运行：
 
 ```bash
 export OPENAI_API_KEY=sk-...     # 或 ANTHROPIC_API_KEY / GEMINI_API_KEY
@@ -168,8 +170,17 @@ python scripts/real_acceptance.py                        # 7 阶段自动验收
 python scripts/real_acceptance.py --provider anthropic --keep
 ```
 
-7 阶段：基础对话 → get_time 工具调用 → 文件写读 → 命令执行 →
-上下文注入 → 会话录制恢复 → 用量成本。退出码 = 失败阶段数。
+最终发布门禁使用 fresh 的 16-case × 3-trial suite：
+
+```bash
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --live \
+  --gate benchmarks/baselines/PROVIDER-MODEL.json \
+  --final-acceptance --json
+```
+
+状态与退出码：`accepted=0`、`pending_live=2`、`failed=1`。最终验收会同时运行 9 个离线
+生产面、runtime probes、Prompt Release/Parity/Calibration 身份检查和 Live Gate；不能与
+`--include-content`、`--no-sdk` 或单 case 混用。
 
 建议再手动过一遍 REPL：流式渲染、`/model` 热切换、steering 插话、
 `/stop`、`/undo`、`/compact`、`/cost`、MCP 服务器（如有）。

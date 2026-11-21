@@ -2478,7 +2478,10 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> None:
         help="在完整 3-trial suite 通过后保存 prompt parity baseline")
     parser.add_argument(
         "--include-content", action="store_true",
-        help="在调试报告中包含最终答案和工具参数（gate/save 时禁用）")
+        help="在调试报告中包含最终答案和工具参数（gate/save/final acceptance 时禁用）")
+    parser.add_argument(
+        "--final-acceptance", action="store_true",
+        help="在 fresh live Parity Gate 后执行 Step 112 最终 fail-closed 验收")
     parser.add_argument(
         "--tune", action="store_true",
         help="根据失败轨迹生成需人工审核的 Prompt 调优候选")
@@ -2504,9 +2507,15 @@ def _parity_payload(
     tuning_report=None,
     gate: PromptParityGateResult | None = None,
     baseline_path: str = "",
+    final_acceptance=None,
 ) -> object:
     benchmark = report.as_dict(include_content=include_content)
-    if tuning_report is None and gate is None and not baseline_path:
+    if (
+        tuning_report is None
+        and gate is None
+        and not baseline_path
+        and final_acceptance is None
+    ):
         return benchmark
     payload: dict[str, object] = {"benchmark": benchmark}
     if tuning_report is not None:
@@ -2515,11 +2524,22 @@ def _parity_payload(
         payload["gate"] = gate.as_dict()
     if baseline_path:
         payload["baseline_path"] = baseline_path
+    if final_acceptance is not None:
+        payload["final_acceptance"] = final_acceptance.as_dict()
     return payload
 
 
 def run_live_command(args: argparse.Namespace) -> int:
     """CLI adapter used by ``python -m krelcode.benchmarks.prompt --live``."""
+    if getattr(args, "final_acceptance", False) and any((
+        getattr(args, "contract", False),
+        getattr(args, "release", False),
+        getattr(args, "list", False),
+    )):
+        print("--final-acceptance 不能与 contract/release/list 混用",
+              file=sys.stderr)
+        return 2
+
     if getattr(args, "contract", False):
         payload = contract_summary(PROMPT_PARITY_CONTRACT)
         if getattr(args, "json", False):
@@ -2590,17 +2610,30 @@ def run_live_command(args: argparse.Namespace) -> int:
     gate_path = getattr(args, "gate", None)
     save_path = getattr(args, "save_baseline", None)
     include_content = bool(getattr(args, "include_content", False))
+    final_acceptance = bool(getattr(args, "final_acceptance", False))
     if gate_path and save_path:
         print("--gate 与 --save-baseline 不能同时使用", file=sys.stderr)
         return 2
-    if include_content and (gate_path or save_path):
-        print("gate/baseline 流程禁止 --include-content，以保持报告 content-light",
+    if include_content and (gate_path or save_path or final_acceptance):
+        print("gate/baseline/final acceptance 流程禁止 --include-content，"
+              "以保持报告 content-light", file=sys.stderr)
+        return 2
+    if final_acceptance and not getattr(args, "live", False):
+        print("--final-acceptance 必须与 --live 一起运行 fresh live gate",
+              file=sys.stderr)
+        return 2
+    if final_acceptance and not gate_path:
+        print("--final-acceptance 需要 --gate <accepted-baseline.json>",
+              file=sys.stderr)
+        return 2
+    if final_acceptance and getattr(args, "no_sdk", False):
+        print("--final-acceptance 必须运行 SDK 生产面，不能使用 --no-sdk",
               file=sys.stderr)
         return 2
     requested_cases = tuple(getattr(args, "case", []) or ())
-    if (gate_path or save_path) and requested_cases:
-        print("gate/baseline 必须运行完整 case manifest，不能同时指定 --case",
-              file=sys.stderr)
+    if (gate_path or save_path or final_acceptance) and requested_cases:
+        print("gate/baseline/final acceptance 必须运行完整 case manifest，"
+              "不能同时指定 --case", file=sys.stderr)
         return 2
 
     baseline = None
@@ -2701,6 +2734,22 @@ def run_live_command(args: argparse.Namespace) -> int:
         gate_result = evaluate_prompt_parity(
             report, baseline, PROMPT_PARITY_CONTRACT)
 
+    acceptance_report = None
+    if final_acceptance:
+        if gate_result is None:
+            print("final acceptance 缺少 live Parity Gate", file=sys.stderr)
+            return 2
+        from .acceptance import FinalAcceptanceRunner
+
+        acceptance_report = FinalAcceptanceRunner(
+            workspace=workspace,
+        ).run(
+            include_sdk=True,
+            sdk_timeout=float(getattr(args, "sdk_timeout", 30.0)),
+            live_gate=gate_result,
+            live_report=report,
+        )
+
     tune_output = getattr(args, "tune_output", None)
     if tuning_report is not None and tune_output:
         try:
@@ -2731,6 +2780,7 @@ def run_live_command(args: argparse.Namespace) -> int:
                 tuning_report=selected_tuning,
                 gate=gate_result,
                 baseline_path=saved_baseline_path,
+                final_acceptance=acceptance_report,
             ),
             ensure_ascii=False,
             indent=2,
@@ -2746,6 +2796,11 @@ def run_live_command(args: argparse.Namespace) -> int:
         if gate_result is not None:
             print()
             print(gate_result.render_text())
+        if acceptance_report is not None:
+            print()
+            print(acceptance_report.render_text())
+    if acceptance_report is not None:
+        return acceptance_report.exit_code
     if gate_result is not None:
         return 0 if gate_result.passed else 1
     return 0 if report.passed else 1

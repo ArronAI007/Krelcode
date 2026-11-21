@@ -2128,3 +2128,46 @@ suite hash、case manifest、trial floor、case pass@k/stability、整体 report
 
 任何语义变更都必须显式更新 contract version/hash，并通过同 commit 的 parity 测试与
 新的真实模型 baseline/gate；不能通过修改 baseline 或降低 trial floor 静默放宽。
+
+## Final Fail-closed Acceptance（Step 112）
+
+Step 112 不再把“全量测试通过”或“有 gate 文件”直接等同于最终对齐，而是新增
+`benchmarks/acceptance.py` 作为唯一最终验收器。契约冻结 17 个 capability requirement，
+覆盖 12 个 area：entrypoint、provider、tools、prompt、context、recovery、subagents、
+extensions、safety、interfaces、release、leakage。每个 requirement 必须引用真实生产
+artifact 与测试文件；验收器再增加一个独立的 frozen-contract check，因此报告固定为 18 个
+required checks。
+
+证据矩阵分为四层：
+
+1. `static`：接受契约 hash、required artifact/test 是否存在。
+2. `runtime`：直接实例化生产 `ToolRegistry`、`TurnToolPool`、Secret Guard、Command
+   Registry、ExtensionRegistry 和 Provider event stream，验证模块“可导入”之外的运行边界。
+3. `offline`：执行 `PromptBenchmarkRunner` 的 main/headless/stream-json/SDK/subagent/
+   resume/fork/rewind/compact 九个生产面与八项结构指标。
+4. `live`：要求 fresh 的真实模型 report 与 `PromptParityGateResult`，不能由 mock、
+   scripted provider、缺失 source report、旧时间戳或只有 `passed=true` 的对象伪造。
+
+最终状态严格限定为：
+
+- `accepted`：所有 required check 通过，且 live evidence 新鲜、完整并绑定冻结身份；退出码 0。
+- `pending_live`：确定性矩阵和 runtime probes 全部通过，但尚无 Live Gate；退出码 2。
+- `failed`：任一 required check 失败；退出码 1。
+
+Live 验收不只信任 Parity Gate 的 `passed` 字段。`FinalAcceptanceRunner` 会独立核对：
+
+- Gate schema/version/contract hash 与冻结 Prompt Parity contract 一致；
+- Gate 的全部预期 check 均通过，baseline hash 是有效 SHA-256；
+- source report 的 suite hash 与 Gate、冻结 suite 一致；
+- report 使用真实非 mock provider，contract version/hash、calibration state 合法；
+- 16 个 case 全部存在，每案至少 3 trials 且 stable/pass@k、零失败、零 runtime error；
+- report 与 Gate 时间戳处于 24 小时窗口内，Gate 在 report 完成后 5 分钟容差内生成；
+- Prompt Release、Parity contract、behavior suite、offline report、live report、gate 的
+  hash 全部进入最终 fingerprint。
+
+报告保持 content-light。`_safe_error()` 只输出异常类型，不复制任意异常消息；Runner 对
+最终 JSON 再做一次递归自检，拒绝禁止字段、Prompt benchmark 正文标记、超长字符串和
+credential-shaped 值。若某个 probe 误携带内容，相关 detail/evidence 会被清除、验收失败，
+而不是把泄漏内容写入报告。CLI 使用
+`python -m krelcode.benchmarks.prompt --live --gate <baseline> --final-acceptance`，
+且禁止 `--include-content`、`--no-sdk`、`--case` 或没有 fresh Live Gate 的离线验收。

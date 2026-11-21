@@ -1515,7 +1515,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     add_cli_arguments(parser)
     args = parser.parse_args(list(argv) if argv is not None else None)
-    if args.live or args.contract or args.release:
+    if args.live or args.contract or args.release or args.final_acceptance:
         return run_live_command(args)
     if args.list:
         cases = [

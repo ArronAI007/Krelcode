@@ -15,6 +15,20 @@ __all__ = [
     "PROMPT_PARITY_MINIMUM_TRIALS",
     "PROMPT_PARITY_SCHEMA_VERSION",
     "PROMPT_TUNING_SCHEMA_VERSION",
+    "AcceptanceArea",
+    "AcceptanceCheckResult",
+    "AcceptanceCheckStatus",
+    "AcceptanceEvidenceKind",
+    "AcceptanceRequirement",
+    "FINAL_ACCEPTANCE_CONTRACT",
+    "FINAL_ACCEPTANCE_CONTRACT_VERSION",
+    "FINAL_ACCEPTANCE_LIVE_MAX_AGE_SECONDS",
+    "FINAL_ACCEPTANCE_SCHEMA_VERSION",
+    "FROZEN_FINAL_ACCEPTANCE_CONTRACT_HASH",
+    "FinalAcceptanceContract",
+    "FinalAcceptanceReport",
+    "FinalAcceptanceRunner",
+    "FinalAcceptanceStatus",
     "BehaviorBenchmarkRunner",
     "BehaviorCase",
     "BehaviorCheck",
@@ -46,6 +60,7 @@ __all__ = [
     "contract_summary",
     "evaluate_prompt_parity",
     "load_prompt_baseline",
+    "run_offline_acceptance",
     "main",
     "save_prompt_baseline",
 ]
@@ -54,6 +69,18 @@ __all__ = [
 def __getattr__(name: str):
     if name not in __all__:
         raise AttributeError(name)
+    if (
+        name.startswith((
+            "Acceptance",
+            "FinalAcceptance",
+            "FINAL_ACCEPTANCE",
+            "FROZEN_FINAL_ACCEPTANCE",
+        ))
+        or name == "run_offline_acceptance"
+    ):
+        from . import acceptance
+
+        return getattr(acceptance, name)
     if name.startswith("Behavior") or name.startswith("BEHAVIOR_"):
         from . import behavior
 

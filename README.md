@@ -157,7 +157,18 @@ PYTHONPATH=src python -m krelcode.benchmarks.prompt --live \
 # 发布 gate：release/profile/calibration/contract/provider/suite/case/pass@3/stability/error 任一不符即失败
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live \
   --gate benchmarks/baselines/PROVIDER-MODEL.json
+
+# Step 112 最终验收：离线/运行时探针 + fresh live report + accepted Parity baseline
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --live \
+  --gate benchmarks/baselines/PROVIDER-MODEL.json --final-acceptance --json
 ```
+
+最终验收固定 17 个 capability requirement、12 个 area，共 18 个 fail-closed check。
+`accepted` 只有在离线 9 个执行面、运行时探针、冻结的 Prompt/Parity/Release 身份和
+fresh 的完整 16-case × 至少 3-trial Live Gate 全部通过时才返回，退出码为 `0`；
+只通过确定性矩阵而没有 Live Gate 时状态为 `pending_live`，退出码为 `2`；任一 required
+check 失败则为 `failed`，退出码为 `1`。`--final-acceptance` 不允许 `--include-content`、
+`--no-sdk`、单 case 或已有离线报告的“借用”，必须运行完整现场。
 
 离线层覆盖 `main`、`headless`、`stream-json`、`sdk`、`subagent`、`resume`、
 `fork`、`rewind`、`compact` 九个执行面，并验收八项结构指标：
@@ -200,7 +211,7 @@ evidence、cache、subagents、compact、recovery、leakage）、16 个 live cas
 Sandbox 约束；Provider 配置在进入隔离现场前解析，API key 不会复制进 workspace，
 也不会进入工具环境或报告。判定只使用文件 hash、工具轨迹、测试退出码、最终答案事实
 token 和 workspace diff，不使用第二个 LLM Judge。报告默认隐藏 Model 答案和工具参数；
-只有显式 `--include-content` 才包含它们；`--gate` 和 `--save-baseline` 禁止该开关。单个 trial 默认 300 秒超时，可用
+只有显式 `--include-content` 才包含它们；`--gate`、`--save-baseline` 和最终验收禁止该开关。单个 trial 默认 300 秒超时，可用
 `--trial-timeout` 调整；超时只标记当前 trial，后续 case/trial 继续执行。
 
 离线报告只包含 Fragment ID/source/scope、token 数、hash、计数、checkpoint ID 和
@@ -587,6 +598,8 @@ Step 104 统一 Context / Cache Ledger：每次最终 Provider 请求（包括 m
 Step 110 增加确定性的 Prompt Conflict Analyzer：PromptAssembler 在最终 L0-L12 排序后识别直接否定、显式对立值与条件冲突，并按照 `Managed → L5 Mode Contract → L1 Base → Directory → Project → User → Style → Working Context → Turn Reminder` 裁决权威；同权规则明确标为 ambiguous，不按 Fragment ID 随机覆盖。分析器支持中英文与代码围栏过滤，使用主题候选索引和有界缓存，不调用模型。`/context conflicts`、`/context why conflict:<id>` 和 `/context plan` 可查看冲突来源、winner/resolution、置信度和 hash，但报告、Snapshot 与 Provider channel 均不保存指令正文；`conflict_hash` 也与 Provider 请求缓存 hash 解耦。
 
 Step 111 增加 Prompt Release 与模型 Profile 校准闭环：Base section 和 Profile catalog 被归一化为不可变 `PromptRelease` 身份；`ModelProfileCalibration` 只能引用真实 live Benchmark baseline，并绑定 release/profile/contract/behavior-suite/provider/model。Calibration 是内容无关证据，不进入 System Instruction。运行时无匹配证据显示 `uncalibrated`，Release/contract/suite 变化显示 `stale`；Baseline schema v2 和 Release gate 对上述任一漂移 fail-closed。主 Agent、`/model`、子代理、`/context why`、Benchmark report/baseline 共用同一身份链，持久化记录不包含 Prompt、答案、工具参数或密钥。
+
+Step 112 增加可执行最终验收：`benchmarks/acceptance.py` 冻结 17 个 requirement、12 个 capability area，检查静态证据、生产对象运行时探针、9 个离线执行面和 fresh live authority。Live Gate 不能只凭 `passed=true` 注入，验收器会独立核对 source report、真实 provider、冻结 contract/suite、16-case/3-trial manifest、case stability/pass@k、runtime error、时间窗以及 gate/report 生成时序。最终报告执行第二次内容轻量自检；异常文本、Prompt 正文、答案、工具参数、会话正文和凭据形状内容会被拒绝并从报告中清除。
 
 ## 模块结构（依赖严格单向）
 

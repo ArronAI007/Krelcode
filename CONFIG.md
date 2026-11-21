@@ -65,12 +65,13 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--live` | — | 启用真实模型行为层；provider/model 来自用户 → project → local → managed 配置 |
-| `--live --list` | — | 列出 6 个行为场景，不读取 API key |
+| `--live --list` | — | 列出 16 个行为场景，不读取 API key |
 | `--trials` | `1` | 每个场景独立 trial 数，限制 1-20 |
 | `--trial-timeout` | `300` | 单个 trial 总超时秒数；超时只失败当前 trial |
 | `--live-max-steps` | `14` | 每个 Agent turn 的最大模型/工具步数 |
 | `--sandbox-backend` | `auto` | `auto/static/seatbelt/bubblewrap` |
-| `--include-content` | 关闭 | 在报告中包含最终答案与工具参数；默认仅输出计数、hash 和检查结果 |
+| `--include-content` | 关闭 | 在调试报告中包含最终答案与工具参数；gate、baseline 保存和最终验收禁止 |
+| `--final-acceptance` | 关闭 | 在 fresh live Parity Gate 后运行 Step 112 最终 fail-closed 验收；必须同时提供 `--live` 和 `--gate` |
 | `--tune` | 关闭 | 根据失败 trial 的工具轨迹与 checks 生成人工审核用 Prompt 调优候选 |
 | `--tune-output` | — | 将内容轻量的 tuning JSON 写入指定文件；不自动修改任何 Prompt |
 
@@ -429,6 +430,19 @@ provider/model pattern。匹配记录还必须与当前 Release、Profile hash�
 漂移时状态为 `stale`。这两种状态都可正常对话，但 `/context why` 会明确展示，且
 `--gate` 不会接受旧现场。Calibration 只是 Benchmark 证据，不会作为额外 System
 Instruction 注入。
+
+最终发布验收使用：
+
+```bash
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --live \
+  --gate benchmarks/baselines/PROVIDER-MODEL.json --final-acceptance --json
+```
+
+该命令会先完成 fresh live run 和 Parity Gate，再运行 9-surface 离线矩阵、生产对象
+探针与冻结契约检查。`accepted`（退出码 0）同时要求完整 16-case、每案至少 3 trials、
+真实 provider、未过期的 gate/report、冻结 Release/contract/suite，以及报告 content-light。
+仅离线矩阵通过只能得到 `pending_live`（退出码 2）；任何 required gate 失败为 `failed`
+（退出码 1）。最终验收禁止 `--include-content`、`--no-sdk` 和 `--case`。
 
 MCP 远程能力：
 
