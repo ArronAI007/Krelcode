@@ -267,7 +267,7 @@ Prompt 文本授予工具、文件、Sandbox 或审批权限。
 inspect  -> Fragment 元数据、来源、层级、token、hash、enabled 与冲突 ID（不返回正文）
 generate -> 生成可人工审核的候选骨架，立即 evaluate；applied=false，不写 Registry/文件
 compare  -> 比较 Fragment ID、唯一 source 或两段 inline instruction，复用生产冲突分析器
-evaluate -> 用 PromptAuthoringValidator 检查候选，只返回 issue/ID/计数/hash
+evaluate -> 先进入 temporary PromptPlan，执行六项隔离检查，再返回 issue/ID/计数/hash
 ```
 
 `prompt_lab` 不调用模型、不修改 Prompt、不扩大权限；`inspect`、`compare`、`evaluate` 的报告
@@ -285,7 +285,26 @@ generate/evaluate 使用封闭的 Candidate Prompt Schema v1；八个字段全�
   "constraints": [],
   "expected_behavior": [],
   "risk": "low",
-  "evaluation_cases": [],
+  "evaluation_cases": [
+    {
+      "id": "success",
+      "kind": "success",
+      "metric": "assert unrelated file reads == 0",
+      "machine_verifiable": true
+    },
+    {
+      "id": "regression",
+      "kind": "regression",
+      "metric": "assert focused tests exit_code == 0",
+      "machine_verifiable": true
+    },
+    {
+      "id": "security",
+      "kind": "security",
+      "metric": "assert output contains no credential-shaped text",
+      "machine_verifiable": true
+    }
+  ],
   "rollback_plan": "..."
 }
 ```
@@ -670,12 +689,19 @@ Step 115 将候选 Prompt 从旧 authoring dict 提升为正式 `PromptCandidate
 `candidate_hash` 对正文变化敏感，而 evaluate 使用 content-light metadata。旧
 `PromptAuthoringRequest` evaluate 输入继续兼容，但所有路径仍保持不写 Registry、不应用候选。
 
+Step 116 增加候选 Prompt 的隔离评估：canonical candidate 先通过唯一装配路径生成 baseline 与
+candidate 两个内存中的临时 `PromptPlan`，再依次检查当前失败用例、原本稳定回归、Instruction
+优先级、Evidence 注入隔离、当前权限/Sandbox 合同和 cache 边界/hash 确定性。六项全部通过后
+只得到 `review_allowed=true`，仍必须经过人工审核和独立的 Prompt Release 决策；Agent 不能
+修改生产 Prompt 源、写 Registry 或自行应用 Release。旧 `PromptAuthoringRequest` evaluate 输入
+仍可读取，但明确标记为 authoring-only，不能获得 release 资格。
+
 ## 模块结构（依赖严格单向）
 
 ```
 core/    wire-free 规范消息·事件总线·错误（零依赖内核）
 llm/     统一 Provider 机制：transport+SSE / OpenAI·Anthropic·Mock 适配器 / 工厂+配置
-agent/   AgentRuntime / AgentLoop / Fragment Registry / compact（主循环只依赖端口）
+agent/   AgentRuntime / AgentLoop / Fragment Registry / PromptAssembler / compact（主循环只依赖端口）
 tools/   Tool 端口 + Registry + builtin/（每工具一个文件）
 jobs/    后台 Shell Job Manager（进程组、实时输出、游标、kill/list、日志与完成事件）
 skills/  SKILL.md 发现/解析、渐进加载、资源、脚本、热重载

@@ -462,6 +462,27 @@ canonical Candidate Prompt 的字段固定为 `target_fragment`、`objective`、
 cacheability/Instruction authority；不存在时按 project/L6/session 保守处理。evaluate 只返回
 candidate hash、分类计数与内容轻量报告，不返回 proposed_prompt、rollback_plan 或 metric 正文。
 
+canonical evaluate 的隔离流程如下：
+
+```text
+PromptCandidate
+  -> PromptAssembler.build_isolated_plan(baseline)
+  -> PromptAssembler.build_isolated_plan(candidate)
+  -> current-failure-cases
+  -> original-stable-cases
+  -> instruction-precedence
+  -> evidence-injection
+  -> permission-sandbox
+  -> cache-stability
+  -> review_allowed (人工审核入口)
+  -> Prompt Release (独立人工决策)
+```
+
+临时 Plan 不收集 live ContextSources、不调用模型、不写文件或 Registry。六项通过只表示候选
+可以进入人工审核，不表示自动发布；服务始终返回 `production_modified=false`、`applied=false`
+和 `release_requires_manual_review=true`。旧 `PromptAuthoringRequest` evaluate 输入继续兼容，
+但返回 `legacy_authoring_only=true`、`review_allowed=false`，不能绕过隔离门禁。
+
 最终发布验收使用：
 
 ```bash

@@ -5,12 +5,12 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（Step 115）
+## 1. 项目统计（Step 116）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 68,697 行（Python，**零第三方运行时依赖**） |
-| 测试 | 34,676 行 / 142 个 `test_*.py` 模块 / 1,501 个通过用例 + 2 个本地端口集成 skip |
+| 源码 | 69,638 行（Python，**零第三方运行时依赖**） |
+| 测试 | 34,687 行 / 143 个 `test_*.py` 模块 / 1,514 个通过用例 + 2 个本地端口集成 skip |
 | 提交 | 161 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 17 + 只读 `memory_search`（装配 MemoryStore 时）+ 只读 `prompt_lab`（Prompt Authoring 开启时）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
@@ -20,8 +20,8 @@
 源码按层分布：
 
 ```
-agent 18480 · session 11746 · benchmarks 7456 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4369
-ui 3965 · llm 3797 · tools 3479 · safety 2861 · mcp 2679 · subagent 2362
+agent 20444 · session 11747 · benchmarks 7456 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4369
+ui 3965 · llm 3797 · tools 3865 · safety 2861 · mcp 2679 · subagent 2366
 lsp 1295 · plugins 1105 · core 1023 · skills 957 · web 891 · jobs 582 · entrypoints 226
 ```
 
@@ -96,6 +96,7 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 
 | v1.04 | Prompt Engineering Lab | 在 `[prompt.authoring].enabled` 下注册只读 core 工具 `prompt_lab(action=inspect|generate|compare|evaluate)`，复用 Fragment Registry、PromptConflictAnalyzer 和 PromptAuthoringValidator；inspect/compare/evaluate 内容轻量，generate 只返回 `applied=false` 候选。主/子 Agent 的 ToolContext 分别绑定自己的 Registry，工具不写文件、不修改 Registry、不扩大权限，Plan/read-only 模式可用 |
 | v1.05 | Candidate Prompt Schema | PromptAuthoringContract 升为 v2，新增封闭 `PromptCandidate`/`PROMPT_CANDIDATE_SCHEMA`：八个字段必填，risk 仅 low/medium/high，evaluation cases 固定 success/regression/security，未知字段与超界输入 fail-closed。`prompt_lab.generate` 输出 canonical candidate，evaluate 接受新 schema 并兼容旧 authoring 输入；已存在目标自动继承 layer/scope/stability/cacheability/authority，新目标使用 project/L6/session。候选只生成确定性 hash 与 content-light metadata，不写文件、不修改 Registry、不自动应用 |
+| v1.06 | 隔离候选评估 | PromptAuthoringContract 升为 v3；canonical candidate 先通过 baseline/candidate temporary `PromptPlan`，执行当前失败、稳定回归、Instruction 优先级、Evidence 注入、permission/Sandbox、cache stability 六项固定门禁。通过只允许人工 review，Prompt Release 仍需独立人工决策；评估复用真实 ToolContext/Sandbox L5 合同，报告 content-light，且始终 `production_modified=false`、`applied=false`。旧 authoring evaluate 明确不能绕过 Release 资格 |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -116,6 +117,7 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 | 会话任务现场 | `agent/working_context.py`（goal/plan/files/commands/errors） |
 | token 估算/价目/窗口 | `agent/tokens.py` `agent/pricing.py` |
 | 请求级 Context 可观测性 | `core/context_usage.py` `agent/context_usage.py` |
+| 候选 Prompt 隔离评估 | `agent/prompt_isolation.py`（temporary PromptPlan + 六项门禁） |
 | 可插拔上下文来源/确定性装配 | `agent/context_source.py` `agent/context_assembler.py` |
 | 扩展来源目录/配置分层 | `extensions.py` `config.py` |
 | Plugin v2 六类组件/生命周期 | `plugins/{manifest,components,manager,loader}.py` |

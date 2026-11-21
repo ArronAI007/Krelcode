@@ -68,16 +68,21 @@ class PromptLabTool:
     description = (
         "Read-only Prompt engineering lab. Inspect Prompt Fragments and hashes, "
         "generate a canonical, reviewable Prompt candidate, compare two fragments "
-        "or inline instructions, and evaluate a candidate against "
-        "PromptAuthoringContract. "
-        "It never writes Prompt files or applies candidate changes."
+        "or inline instructions, and evaluate a candidate through a temporary "
+        "PromptPlan. Evaluation runs six isolation gates: current failure, stable "
+        "regression, instruction precedence, evidence injection, permission/"
+        "Sandbox, and cache stability. Passing only permits human review and a "
+        "separate Prompt Release decision. It never writes Prompt files, mutates "
+        "the Registry, or applies a candidate."
     )
     prompt = (
         "Use inspect to see active Fragment provenance, placement, token counts, "
         "hashes, and conflicts without returning bodies. Use generate for a local "
         "candidate using the closed Candidate Prompt Schema, then evaluate it. "
-        "Use compare for two Fragment IDs, "
-        "sources, or inline instruction texts. Evaluation and comparison are "
+        "Use compare for two Fragment IDs, sources, or inline instruction texts. "
+        "Canonical evaluation first assembles an in-memory temporary PromptPlan "
+        "and must pass all six isolation gates before human review. Release still "
+        "requires a separate manual decision. Evaluation and comparison are "
         "content-light. Generated candidate text is returned for review only and "
         "is never applied automatically."
     )
@@ -106,11 +111,32 @@ class PromptLabTool:
                     "constraints": ["Do not expand tool authority."],
                     "expected_behavior": ["Read fewer unrelated files."],
                     "risk": "low",
-                    "evaluation_cases": [],
+                    "evaluation_cases": [
+                        {
+                            "id": "success",
+                            "kind": "success",
+                            "metric": "assert unrelated file reads == 0",
+                            "machine_verifiable": True,
+                        },
+                        {
+                            "id": "regression",
+                            "kind": "regression",
+                            "metric": "assert focused tests exit_code == 0",
+                            "machine_verifiable": True,
+                        },
+                        {
+                            "id": "security",
+                            "kind": "security",
+                            "metric": "assert output contains no credential-shaped text",
+                            "machine_verifiable": True,
+                        },
+                    ],
                     "rollback_plan": "Discard the unapplied candidate review.",
                 },
             },
-            description="Validate the closed Candidate Prompt Schema.",
+            description=(
+                "Run the six temporary-PromptPlan isolation gates; passing "
+                "does not apply or release the candidate."),
         ),
         ToolPromptExample(
             title="Compare two instructions",
@@ -164,7 +190,10 @@ class PromptLabTool:
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
         action = str(args.get("action") or "").strip().lower()
-        service = PromptLabService(lambda: getattr(ctx, "prompt_registry", None))
+        service = PromptLabService(
+            lambda: getattr(ctx, "prompt_registry", None),
+            isolation_context=ctx,
+        )
         try:
             if action == "inspect":
                 try:
@@ -237,6 +266,7 @@ class PromptLabTool:
             f"evaluation: {'passed' if report['passed'] else 'needs work'}"
             f" · errors={report['error_count']}"
             f" · warnings={report['warning_count']}",
+            *PromptLabTool._isolation_lines(report, body_returned=True),
             "",
             "```json",
             json.dumps(candidate, ensure_ascii=False, indent=2),
@@ -245,7 +275,7 @@ class PromptLabTool:
         issue_lines = PromptLabTool._issue_lines(report)
         if issue_lines:
             lines.extend(("", *issue_lines))
-        lines.append("No Prompt source or registry entry was modified.")
+        lines.append("No Prompt source, Registry entry, or Release was modified.")
         return "\n".join(lines)
 
     @staticmethod
@@ -276,17 +306,71 @@ class PromptLabTool:
     @staticmethod
     def _render_evaluate(result: Dict[str, Any]) -> str:
         report = result["report"]
+        legacy = bool(result.get("legacy_authoring_only"))
+        release_passed = bool(result.get("passed"))
+        if legacy and report["passed"]:
+            headline = "PASS (authoring only; not Release eligible)"
+        else:
+            headline = "PASS" if release_passed else "FAIL"
         lines = [
-            f"PromptLab evaluate: {'PASS' if report['passed'] else 'FAIL'}"
+            f"PromptLab evaluate: {headline}"
+            f" · authoring={'PASS' if report['passed'] else 'FAIL'}"
             f" · errors={report['error_count']}"
             f" · warnings={report['warning_count']}"
             f" · conflicts={report['conflict_count']}"
             f" · unresolved={report['unresolved_conflict_count']}",
             f"request_hash: {report['request_hash']}",
+            *PromptLabTool._isolation_lines(result),
         ]
         lines.extend(PromptLabTool._issue_lines(report))
         lines.append("body_returned=false")
+        lines.append(
+            "production_modified=false · applied=false · release_requires_manual_review=true")
         return "\n".join(lines)
+
+    @staticmethod
+    def _isolation_lines(
+        result: Dict[str, Any], *, body_returned: bool = False,
+    ) -> tuple[str, ...]:
+        isolation = result.get("isolation")
+        if not isinstance(isolation, dict):
+            return (
+                "isolation: NOT RUN · legacy authoring-only input · Release blocked",
+            )
+        checks = tuple(isolation.get("checks", ()))
+        failed = tuple(isolation.get("failed_checks", ()))
+        review_allowed = bool(isolation.get("review_allowed"))
+        lines = [
+            f"isolation: {'PASS' if isolation.get('passed') else 'FAIL'}"
+            f" · mode={isolation.get('mode')}"
+            f" · {sum(1 for check in checks if check.get('passed'))}/{len(checks)} gates",
+            (
+                "review: eligible for human review · Release requires separate manual approval"
+                if review_allowed else
+                "review: BLOCKED · Release blocked"
+            ),
+        ]
+        for check in checks:
+            state = "PASS" if check.get("passed") else "FAIL"
+            issues = ", ".join(str(item) for item in check.get("issue_codes", ()))
+            suffix = f" · {issues}" if issues else ""
+            lines.append(f"[{state}] {check.get('id', 'unknown')}{suffix}")
+        if failed:
+            lines.append("failed checks: " + ", ".join(str(item) for item in failed))
+        plan = isolation.get("candidate_plan")
+        if isinstance(plan, dict):
+            lines.append(
+                f"temporary plan: fragments={plan.get('fragment_count', 0)}"
+                f" · stable={plan.get('stable_hash', '')[:12] or '(empty)'}"
+                f" · full={plan.get('full_hash', '')[:12] or '(empty)'}"
+                f" · cache boundary={plan.get('cache_boundary_chars', 0)} chars")
+        body_state = (
+            "candidate body returned for review only"
+            if body_returned else "candidate body not returned"
+        )
+        lines.append(
+            f"production_modified=false · applied=false · {body_state}")
+        return tuple(lines)
 
     @staticmethod
     def _issue_lines(report: Dict[str, Any]) -> tuple[str, ...]:

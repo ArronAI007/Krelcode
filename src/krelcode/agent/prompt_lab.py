@@ -33,6 +33,10 @@ from .prompt_authoring import (
 )
 from .prompt_candidate import PromptCandidate
 from .prompt_conflicts import PromptConflictAnalyzer
+from .prompt_isolation import (
+    CandidateIsolationReport,
+    PromptCandidateIsolator,
+)
 
 
 MAX_INSPECT_RECORDS = 100
@@ -170,12 +174,14 @@ class PromptLabService:
         *,
         conflict_analyzer: Optional[PromptConflictAnalyzer] = None,
         authoring_validator: Optional[PromptAuthoringValidator] = None,
+        isolation_context: object | None = None,
     ) -> None:
         self._registry_provider = registry_provider
         self.conflict_analyzer = conflict_analyzer or PromptConflictAnalyzer()
         self.authoring_validator = (
             authoring_validator or PromptAuthoringValidator(self.conflict_analyzer)
         )
+        self.isolation_context = isolation_context
 
     def inspect(self, target: str = "", *, limit: int = 50) -> dict[str, object]:
         target = _text(target, 160)
@@ -237,13 +243,21 @@ class PromptLabService:
         raw = _mapping(spec, "spec")
         if set(raw).intersection(_CANDIDATE_MARKERS):
             candidate = PromptCandidate.from_mapping(raw)
-            report = self._evaluate_candidate(candidate)
+            report, isolation = self._evaluate_candidate(candidate)
+            review_allowed = bool(
+                report.passed and isolation.passed)
             return {
                 "action": "evaluate",
                 "candidate": candidate.content_light_record(),
                 "candidate_hash": candidate.candidate_hash,
                 "report": report.as_dict(),
+                "isolation": isolation.as_dict(),
+                "passed": review_allowed,
+                "review_allowed": review_allowed,
+                "prompt_release_eligible": review_allowed,
+                "release_requires_manual_review": True,
                 "applied": False,
+                "production_modified": False,
                 "contains_prompt_content": False,
             }
 
@@ -254,7 +268,13 @@ class PromptLabService:
         return {
             "action": "evaluate",
             "report": report.as_dict(),
+            "legacy_authoring_only": True,
+            "passed": False,
+            "review_allowed": False,
+            "prompt_release_eligible": False,
+            "release_requires_manual_review": True,
             "applied": False,
+            "production_modified": False,
             "contains_prompt_content": False,
         }
 
@@ -322,13 +342,20 @@ class PromptLabService:
                 if "rollback_plan" in raw else _DEFAULT_ROLLBACK_PLAN
             ),
         })
-        report = self._evaluate_candidate(candidate)
+        report, isolation = self._evaluate_candidate(candidate)
+        review_allowed = bool(report.passed and isolation.passed)
+        evaluation = self._evaluation_record(report, isolation)
         return {
             "action": "generate",
             "candidate": candidate.as_record(),
             "candidate_hash": candidate.candidate_hash,
-            "evaluation": report.as_dict(),
+            "evaluation": evaluation,
+            "passed": review_allowed,
+            "review_allowed": review_allowed,
+            "prompt_release_eligible": review_allowed,
+            "release_requires_manual_review": True,
             "applied": False,
+            "production_modified": False,
             "contains_prompt_content": True,
         }
 
@@ -339,13 +366,36 @@ class PromptLabService:
             if registry is not None else ()
         )
 
-    def _evaluate_candidate(self, candidate: PromptCandidate):
+    def _evaluate_candidate(
+        self,
+        candidate: PromptCandidate,
+    ) -> tuple[object, CandidateIsolationReport]:
         registry = self._registry_provider()
         target = registry.get(candidate.target_fragment) \
             if registry is not None else None
         request = candidate.to_authoring_request(target)
-        return self.authoring_validator.validate(
+        report = self.authoring_validator.validate(
             request, active_fragments=self._active_fragments())
+        isolation = PromptCandidateIsolator(
+            self._registry_provider,
+            context=self.isolation_context,
+        ).evaluate(candidate, authoring_report=report)
+        return report, isolation
+
+    @staticmethod
+    def _evaluation_record(report, isolation: CandidateIsolationReport):
+        record = report.as_dict()
+        review_allowed = bool(report.passed and isolation.passed)
+        record.update({
+            "authoring_passed": report.passed,
+            "isolation_passed": isolation.passed,
+            "passed": review_allowed,
+            "review_allowed": review_allowed,
+            "prompt_release_eligible": review_allowed,
+            "release_requires_manual_review": True,
+            "isolation": isolation.as_dict(),
+        })
+        return record
 
     def request_from_mapping(self, spec: object) -> PromptAuthoringRequest:
         raw = _mapping(spec, "spec")

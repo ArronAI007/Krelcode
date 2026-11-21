@@ -20,7 +20,8 @@ CONFIG_TEMPLATE = '''# Krelcode 配置（默认按 user → project → local �
 # [prompt.authoring]                 # 可选 Prompt 设计/评审契约（默认关闭）
 # enabled = true                     # 启用 prompt_authoring:contract (L6) 与只读 prompt_lab 工具
 # 契约覆盖目标分析、Instruction/Evidence 分离、stable/dynamic、冲突检测、
-# 工具权限设计、可机器验证用例与 canonical Candidate Prompt Schema
+# 工具权限设计、可机器验证用例、canonical Candidate Prompt Schema
+# 以及 temporary PromptPlan 六项隔离评估（通过后仅进入人工审核）
 
 [providers.openai]
 # model = "gpt-4o-mini"

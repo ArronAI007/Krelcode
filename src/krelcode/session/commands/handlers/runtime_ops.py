@@ -1131,7 +1131,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             "  capabilities: objective-analysis · instruction-evidence-separation"
             " · stable-dynamic-placement · conflict-detection"
             " · tool-permission-design · machine-verifiable-validation"
-            " · candidate-prompt-schema",
+            " · candidate-prompt-schema · isolated-candidate-evaluation",
         )
 
     if operation == "conflicts" and len(parts) == 1:

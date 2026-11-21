@@ -117,8 +117,11 @@ def test_contract_is_optional_l6_managed_session_fragment():
     assert "stable cacheable layers" in fragment.content
     assert "conflict analyzer" in fragment.content
     assert "machine-checkable" in fragment.content
+    assert "Isolated evaluation" in fragment.content
+    assert "temporary PromptPlan" in fragment.content
+    assert "never modify production Prompt sources" in fragment.content
     assert "never grants new tools" in fragment.content
-    assert fragment.metadata["prompt_authoring_contract"] == "2"
+    assert fragment.metadata["prompt_authoring_contract"] == "3"
     assert len(fragment.metadata["prompt_authoring_hash"]) == 64
 
     report = PromptConflictAnalyzer().analyze((*base_fragments(), fragment))
@@ -194,11 +197,12 @@ def test_context_authoring_command_exposes_status_without_prompt_content(tmp_pat
         controller.execute_command("/context authoring")).output)
 
     assert "[authoring] enabled" in output
-    assert "contract v2" in output
+    assert "contract v3" in output
     assert "prompt_authoring:contract" in output
     assert "objective-analysis" in output
     assert "machine-verifiable-validation" in output
-    assert "Prompt Authoring Contract v2" not in output
+    assert "isolated-candidate-evaluation" in output
+    assert "Prompt Authoring Contract v3" not in output
 
 
 def test_contract_enters_prompt_plan_as_stable_l6_instruction(tmp_path):
@@ -227,7 +231,7 @@ def test_contract_enters_prompt_plan_as_stable_l6_instruction(tmp_path):
     assert fragment.scope == "managed"
     assert fragment.trust == TRUST_MANAGED
     assert fragment.stable is True
-    assert "Prompt Authoring Contract v2" not in json.dumps(
+    assert "Prompt Authoring Contract v3" not in json.dumps(
         snapshot.as_dict(), ensure_ascii=False)
 
 

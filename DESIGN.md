@@ -2237,7 +2237,7 @@ evaluate → PromptAuthoringValidator → content-light report
 
 ## Candidate Prompt Schema（Step 115）
 
-`agent/prompt_candidate.py` 是候选 Prompt 的唯一正式契约。`PromptAuthoringContract v2` 要求
+`agent/prompt_candidate.py` 是候选 Prompt 的唯一正式契约。`PromptAuthoringContract v3` 要求
 作者返回以下封闭结构，`PROMPT_CANDIDATE_SCHEMA` 与运行时解析器保持一致：
 
 ```json
@@ -2270,3 +2270,47 @@ rollback 正文。
 `applied=false`；`prompt_lab.evaluate` 接受 canonical schema，也继续兼容旧
 `PromptAuthoringRequest` 输入。两条路径都不调用模型、不写文件、不修改 Registry，也不自动应用
 候选。
+
+## Isolated Candidate Evaluation（Step 116）
+
+候选 Prompt 的发布前验证不是第二套 Prompt 渲染器，而是对唯一生产装配路径的同步、无副作用
+子集。`PromptCandidateIsolator` 从当前 Fragment Registry 创建 baseline snapshot 和 candidate
+snapshot；候选 Fragment 只在内存 temporary registry 中存在，随后分别通过
+`PromptAssembler.build_isolated_plan()` 得到两个临时 `PromptPlan`。该入口复用
+`_finalize_plan()` 的排序、L0-L12 分层、Instruction/Evidence channel、冲突裁决和 cache
+boundary；不读取 live ContextSources，也不持久化 snapshot。
+
+```text
+Candidate
+  -> baseline temporary PromptPlan
+  -> candidate temporary PromptPlan
+  -> candidate temporary PromptPlan (determinism replay)
+  -> six isolation gates
+  -> review_allowed
+  -> human review
+  -> Prompt Release decision
+```
+
+六项门禁固定为：
+
+1. `current-failure-cases`：至少一个机器可验证 success case，候选确实改变目标 Fragment，并进入
+   Instruction channel。
+2. `original-stable-cases`：至少一个机器可验证 regression case，验证未修改的 stable Fragment
+   hash、顺序和集合不变；目标 Fragment 自身的预期变化不参与回归比较。
+3. `instruction-precedence`：候选层等于作者声明的目标层，按 L0-L12 排序，未被更高权威规则
+   覆盖，也未产生未裁决冲突。
+4. `evidence-injection`：注入一个不可信隔离 marker，确认它只出现在独立 Evidence channel；
+   不存在 Evidence/Instruction channel 串线，候选正文不能被复制进 Evidence。
+5. `permission-sandbox`：用当前 `ToolContext.runtime`、Tool exposure 和 Sandbox 状态构造真实
+   L5 contract；候选不得修改 L5、扩大权限或绕过当前 mode/Sandbox。
+6. `cache-stability`：重复装配必须得到相同 stable/dynamic/full hash 与 cache boundary；stable
+   前缀顺序不能变化；如果前置 L5 attachment 本身是动态的，后置 L6 Fragment 即使标记为
+   cacheable 也只能进入 dynamic block，检查实际边界而不是简单等同 cacheable 与 stable。
+
+报告是 content-light：只包含 candidate hash、六项 check ID/issue code、case ID、临时 Plan
+计数/hash/boundary 和 Evidence ID，不包含 proposed Prompt、metric 或 rollback 正文。通过后
+服务返回 `review_allowed=true`、`prompt_release_eligible=true`、`release_requires_manual_review=true`、
+`production_modified=false` 与 `applied=false`。`prompt_lab` 只负责提出、评估和展示，不能
+写生产 Prompt 源、Registry 或 Prompt Release；Release 必须由独立人工流程完成。旧
+`PromptAuthoringRequest` evaluate 路径保留兼容，但只能得到 authoring-only 报告，永远不能获得
+Release 资格。

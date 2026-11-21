@@ -320,7 +320,6 @@ class PromptAssembler:
             snapshot, context_request)
         prompt_omissions = _prompt_omission_details(
             snapshot, context_request, omitted)
-        current_user = _current_user_message(context_request.history)
         tool_prompt_specs = self.tool_playbook_catalog.resolve_prompt_specs(
             _normalize_tool_prompt_specs(request.tools))
         workflow_fragments = ()
@@ -343,7 +342,6 @@ class PromptAssembler:
             scope_filter = "file_explanation"
         all_omissions = _dedupe_omissions(
             (*prompt_omissions, *attachment_omissions))
-        all_omitted_ids = tuple(item.id for item in all_omissions)
 
         # ContextSources contribute only the dynamic layers here.  The prompt
         # source is disabled by using an empty snapshot/system prompt so the
@@ -361,10 +359,81 @@ class PromptAssembler:
             for layer in dynamic_assembly.layers
         )
 
+        return self._finalize_plan(
+            context_request=context_request,
+            snapshot=snapshot,
+            prompt_fragments=prompt_fragments,
+            playbook_fragments=playbook_fragments,
+            workflow_fragments=workflow_fragments,
+            attachment_fragments=attachment_fragments,
+            dynamic_fragments=dynamic_fragments,
+            dynamic_assembly=dynamic_assembly,
+            all_omissions=all_omissions,
+            scope_filter=scope_filter,
+            tool_prompt_specs=tool_prompt_specs,
+            per_turn_reminders=request.per_turn_reminders,
+        )
+
+    def build_isolated_plan(
+        self,
+        *,
+        context_request: ContextRequest,
+        snapshot: PromptSnapshot,
+        attachments: Sequence[ContextAttachment] = (),
+        per_turn_reminders: Tuple[str, ...] = (),
+    ) -> PromptPlan:
+        """Build a temporary plan without collecting live ContextSources.
+
+        This is the synchronous, side-effect-free subset used by Candidate
+        Prompt isolation.  It still uses the production ordering, authority,
+        conflict, channel and cache-boundary implementation through
+        ``_finalize_plan``; it does not write or activate the snapshot.
+        """
+        prompt_fragments, omitted, scope_filter = self._prompt_fragments(
+            snapshot, context_request)
+        prompt_omissions = _prompt_omission_details(
+            snapshot, context_request, omitted)
+        attachment_fragments, attachment_omissions = _select_attachment_fragments(
+            attachments, context_request)
+        if not scope_filter and any(
+            item.reason == "file-explanation-scope"
+            for item in attachment_omissions
+        ):
+            scope_filter = "file_explanation"
+        all_omissions = _dedupe_omissions(
+            (*prompt_omissions, *attachment_omissions))
+        return self._finalize_plan(
+            context_request=context_request,
+            snapshot=snapshot,
+            prompt_fragments=prompt_fragments,
+            attachment_fragments=attachment_fragments,
+            dynamic_assembly=_empty_dynamic_assembly(self.engine),
+            all_omissions=all_omissions,
+            scope_filter=scope_filter,
+            per_turn_reminders=per_turn_reminders,
+        )
+
+    def _finalize_plan(
+        self,
+        *,
+        context_request: ContextRequest,
+        snapshot: Optional[PromptSnapshot],
+        prompt_fragments: Sequence[PromptFragment],
+        dynamic_assembly: ContextAssembly,
+        all_omissions: Sequence[PromptOmissionSnapshot],
+        scope_filter: str,
+        playbook_fragments: Sequence[PromptFragment] = (),
+        workflow_fragments: Sequence[PromptFragment] = (),
+        attachment_fragments: Sequence[PromptFragment] = (),
+        dynamic_fragments: Sequence[PromptFragment] = (),
+        tool_prompt_specs: Sequence[ToolPromptSpec] = (),
+        per_turn_reminders: Sequence[str] = (),
+    ) -> PromptPlan:
+        current_user = _current_user_message(context_request.history)
         conversation_fragments = _conversation_fragments(
             context_request.history,
             current_user,
-            request.per_turn_reminders,
+            tuple(per_turn_reminders),
         )
         fragments = _ordered_fragments(
             tuple(
@@ -432,7 +501,7 @@ class PromptAssembler:
             cache=cache,
             contributions=contributions,
             fragment_count=len(fragments),
-            omitted=all_omitted_ids,
+            omitted=tuple(item.id for item in all_omissions),
             scope_filter=scope_filter,
             snapshot=snapshot,
             engine=self.engine,
@@ -456,11 +525,11 @@ class PromptAssembler:
             system_blocks=system_blocks,
             evidence_blocks=evidence_blocks,
             token_contributions=contributions,
-            omitted_fragments=all_omitted_ids,
-            omitted_details=all_omissions,
+            omitted_fragments=tuple(item.id for item in all_omissions),
+            omitted_details=tuple(all_omissions),
             issues=dynamic_assembly.issues,
             context_assembly=assembly,
-            tool_prompt_specs=tool_prompt_specs,
+            tool_prompt_specs=tuple(tool_prompt_specs),
             conflict_report=conflict_report,
         )
 
@@ -534,6 +603,20 @@ class PromptAssembler:
                 trust=TRUST_MANAGED,
             ),
         ), (), ""
+
+
+def _empty_dynamic_assembly(engine: str) -> ContextAssembly:
+    empty_hash = hashlib.sha256(b"").hexdigest()
+    return ContextAssembly(
+        text="",
+        layers=(),
+        stable_prefix_chars=0,
+        stable_hash=empty_hash,
+        full_hash=empty_hash,
+        dynamic_hash=empty_hash,
+        token_contributions=(),
+        engine=engine,
+    )
 
 
 def _fragment_from_context_layer(layer: ContextLayer) -> PromptFragment:
