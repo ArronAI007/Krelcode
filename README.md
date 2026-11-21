@@ -140,6 +140,7 @@ PYTHONPATH=src python -m krelcode.benchmarks.prompt --json > prompt-benchmark.js
 
 # 真实模型行为 Benchmark：provider/model 来自现有分层配置
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --contract --json
+PYTHONPATH=src python -m krelcode.benchmarks.prompt --release --json
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --list
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --trials 3
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --case read-scope --json
@@ -153,7 +154,7 @@ PYTHONPATH=src python -m krelcode.benchmarks.prompt --live \
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live \
   --save-baseline benchmarks/baselines/PROVIDER-MODEL.json
 
-# 发布 gate：contract/provider/suite/case/pass@3/stability/error 任一不符即失败
+# 发布 gate：release/profile/calibration/contract/provider/suite/case/pass@3/stability/error 任一不符即失败
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live \
   --gate benchmarks/baselines/PROVIDER-MODEL.json
 ```
@@ -225,12 +226,17 @@ Base Prompt 固定拆为身份、执行循环、工具纪律、编码质量、�
 ```toml
 [prompt]
 profile = "auto"  # 或 default / claude / deepseek / openai / gemini
+release = "2026.11.21"
+calibration_baselines = ["benchmarks/baselines/deepseek-chat.json"]
 ```
 
 profile 只能追加非权威的模型适配 section，不能替换或弱化共享安全规则。`/model`
 热切换会在 `auto` 模式下重新解析 profile、原子替换 `core:base*` 并更新 stable
-hash；子代理按自身实际模型独立解析。`/context why core:base:safety` 可查看 profile、
-provider/model、匹配方式和 base hash，但不会记录 Prompt 正文。
+hash；子代理按自身实际模型独立解析。每个 profile resolution 同时绑定不可变 Prompt
+Release、section/profile catalog hash 与 Benchmark calibration 身份。没有对应证据时
+明确显示 `uncalibrated`；旧 Release、contract 或 suite 的证据显示 `stale`，普通对话
+仍可运行，但 live release gate fail-closed。`/context why core:base:safety` 可查看
+release/profile/calibration hash、状态与 base hash，但不会记录 Prompt 正文。
 
 REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`（当前工具池的 core/discoverable/deferred/loaded/excluded 状态）、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp [reload|auth <server>]`（状态、热重载、OAuth + PKCE 授权）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>|install|update|enable|disable|remove ...]`（插件生命周期）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/lsp`（语言服务器状态）、`/web`（网页工具安全配置）、`/output-style [list|show <name>|reload|off|<name>]`（声明式输出样式）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|fragments|enable|disable|toggle|reset|cache|ledger|refresh]`（请求 token 分项、来源归因、Fragment 启停、缓存边界与工作区重采）、`/memory [list [scope]|show|add <text> --scope|search|pin|unpin|forget|mode|review|migrate]`（分层记忆、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
 
@@ -579,6 +585,8 @@ Step 103 增加内容轻量的 Prompt Plan 可观测性：每个 Fragment 记录
 Step 104 统一 Context / Cache Ledger：每次最终 Provider 请求（包括 microcompact/compact 后重装配）记录 stable/dynamic/instruction/evidence hash、tool catalog hash、attachment generation/revision、compact checkpoint、Working Context sequence、Memory evidence IDs、history digest、Provider request digest 与最终 complete request hash。`/context ledger` 直接给出 cache miss 及 tool/environment/Memory/history/working-context/compact/provider 等机器可读原因；Ledger 随 ContextPlan/checkpoint 持久化，Resume 记录 workspace/file/Memory/Working Context invalidation，子代理 sidechain 记录自己的 Ledger 并比较 parent policy instruction hash。`context_assembled` JSONL/stream-json 事件同步携带该内容无关 Ledger，记录中不含 Prompt、工具 Schema、history、Memory 或请求体正文。
 
 Step 110 增加确定性的 Prompt Conflict Analyzer：PromptAssembler 在最终 L0-L12 排序后识别直接否定、显式对立值与条件冲突，并按照 `Managed → L5 Mode Contract → L1 Base → Directory → Project → User → Style → Working Context → Turn Reminder` 裁决权威；同权规则明确标为 ambiguous，不按 Fragment ID 随机覆盖。分析器支持中英文与代码围栏过滤，使用主题候选索引和有界缓存，不调用模型。`/context conflicts`、`/context why conflict:<id>` 和 `/context plan` 可查看冲突来源、winner/resolution、置信度和 hash，但报告、Snapshot 与 Provider channel 均不保存指令正文；`conflict_hash` 也与 Provider 请求缓存 hash 解耦。
+
+Step 111 增加 Prompt Release 与模型 Profile 校准闭环：Base section 和 Profile catalog 被归一化为不可变 `PromptRelease` 身份；`ModelProfileCalibration` 只能引用真实 live Benchmark baseline，并绑定 release/profile/contract/behavior-suite/provider/model。Calibration 是内容无关证据，不进入 System Instruction。运行时无匹配证据显示 `uncalibrated`，Release/contract/suite 变化显示 `stale`；Baseline schema v2 和 Release gate 对上述任一漂移 fail-closed。主 Agent、`/model`、子代理、`/context why`、Benchmark report/baseline 共用同一身份链，持久化记录不包含 Prompt、答案、工具参数或密钥。
 
 ## 模块结构（依赖严格单向）
 

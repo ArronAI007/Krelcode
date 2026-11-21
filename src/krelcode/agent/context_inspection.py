@@ -631,6 +631,15 @@ class ContextInspectionService:
                 lines.append(
                     f"  base hash: {provenance.get('base_prompt_hash', '')}"
                     f" · section={provenance.get('prompt_section', fragment.id)}")
+                lines.append(
+                    f"  prompt release: {provenance.get('prompt_release_id', '') or '(unknown)'}"
+                    f" · hash={provenance.get('prompt_release_hash', '') or '(none)'}"
+                    f" · profile hash={provenance.get('prompt_profile_hash', '') or '(none)'}")
+                lines.append(
+                    f"  calibration: {provenance.get('profile_calibration_status', 'uncalibrated')}"
+                    f" · id={provenance.get('profile_calibration_id', '') or '(none)'}"
+                    f" · hash={provenance.get('profile_calibration_hash', '') or '(none)'}"
+                    f" · {provenance.get('profile_calibration_reason', '') or '(no detail)'}")
             contract_version = str(
                 provenance.get("contract_version", "") or "")
             if contract_version:

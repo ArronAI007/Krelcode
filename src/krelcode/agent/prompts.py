@@ -15,6 +15,14 @@ from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence, Tuple, Union
 
 from ..core.errors import ConfigError
+from .prompt_release import (
+    ModelProfileCalibration,
+    ProfileCalibrationResolution,
+    PromptRelease,
+    PromptReleaseRegistry,
+    build_prompt_release,
+    profile_identity,
+)
 
 PROMPT_PROFILE_AUTO = "auto"
 
@@ -273,10 +281,28 @@ PROMPT_PROFILE_BY_NAME = {
     profile.name: profile for profile in PROMPT_PROFILES
 }
 
+CURRENT_PROMPT_RELEASE_ID = "2026.11.21"
+CURRENT_PROMPT_RELEASE: PromptRelease = build_prompt_release(
+    CURRENT_PROMPT_RELEASE_ID,
+    PROMPT_BASE_SECTIONS,
+    PROMPT_PROFILES,
+)
+
+# Any Prompt/profile content change must deliberately update this release hash
+# in the same review. Runtime can still operate while uncalibrated, but release
+# gates reject missing or stale identity.
+FROZEN_PROMPT_RELEASE_HASH = (
+    "c18fb8edf8c3dbd9c3829f34e692e6ec353873f1e2957d107b550f3599071e5c"
+)
+if CURRENT_PROMPT_RELEASE.release_hash != FROZEN_PROMPT_RELEASE_HASH:
+    raise RuntimeError(
+        "Prompt release 内容与 FROZEN_PROMPT_RELEASE_HASH 不一致；"
+        "请显式 review 并更新 release ID/hash")
+
 
 @dataclass(frozen=True)
 class PromptProfileResolution:
-    """Resolved profile plus content-free provenance for diagnostics."""
+    """Resolved profile plus content-free release/calibration provenance."""
 
     profile: ModelPromptProfile
     requested: str
@@ -284,10 +310,21 @@ class PromptProfileResolution:
     provider: str = ""
     model: str = ""
     base_prompt_hash: str = ""
+    release_id: str = CURRENT_PROMPT_RELEASE_ID
+    release_hash: str = FROZEN_PROMPT_RELEASE_HASH
+    profile_hash: str = ""
+    calibration_id: str = ""
+    calibration_hash: str = ""
+    calibration_status: str = "uncalibrated"
+    calibration_reason: str = ""
 
     @property
     def name(self) -> str:
         return self.profile.name
+
+    @property
+    def calibrated(self) -> bool:
+        return self.calibration_status == "calibrated"
 
 
 def render_prompt_sections(sections: Sequence[PromptSection]) -> str:
@@ -351,13 +388,53 @@ def _match_profile(
     return DEFAULT_PROMPT_PROFILE, "default", 0
 
 
+def available_prompt_releases() -> Tuple[str, ...]:
+    return (CURRENT_PROMPT_RELEASE.release_id,)
+
+
+def select_prompt_release(release_id: str = "") -> PromptRelease:
+    requested = str(release_id or CURRENT_PROMPT_RELEASE_ID).strip()
+    if requested != CURRENT_PROMPT_RELEASE.release_id:
+        raise ConfigError(
+            "未知或未内置的 Prompt release: "
+            f"{requested}（可用: {', '.join(available_prompt_releases())}）")
+    return CURRENT_PROMPT_RELEASE
+
+
+def _current_contract_identity() -> tuple[str, str, str]:
+    # Lazy import avoids a Prompt -> benchmark package import at module load.
+    from ..benchmarks.parity import (
+        FROZEN_PROMPT_PARITY_SUITE_HASH,
+        PROMPT_PARITY_CONTRACT,
+    )
+
+    return (
+        PROMPT_PARITY_CONTRACT.version,
+        PROMPT_PARITY_CONTRACT.hash,
+        FROZEN_PROMPT_PARITY_SUITE_HASH,
+    )
+
+
+def _calibration_fields(
+    resolution: ProfileCalibrationResolution,
+) -> dict[str, str]:
+    return {
+        "calibration_id": resolution.calibration_id,
+        "calibration_hash": resolution.calibration_hash,
+        "calibration_status": resolution.status.value,
+        "calibration_reason": resolution.reason,
+    }
+
+
 def resolve_prompt_profile(
     provider: object = "",
     model: object = "",
     *,
     configured: str = PROMPT_PROFILE_AUTO,
+    release_id: str = "",
+    calibrations: Sequence[ModelProfileCalibration] = (),
 ) -> PromptProfileResolution:
-    """Resolve explicit config first, then longest model match, then provider."""
+    """Resolve profile and attach release/calibration evidence identity."""
 
     provider_name = _identity_name(provider)
     model_name = _identity_model(model)
@@ -371,6 +448,36 @@ def resolve_prompt_profile(
                 "未知 prompt profile: "
                 f"{requested}（可用: auto, {', '.join(available_prompt_profiles())}）")
         matched_by = "configured"
+    release = select_prompt_release(release_id)
+    try:
+        profile_identity_value = release.profile(profile.name)
+    except ValueError:
+        # Tests and extension code may temporarily replace the profile catalog.
+        # Such a profile is visible but can never claim the frozen release or a
+        # release calibration.
+        identity_value = profile_identity(profile, PROMPT_BASE_SECTIONS)
+        return PromptProfileResolution(
+            profile=profile,
+            requested=requested,
+            matched_by=matched_by,
+            provider=provider_name,
+            model=model_name,
+            base_prompt_hash=base_prompt_hash(profile),
+            release_id=release.release_id,
+            release_hash="",
+            profile_hash=identity_value.profile_hash,
+            calibration_status="uncalibrated",
+            calibration_reason="profile 未包含在冻结 Prompt release 中",
+        )
+    contract_version, contract_hash, suite_hash = _current_contract_identity()
+    calibration = PromptReleaseRegistry(release, calibrations).resolve(
+        profile.name,
+        provider_name,
+        model_name,
+        contract_version=contract_version,
+        contract_hash=contract_hash,
+        suite_hash=suite_hash,
+    )
     return PromptProfileResolution(
         profile=profile,
         requested=requested,
@@ -378,6 +485,10 @@ def resolve_prompt_profile(
         provider=provider_name,
         model=model_name,
         base_prompt_hash=base_prompt_hash(profile),
+        release_id=release.release_id,
+        release_hash=release.release_hash,
+        profile_hash=profile_identity_value.profile_hash,
+        **_calibration_fields(calibration),
     )
 
 
@@ -389,6 +500,7 @@ def _coerce_resolution(
     if isinstance(profile, PromptProfileResolution):
         return profile
     if isinstance(profile, ModelPromptProfile):
+        identity = profile_identity(profile, PROMPT_BASE_SECTIONS)
         return PromptProfileResolution(
             profile=profile,
             requested=profile.name,
@@ -396,6 +508,11 @@ def _coerce_resolution(
             provider=_identity_name(provider),
             model=_identity_model(model),
             base_prompt_hash=base_prompt_hash(profile),
+            release_id="adhoc",
+            release_hash="",
+            profile_hash=identity.profile_hash,
+            calibration_status="uncalibrated",
+            calibration_reason="ad-hoc profile 不参与 release calibration",
         )
     return resolve_prompt_profile(provider, model, configured=str(profile))
 
@@ -421,10 +538,44 @@ def prompt_profile_from_config(config: Optional[Mapping[str, object]]) -> str:
     return str(section.get("profile") or PROMPT_PROFILE_AUTO).strip().lower()
 
 
+def prompt_release_id_from_config(config: Optional[Mapping[str, object]]) -> str:
+    section = (config or {}).get("prompt")
+    if not isinstance(section, Mapping):
+        return CURRENT_PROMPT_RELEASE_ID
+    return str(section.get("release") or CURRENT_PROMPT_RELEASE_ID).strip()
+
+
+def prompt_calibration_paths_from_config(
+    config: Optional[Mapping[str, object]],
+) -> Tuple[str, ...]:
+    section = (config or {}).get("prompt")
+    if not isinstance(section, Mapping):
+        return ()
+    raw = section.get("calibration_baselines")
+    if raw is None:
+        raw = section.get("calibration_baseline")
+    if raw is None or raw == "":
+        return ()
+    values = (raw,) if isinstance(raw, str) else raw
+    if not isinstance(values, (list, tuple)):
+        raise ConfigError(
+            "[prompt].calibration_baselines 必须是字符串或字符串数组")
+    paths = []
+    for item in values:
+        if not isinstance(item, str) or not item.strip():
+            raise ConfigError(
+                "[prompt].calibration_baselines 只能包含非空字符串")
+        paths.append(item.strip())
+    return tuple(dict.fromkeys(paths))
+
+
 __all__ = [
     "BASE_SYSTEM_PROMPT",
     "CLAUDE_PROMPT_PROFILE",
+    "CURRENT_PROMPT_RELEASE",
+    "CURRENT_PROMPT_RELEASE_ID",
     "DEFAULT_PROMPT_PROFILE",
+    "FROZEN_PROMPT_RELEASE_HASH",
     "DEEPSEEK_PROMPT_PROFILE",
     "GEMINI_PROMPT_PROFILE",
     "ModelPromptProfile",
@@ -436,9 +587,13 @@ __all__ = [
     "PromptProfileResolution",
     "PromptSection",
     "available_prompt_profiles",
+    "available_prompt_releases",
     "base_prompt_hash",
     "build_system_prompt",
+    "prompt_calibration_paths_from_config",
     "prompt_profile_from_config",
+    "prompt_release_id_from_config",
     "render_prompt_sections",
     "resolve_prompt_profile",
+    "select_prompt_release",
 ]

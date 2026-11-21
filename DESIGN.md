@@ -1317,6 +1317,57 @@ Provider cache miss。
 - `/context why conflict:<id>` 查看单条冲突裁决。
 - `/context why <fragment-id>` 同时显示与该 Fragment 相关的冲突，但始终不输出指令正文。
 
+## Prompt Release 与模型 Profile 校准（Step 111）
+
+Prompt 的“可发布身份”不再等于一个可变字符串或 profile 名称。`agent/prompt_release.py`
+把生产 Base section 与 append-only Profile catalog 归一化为不可变 `PromptRelease`：
+
+```text
+PromptSectionIdentity(id, content_hash, priority, required)
+PromptProfileIdentity(name, patterns, base_prompt_hash, section_hashes)
+PromptRelease(release_id, frozen_at, base_sections, profiles)
+  → release_hash = SHA256(canonical content-free manifest)
+```
+
+Release hash 对 section/profile 内容敏感，对注册顺序不敏感；manifest 可以稳定序列化，
+但不包含任何 Prompt section 正文。当前 Release 的 ID 与 hash 在 `agent/prompts.py`
+中显式冻结，任何生产 Prompt 变更都必须作为独立 review 事件更新二者。
+
+`ModelProfileCalibration` 是从真实 live Benchmark baseline 派生的内容无关证据：
+
+```text
+profile_name / profile_hash
+release_id / release_hash
+contract_version / contract_hash
+benchmark_schema_version / frozen suite_hash
+provider / model（精确）或 provider/model patterns
+verified / verified_at / trials
+```
+
+`certify()` 只接受通过完整 case manifest 和至少 3 trials 的 baseline。扫描范围默认是
+具体 provider/model，只有显式提供 pattern 时才形成 family-wide scope；多个候选先按
+精确匹配或最长 pattern 排序。匹配后还会逐项校验 Release、Profile、contract 和冻结
+behavior suite。因此 profile 名称命中本身不会产生“已校准”结论。
+
+运行时语义固定为：
+
+- `calibrated`：Release/Profile/contract/suite/scope 都与 baseline 证据一致；
+- `uncalibrated`：没有覆盖当前模型的证据；普通对话可继续，gate fail-closed；
+- `stale`：存在旧 Release、旧 Profile、旧 contract 或旧 suite 的证据；显式可见但不采用。
+
+Calibration 只进入 provenance 和发布证据，不进入 Instruction 或 Evidence channel。
+主 Agent、`/model` 热切换和子代理都通过同一个 `resolve_prompt_profile()` 绑定 Release
+与 calibration；L1 Base Fragment metadata、subagent instruction bundle、sidechain、
+Benchmark report 和 `/context why` 使用同一组 ID/hash/status。任何展示/持久化路径都不含
+Prompt 正文、答案、工具参数或凭据。
+
+Baseline schema 升为 v2，顶层嵌入完整 calibration 并仍保持
+`contains_prompt_content=false`。加载时对 baseline hash、calibration hash、字段白名单、
+contract/suite/provider/model 一致性校验；schema v1 视为 legacy-uncalibrated，必须重跑
+`--save-baseline`。Release gate 新增 `prompt-release`、`prompt-profile`、
+`calibration-identity`、`calibration-state` 检查，并把 suite hash 与冻结值比较，任何身份
+漂移都返回 `NOT_ALIGNED`。
+
 ## 增量 Context Attachment（Step 101）
 
 动态上下文不再作为一个整体重建 system prompt。`ContextAttachmentStore` 为每个易变来源分配

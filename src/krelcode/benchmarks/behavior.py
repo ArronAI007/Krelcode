@@ -48,7 +48,14 @@ from ..agent.fragments import (
     sync_rule_fragments,
 )
 from ..agent.loop import AgentLoop
-from ..agent.prompts import resolve_prompt_profile
+from ..agent.prompts import (
+    CURRENT_PROMPT_RELEASE,
+    PromptProfileResolution,
+    prompt_calibration_paths_from_config,
+    prompt_profile_from_config,
+    prompt_release_id_from_config,
+    resolve_prompt_profile,
+)
 from ..agent.rules import RuleLoader
 from ..agent.usage import UsageTracker
 from ..agent.working_context import WorkingContextStore
@@ -95,7 +102,7 @@ from .parity import (
 )
 
 
-BEHAVIOR_BENCHMARK_SCHEMA_VERSION = 3
+BEHAVIOR_BENCHMARK_SCHEMA_VERSION = 4
 _IGNORED_WORKSPACE_PARTS = frozenset({
     ".git", ".krelcode", ".pytest_cache", "__pycache__",
 })
@@ -689,6 +696,7 @@ class BehaviorBenchmarkRunner:
         trial_timeout_seconds: float = 300.0,
         provider_name: str = "",
         model_name: str = "",
+        prompt_resolution: PromptProfileResolution | None = None,
     ) -> None:
         self.provider_factory = provider_factory
         self.cases = tuple(cases or BEHAVIOR_CASES)
@@ -699,6 +707,7 @@ class BehaviorBenchmarkRunner:
         self.trial_timeout_seconds = max(0.01, float(trial_timeout_seconds))
         self.provider_name = provider_name
         self.model_name = model_name
+        self.prompt_resolution = prompt_resolution
 
     @property
     def case_ids(self) -> tuple[str, ...]:
@@ -752,6 +761,10 @@ class BehaviorBenchmarkRunner:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
+        resolution = self.prompt_resolution or resolve_prompt_profile(
+            self.provider_name,
+            self.model_name,
+        )
         return {
             "krelcode_version": __version__,
             "python_version": platform.python_version(),
@@ -765,6 +778,14 @@ class BehaviorBenchmarkRunner:
             "context_max_tokens": self.context_max_tokens,
             "sandbox_backend": self.sandbox_backend,
             "trial_timeout_seconds": self.trial_timeout_seconds,
+            "prompt_release_id": resolution.release_id,
+            "prompt_release_hash": resolution.release_hash,
+            "prompt_profile": resolution.name,
+            "prompt_profile_hash": resolution.profile_hash,
+            "profile_calibration_id": resolution.calibration_id,
+            "profile_calibration_hash": resolution.calibration_hash,
+            "profile_calibration_status": resolution.calibration_status,
+            "profile_calibration_reason": resolution.calibration_reason,
         }
 
     async def _run_trial_with_timeout(
@@ -2357,6 +2378,16 @@ def _safe_error(
     return f"{type(error).__name__}: {message[:limit]}"
 
 
+def _configured_prompt_calibrations(config, workspace: Path):
+    calibrations = []
+    for raw_path in prompt_calibration_paths_from_config(config):
+        source = Path(raw_path).expanduser()
+        if not source.is_absolute():
+            source = Path(workspace) / source
+        calibrations.append(load_prompt_baseline(source).calibration)
+    return tuple(calibrations)
+
+
 def _error_kind(error: BaseException) -> str:
     if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
         return BehaviorErrorKind.TIMEOUT.value
@@ -2383,6 +2414,14 @@ def _text_report(
             f"python={report.profile.get('python_version', '?')} · "
             f"hash={str(report.profile.get('suite_hash', '?'))[:12]} · "
             f"timeout={report.profile.get('trial_timeout_seconds', '?')}s"
+        )
+        lines.append(
+            "prompt: "
+            f"release={report.profile.get('prompt_release_id', '?')}/"
+            f"{str(report.profile.get('prompt_release_hash', '?'))[:12]} · "
+            f"profile={report.profile.get('prompt_profile', '?')}/"
+            f"{str(report.profile.get('prompt_profile_hash', '?'))[:12]} · "
+            f"calibration={report.profile.get('profile_calibration_status', 'uncalibrated')}"
         )
     for result in report.results:
         status = "PASS" if result.passed else "FAIL"
@@ -2428,6 +2467,9 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--contract", action="store_true",
         help="输出冻结的 Prompt Parity Contract")
+    parser.add_argument(
+        "--release", action="store_true",
+        help="输出不可变 Prompt Release manifest（content-light）")
     parser.add_argument(
         "--gate", default=None, metavar="BASELINE",
         help="用 content-light baseline 执行 Prompt Parity benchmark gate")
@@ -2502,6 +2544,26 @@ def run_live_command(args: argparse.Namespace) -> int:
                             + ", ".join(str(item) for item in requirement_ids))
         return 0
 
+    if getattr(args, "release", False):
+        payload = CURRENT_PROMPT_RELEASE.manifest()
+        if getattr(args, "json", False):
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print("Krelcode Prompt Release")
+            print(
+                f"id: {payload['release_id']} · "
+                f"hash: {str(payload['release_hash'])[:16]} · "
+                f"frozen: {payload['frozen_at']}"
+            )
+            raw_profiles = payload.get("profiles")
+            if isinstance(raw_profiles, (list, tuple)):
+                print("profiles: " + ", ".join(
+                    str(item.get("name", ""))
+                    for item in raw_profiles
+                    if isinstance(item, Mapping)
+                ))
+        return 0
+
     if getattr(args, "list", False):
         requested = set(getattr(args, "case", []) or ())
         cases = [
@@ -2567,6 +2629,14 @@ def run_live_command(args: argparse.Namespace) -> int:
             base_url=getattr(args, "base_url", None),
             config=bundle.data,
         )
+        prompt_resolution = resolve_prompt_profile(
+            settings.provider,
+            settings.model or "provider-default",
+            configured=prompt_profile_from_config(bundle.data),
+            release_id=prompt_release_id_from_config(bundle.data),
+            calibrations=_configured_prompt_calibrations(
+                bundle.data, workspace),
+        )
     except Exception as exc:
         print(f"live benchmark 配置错误: {_safe_error(exc)}", file=sys.stderr)
         return 2
@@ -2598,6 +2668,7 @@ def run_live_command(args: argparse.Namespace) -> int:
         trial_timeout_seconds=getattr(args, "trial_timeout", 300.0),
         provider_name=settings.provider,
         model_name=settings.model or "provider-default",
+        prompt_resolution=prompt_resolution,
     )
     try:
         report = runner.run(requested_cases or None)

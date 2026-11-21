@@ -12,7 +12,7 @@ import json
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ..agent.compression import ContextManager
 from ..agent.context import _git
@@ -23,6 +23,7 @@ from ..agent.fragments import (
 )
 from ..agent.loop import DEFAULT_MAX_STEPS, AgentLoop
 from ..agent.tool_pool import normalize_tool_allowlist
+from ..agent.prompt_release import ModelProfileCalibration
 from ..agent.prompts import (
     PROMPT_PROFILE_AUTO,
     build_system_prompt,
@@ -174,6 +175,8 @@ class SubagentManager:
         base_prompt_provider: Optional[Callable[[], str]] = None,
         base_prompt_for_llm: Optional[Callable[[LLMProvider], str]] = None,
         prompt_profile: str = PROMPT_PROFILE_AUTO,
+        prompt_release_id: str = "",
+        prompt_calibrations: Sequence[ModelProfileCalibration] = (),
         catalog_fragments_provider: Optional[
             Callable[[], Iterable[PromptFragment]]
         ] = None,
@@ -191,6 +194,8 @@ class SubagentManager:
         self.base_prompt_provider = base_prompt_provider
         self.base_prompt_for_llm = base_prompt_for_llm
         self.prompt_profile = prompt_profile
+        self.prompt_release_id = prompt_release_id
+        self.prompt_calibrations = tuple(prompt_calibrations)
         self.catalog_fragments_provider = catalog_fragments_provider
         self.hook_port = hook_port
         self.definitions = definitions or AgentDefinitionManager(
@@ -378,6 +383,8 @@ class SubagentManager:
             child_llm,
             getattr(child_llm, "model", ""),
             configured=self.prompt_profile,
+            release_id=self.prompt_release_id,
+            calibrations=self.prompt_calibrations,
         )
         if self.base_prompt_for_llm is not None:
             base_prompt = self.base_prompt_for_llm(child_llm)
@@ -406,6 +413,13 @@ class SubagentManager:
                 "prompt_provider": prompt_resolution.provider,
                 "prompt_model": prompt_resolution.model,
                 "base_prompt_hash": prompt_resolution.base_prompt_hash,
+                "prompt_release_id": prompt_resolution.release_id,
+                "prompt_release_hash": prompt_resolution.release_hash,
+                "prompt_profile_hash": prompt_resolution.profile_hash,
+                "profile_calibration_id": prompt_resolution.calibration_id,
+                "profile_calibration_hash": prompt_resolution.calibration_hash,
+                "profile_calibration_status": prompt_resolution.calibration_status,
+                "profile_calibration_reason": prompt_resolution.calibration_reason,
             },
         )
         prompt_fragments = list(instruction_bundle.fragments())
@@ -491,6 +505,12 @@ class SubagentManager:
             "resolved_model": str(getattr(child_llm, "model", "") or ""),
             "provider": str(getattr(child_llm, "name", "") or ""),
             "prompt_profile": prompt_resolution.name,
+            "prompt_release_id": prompt_resolution.release_id,
+            "prompt_release_hash": prompt_resolution.release_hash,
+            "prompt_profile_hash": prompt_resolution.profile_hash,
+            "profile_calibration_id": prompt_resolution.calibration_id,
+            "profile_calibration_hash": prompt_resolution.calibration_hash,
+            "profile_calibration_status": prompt_resolution.calibration_status,
             "permission_mode": permission_mode.value,
             "mcp_servers": list(mcp_servers),
             "isolated": bool(isolated),

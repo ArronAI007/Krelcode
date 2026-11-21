@@ -36,13 +36,16 @@ from .agent.fragments import (
     sync_rule_fragments,
 )
 from .agent.prompts import (
+    prompt_calibration_paths_from_config,
     prompt_profile_from_config,
+    prompt_release_id_from_config,
     resolve_prompt_profile,
 )
 from .agent.rules import RuleLoader
 from .agent.runtime import AgentRuntime
 from .agent.usage import UsageTracker
 from .agent.working_context import WorkingContextStore
+from .benchmarks.parity import load_prompt_baseline
 from .config import load_config_layers
 from .core.events import EventBus
 from .core.errors import ConfigError
@@ -519,10 +522,14 @@ async def build_loop(
     bus = EventBus()
     llm = build_llm(args, config, log=log)
     prompt_profile_setting = prompt_profile_from_config(config)
+    prompt_release_setting = prompt_release_id_from_config(config)
+    prompt_calibrations = _load_prompt_calibrations(config, workspace_root)
     prompt_profile_resolution = resolve_prompt_profile(
         llm,
         getattr(llm, "model", ""),
         configured=prompt_profile_setting,
+        release_id=prompt_release_setting,
+        calibrations=prompt_calibrations,
     )
     memory_store = MemoryStore(workspace_root)
     base_skill_paths = configured_skill_paths(args, config)
@@ -665,6 +672,8 @@ async def build_loop(
                 subagent_base_prompt(manager.llm))),
         base_prompt_for_llm=subagent_base_prompt,
         prompt_profile=prompt_profile_setting,
+        prompt_release_id=prompt_release_setting,
+        prompt_calibrations=prompt_calibrations,
         catalog_fragments_provider=subagent_catalog_fragments,
         definitions=agent_definitions,
         memory_store=memory_store,
@@ -881,15 +890,25 @@ def build_model_switcher(args: argparse.Namespace, config: Dict[str, Any],
         except Exception as e:
             return f"切换失败: {type(e).__name__}: {e}"
 
-        profile_resolution = resolve_prompt_profile(
-            inner,
-            getattr(inner, "model", ""),
-            configured=prompt_profile_from_config(config),
-        )
+        try:
+            calibration_workspace = loop.tool_context.workspace_root
+            calibration_records = _load_prompt_calibrations(
+                config, calibration_workspace)
+            profile_resolution = resolve_prompt_profile(
+                inner,
+                getattr(inner, "model", ""),
+                configured=prompt_profile_from_config(config),
+                release_id=prompt_release_id_from_config(config),
+                calibrations=calibration_records,
+            )
+        except ConfigError as exc:
+            return f"切换失败: {exc}"
         loop.llm = provider
         if subagents is not None:
             subagents.llm = provider   # 之后 spawn 的子代理用新模型
             subagents.prompt_profile = prompt_profile_from_config(config)
+            subagents.prompt_release_id = prompt_release_id_from_config(config)
+            subagents.prompt_calibrations = calibration_records
         loop.prompt_profile = profile_resolution.profile
         loop.prompt_profile_resolution = profile_resolution
         loop.prompt_profile_name = profile_resolution.name
@@ -922,6 +941,20 @@ def build_model_switcher(args: argparse.Namespace, config: Dict[str, Any],
         )
 
     return switch
+
+
+def _load_prompt_calibrations(config: Dict[str, Any], workspace: Path):
+    calibrations = []
+    for raw_path in prompt_calibration_paths_from_config(config):
+        source = Path(raw_path).expanduser()
+        if not source.is_absolute():
+            source = Path(workspace).expanduser().resolve() / source
+        try:
+            baseline = load_prompt_baseline(source)
+        except ValueError as exc:
+            raise ConfigError(f"Prompt calibration 加载失败: {source}: {exc}") from exc
+        calibrations.append(baseline.calibration)
+    return tuple(calibrations)
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -11,6 +11,7 @@ from krelcode.benchmarks import (
     BEHAVIOR_CASES,
     BEHAVIOR_BENCHMARK_SCHEMA_VERSION,
     FROZEN_PROMPT_PARITY_CONTRACT_HASH,
+    FROZEN_PROMPT_PARITY_SUITE_HASH,
     PROMPT_PARITY_CONTRACT,
     PROMPT_PARITY_MINIMUM_TRIALS,
     BehaviorCheck,
@@ -25,6 +26,7 @@ from krelcode.benchmarks import (
     load_prompt_baseline,
     save_prompt_baseline,
 )
+from krelcode.agent.prompts import resolve_prompt_profile
 from krelcode.benchmarks import behavior as benchmark_behavior
 from krelcode.benchmarks import prompt as benchmark_prompt
 from krelcode.llm.registry import ProviderSettings
@@ -55,6 +57,7 @@ def _full_report(
                     "total_tokens": 12,
                 },
             ))
+    resolution = resolve_prompt_profile("scripted", "scripted-model")
     return BehaviorReport(
         schema_version=BEHAVIOR_BENCHMARK_SCHEMA_VERSION,
         generated_at="2026-11-20T00:00:00+00:00",
@@ -65,11 +68,18 @@ def _full_report(
         duration_ms=1,
         profile={
             "krelcode_version": "test",
-            "suite_hash": "a" * 64,
+            "suite_hash": FROZEN_PROMPT_PARITY_SUITE_HASH,
             "sandbox_backend": "static",
             "max_steps": 14,
             "context_max_tokens": 30000,
             "trial_timeout_seconds": 300.0,
+            "parity_contract_version": PROMPT_PARITY_CONTRACT.version,
+            "parity_contract_hash": PROMPT_PARITY_CONTRACT.hash,
+            "prompt_release_id": resolution.release_id,
+            "prompt_release_hash": resolution.release_hash,
+            "prompt_profile": resolution.name,
+            "prompt_profile_hash": resolution.profile_hash,
+            "profile_calibration_status": "uncalibrated",
         },
     )
 
@@ -169,12 +179,23 @@ def test_gate_fails_closed_on_regression_and_trial_floor():
 def test_gate_rejects_contract_mismatch_and_unknown_baseline_fields(tmp_path):
     report = _full_report()
     baseline = PromptParityBaseline.from_report(report)
-    stale = replace(baseline, contract_hash="b" * 64)
+    stale_calibration = replace(
+        baseline.calibration, contract_hash="b" * 64)
+    stale = replace(
+        baseline,
+        contract_hash="b" * 64,
+        calibration=stale_calibration,
+    )
     gate = evaluate_prompt_parity(report, stale)
     assert not gate.passed
     assert not {check.id: check.passed for check in gate.checks}["baseline-contract"]
 
-    old_schema = replace(baseline, benchmark_schema_version=2)
+    old_schema = replace(
+        baseline,
+        benchmark_schema_version=2,
+        calibration=replace(
+            baseline.calibration, benchmark_schema_version=2),
+    )
     schema_gate = evaluate_prompt_parity(report, old_schema)
     assert not schema_gate.passed
     assert not {

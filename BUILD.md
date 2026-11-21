@@ -5,12 +5,12 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（Step 110）
+## 1. 项目统计（Step 111）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 63,654 行（Python，**零第三方运行时依赖**） |
-| 测试 | 32,570 行 / 137 个测试文件 / 1,407 个通过用例 + 2 个本地端口集成 skip |
+| 源码 | 64,765 行（Python，**零第三方运行时依赖**） |
+| 测试 | 32,980 行 / 138 个测试文件 / 1,418 个通过用例 + 2 个本地端口集成 skip |
 | 提交 | 100+ 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 16 + 只读 `memory_search`（装配 MemoryStore 时）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
@@ -20,8 +20,8 @@
 源码按层分布：
 
 ```
-agent 16710 · session 11719 · benchmarks 5703 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4320
-ui 3965 · llm 3797 · tools 3479 · safety 2861 · mcp 2679 · subagent 2342
+agent 17566 · session 11719 · benchmarks 5905 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4353
+ui 3965 · llm 3797 · tools 3479 · safety 2861 · mcp 2679 · subagent 2362
 lsp 1295 · plugins 1105 · core 1023 · skills 957 · web 891 · jobs 582 · entrypoints 226
 ```
 
@@ -89,6 +89,7 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 | v0.98 | 自适应 Cache Breakpoint Planner | Anthropic 不再固定写死三个断点。新增 content-light `CacheBreakpointCandidate/Plan/Planner`，在最终 wire 的 tools → stable system → messages 顺序上选择稳定锚点、移动 frontier 与均匀历史 checkpoint，严格服从 Provider 最大断点数；Sonnet/Opus 默认 1024、Haiku 2048 tokens 阈值，`cache_min_tokens` 可覆盖，低于阈值不写 `cache_control`。plan 的选中/跳过原因、token、stability 与 digest 贯通 PreparedRequest、ContextUsageSnapshot、`/context cache`、TUI、JSONL/stream-json/SDK |
 | v0.99 | ToolPromptSpec 统一工具契约 | 新增 `ToolPromptSpec`，把 Provider description/Schema、工具指令、when/exclusion、示例、别名、来源/版本和 Playbook 元数据收敛为单一来源。`Tool` 保持执行职责，`ToolDescriptor` 保持安全/路由职责；Registry、TurnToolPool、ToolSearch、PromptAssembler 和 L5 Playbook 共用同一 spec。Provider wire 只接收 name/description/parameters，`wire_hash/content_hash` 贯通 PromptPlan/ProviderMessages/`/context`，所有观测字段不含工具正文。旧工具空 description 使用稳定占位，兼容历史注册 |
 | v1.00 | Prompt Conflict Analyzer | 最终 Prompt 排序后做无模型、content-light 的跨层冲突分析：识别直接否定、显式对立值和条件冲突，固定 Managed → Mode Contract → Base → Directory → Project → User → Style → Working → Reminder 权威顺序；同权冲突不按 ID 裁决。中英文分句/CJK bigram、代码围栏过滤、主题候选索引与有界缓存把基础 Prompt 分析降到约 2ms。报告贯通 PromptPlan、Provider channel、Snapshot 与 `/context conflicts|why`，只保存来源、分类、winner、置信度和 hash，不保存指令正文，也不改变 Provider `full_hash` |
+| v1.01 | Prompt Release 与 Profile 校准 | 新增不可变 `PromptRelease` 与内容无关 release hash；`ModelProfileCalibration` 绑定真实 live baseline 的 release/profile/contract/suite/provider/model，支持精确与最长 pattern scope。运行时 `calibrated/uncalibrated/stale` 可见，calibration 不进入指令通道；主 Agent、`/model`、子代理、`/context why` 与 Benchmark report 共用身份链。Baseline schema v2 嵌入 calibration，gate 对 Release/Profile/contract/frozen-suite/state 漂移 fail-closed |
 
 ## 3. 文件导览（能力 → 位置）
 

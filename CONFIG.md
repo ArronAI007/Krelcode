@@ -239,6 +239,8 @@ default_provider = "openai"          # openai / anthropic / gemini / mock
 
 [prompt]
 profile = "auto"                     # auto / default / claude / deepseek / openai / gemini
+release = "2026.11.21"               # 当前内置的不可变 Prompt Release
+calibration_baselines = []           # live baseline 路径；用于模型 Profile 校准
 
 [providers.openai]
 model = "gpt-4o-mini"                # 覆盖 KRELCODE_MODEL
@@ -415,6 +417,18 @@ profile 只追加模型适配指导，不替换、关闭或削弱 `core:base:saf
 required section。`/model` 热切换在 `auto` 模式会重新解析 profile、原子替换
 `core:base*` 并刷新 stable hash；显式 profile 保持不变。子代理按自身实际
 provider/model 解析同一套 profile。
+
+`[prompt].release` 只能选择当前代码内置的不可变 Release；未知值启动失败。Release
+hash 由全部 Base section hash、Profile pattern 和 Profile section hash 归一化生成，
+不保存 Prompt 正文。`calibration_baselines` 接受一个字符串或字符串数组，路径相对
+workspace 解析；文件必须是 `--save-baseline` 生成的 schema v2 live baseline。
+
+运行时按 provider/model 匹配 calibration scope；精确 provider/model 优先，其次是最长
+provider/model pattern。匹配记录还必须与当前 Release、Profile hash、Parity contract
+和冻结 behavior suite 一致。没有证据时状态为 `uncalibrated`；Release/contract/suite
+漂移时状态为 `stale`。这两种状态都可正常对话，但 `/context why` 会明确展示，且
+`--gate` 不会接受旧现场。Calibration 只是 Benchmark 证据，不会作为额外 System
+Instruction 注入。
 
 MCP 远程能力：
 

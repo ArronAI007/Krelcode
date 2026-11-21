@@ -24,9 +24,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from ..agent.prompt_release import ModelProfileCalibration
+
 
 PROMPT_PARITY_SCHEMA_VERSION = 1
-PROMPT_BASELINE_SCHEMA_VERSION = 1
+PROMPT_BASELINE_SCHEMA_VERSION = 2
 PROMPT_PARITY_CONTRACT_VERSION = "1"
 PROMPT_PARITY_MINIMUM_TRIALS = 3
 
@@ -338,6 +340,12 @@ PROMPT_PARITY_CONTRACT = PromptParityContract(
 # explicit review event with a contract-version/hash update in the same commit.
 FROZEN_PROMPT_PARITY_CONTRACT_HASH = "8d9c1a9f68a24113ce7a3f42595bf13005a4286ae0f641547775d84e5495262a"
 
+# Full-suite identity consumed as runtime calibration context. Any case
+# description/catalog change must deliberately update this reviewed value.
+FROZEN_PROMPT_PARITY_SUITE_HASH = (
+    "642a4a24d0192f9597caa0eb419c23b6661b62c480c7a13e126065cb0eb6706b"
+)
+
 
 @dataclass(frozen=True)
 class BaselineCaseResult:
@@ -400,6 +408,7 @@ class PromptParityBaseline:
     krelcode_version: str
     trials: int
     cases: tuple[BaselineCaseResult, ...]
+    calibration: ModelProfileCalibration
     profile: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -407,6 +416,19 @@ class PromptParityBaseline:
         object.__setattr__(self, "profile", dict(self.profile))
         if len({item.case_id for item in self.cases}) != len(self.cases):
             raise ValueError("baseline case 不能重复")
+        if self.calibration.contract_version != self.contract_version:
+            raise ValueError("baseline 与 calibration contract version 不一致")
+        if self.calibration.contract_hash != self.contract_hash:
+            raise ValueError("baseline 与 calibration contract hash 不一致")
+        if self.calibration.suite_hash != self.suite_hash:
+            raise ValueError("baseline 与 calibration suite hash 不一致")
+        if (
+            self.calibration.provider != self.provider.strip().lower()
+            or self.calibration.model != self.model.strip().lower()
+        ):
+            raise ValueError("baseline 与 calibration provider/model 不一致")
+        if self.calibration.benchmark_schema_version != self.benchmark_schema_version:
+            raise ValueError("baseline 与 calibration benchmark schema 不一致")
 
     @property
     def case_map(self) -> dict[str, BaselineCaseResult]:
@@ -434,6 +456,7 @@ class PromptParityBaseline:
             "krelcode_version": self.krelcode_version,
             "trials": self.trials,
             "cases": [item.as_dict() for item in self.cases],
+            "calibration": self.calibration.as_dict(),
             "profile": dict(self.profile),
         }
 
@@ -453,7 +476,7 @@ class PromptParityBaseline:
             "kind", "schema_version", "benchmark_schema_version",
             "created_at", "contract_version",
             "contract_hash", "suite_hash", "provider", "model",
-            "krelcode_version", "trials", "cases", "profile",
+            "krelcode_version", "trials", "cases", "calibration", "profile",
             "baseline_hash", "contains_prompt_content",
         }
         unknown = sorted(set(raw) - allowed_top_level)
@@ -472,12 +495,24 @@ class PromptParityBaseline:
             if not isinstance(item, Mapping):
                 raise ValueError("baseline case 必须是 object")
             cases.append(BaselineCaseResult.from_dict(item))
+        calibration_raw = raw.get("calibration")
+        if not isinstance(calibration_raw, Mapping):
+            raise ValueError(
+                "baseline schema 2 必须包含 model profile calibration；"
+                "旧 baseline 请重新运行 --save-baseline")
+        calibration = ModelProfileCalibration.from_dict(calibration_raw)
         profile = raw.get("profile")
         if profile is not None and not isinstance(profile, Mapping):
             raise ValueError("baseline profile 必须是 object")
         allowed_profile = {
             "suite_hash", "sandbox_backend", "context_max_tokens",
-            "max_steps", "trial_timeout_seconds",
+            "max_steps", "trial_timeout_seconds", "krelcode_version",
+            "python_version", "platform", "parity_contract_version",
+            "parity_contract_hash", "cases", "trials",
+            "prompt_release_id", "prompt_release_hash",
+            "prompt_profile", "prompt_profile_hash",
+            "profile_calibration_id", "profile_calibration_hash",
+            "profile_calibration_status", "profile_calibration_reason",
         }
         profile_unknown = sorted(set(profile or ()) - allowed_profile)
         if profile_unknown:
@@ -497,6 +532,7 @@ class PromptParityBaseline:
             krelcode_version=str(raw.get("krelcode_version", "") or ""),
             trials=_as_int(raw.get("trials", 0)),
             cases=tuple(cases),
+            calibration=calibration,
             profile=dict(profile) if isinstance(profile, Mapping) else {},
         )
         stored_hash = str(raw.get("baseline_hash", "") or "")
@@ -541,6 +577,52 @@ class PromptParityBaseline:
             stable=bool(summary[case_id].get("stable", False)),
         ) for case_id in contract.required_case_ids)
         profile = dict(getattr(report, "profile", {}) or {})
+        release_id = str(profile.get("prompt_release_id", "") or "")
+        release_hash = str(profile.get("prompt_release_hash", "") or "")
+        profile_name = str(profile.get("prompt_profile", "") or "")
+        profile_hash = str(profile.get("prompt_profile_hash", "") or "")
+        suite_hash = str(profile.get("suite_hash", "") or "")
+        missing_identity = [
+            name for name, value in (
+                ("prompt_release_id", release_id),
+                ("prompt_release_hash", release_hash),
+                ("prompt_profile", profile_name),
+                ("prompt_profile_hash", profile_hash),
+                ("suite_hash", suite_hash),
+            )
+            if not value
+        ]
+        if missing_identity:
+            raise ValueError(
+                "baseline report 缺少 Prompt release/profile identity: "
+                + ", ".join(missing_identity))
+        report_contract_version = str(
+            profile.get("parity_contract_version", "") or "")
+        report_contract_hash = str(
+            profile.get("parity_contract_hash", "") or "")
+        if (
+            report_contract_version != contract.version
+            or report_contract_hash != contract.hash
+        ):
+            raise ValueError("baseline report 不是由当前 Parity contract 生成")
+        trials = max((item.trials for item in cases), default=0)
+        calibration = ModelProfileCalibration.certify(
+            profile_name=profile_name,
+            profile_hash=profile_hash,
+            release_id=release_id,
+            release_hash=release_hash,
+            contract_version=contract.version,
+            contract_hash=contract.hash,
+            benchmark_schema_version=int(
+                getattr(report, "schema_version", 0) or 0),
+            suite_hash=suite_hash,
+            provider=str(getattr(report, "provider", "") or ""),
+            model=str(getattr(report, "model", "") or ""),
+            verified_at=(
+                str(getattr(report, "generated_at", "") or "")
+                or datetime.now(timezone.utc).isoformat()),
+            trials=trials,
+        )
         return cls(
             schema_version=PROMPT_BASELINE_SCHEMA_VERSION,
             benchmark_schema_version=int(
@@ -548,20 +630,14 @@ class PromptParityBaseline:
             created_at=datetime.now(timezone.utc).isoformat(),
             contract_version=contract.version,
             contract_hash=contract.hash,
-            suite_hash=str(profile.get("suite_hash", "") or ""),
+            suite_hash=suite_hash,
             provider=str(getattr(report, "provider", "") or ""),
             model=str(getattr(report, "model", "") or ""),
             krelcode_version=str(profile.get("krelcode_version", "") or ""),
-            trials=max((item.trials for item in cases), default=0),
+            trials=trials,
             cases=cases,
-            profile={
-                "suite_hash": str(profile.get("suite_hash", "") or ""),
-                "sandbox_backend": str(profile.get("sandbox_backend", "") or ""),
-                "context_max_tokens": int(profile.get("context_max_tokens", 0) or 0),
-                "max_steps": int(profile.get("max_steps", 0) or 0),
-                "trial_timeout_seconds": float(
-                    profile.get("trial_timeout_seconds", 0.0) or 0.0),
-            },
+            calibration=calibration,
+            profile=profile,
         )
 
 
@@ -677,6 +753,16 @@ def evaluate_prompt_parity(
     checks: list[ParityGateCheck] = []
     report_profile = dict(getattr(report, "profile", {}) or {})
     report_suite_hash = str(report_profile.get("suite_hash", "") or "")
+    report_release_id = str(
+        report_profile.get("prompt_release_id", "") or "")
+    report_release_hash = str(
+        report_profile.get("prompt_release_hash", "") or "")
+    report_profile_name = str(
+        report_profile.get("prompt_profile", "") or "")
+    report_profile_hash = str(
+        report_profile.get("prompt_profile_hash", "") or "")
+    report_calibration_status = str(
+        report_profile.get("profile_calibration_status", "") or "uncalibrated")
     case_summary = report.case_summary()
     report_cases = set(case_summary)
     required_cases = set(contract.required_case_ids)
@@ -720,8 +806,51 @@ def evaluate_prompt_parity(
     ))
     checks.append(_gate_check(
         "suite-hash",
-        bool(report_suite_hash) and report_suite_hash == baseline.suite_hash,
-        "case manifest and runner profile match the baseline",
+        bool(report_suite_hash)
+        and report_suite_hash == baseline.suite_hash
+        and report_suite_hash == FROZEN_PROMPT_PARITY_SUITE_HASH,
+        "case manifest, frozen suite and baseline match",
+    ))
+    checks.append(_gate_check(
+        "prompt-release",
+        bool(report_release_id)
+        and report_release_id == baseline.calibration.release_id
+        and bool(report_release_hash)
+        and report_release_hash == baseline.calibration.release_hash,
+        (
+            "report and calibration use the same immutable Prompt release"
+            if (
+                report_release_id == baseline.calibration.release_id
+                and report_release_hash == baseline.calibration.release_hash
+            ) else "Prompt release identity changed; rerun calibration"
+        ),
+    ))
+    checks.append(_gate_check(
+        "prompt-profile",
+        bool(report_profile_name)
+        and report_profile_name == baseline.calibration.profile_name
+        and bool(report_profile_hash)
+        and report_profile_hash == baseline.calibration.profile_hash,
+        "resolved model Prompt profile matches calibration evidence",
+    ))
+    checks.append(_gate_check(
+        "calibration-identity",
+        baseline.calibration.provider
+        == str(getattr(report, "provider", "") or "").strip().lower()
+        and baseline.calibration.model
+        == str(getattr(report, "model", "") or "").strip().lower()
+        and baseline.calibration.contract_hash == contract.hash
+        and baseline.calibration.contract_version == contract.version
+        and baseline.calibration.suite_hash == report_suite_hash,
+        "calibration hash, contract and behavior suite match this report",
+    ))
+    checks.append(_gate_check(
+        "calibration-state",
+        report_calibration_status in {"calibrated", "uncalibrated"},
+        (
+            f"runtime calibration state={report_calibration_status}; "
+            "stale configured evidence is never accepted"
+        ),
     ))
     checks.append(_gate_check(
         "case-manifest",
@@ -820,6 +949,7 @@ def contract_summary(contract: PromptParityContract = PROMPT_PARITY_CONTRACT) ->
 __all__ = [
     "BaselineCaseResult",
     "FROZEN_PROMPT_PARITY_CONTRACT_HASH",
+    "FROZEN_PROMPT_PARITY_SUITE_HASH",
     "ParityDimension",
     "ParityGateCheck",
     "ParityRequirement",
