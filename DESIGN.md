@@ -2233,3 +2233,40 @@ evaluate → PromptAuthoringValidator → content-light report
 返回候选正文供人工审核。输入有上限，Fragment 匹配要求唯一，错误以 `ToolResult(is_error=True)`
 回填给模型而不是伪造成功。工具复用生产 `PromptConflictAnalyzer` 与
 `PromptAuthoringValidator`，因此交互诊断、Benchmark 和真实 Prompt 校验使用同一套检查语义。
+
+
+## Candidate Prompt Schema（Step 115）
+
+`agent/prompt_candidate.py` 是候选 Prompt 的唯一正式契约。`PromptAuthoringContract v2` 要求
+作者返回以下封闭结构，`PROMPT_CANDIDATE_SCHEMA` 与运行时解析器保持一致：
+
+```json
+{
+  "target_fragment": "core:base:tool-discipline",
+  "objective": "reduce unrelated file reads",
+  "proposed_prompt": "...",
+  "constraints": [],
+  "expected_behavior": [],
+  "risk": "low",
+  "evaluation_cases": [],
+  "rollback_plan": "..."
+}
+```
+
+解析执行以下 fail-closed 规则：八个字段全部必填；target/objective/proposed_prompt/rollback_plan
+不能为空；字符串数组有数量和单项长度上限；risk 只允许 low/medium/high；evaluation case 使用
+`id/kind/metric/machine_verifiable`，kind 只允许 success/regression/security；候选与 case 均拒绝
+未知字段。空 evaluation_cases 结构有效，但语义 evaluate 会因缺少三类验证而失败。
+
+`PromptCandidate.to_authoring_request()` 将候选适配到现有 `PromptAuthoringValidator`。若目标
+Fragment 已存在，layer、scope、stability、cacheability、source/instruction authority 全部从
+Registry 继承；不存在时使用 project-scoped L6/session 保守默认值。constraints 作为 non-goals，
+success case metric 作为 success metrics；expected_behavior 与 rollback_plan 保留为审核元数据。
+`candidate_hash` 对完整 canonical record 确定性计算且正文敏感。`content_light_record()` 只暴露
+字段 hash、ID、kind 和计数，供 evaluate、日志与 checkpoint 使用，不保存 Prompt、metric 或
+rollback 正文。
+
+`prompt_lab.generate` 返回 canonical candidate、candidate_hash、evaluation report 与
+`applied=false`；`prompt_lab.evaluate` 接受 canonical schema，也继续兼容旧
+`PromptAuthoringRequest` 输入。两条路径都不调用模型、不写文件、不修改 Registry，也不自动应用
+候选。

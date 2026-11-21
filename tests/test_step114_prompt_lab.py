@@ -246,8 +246,12 @@ def test_generate_returns_reviewable_candidate_without_mutation(tmp_path):
     assert result["applied"] is False
     assert result["contains_prompt_content"] is True
     assert result["evaluation"]["passed"] is True
-    assert result["candidate"]["tool_scope"] == "none"
-    assert result["candidate"]["items"][0]["content"].startswith("[Objective]")
+    assert result["candidate"]["target_fragment"] == "project:review-prompt"
+    assert result["candidate"]["proposed_prompt"].startswith("[Objective]")
+    assert set(result["candidate"]) == {
+        "target_fragment", "objective", "proposed_prompt", "constraints",
+        "expected_behavior", "risk", "evaluation_cases", "rollback_plan",
+    }
     assert registry.generation == before_generation
     assert registry.get("project:review-prompt") is None
 
@@ -328,15 +332,15 @@ def test_prompt_lab_large_compare_and_item_inputs_fail_closed(tmp_path):
     ctx = _tool_context(registry, tmp_path)
     oversized_text = "x" * 100_001
     oversized_item = dict(_valid_candidate_spec())
-    oversized_item["items"] = ({
-        "id": "large",
-        "role": "instruction",
-        "source": "project",
-        "content": "x" * 40_001,
-        "layer": LAYER_L6_CATALOG,
-        "stability": STABILITY_SESSION,
-        "cacheable": True,
-    },)
+    oversized_item.update({
+        "target_fragment": "project:large",
+        "proposed_prompt": "x" * 40_001,
+        "constraints": (),
+        "expected_behavior": (),
+        "risk": "low",
+        "evaluation_cases": oversized_item["validation_cases"],
+        "rollback_plan": "Discard the unapplied candidate review.",
+    })
 
     compare = asyncio.run(tool.execute({
         "action": "compare", "left": oversized_text, "right": "small",

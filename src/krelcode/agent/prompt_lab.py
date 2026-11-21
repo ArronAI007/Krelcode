@@ -31,6 +31,7 @@ from .prompt_authoring import (
     PromptAuthoringValidationCase,
     PromptAuthoringValidator,
 )
+from .prompt_candidate import PromptCandidate
 from .prompt_conflicts import PromptConflictAnalyzer
 
 
@@ -39,17 +40,29 @@ MAX_COMPARE_TEXT_CHARS = 100_000
 MAX_GENERATED_CHARS = 40_000
 MAX_ITEM_CONTENT_CHARS = 40_000
 
-_STABLE_LAYERS = frozenset(PROMPT_LAYERS[:7])
 _REQUEST_KEYS = frozenset({
     "objective", "target_fragment_id", "target_layer", "items", "tools",
     "permission_mode", "tool_scope", "sandbox_policy", "approval_policy",
     "validation_cases", "success_metrics", "non_goals",
 })
+_CANDIDATE_KEYS = frozenset({
+    "target_fragment", "objective", "proposed_prompt", "constraints",
+    "expected_behavior", "risk", "evaluation_cases", "rollback_plan",
+})
+_CANDIDATE_MARKERS = frozenset({
+    "target_fragment", "proposed_prompt", "expected_behavior", "risk",
+    "evaluation_cases", "rollback_plan",
+})
 _GENERATE_KEYS = frozenset({
     *_REQUEST_KEYS,
-    "behavior", "constraints", "evidence_policy", "output_contract",
+    *_CANDIDATE_KEYS,
+    "behavior", "evidence_policy", "output_contract",
     "instruction_source", "tool_policy",
 })
+_DEFAULT_ROLLBACK_PLAN = (
+    "Discard this unapplied candidate review; no production Prompt source,"
+    " Registry entry, or configuration was changed."
+)
 
 
 class PromptLabError(ValueError):
@@ -67,18 +80,19 @@ def _hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _hash_value(value: object) -> str:
-    payload = json.dumps(
-        value, ensure_ascii=False, sort_keys=True,
-        separators=(",", ":"), default=str,
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
 def _text(value: object, limit: int = 10_000) -> str:
     result = str(value or "").strip()
     if len(result) > limit:
         raise PromptLabError(f"输入超过 {limit} 字符上限")
+    return result
+
+
+def _candidate_text(value: object, field: str, limit: int) -> str:
+    if not isinstance(value, str):
+        raise PromptLabError(f"{field} 必须是字符串")
+    result = value.strip()
+    if len(result) > limit:
+        raise PromptLabError(f"{field} 超过 {limit} 字符上限")
     return result
 
 
@@ -220,16 +234,27 @@ class PromptLabService:
         }
 
     def evaluate(self, spec: object) -> dict[str, object]:
-        request = self.request_from_mapping(spec)
-        registry = self._registry_provider()
-        active_fragments = (
-            registry.list(include_disabled=False) if registry is not None else ()
-        )
+        raw = _mapping(spec, "spec")
+        if set(raw).intersection(_CANDIDATE_MARKERS):
+            candidate = PromptCandidate.from_mapping(raw)
+            report = self._evaluate_candidate(candidate)
+            return {
+                "action": "evaluate",
+                "candidate": candidate.content_light_record(),
+                "candidate_hash": candidate.candidate_hash,
+                "report": report.as_dict(),
+                "applied": False,
+                "contains_prompt_content": False,
+            }
+
+        request = self.request_from_mapping(raw)
+        active_fragments = self._active_fragments()
         report = self.authoring_validator.validate(
             request, active_fragments=active_fragments)
         return {
             "action": "evaluate",
             "report": report.as_dict(),
+            "applied": False,
             "contains_prompt_content": False,
         }
 
@@ -238,56 +263,89 @@ class PromptLabService:
         unknown = sorted(set(raw).difference(_GENERATE_KEYS))
         if unknown:
             raise PromptLabError("未知 generate 字段: " + ", ".join(unknown))
-        objective = _text(raw.get("objective"), 8_000)
-        target_id = _text(raw.get("target_fragment_id"), 160)
+        objective = _candidate_text(raw.get("objective"), "objective", 8_000)
+        target_value = (
+            raw.get("target_fragment") if "target_fragment" in raw
+            else raw.get("target_fragment_id")
+        )
+        target_id = _candidate_text(
+            target_value, "target_fragment", 160)
         if not objective or not target_id:
-            raise PromptLabError("generate 需要 objective 与 target_fragment_id")
-        target_layer = _text(
-            raw.get("target_layer"), 120) or LAYER_L6_CATALOG
+            raise PromptLabError(
+                "generate 需要 objective 与 target_fragment")
+
+        target_fragment = None
+        registry = self._registry_provider()
+        if registry is not None:
+            target_fragment = registry.get(target_id)
+        target_layer = (
+            target_fragment.layer if target_fragment is not None
+            else _text(raw.get("target_layer"), 120) or LAYER_L6_CATALOG
+        )
         if target_layer not in PROMPT_LAYERS:
             raise PromptLabError("target_layer 必须在 L0-L12 范围内")
         tool_scope = self._tool_scope(raw)
-        generated = self._generated_instruction(
-            raw, target_id=target_id, target_layer=target_layer,
-            tool_scope=tool_scope)
-        stability = (
-            STABILITY_SESSION if target_layer in _STABLE_LAYERS
-            else STABILITY_TURN
+        proposed_prompt = (
+            _candidate_text(
+                raw.get("proposed_prompt"), "proposed_prompt",
+                MAX_GENERATED_CHARS)
+            if "proposed_prompt" in raw else ""
         )
-        source = _text(raw.get("instruction_source"), 80) or "project"
-        candidate = {
+        if not proposed_prompt:
+            proposed_prompt = self._generated_instruction(
+                raw, target_id=target_id, target_layer=target_layer,
+                tool_scope=tool_scope)
+
+        constraints = (
+            raw.get("constraints") if "constraints" in raw
+            else raw.get("non_goals", ())
+        )
+        expected_behavior = (
+            raw.get("expected_behavior") if "expected_behavior" in raw
+            else (raw.get("behavior"),) if raw.get("behavior") else ()
+        )
+        evaluation_cases = (
+            raw.get("evaluation_cases") if "evaluation_cases" in raw
+            else raw.get("validation_cases", ())
+        )
+        candidate = PromptCandidate.from_mapping({
+            "target_fragment": target_id,
             "objective": objective,
-            "target_fragment_id": target_id,
-            "target_layer": target_layer,
-            "items": raw.get("items") or ({
-                "id": target_id,
-                "role": "instruction",
-                "source": source,
-                "content": generated,
-                "scope": "project",
-                "layer": target_layer,
-                "stability": stability,
-                "cacheable": target_layer in _STABLE_LAYERS,
-                "requires_validation": False,
-            },),
-            "tools": raw.get("tools") or (),
-            "permission_mode": raw.get("permission_mode") or "default",
-            "tool_scope": tool_scope,
-            "sandbox_policy": raw.get("sandbox_policy") or "",
-            "approval_policy": raw.get("approval_policy") or "",
-            "validation_cases": raw.get("validation_cases") or (),
-            "success_metrics": raw.get("success_metrics") or (),
-            "non_goals": raw.get("non_goals") or (),
-        }
-        evaluation = self.evaluate(candidate)
+            "proposed_prompt": proposed_prompt,
+            "constraints": constraints or (),
+            "expected_behavior": expected_behavior or (),
+            "risk": raw.get("risk") or "low",
+            "evaluation_cases": evaluation_cases or (),
+            "rollback_plan": (
+                _candidate_text(
+                    raw.get("rollback_plan"), "rollback_plan", 8_000)
+                if "rollback_plan" in raw else _DEFAULT_ROLLBACK_PLAN
+            ),
+        })
+        report = self._evaluate_candidate(candidate)
         return {
             "action": "generate",
-            "candidate": candidate,
-            "candidate_hash": _hash_value(candidate),
-            "evaluation": evaluation["report"],
+            "candidate": candidate.as_record(),
+            "candidate_hash": candidate.candidate_hash,
+            "evaluation": report.as_dict(),
             "applied": False,
             "contains_prompt_content": True,
         }
+
+    def _active_fragments(self) -> Sequence[PromptFragment]:
+        registry = self._registry_provider()
+        return (
+            registry.list(include_disabled=False)
+            if registry is not None else ()
+        )
+
+    def _evaluate_candidate(self, candidate: PromptCandidate):
+        registry = self._registry_provider()
+        target = registry.get(candidate.target_fragment) \
+            if registry is not None else None
+        request = candidate.to_authoring_request(target)
+        return self.authoring_validator.validate(
+            request, active_fragments=self._active_fragments())
 
     def request_from_mapping(self, spec: object) -> PromptAuthoringRequest:
         raw = _mapping(spec, "spec")

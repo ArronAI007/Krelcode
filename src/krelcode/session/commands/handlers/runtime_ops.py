@@ -1130,7 +1130,8 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             f" · {fragment.tokens} tokens",
             "  capabilities: objective-analysis · instruction-evidence-separation"
             " · stable-dynamic-placement · conflict-detection"
-            " · tool-permission-design · machine-verifiable-validation",
+            " · tool-permission-design · machine-verifiable-validation"
+            " · candidate-prompt-schema",
         )
 
     if operation == "conflicts" and len(parts) == 1:

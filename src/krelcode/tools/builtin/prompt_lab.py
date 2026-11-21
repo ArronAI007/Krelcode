@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
+from ...agent.prompt_candidate import PROMPT_CANDIDATE_SCHEMA
 from ...agent.prompt_lab import PromptLabError, PromptLabService
 from ..base import ToolContext, ToolResult, ToolTier
 from ..prompt import ToolPromptExample
@@ -50,6 +51,7 @@ _SPEC_SCHEMA: Dict[str, Any] = {
     },
     "additionalProperties": False,
 }
+_SPEC_SCHEMA["properties"].update(PROMPT_CANDIDATE_SCHEMA["properties"])
 
 
 class PromptLabTool:
@@ -65,14 +67,16 @@ class PromptLabTool:
     )
     description = (
         "Read-only Prompt engineering lab. Inspect Prompt Fragments and hashes, "
-        "generate a reviewable Prompt candidate, compare two fragments or inline "
-        "instructions, and evaluate a candidate against PromptAuthoringContract. "
+        "generate a canonical, reviewable Prompt candidate, compare two fragments "
+        "or inline instructions, and evaluate a candidate against "
+        "PromptAuthoringContract. "
         "It never writes Prompt files or applies candidate changes."
     )
     prompt = (
         "Use inspect to see active Fragment provenance, placement, token counts, "
         "hashes, and conflicts without returning bodies. Use generate for a local "
-        "candidate scaffold, then evaluate it. Use compare for two Fragment IDs, "
+        "candidate using the closed Candidate Prompt Schema, then evaluate it. "
+        "Use compare for two Fragment IDs, "
         "sources, or inline instruction texts. Evaluation and comparison are "
         "content-light. Generated candidate text is returned for review only and "
         "is never applied automatically."
@@ -92,6 +96,23 @@ class PromptLabTool:
             description="Return metadata, hashes and conflicts, not Prompt bodies.",
         ),
         ToolPromptExample(
+            title="Evaluate a canonical candidate",
+            input={
+                "action": "evaluate",
+                "spec": {
+                    "target_fragment": "core:base:tool-discipline",
+                    "objective": "Reduce unrelated file reads.",
+                    "proposed_prompt": "Read only the files needed by the request.",
+                    "constraints": ["Do not expand tool authority."],
+                    "expected_behavior": ["Read fewer unrelated files."],
+                    "risk": "low",
+                    "evaluation_cases": [],
+                    "rollback_plan": "Discard the unapplied candidate review.",
+                },
+            },
+            description="Validate the closed Candidate Prompt Schema.",
+        ),
+        ToolPromptExample(
             title="Compare two instructions",
             input={
                 "action": "compare",
@@ -101,7 +122,7 @@ class PromptLabTool:
             description="Reuse the production conflict analyzer.",
         ),
     )
-    prompt_version = "1"
+    prompt_version = "2"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -130,7 +151,9 @@ class PromptLabTool:
             },
             "spec": {
                 "type": "object",
-                "description": "generate/evaluate: Prompt candidate specification.",
+                "description": (
+                    "generate/evaluate: canonical Candidate Prompt Schema or "
+                    "legacy PromptAuthoringRequest-compatible input."),
                 "properties": _SPEC_SCHEMA["properties"],
                 "additionalProperties": False,
             },

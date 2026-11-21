@@ -455,6 +455,13 @@ Prompt Authoring 永远不能自动应用生产 Prompt，也不能借正文授�
 inspect/compare/evaluate 默认只返回来源、计数、冲突与 hash，不返回 Prompt 正文；generate 只
 返回 `applied=false` 的候选供人工审阅，必须再经过 evaluate 与人工 review 才能修改真实来源。
 
+canonical Candidate Prompt 的字段固定为 `target_fragment`、`objective`、`proposed_prompt`、
+`constraints`、`expected_behavior`、`risk`、`evaluation_cases`、`rollback_plan`；全部必填且
+拒绝未知字段。`risk` 只能是 `low/medium/high`，`evaluation_cases[]` 只能使用
+`success/regression/security` 三类 kind。目标 Fragment 已存在时继承其 layer/scope/stability/
+cacheability/Instruction authority；不存在时按 project/L6/session 保守处理。evaluate 只返回
+candidate hash、分类计数与内容轻量报告，不返回 proposed_prompt、rollback_plan 或 metric 正文。
+
 最终发布验收使用：
 
 ```bash

@@ -5,13 +5,13 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（Step 114）
+## 1. 项目统计（Step 115）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 68,119 行（Python，**零第三方运行时依赖**） |
-| 测试 | 34,300 行 / 145 个测试文件 / 1,464 个通过用例 + 2 个本地端口集成 skip |
-| 提交 | 160 个增量提交，每个功能阶段均包含测试与语义化 commit |
+| 源码 | 68,697 行（Python，**零第三方运行时依赖**） |
+| 测试 | 34,676 行 / 142 个 `test_*.py` 模块 / 1,501 个通过用例 + 2 个本地端口集成 skip |
+| 提交 | 161 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 17 + 只读 `memory_search`（装配 MemoryStore 时）+ 只读 `prompt_lab`（Prompt Authoring 开启时）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
 | CLI 入口 | REPL 对话 · -m 单次（text/json/stream-json）· stream-json 持久会话 · Python SDK · doctor · init · review |
@@ -95,6 +95,7 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 | v1.03 | Prompt Authoring Contract | 新增默认关闭的 L6 `prompt_authoring:contract`，通过 `[prompt.authoring].enabled` 显式启用并共享给主/子 Agent。契约自身覆盖目标分析、Instruction/Evidence 分权、stable/dynamic、冲突检测、工具权限与可验证性；`PromptAuthoringValidator` 复用生产 Conflict Analyzer，检查无效来源角色、动态缓存污染、read-only 写工具、通配符/自动批准边界、权限提升文案和 success/regression/security 机器指标，报告只含 ID/计数/hash。`/context authoring` 提供内容轻量状态入口，不自动应用 Prompt 或扩大运行时权限 |
 
 | v1.04 | Prompt Engineering Lab | 在 `[prompt.authoring].enabled` 下注册只读 core 工具 `prompt_lab(action=inspect|generate|compare|evaluate)`，复用 Fragment Registry、PromptConflictAnalyzer 和 PromptAuthoringValidator；inspect/compare/evaluate 内容轻量，generate 只返回 `applied=false` 候选。主/子 Agent 的 ToolContext 分别绑定自己的 Registry，工具不写文件、不修改 Registry、不扩大权限，Plan/read-only 模式可用 |
+| v1.05 | Candidate Prompt Schema | PromptAuthoringContract 升为 v2，新增封闭 `PromptCandidate`/`PROMPT_CANDIDATE_SCHEMA`：八个字段必填，risk 仅 low/medium/high，evaluation cases 固定 success/regression/security，未知字段与超界输入 fail-closed。`prompt_lab.generate` 输出 canonical candidate，evaluate 接受新 schema 并兼容旧 authoring 输入；已存在目标自动继承 layer/scope/stability/cacheability/authority，新目标使用 project/L6/session。候选只生成确定性 hash 与 content-light metadata，不写文件、不修改 Registry、不自动应用 |
 
 ## 3. 文件导览（能力 → 位置）
 
