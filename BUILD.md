@@ -103,6 +103,7 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 
 | v1.12 | Tool Prompt lint 与 examples 补齐 | 新增旁路 `tools/prompt_lint.py` 与 `/prompts lint [tool]`：校验 ToolPromptSpec name、object Schema、required 引用、instructions、when/exclusion、example 未知字段与 JSON Schema 约束、重复 input/title、空 description、guidance 冲突、长度、凭据形状和可选参数覆盖。内置/Skill/Subagent 缺 example 为 error，MCP/Plugin 为 warning；报告只含字段路径、稳定 `TPLxxx` code、severity/count 与 content-light 标志，不扫描磁盘或回显正文。39 个已知工具全部补齐至少一个 schema-valid example，Step 120 契约测试同步要求 examples；全量 1626 通过 + 2 个本地端口集成 skip |
 | v1.13 | 标准命令模板与 Reminder Catalog | 新增 `CommandTemplate` 统一 Builtin/Custom/Skill/Plugin/MCP Prompt Command 的 source/trust、参数模式、envelope、工具 allowlist、reminder 声明与 stable hash；REPL、headless、stream-json 将 command contract 传入真实 turn。新增 `ReminderCatalog`，以显式 ID/trigger 选择 l12 turn reminder，支持稳定排序、ID/content 去重、单条/turn 预算与 content-light exclusion；AgentLoop 每 turn 只选择一次，PromptAssembler 不将其放入 stable cache prefix。新增 `/commands [show <name>]` 与 `/context reminders`；全量 1633 通过 + 2 个本地端口集成 skip |
+| v1.14 | Prompt 可观测性与真实行为 Benchmark | `/prompts` 增加 health/observations/active 与 benchmark 状态查询；Reminder 也进入统一 Surface Registry 并在真实 L12 渲染时记录 content-light observation。新增 `krelcode benchmark` 一等入口与 `--save-report [path]`，默认原子写入 `.krelcode/prompts/benchmarks/latest.json`（0600）；报告强制排除 answer/工具参数，并提供 provider/model、case/trial、pass@k、token、成本、错误分类和 Prompt Surface 执行证据。`/prompts benchmark` 只读报告，不隐式产生 API 费用；全量 1639 通过 + 2 个本地端口集成 skip |
 
 ## 3. 文件导览（能力 → 位置）
 

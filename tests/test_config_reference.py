@@ -28,7 +28,7 @@ def test_default_max_steps_matches_agent_default():
 
 def test_subcommands_documented():
     text = (ROOT / "CONFIG.md").read_text(encoding="utf-8")
-    for cmd in ("doctor", "init", "review", "security-review"):
+    for cmd in ("doctor", "init", "review", "security-review", "benchmark"):
         assert f"`{cmd}`" in text
 
 

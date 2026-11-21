@@ -203,6 +203,44 @@ def workflow_prompt_surfaces(
     return tuple(surfaces)
 
 
+def reminder_prompt_surfaces(
+    catalog: object | None,
+) -> tuple[PromptSurfaceDescriptor, ...]:
+    """Describe managed L12 reminders without exposing their policy text."""
+    specs = tuple(
+        getattr(catalog, "list", lambda: ())() or ()) if catalog is not None else ()
+    surfaces: list[PromptSurfaceDescriptor] = []
+    for spec in specs:
+        reminder_id = str(getattr(spec, "id", "") or "")
+        if not reminder_id:
+            continue
+        surfaces.append(PromptSurfaceDescriptor(
+            id=f"reminder:{reminder_id}",
+            kind=PromptSurfaceKind.REMINDER,
+            source=f"reminder:{getattr(spec, 'source', '') or 'unknown'}",
+            owner="ReminderCatalog",
+            role=SourceRole.INSTRUCTION,
+            authority=InstructionSource.MANAGED.value,
+            trust=str(getattr(spec, "trust", "") or "managed"),
+            stability="turn",
+            scope="managed",
+            content_hash=str(getattr(spec, "content_hash", "") or ""),
+            token_estimate=int(getattr(spec, "tokens", 0) or 0),
+            description=f"Managed turn reminder {reminder_id}",
+            capabilities=("turn_reminder", "non_cacheable", "l12_fragment"),
+            metadata={
+                "trigger": str(getattr(spec, "trigger", "") or ""),
+                "trigger_values": tuple(
+                    getattr(spec, "trigger_values", ()) or ()),
+                "priority": int(getattr(spec, "priority", 0) or 0),
+                "max_tokens": int(getattr(spec, "max_tokens", 0) or 0),
+                "threshold": float(getattr(spec, "threshold", 0.0) or 0.0),
+                "trust_boundary": str(getattr(spec, "trust", "") or "managed"),
+            },
+        ))
+    return tuple(surfaces)
+
+
 def subagent_prompt_surfaces(
     manager: object | None,
 ) -> tuple[PromptSurfaceDescriptor, ...]:
@@ -583,6 +621,7 @@ def build_prompt_surface_collections(
     model: str = "",
     tools: object | None = None,
     workflows: object = DEFAULT_TASK_WORKFLOW_CATALOG,
+    reminders: object | None = None,
     agents: object | None = None,
     output_styles: object | None = None,
     hooks: object | None = None,
@@ -603,6 +642,7 @@ def build_prompt_surface_collections(
         ),),
         "tools": tool_prompt_surfaces(tools),
         "workflows": workflow_prompt_surfaces(workflows),
+        "reminders": reminder_prompt_surfaces(reminders),
         "subagents": subagent_prompt_surfaces(agents),
         "auxiliary": auxiliary_prompt_surfaces(),
         "output_styles": output_style_prompt_surfaces(output_styles),
@@ -652,6 +692,7 @@ def refresh_prompt_surfaces(
         model=str(getattr(getattr(loop, "llm", None), "model", "") or ""),
         tools=getattr(loop, "registry", None),
         workflows=workflows,
+        reminders=getattr(loop, "reminder_catalog", None),
         agents=getattr(loop, "agent_definitions", None),
         output_styles=getattr(loop, "output_style_manager", None),
         hooks=effective_hooks,
@@ -667,6 +708,7 @@ def refresh_prompt_surfaces(
 __all__ = [
     "build_prompt_surface_collections",
     "refresh_prompt_surfaces",
+    "reminder_prompt_surfaces",
     "tool_prompt_surfaces",
     "workflow_prompt_surfaces",
 ]

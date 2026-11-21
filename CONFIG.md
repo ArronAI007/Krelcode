@@ -17,6 +17,7 @@ krelcode [子命令] [选项]
 | `init` | 生成 `krelcode.toml` + `AGENTS.md` 模板（不覆盖已有文件） | `--force` |
 | `review` | 评审当前 git 变更（只读工具集，天然安全） | `--staged`（只评审暂存区）、`--focus "重点"` |
 | `security-review` | 防御性安全审查：security-review Workflow、本地只读工具池、JSON Schema 报告与 CI 风险门禁 | `--staged`、`--focus "重点"`、`--fail-on <严重度>`、`--output-format json` |
+| `benchmark` | 真实模型 Prompt/Context 行为 Benchmark 一等入口；输出离线结构报告或 opt-in live report | `--live`、`--trials`、`--save-report [path]`、`--gate <baseline>`、`--final-acceptance` |
 
 ### 通用旗标
 
@@ -76,6 +77,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `--final-acceptance` | 关闭 | 在 fresh live Parity Gate 后运行 Step 112 最终 fail-closed 验收；必须同时提供 `--live` 和 `--gate` |
 | `--tune` | 关闭 | 根据失败 trial 的工具轨迹与 checks 生成人工审核用 Prompt 调优候选 |
 | `--tune-output` | — | 将内容轻量的 tuning JSON 写入指定文件；不自动修改任何 Prompt |
+| `--save-report [path]` | — | 原子保存 content-light live behavior report；省略 path 时写入 `.krelcode/prompts/benchmarks/latest.json`（权限 0600） |
 
 ## 2. REPL 命令
 
@@ -114,9 +116,13 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/context cache` | 显示稳定前缀字符/token 数、稳定/动态 Fragment、stable/dynamic/full hash、工具目录 hash、与上一请求相比的 hash/flag/token 差值及 cache segment 归因 |
 | `/context ledger` | 显示统一请求身份、instruction/evidence/tool/attachment/working/compact/memory/history/wire hash、完整请求 hash、cache miss 原因、Resume invalidation 与子代理指令继承状态 |
 | `/context refresh` | 重采目录树/git/规则文件；规则变化才更新稳定 Fragment，环境变化只替换对应 snapshot/delta attachment |
-| `/prompts` · `/prompts list [kind\|source]` | 只读列出主 Agent、Tool、Workflow、Subagent、Compact、Review、Hook、MCP、Skill、Plugin Command、Custom Command 与 Output Style 的来源、权限、Hash、Token 和最近真实渲染状态；筛选值可传 kind 或 source 子串 |
+| `/prompts` · `/prompts list [kind\|source\|state]` | 只读列出主 Agent、Tool、Workflow、Reminder、Subagent、Compact、Review、Hook、MCP、Skill、Plugin Command、Custom Command 与 Output Style 的来源、权限、Hash、Token 和最近真实渲染状态；筛选值可传 kind、source 子串，或 `observed/unobserved/stale/unavailable` |
 | `/prompts show <id>` | 查看单个 Prompt Surface 的 source/owner/version、instruction/evidence 角色、authority/trust、stability、content hash、capability、有界 metadata、Surface Contract（Schema ID/hash、timeout、输入/输出上限、脱敏策略）与最近执行状态；永远不显示 Prompt 正文 |
+| `/prompts health` | 汇总 surfaces/observed/unobserved/stale/unavailable、真实 render 次数与 contract 失败数，并按 kind 分项；不包含 Prompt 正文 |
+| `/prompts observations [kind\|source]` | 查看当前进程内真实渲染过的 surface、render 次数、最后 turn/step、token、contract 状态、耗时与 rendered hash |
+| `/prompts active [kind\|source]` | 查看最近真实 Agent turn 的 PromptPlan 摘要与同 turn 实际渲染的 main/tool/reminder surface；不输出正文 |
 | `/prompts lint [tool]` | 对当前 ToolRegistry 或指定工具执行 content-light Tool Prompt lint：检查 JSON Schema、必填字段、instructions、when/exclusion、examples、重复项、疑似凭据和示例覆盖；输出稳定错误码、字段名与计数，不回显 Prompt/example 正文。内置/Skill/Subagent 缺 example 为 error，MCP/Plugin 为 warning |
+| `/prompts benchmark [status [path]\|list]` | 读取 `--save-report` 生成的 content-light live report 摘要，或列出 16 个真实行为 case；不会触发模型调用或自动产生 API 费用 |
 | `/prompts coverage` · `/prompts hash` | 查看核心 Surface 覆盖、kind/role/trust 计数与 content-light 目录 Hash；refresh 只更新旁路目录，不改变 Provider 请求 |
 | `/security-review [--staged] [--focus <重点>]` | 对当前 git 变更启动 `security-review` Workflow；本轮只开放 `read_file/grep/glob/find_refs/repo_map/tool_search`，要求返回结构化 Security Review JSON 报告 |
 | `/memory` · `/memory list [scope]` | 列出全部或指定 user/project/session 作用域记忆及 ID、类型和内容 |

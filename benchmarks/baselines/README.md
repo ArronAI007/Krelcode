@@ -30,6 +30,18 @@ PYTHONPATH=src python -m krelcode.benchmarks.prompt \
   --gate benchmarks/baselines/deepseek-chat.json
 ```
 
+Persist a content-light execution report for later `/prompts benchmark status`
+inspection:
+
+```bash
+krelcode benchmark --live --provider openai \
+  --model YOUR_DEEPSEEK_MODEL --trials 3 --save-report
+```
+
+The default destination is `.krelcode/prompts/benchmarks/latest.json`. Report
+files never contain answers or tool-argument bodies, even when
+`--include-content` is used for the debug-only console output.
+
 
 `--gate` fails closed when the contract, provider/model, suite hash, case
 manifest, minimum trial count, pass@k, stability or runtime error requirements

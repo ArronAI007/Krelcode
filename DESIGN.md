@@ -2670,3 +2670,39 @@ reminder 映射为固定 ID `reminder:<id>` 的 L12 Fragment：turn、non-cachea
 3. 同一 turn 的多步工具循环使用同一 reminder selection。
 4. 未知 reminder ID、超预算项与重复 content 只形成 content-light exclusion。
 5. Canonical Command Template 与 Reminder Catalog 不扫描磁盘、不执行工具、不依赖 UI。
+
+## Prompt 可观测性与真实行为 Benchmark（Step G）
+
+Step G 把 Prompt Surface 目录从静态清单收口为实际执行观测面。`ReminderCatalog` 中的每个
+managed reminder 也登记为 `reminder:<id>` surface；`AgentLoop` 在本轮真实渲染 L12 Fragment
+时写入 content-light observation。`PromptSurfaceRegistry.health()` 统一聚合
+observed/unobserved/stale/unavailable、render 次数与 contract 失败数，并可按 kind 分项。
+所有值只来自 descriptor、hash 与计数，不读取或保存 Prompt、reminder、工具参数或模型回复正文。
+
+诊断闭环：
+
+```text
+/prompts              summary + usage
+/prompts list ...     descriptor + latest observation
+/prompts health       aggregate observation/contract health
+/prompts observations actual rendered surfaces
+/prompts active       latest real turn + PromptPlan summary
+/prompts benchmark    saved live report / 16-case catalogue
+```
+
+`/prompts active` 以最近 `PromptPlanSnapshot.turn_id` 为边界，只显示同一 turn 的 main、实际
+exposed tool 与 selected reminder surface。`/prompts benchmark` 只读取报告，不启动模型调用；
+真实执行仍由 opt-in CLI 完成，避免 slash command 意外产生费用。
+
+Live behavior Benchmark 新增正式入口 `krelcode benchmark`（兼容
+`python -m krelcode.benchmarks.prompt`）。每次 trial 使用独立 workspace/HOME，复用生产
+Provider、AgentLoop、PromptAssembler、动态工具池、权限与 Sandbox；report 的 trial facts 增加
+Prompt Surface 数量、observed/stale/contract-failure 计数与 catalogue hash，用于证明真实行为
+验证同时覆盖 Prompt 执行现场。
+
+`--save-report [path]` 采用原子 JSON 持久化，默认
+`.krelcode/prompts/benchmarks/latest.json`，文件权限为 `0600`。保存前强制使用
+`include_content=False`，并拒绝 `answer` 或工具 `arguments`；汇总加载器只暴露 provider/model、
+case/trial 稳定性、pass@k、token、成本、错误分类、profile 与时间等有界元数据。这样一次昂贵的
+真实模型评测可以在后续会话中由 `/prompts benchmark status` 审计，而不会复制模型输出、仓库文本
+或凭据进入会话记录。

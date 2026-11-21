@@ -35,7 +35,9 @@ __all__ = [
     "BehaviorErrorKind",
     "BehaviorMetric",
     "BehaviorReport",
+    "BehaviorReportSummary",
     "BehaviorTrialResult",
+    "DEFAULT_BEHAVIOR_REPORT_PATH",
     "FailureAttribution",
     "FailureCause",
     "FailureTrajectoryAnalyzer",
@@ -56,13 +58,16 @@ __all__ = [
     "PromptTuningCandidate",
     "PromptTuningReport",
     "TuningRisk",
+    "ToolObservation",
     "analyze_failure_trajectories",
     "contract_summary",
     "evaluate_prompt_parity",
     "load_prompt_baseline",
+    "load_behavior_report_summary",
     "run_offline_acceptance",
     "main",
     "save_prompt_baseline",
+    "save_behavior_report",
 ]
 
 
@@ -81,7 +86,16 @@ def __getattr__(name: str):
         from . import acceptance
 
         return getattr(acceptance, name)
-    if name.startswith("Behavior") or name.startswith("BEHAVIOR_"):
+    if name in {"BehaviorReportSummary", "DEFAULT_BEHAVIOR_REPORT_PATH",
+                "load_behavior_report_summary", "save_behavior_report"}:
+        from . import report_store
+
+        return getattr(report_store, name)
+    if (
+        name.startswith("Behavior")
+        or name.startswith("BEHAVIOR_")
+        or name in {"ToolObservation"}
+    ):
         from . import behavior
 
         return getattr(behavior, name)

@@ -122,6 +122,7 @@ from .prompt_assembler import (
 from .prompt_surface import (
     PromptSurfaceRegistry,
     main_prompt_surface,
+    prompt_content_hash,
     update_observation,
 )
 from .reminders import (
@@ -1363,6 +1364,19 @@ class AgentLoop:
                 f"tool:{name}",
                 content_hash=str(getattr(spec, "content_hash", "") or ""),
                 tokens=int(getattr(spec, "token_estimate", 0) or 0),
+                turn_id=self._current_turn_id,
+                step=step,
+            )
+        for fragment in prompt_plan.fragments:
+            fragment_id = str(getattr(fragment, "id", "") or "")
+            if not fragment_id.startswith("reminder:"):
+                continue
+            update_observation(
+                registry,
+                fragment_id,
+                content_hash=prompt_content_hash(
+                    getattr(fragment, "content", "")),
+                tokens=int(getattr(fragment, "tokens", 0) or 0),
                 turn_id=self._current_turn_id,
                 step=step,
             )

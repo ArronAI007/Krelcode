@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -24,11 +25,11 @@ def build_parser() -> argparse.ArgumentParser:
         prog="krelcode", description="Krelcode coding agent (统一 Provider + tool-calling 循环 + MCP)"
     )
     p.add_argument("command", nargs="?",
-                   choices=("doctor", "init", "review", "security-review"),
+                   choices=("doctor", "init", "review", "security-review", "benchmark"),
                    default=None,
                    help="子命令：doctor=环境自检；init=生成配置/规则模板；"
                         "review=评审当前 git 变更；security-review=只读安全审查；"
-                        "缺省进入对话")
+                        "benchmark=真实模型 Prompt 行为评测；缺省进入对话")
     p.add_argument("--force", action="store_true",
                    help="init 子命令：覆盖已存在的模板文件")
     p.add_argument("--staged", action="store_true",
@@ -161,7 +162,17 @@ def _run_init(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(None if argv is None else list(argv))
+    raw_args = list(argv) if argv is not None else None
+    effective = raw_args if raw_args is not None else list(sys.argv[1:])
+    if effective and effective[0] == "benchmark":
+        from krelcode.benchmarks.prompt import main as benchmark_main
+
+        benchmark_args = effective[1:]
+        if benchmark_args and benchmark_args[0] == "prompt":
+            benchmark_args = benchmark_args[1:]
+        return benchmark_main(benchmark_args)
+
+    args = build_parser().parse_args(raw_args)
     if args.command == "doctor":
         return _run_doctor(args)
     if args.command == "init":

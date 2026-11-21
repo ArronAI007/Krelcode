@@ -36,6 +36,7 @@ class PromptSurfaceKind(str, Enum):
     MAIN_AGENT = "main_agent"
     TOOL = "tool"
     WORKFLOW = "workflow"
+    REMINDER = "reminder"
     SUBAGENT = "subagent"
     COMPACT = "compact"
     REVIEW = "review"
@@ -52,6 +53,7 @@ CORE_SURFACE_KINDS = (
     PromptSurfaceKind.MAIN_AGENT,
     PromptSurfaceKind.TOOL,
     PromptSurfaceKind.WORKFLOW,
+    PromptSurfaceKind.REMINDER,
     PromptSurfaceKind.SUBAGENT,
     PromptSurfaceKind.COMPACT,
     PromptSurfaceKind.REVIEW,
@@ -489,6 +491,74 @@ class PromptSurfaceRegistry:
         return tuple(sorted(
             self._observations.values(), key=lambda item: item.surface_id))
 
+    def observations_for_turn(
+        self,
+        turn_id: str,
+    ) -> Tuple[PromptSurfaceObservation, ...]:
+        """Return content-light observations rendered for one Agent turn."""
+        normalized = str(turn_id or "").strip()
+        if not normalized:
+            return ()
+        return tuple(
+            item for item in self.observations()
+            if item.last_turn_id == normalized
+        )
+
+    def health(self) -> Mapping[str, object]:
+        """Aggregate observation and contract health without Prompt content."""
+        surfaces = self.list()
+        observed = tuple(
+            surface for surface in surfaces
+            if surface.id in self._observations)
+        stale = tuple(
+            surface for surface in observed
+            if not self._observations[surface.id].is_current(
+                surface.content_hash))
+        unavailable = tuple(surface for surface in surfaces if not surface.available)
+        contract_failures = tuple(
+            observation for observation in self._observations.values()
+            if observation.contract_status not in ("", "ok"))
+        render_count = sum(
+            observation.render_count for observation in self._observations.values())
+        by_kind: dict[str, dict[str, int]] = {}
+        for kind in PromptSurfaceKind:
+            selected = tuple(surface for surface in surfaces if surface.kind is kind)
+            if not selected:
+                continue
+            selected_observed = tuple(
+                surface for surface in selected
+                if surface.id in self._observations)
+            selected_stale = tuple(
+                surface for surface in selected_observed
+                if not self._observations[surface.id].is_current(
+                    surface.content_hash))
+            selected_contract_failures = tuple(
+                surface for surface in selected
+                if (
+                    surface.id in self._observations
+                    and self._observations[surface.id].contract_status
+                    not in ("", "ok")
+                )
+            )
+            by_kind[kind.value] = {
+                "surfaces": len(selected),
+                "observed": len(selected_observed),
+                "unobserved": len(selected) - len(selected_observed),
+                "stale": len(selected_stale),
+                "unavailable": sum(1 for surface in selected if not surface.available),
+                "contract_failures": len(selected_contract_failures),
+            }
+        return {
+            "surfaces": len(surfaces),
+            "observed": len(observed),
+            "unobserved": len(surfaces) - len(observed),
+            "stale": len(stale),
+            "unavailable": len(unavailable),
+            "contract_failures": len(contract_failures),
+            "render_count": render_count,
+            "by_kind": by_kind,
+        }
+
     def observe(
         self,
         surface_id: str,
@@ -564,9 +634,7 @@ class PromptSurfaceRegistry:
         )
 
     def summary_lines(self) -> list[str]:
-        observed = sum(
-            1 for surface in self._surfaces.values()
-            if surface.id in self._observations)
+        health = self.health()
         kinds = " · ".join(
             f"{name} {count}" for name, count in self.kind_counts().items()
         ) or "（空）"
@@ -574,10 +642,14 @@ class PromptSurfaceRegistry:
             f"{name} {count}" for name, count in self.role_counts().items()
         ) or "（空）"
         return [
-            f"  [prompts] {len(self._surfaces)} surfaces · observed {observed}"
+            f"  [prompts] {health['surfaces']} surfaces"
+            f" · observed {health['observed']}"
+            f" · stale {health['stale']}"
             f" · generation {self._generation}",
             f"  kinds: {kinds}",
-            f"  roles: {roles} · content-light=true",
+            f"  roles: {roles} · renders {health['render_count']}"
+            f" · contract_failures {health['contract_failures']}"
+            " · content-light=true",
         ]
 
 

@@ -57,6 +57,7 @@ from ..agent.prompts import (
     prompt_release_id_from_config,
     resolve_prompt_profile,
 )
+from ..agent.prompt_surface_catalog import refresh_prompt_surfaces
 from ..agent.rules import RuleLoader
 from ..agent.usage import UsageTracker
 from ..agent.working_context import WorkingContextStore
@@ -101,6 +102,7 @@ from .parity import (
     load_prompt_baseline,
     save_prompt_baseline,
 )
+from .report_store import DEFAULT_BEHAVIOR_REPORT_PATH, save_behavior_report
 
 
 BEHAVIOR_BENCHMARK_SCHEMA_VERSION = 4
@@ -422,6 +424,7 @@ class BehaviorReport:
         return {
             "schema_version": self.schema_version,
             "kind": "live_model_behavior",
+            "content_light": not include_content,
             "generated_at": self.generated_at,
             "provider": self.provider,
             "model": self.model,
@@ -612,6 +615,7 @@ class BehaviorSession:
         setattr(loop, "skill_manager", None)
         loop.sync_context_attachments(include_mcp=False)
         apply_prompt_snapshot(loop, prompt_snapshot)
+        refresh_prompt_surfaces(loop)
         self.loop = loop
         self._initial_hashes = self._snapshot_workspace()
 
@@ -672,7 +676,7 @@ class BehaviorSession:
                 "directory:rules",
             ))
         )
-        return {
+        facts: dict[str, object] = {
             "prompt_fragments": len(plan.fragments),
             "active_prompt_fragments": active_prompt_fragments,
             "stable_tokens": plan.stable_tokens,
@@ -681,6 +685,20 @@ class BehaviorSession:
             "stable_hash": plan.stable_hash[:16],
             "full_hash": plan.full_hash[:16],
         }
+        registry = getattr(loop, "prompt_surface_registry", None)
+        health = getattr(registry, "health", lambda: {})()
+        if isinstance(health, Mapping):
+            facts["prompt_surfaces"] = int(health.get("surfaces", 0) or 0)
+            facts["observed_prompt_surfaces"] = int(
+                health.get("observed", 0) or 0)
+            facts["stale_prompt_surfaces"] = int(
+                health.get("stale", 0) or 0)
+            facts["prompt_surface_contract_failures"] = int(
+                health.get("contract_failures", 0) or 0)
+        snapshot = getattr(registry, "snapshot", None)
+        if callable(snapshot):
+            facts["prompt_surface_hash"] = snapshot().content_hash[:16]
+        return facts
 
 
 class BehaviorBenchmarkRunner:
@@ -2479,6 +2497,11 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> None:
         "--save-baseline", default=None, metavar="PATH",
         help="在完整 3-trial suite 通过后保存 prompt parity baseline")
     parser.add_argument(
+        "--save-report", nargs="?", const=DEFAULT_BEHAVIOR_REPORT_PATH,
+        default=None, metavar="PATH",
+        help=("原子保存 content-light live report；省略 PATH 时写入 "
+              f"{DEFAULT_BEHAVIOR_REPORT_PATH}"))
+    parser.add_argument(
         "--include-content", action="store_true",
         help="在调试报告中包含最终答案和工具参数（gate/save/final acceptance 时禁用）")
     parser.add_argument(
@@ -2509,6 +2532,7 @@ def _parity_payload(
     tuning_report=None,
     gate: PromptParityGateResult | None = None,
     baseline_path: str = "",
+    report_path: str = "",
     final_acceptance=None,
 ) -> object:
     benchmark = report.as_dict(include_content=include_content)
@@ -2516,6 +2540,7 @@ def _parity_payload(
         tuning_report is None
         and gate is None
         and not baseline_path
+        and not report_path
         and final_acceptance is None
     ):
         return benchmark
@@ -2526,6 +2551,8 @@ def _parity_payload(
         payload["gate"] = gate.as_dict()
     if baseline_path:
         payload["baseline_path"] = baseline_path
+    if report_path:
+        payload["report_path"] = report_path
     if final_acceptance is not None:
         payload["final_acceptance"] = final_acceptance.as_dict()
     return payload
@@ -2711,6 +2738,18 @@ def run_live_command(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
+    saved_report_path = ""
+    save_report_path = getattr(args, "save_report", None)
+    if save_report_path:
+        destination = Path(str(save_report_path)).expanduser()
+        if not destination.is_absolute():
+            destination = workspace / destination
+        try:
+            saved_report_path = str(save_behavior_report(report, destination))
+        except (OSError, TypeError, ValueError) as exc:
+            print(f"live report 保存失败: {_safe_error(exc)}", file=sys.stderr)
+            return 2
+
     tuning_report = None
     if getattr(args, "tune", False) or getattr(args, "tune_output", None):
         from .tuning import analyze_failure_trajectories
@@ -2782,6 +2821,7 @@ def run_live_command(args: argparse.Namespace) -> int:
                 tuning_report=selected_tuning,
                 gate=gate_result,
                 baseline_path=saved_baseline_path,
+                report_path=saved_report_path,
                 final_acceptance=acceptance_report,
             ),
             ensure_ascii=False,
@@ -2792,6 +2832,9 @@ def run_live_command(args: argparse.Namespace) -> int:
         if saved_baseline_path:
             print()
             print(f"Prompt Parity baseline: {saved_baseline_path}")
+        if saved_report_path:
+            print()
+            print(f"Live behavior report: {saved_report_path}")
         if selected_tuning is not None:
             print()
             print(selected_tuning.render_text())
