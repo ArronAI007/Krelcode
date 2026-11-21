@@ -97,11 +97,12 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
         CommandSpec(
             "output-style", "查看、切换或重载 Output Style",
             argument_hint="[list|show <name>|reload|off]",
-            help=("查看当前 Output Style；/output-style <name> 切换；"
+            help=("查看当前 Output Style；内置 default/explanatory/learning；"
+                  "/output-style <name> 切换；"
                   "/output-style list 列出可用样式；"
                   "/output-style show <name> 查看正文；"
-                  "/output-style reload 重载 user/project/config 文件；"
-                  "/output-style off 恢复默认输出。")),
+                  "/output-style reload 重载内置与 user/project/config 文件；"
+                  "/output-style default|off 恢复默认输出。")),
         CommandSpec(
             "statusline", "使用内置 statusline-setup agent 配置状态栏",
             argument_hint="[要求]",

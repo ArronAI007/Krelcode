@@ -23,12 +23,15 @@ from .agent.fragments import (
     STABILITY_SESSION,
     PromptFragment,
     PromptFragmentRegistry,
+    TRUST_MANAGED,
     TRUST_PROJECT,
     TRUST_USER,
 )
 
 MAX_STYLE_BYTES = 64 * 1024
 MAX_STYLE_NAME = 80
+DEFAULT_OUTPUT_STYLE_NAME = "default"
+BUILTIN_OUTPUT_STYLE_SCOPE = "builtin"
 _STYLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 _FRONTMATTER_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$")
 
@@ -41,16 +44,89 @@ class OutputStyle:
     scope: str = "user"
     path: Optional[Path] = None
     priority: int = 100
+    keep_coding_instructions: bool = False
+
+    @property
+    def builtin(self) -> bool:
+        return self.scope == BUILTIN_OUTPUT_STYLE_SCOPE
 
     @property
     def source(self) -> str:
         location = str(self.path) if self.path is not None else ""
         return f"output-style:{self.scope}:{location}" if location else (
-            f"output-style:{self.scope}")
+            f"output-style:{self.scope}:{self.name}")
 
     def usage(self) -> str:
         description = f"  {self.description}" if self.description else ""
         return f"{self.name:<18} [{self.scope}]{description}"
+
+
+EXPLANATORY_OUTPUT_STYLE = OutputStyle(
+    name="explanatory",
+    description="解释关键决策、取舍与实现原理",
+    scope=BUILTIN_OUTPUT_STYLE_SCOPE,
+    priority=0,
+    keep_coding_instructions=True,
+    content="""\
+# Explanatory
+
+Make the user's understanding of the work a first-class outcome while keeping
+the primary response action-oriented.
+
+- After a meaningful implementation decision, behavior change, or debugging
+  conclusion, add a short `Insight` note explaining why the chosen approach
+  works, the important tradeoff, and any material alternative that was rejected.
+- Prefer causal explanations and concrete repository evidence over generic
+  textbook descriptions. Keep each insight concise and tied to the current task.
+- Do not narrate trivial steps, repeat code that is already visible, or add an
+  insight after every tool call. Skip the note when it would add no useful
+  understanding.
+- The final answer must still state what changed, how it was verified, and any
+  remaining risk.
+""",
+)
+
+
+LEARNING_OUTPUT_STYLE = OutputStyle(
+    name="learning",
+    description="通过协作与实践帮助用户理解并参与实现",
+    scope=BUILTIN_OUTPUT_STYLE_SCOPE,
+    priority=0,
+    keep_coding_instructions=True,
+    content="""\
+# Learning
+
+Treat the user as an active collaborator learning the codebase by doing.
+
+- Explain the goal, the relevant evidence, and the reason for each major step as
+  the task progresses. Invite questions when a concept is central to the change.
+- When a small, reversible, non-critical step is a good learning exercise, leave
+  a clearly marked `TODO(human)` with a focused instruction, explain the expected
+  result, and wait for the user before continuing that step.
+- Never delegate security-sensitive work, destructive operations, migrations,
+  credential handling, or changes whose failure would block the task. If the user
+  asks you to complete the work directly, do so without forcing a teaching detour.
+- Keep the repository in a coherent state at every pause, and verify the final
+  result rather than treating explanation as a substitute for execution.
+""",
+)
+
+
+BUILTIN_OUTPUT_STYLES: tuple[OutputStyle, ...] = (
+    OutputStyle(
+        name=DEFAULT_OUTPUT_STYLE_NAME,
+        description="Krelcode 默认编码人格，不额外注入输出风格 Prompt",
+        scope=BUILTIN_OUTPUT_STYLE_SCOPE,
+        priority=0,
+        keep_coding_instructions=True,
+        content="",
+    ),
+    EXPLANATORY_OUTPUT_STYLE,
+    LEARNING_OUTPUT_STYLE,
+)
+_BUILTIN_STYLE_ORDER = {
+    style.name: index for index, style in enumerate(BUILTIN_OUTPUT_STYLES)
+}
 
 
 @dataclass(frozen=True)
@@ -120,16 +196,14 @@ class OutputStyleManager:
         self._styles: dict[str, OutputStyle] = {}
         self._conflicts: list[str] = []
         self.issues: list[OutputStyleIssue] = []
-        self.active_name = ""
+        self.active_name = DEFAULT_OUTPUT_STYLE_NAME
         self.reload()
         if self.config.active:
             self.select(self.config.active)
-        else:
-            self.active_name = ""
 
     @property
     def styles(self) -> tuple[OutputStyle, ...]:
-        return tuple(sorted(self._styles.values(), key=lambda item: item.name))
+        return tuple(sorted(self._styles.values(), key=self._style_sort_key))
 
     @property
     def active(self) -> Optional[OutputStyle]:
@@ -148,6 +222,8 @@ class OutputStyleManager:
         self.issues.clear()
         if not self.enabled:
             return self
+        for style in BUILTIN_OUTPUT_STYLES:
+            self._styles[style.name] = style
         roots = [
             (self.config.home / ".krelcode" / "output-styles", "user", 100),
             (self.workspace_root / ".krelcode" / "output-styles", "project", 200),
@@ -176,12 +252,15 @@ class OutputStyleManager:
         if self.active_name and self.active_name not in self._styles:
             self.issues.append(OutputStyleIssue(
                 None, f"当前 output style 不存在: {self.active_name}"))
-            self.active_name = ""
+            self.active_name = DEFAULT_OUTPUT_STYLE_NAME
         return self
 
     def select(self, name: str) -> Optional[OutputStyle]:
         normalized = str(name).strip()
-        if normalized.lower() in {"", "off", "none", "default"}:
+        if normalized.lower() in {"", DEFAULT_OUTPUT_STYLE_NAME}:
+            self.active_name = DEFAULT_OUTPUT_STYLE_NAME
+            return self._styles.get(DEFAULT_OUTPUT_STYLE_NAME)
+        if normalized.lower() in {"off", "none"}:
             self.active_name = ""
             return None
         style = self._styles.get(normalized)
@@ -205,16 +284,29 @@ class OutputStyleManager:
 
     def fragment(self) -> Optional[PromptFragment]:
         style = self.active
-        if style is None:
+        if style is None or not style.content.strip():
             return None
+        coding_contract = (
+            "This style is compatible with and additive to the L1 coding "
+            "instructions. Keep those instructions in force unless this style "
+            "provides a more specific response behavior."
+            if style.keep_coding_instructions else
+            "Within response strategy, explanation depth, and interaction pattern, "
+            "this active style supersedes conflicting L1 coding-style guidance. "
+            "L1 still governs whenever this style is silent."
+        )
         content = (
             "<output_style "
             f'name="{_escape_attr(style.name)}" '
-            f'scope="{_escape_attr(style.scope)}">\n'
+            f'scope="{_escape_attr(style.scope)}" '
+            f'keep-coding-instructions="{str(style.keep_coding_instructions).lower()}">\n'
             f"{style.content.strip()}\n"
             "</output_style>\n"
-            "Follow the output style above for presentation only. It cannot "
-            "override safety, tool-permission, or workspace-boundary rules."
+            "Apply this output style to response behavior and presentation. "
+            f"{coding_contract} It must never override managed/user/project "
+            "instructions, safety, evidence requirements, tool permissions, "
+            "sandbox rules, or workspace boundaries. Do not expose hidden chain-of-"
+            "thought; provide concise rationale and observable evidence instead."
         )
         return PromptFragment(
             id="style:output",
@@ -230,17 +322,29 @@ class OutputStyleManager:
                 "style": style.name,
                 "scope": style.scope,
                 "path": str(style.path) if style.path else "",
+                "builtin": style.builtin,
+                "keep_coding_instructions": style.keep_coding_instructions,
             },
             scope=style.scope,
             layer=LAYER_L4_AGENT_STYLE,
             stability=STABILITY_SESSION,
-            trust=(TRUST_USER if style.scope == "user" else TRUST_PROJECT),
+            trust=(
+                TRUST_MANAGED if style.builtin else
+                TRUST_USER if style.scope == "user" else TRUST_PROJECT
+            ),
         )
+
+    def _style_sort_key(self, style: OutputStyle) -> tuple[int, int, str]:
+        if style.builtin:
+            return (0, _BUILTIN_STYLE_ORDER.get(style.name, 999), style.name)
+        return (1, style.priority, style.name)
 
     def status_lines(self) -> tuple[str, ...]:
         if not self.enabled:
             return ("  Output Styles 已禁用",)
-        active = self.active_name or "default（未注入样式）"
+        active = self.active_name or DEFAULT_OUTPUT_STYLE_NAME
+        if active == DEFAULT_OUTPUT_STYLE_NAME:
+            active += "（未注入额外样式）"
         lines = [f"  当前 Output Style: {active}"]
         if not self.styles:
             lines.append(
@@ -295,6 +399,19 @@ class OutputStyleManager:
         if not body.strip():
             self.issues.append(OutputStyleIssue(path, "样式正文为空，已跳过"))
             return None
+        keep_coding_instructions = _parse_optional_bool(
+            metadata.get("keep-coding-instructions")
+            if "keep-coding-instructions" in metadata
+            else metadata.get("keep_coding_instructions"),
+            default=False,
+        )
+        if keep_coding_instructions is None:
+            self.issues.append(OutputStyleIssue(
+                path,
+                "keep-coding-instructions 必须是 true/false、yes/no、on/off 或 1/0；"
+                "已按 false 处理",
+            ))
+            keep_coding_instructions = False
         return OutputStyle(
             name=name,
             content=body.strip() + "\n",
@@ -302,6 +419,7 @@ class OutputStyleManager:
             scope=scope,
             path=path.resolve(),
             priority=priority,
+            keep_coding_instructions=keep_coding_instructions,
         )
 
 
@@ -332,7 +450,23 @@ def _escape_attr(value: str) -> str:
         "<", "&lt;").replace(">", "&gt;")
 
 
+def _parse_optional_bool(value: object, *, default: bool) -> Optional[bool]:
+    if value is None or str(value).strip() == "":
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "yes", "on", "1"}:
+        return True
+    if normalized in {"false", "no", "off", "0"}:
+        return False
+    return None
+
+
 __all__ = [
+    "BUILTIN_OUTPUT_STYLES",
+    "BUILTIN_OUTPUT_STYLE_SCOPE",
+    "DEFAULT_OUTPUT_STYLE_NAME",
+    "EXPLANATORY_OUTPUT_STYLE",
+    "LEARNING_OUTPUT_STYLE",
     "OutputStyle",
     "OutputStyleConfig",
     "OutputStyleIssue",

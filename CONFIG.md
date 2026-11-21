@@ -41,7 +41,7 @@ krelcode [子命令] [选项]
 | `--skills-dir <路径>` | — | 追加 Skill 根目录，可重复；也支持 TOML `[skills].paths` |
 | `--no-plugins` | — | 关闭本地目录插件发现与插件工具 |
 | `--plugins-dir <路径>` | — | 追加插件根目录，可重复；也支持 TOML `[plugins].paths` |
-| `--output-style <名称>` | — | 覆盖当前 Output Style；也可用 `[output_styles].active` |
+| `--output-style <名称>` | — | 覆盖当前 Output Style（内置 default/explanatory/learning）；也可用 `[output_styles].active` |
 | `--output-style-dir <路径>` | — | 追加 Output Style 文件或目录，可重复 |
 | `--no-output-styles` | — | 禁用 Output Styles |
 | `--no-web` | — | 禁用 WebFetch/WebSearch |
@@ -331,10 +331,10 @@ args = ["--stdio"]
 extensions = [".py"]
 language_id = "python"
 
-[output_styles]                      # Markdown 只读指令；项目同名覆盖用户
+[output_styles]                      # 内置人格 + Markdown 只读指令；项目同名覆盖用户
 enabled = true
-active = ""                          # 空=默认输出
-paths = ["./output-styles"]
+active = ""                          # 空/default=默认；可选 explanatory、learning 或自定义名称
+paths = ["./output-styles"]          # 追加 configured 样式文件或目录
 
 [status_line]                        # 仅模板变量，不执行 shell
 enabled = true
@@ -542,6 +542,32 @@ MCP 远程能力：
 - HTTP Header 值和 OAuth 字符串字段支持 `${ENV_VAR}` 展开，建议 secret 不直接写入
   TOML。OAuth token cache 位于 `~/.krelcode/mcp-oauth.json`：以 server/url 哈希隔离，
   原子写入并尽力设置为 `0600`；缓存含 bearer/refresh token，不应提交或分享。
+
+### Output Styles
+
+内置样式始终可用：
+
+- `default`：不注入额外人格 Prompt，保持 Krelcode 默认编码行为。
+- `explanatory`：在关键实现与调试决策后增加简短 `Insight`，解释原因和取舍。
+- `learning`：以边做边学方式协作；仅在安全、可逆的小步骤中留下 `TODO(human)`。
+
+自定义样式放在 `~/.krelcode/output-styles/*.md`、
+`<workspace>/.krelcode/output-styles/*.md` 或 `[output_styles].paths`：
+
+```markdown
+---
+name: concise-teacher
+description: Terse explanations with one concrete example
+keep-coding-instructions: true
+---
+Explain each major decision in at most two sentences and include one concrete
+example. Keep final answers focused on changed behavior and verification.
+```
+
+`keep-coding-instructions: true` 表示人格与 L1 编码规则兼容并叠加；`false`（默认）
+表示在回答策略、解释深度和交互模式上，该人格可以覆盖冲突的 L1 编码表现规则。
+两种情况下，Managed/User/Project 指令、安全、权限、Sandbox、证据要求和当前用户
+请求始终优先。
 
 ### Hooks 协议（Hooks v2）
 

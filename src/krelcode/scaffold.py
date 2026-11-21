@@ -131,9 +131,9 @@ api_key_env = "GEMINI_API_KEY"
 # extensions = [".py"]
 # language_id = "python"
 #
-# [output_styles]                   # 只注入 Markdown 指令，不执行代码
+# [output_styles]                   # 内置 default/explanatory/learning + 自定义 Markdown
 # enabled = true
-# active = ""                       # 例如 "concise"；空表示默认
+# active = ""                       # 空/default=默认；或填写样式名称
 # paths = ["./output-styles"]       # 额外文件/目录
 #
 # [status_line]                     # 安全模板，不执行 shell

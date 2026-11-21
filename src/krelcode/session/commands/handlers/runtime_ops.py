@@ -732,11 +732,18 @@ async def handle_output_style(ctx: CommandContext) -> CommandResult:
         style = manager.get(argument)
         if style is None:
             return _ok(f"  未找到 Output Style: {argument}")
+        body = style.content.rstrip() or "（无额外人格 Prompt；使用 Krelcode 默认行为）"
         return _ok(
             f"  {style.name} [{style.scope}] {style.description}".rstrip(),
             f"  来源: {style.path or style.source}",
-            style.content.rstrip())
-    if operation in {"off", "none", "default"}:
+            f"  保留编码指令: {'yes' if style.keep_coding_instructions else 'no'}",
+            body)
+    if operation == "default":
+        manager.select("default")
+        manager.apply_to_registry(ctx.loop.prompt_registry)
+        refresh_registry_snapshot(ctx.loop)
+        return _ok("  已恢复默认输出样式")
+    if operation in {"off", "none"}:
         manager.select("off")
         manager.apply_to_registry(ctx.loop.prompt_registry)
         refresh_registry_snapshot(ctx.loop)

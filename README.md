@@ -432,8 +432,11 @@ Workflow 是 turn 级 `managed` instruction，不进入稳定缓存前缀，也�
   发送给服务器前拒绝；单个服务器崩溃不会阻断主 Agent。
 - **Output Styles**：从 `~/.krelcode/output-styles/*.md`、
   `<workspace>/.krelcode/output-styles/*.md` 与 `[output_styles].paths` 发现样式。
-  样式只是带 frontmatter 的 Markdown 指令，不执行代码；项目同名覆盖用户样式，
-  `/output-style <name>` 热切换，`/output-style off` 恢复默认。
+  内置 `default`、`explanatory`、`learning` 三种人格；自定义样式是带 frontmatter
+  的 Markdown L4 PromptFragment，不执行代码。项目同名覆盖用户，configured 路径
+  优先级最高；`/output-style <name>` 热切换，`default`/`off` 恢复默认。
+  `keep-coding-instructions` 控制自定义人格与 L1 编码指令的冲突优先级，但永远
+  不能覆盖安全、权限、Sandbox、证据标准或当前用户请求。
 - **可配置 Status Line**：`[status_line].template` 只支持
   `{provider} {model} {permission} {session} {cwd} {status} {tokens} {context} {branch}`；
   不执行 shell，高频刷新不扫描磁盘。

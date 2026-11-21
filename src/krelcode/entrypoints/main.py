@@ -56,7 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skills-dir", action="append", default=[],
                    help="额外 skill 根目录（可重复；优先级高于项目/全局目录）")
     p.add_argument("--output-style", default=None,
-                   help="当前 Output Style 名称（覆盖 [output_styles].active）")
+                   help="当前 Output Style（内置 default/explanatory/learning，或自定义名称；"
+                        "覆盖 [output_styles].active）")
     p.add_argument("--output-style-dir", action="append", default=[],
                    help="额外 Output Style 文件或目录（可重复）")
     p.add_argument("--no-output-styles", action="store_true",

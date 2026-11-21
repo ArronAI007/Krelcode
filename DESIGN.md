@@ -2004,9 +2004,12 @@ agent.QueryEngine / AgentRuntime / EventBus
   `lsp/manager.py` 负责按扩展名懒启动与文档同步；`lsp/tools.py` 暴露窄的只读
   diagnostics/hover/definition/references。服务端 stdout/stderr 都有界，单服务器
   失败隔离，LSP 工具不直接写文件。
-- **Output Styles**：样式是带 frontmatter 的 Markdown 指令包，来源固定为 user /
-  project / configured；合并规则同名后写入覆盖前者。活动样式只替换一个带 source
-  的 `style:output` PromptFragment，不改变 base prompt，也不进入可执行 Hook 链。
+- **Output Styles**：内置 `default/explanatory/learning` 三个人格，并通过
+  user/project/configured Markdown 扩展；合并规则为同名高优先级来源覆盖低优先级
+  来源。活动样式只替换一个带 source 的 L4 `style:output` PromptFragment，不修改
+  L1 base prompt，也不进入可执行 Hook 链。自定义 frontmatter 的
+  `keep-coding-instructions` 决定该人格是否允许覆盖冲突的 L1 编码表现规则；L0/L2/
+  L3、安全、权限、Sandbox、证据标准和当前请求始终拥有更高权威。
 - **Status Line**：`ui/status_line.py` 是纯模板渲染器，变量白名单固定，控制字符被
   清理；REPL 每 150ms 只使用内存快照，Git 分支在会话启动时读取一次。
 - **Web**：`web/http.py` 先解析 DNS 并对全部地址做公网校验，再用已验证 IP 建立
