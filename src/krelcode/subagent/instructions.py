@@ -36,7 +36,7 @@ from ..agent.fragments import (
     agent_definition_fragment,
     rule_fragment,
 )
-from ..agent.rules import RuleLayer, RuleLoader, extract_rule_targets
+from ..agent.rules import RuleLayer, RuleLoader, RuleScope, extract_rule_targets
 from ..agent.tokens import estimate_text_tokens
 from ..core.redact import SecretRedactor
 from .definition import AgentDefinition
@@ -158,10 +158,21 @@ def build_subagent_instructions(
         redactor=redactor,
         managed_paths=managed_paths,
     )
-    rule_layers = loader.load_stack(
-        _task_paths(root, task) if task else (),
-        include_directory=bool(task),
-    ).layers
+    if definition is None or definition.inherit_project_rules:
+        rule_layers = loader.load_stack(
+            _task_paths(root, task) if task else (),
+            include_directory=bool(task),
+        ).layers
+    else:
+        # Claude Code's Explore and Plan agents intentionally omit CLAUDE.md
+        # (and Krelcode's equivalent user/project/directory rules) for fast,
+        # focused research. Managed policy remains authoritative.
+        managed = loader.load_managed()
+        rule_layers = (
+            (RuleLayer(RuleScope.MANAGED, managed),)
+            if managed.content
+            else ()
+        )
 
     layers: list[InstructionLayer] = []
     if base_prompt.strip():

@@ -536,7 +536,7 @@ def agent_catalog_attachment(
         return None
     lines = [
         "<agent_catalog>",
-        "Available custom subagent definitions. Use spawn_agent(definition=...) when a task matches.",
+        "Available built-in and custom subagent definitions. Use spawn_agent(definition=...) when a task matches; omission selects general-purpose.",
     ]
     names = []
     for definition in definitions:

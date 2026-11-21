@@ -108,6 +108,7 @@ from .subagent.manager import (
     SubagentManager,
     build_subagent_system_prompt,
 )
+from .subagent.model_aliases import resolve_agent_model_spec
 from .tools.base import (
     PermissionMode,
     RunMode,
@@ -453,23 +454,29 @@ def build_subagent_llm_resolver(
     parent: LLMProvider | Callable[[], LLMProvider],
     redactor: Optional[SecretRedactor] = None,
 ) -> Callable[[str], LLMProvider]:
-    """Resolve Definition.model without changing the parent's provider."""
+    """Resolve Definition.model without changing the parent's provider.
+
+    Logical tiers (``sonnet``/``haiku``/``opus``) map to Anthropic only when the
+    parent already uses Anthropic. Other providers inherit the parent unless the
+    user supplies an explicit ``[agent_models]`` override.
+    """
     def resolve(spec: str) -> LLMProvider:
         parent_provider = parent() if callable(parent) else parent
         raw = str(spec or "").strip()
         if not raw:
             return parent_provider
-        if "/" in raw:
-            provider_name, model_name = raw.split("/", 1)
-        else:
-            provider_name, model_name = getattr(
-                parent_provider, "name", "openai"), raw
+        parent_name = str(getattr(parent_provider, "name", "openai") or "openai")
+        resolved = resolve_agent_model_spec(
+            raw, parent_provider=parent_name, config=config)
+        if resolved is None:
+            return parent_provider
+        provider_name, model_name = resolved
         if provider_name == "mock":
             raise ValueError("mock provider 不支持 Agent Definition 独立模型")
         settings = resolve_settings(
             provider=provider_name,
             model=model_name,
-            base_url=args.base_url,
+            base_url=(args.base_url if provider_name == parent_name else None),
             config=config,
         )
         inner = create_provider(settings)

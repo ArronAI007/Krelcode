@@ -65,6 +65,7 @@ from ..session.context_checkpoint import (
 )
 from ..tools.base import PermissionMode, RunMode, Tool, ToolContext, TurnAbortSignal
 from ..tools.registry import ToolRegistry
+from .builtin_agents import DEFAULT_BUILTIN_SUBAGENT_NAME
 from .control import AgentControl
 from .definition import AgentDefinition, AgentDefinitionManager
 from .feed import AgentFeed, AgentFeedPage
@@ -228,9 +229,10 @@ class SubagentManager:
     ) -> AgentHandle:
         """创建并启动后台子代理。
 
-        definition 指向用户定义文件；未传 isolated/fork_context 时使用定义中
-        的默认值。Definition 的 permission/tool/MCP scope 只能相对父级收窄，
-        审批与 Sandbox 继续继承父级。
+        definition 省略时使用内置 general-purpose；显式名称可指向内置或用户
+        定义文件。未传 isolated/fork_context 时使用定义中的默认值。Definition
+        的 permission/tool/MCP scope 只能相对父级收窄，审批与 Sandbox 继续
+        继承父级。
         """
         if self._closed:
             raise RuntimeError("SubagentManager 已关闭")
@@ -241,12 +243,12 @@ class SubagentManager:
             if await git_is_repo(self.tool_context.workspace_root):
                 await ensure_local_exclude(
                     self.tool_context.workspace_root, ".krelcode/")
-        definition_obj: Optional[AgentDefinition] = None
-        if definition:
-            try:
-                definition_obj = self.definitions.get(definition)
-            except KeyError as exc:
-                raise ValueError(str(exc)) from exc
+        definition_name = str(definition or "").strip() or DEFAULT_BUILTIN_SUBAGENT_NAME
+        try:
+            definition_obj: Optional[AgentDefinition] = self.definitions.get(
+                definition_name)
+        except KeyError as exc:
+            raise ValueError(str(exc)) from exc
         if isolated is None:
             isolated = definition_obj.default_isolated if definition_obj else False
         if fork_context is None:

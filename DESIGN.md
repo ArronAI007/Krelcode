@@ -865,6 +865,8 @@ sidechain 的后台 Agent。实现刻意拆成四个与 manager 解耦的组件�
 ```
 subagent/
 ├── definition.py  AgentDefinitionManager：用户定义发现/覆盖/校验
+├── builtin_agents.py Claude Code 兼容内置 Agent 的 canonical 行为契约
+├── model_aliases.py  sonnet/haiku/opus 逻辑档位解析与配置覆盖
 ├── feed.py        AgentFeed：稳定 sequence、有界缓冲、脱敏
 ├── control.py     AgentControl：协作式 pause/resume gate
 ├── sidechain.py   SidechainStore/Writer：start/feed/state/message/history JSONL
@@ -896,11 +898,14 @@ running ──pause()──> paused ──resume()──> running
 - **Kill** 与 interrupt/shutdown 分离：设置 `kill_requested`、取消 Task、状态进入
   `killed`，终态 `SubagentFinished(killed)` 只发一次；隔离 worktree 先存档到分支再回收，
   之后拒绝追加任务。
-- **Definition** 先加载内置 `verifier`，再从 `~/.krelcode/agents`、项目
+- **Definition** 先加载 Claude Code 兼容的 `Explore`、`Plan`、`general-purpose`、
+  `claude`、`statusline-setup`、`claude-code-guide` 与 Krelcode `verifier`，再从
+  `~/.krelcode/agents`、项目
   `.krelcode/agents`、项目 `.agents/agents` 发现 Markdown；项目覆盖全局与内置。
   frontmatter 提供 description、
-  allowed-tools、isolated、fork-context，正文是角色 system prompt。allowlist 只能
-  缩小默认工具池；未知工具、坏 frontmatter 或空正文 fail-closed/隔离。
+  allowed-tools、isolated、fork-context、inherit-project-rules，正文是角色 system
+  prompt。allowlist 只能缩小默认工具池；未知工具、坏 frontmatter 或空正文
+  fail-closed/隔离。省略 definition 时默认 `general-purpose`。
 - **Sidechain** 记录 start、definition 元数据、初始/排队/打断消息、feed、状态转换、
   每轮完整 history 快照、结果、branch/worktree。写入前递归脱敏；侧链不自动注入父
   history，父 Agent 通过 `wait_agent` 或 `get_agent_feed` 主动消费。进程重启后可读取
@@ -915,6 +920,22 @@ running ──pause()──> paused ──resume()──> running
 - 安全边界不变：Definition 是可信本地配置，但不能绕过审批、Sandbox、read-only/
   plan 模式或子代理不可递归限制；敏感 feed/history 在进入 UI、JSONL、stream-json
   before 全部经过 SecretRedactor；流式 Feed 暂存 secret 前缀尾块，覆盖跨 chunk 拆分。
+
+### Claude Code 六内置 Agent 兼容（Step 121）
+
+兼容层对齐可观察职责而不是复制私有 Prompt：`Explore` 与 `Plan` 使用 read-only
+permission、无 MCP，并通过 `inherit_project_rules=false` 跳过 user/project/directory
+规则（Managed 安全策略仍保留）；`general-purpose` 和 `claude` 继承全部子代理工具与
+MCP，其中前者是缺省委派，后者是无专用匹配时的 catch-all；`statusline-setup` 只暴露
+状态栏配置所需读写/语法工具并绑定 `sonnet` 档位；`claude-code-guide` 为 read-only 并
+绑定 `haiku` 档位。用户同名 Definition 继续覆盖内置版本，`verifier` 作为 Krelcode
+额外能力保留。
+
+逻辑模型档位由 `subagent/model_aliases.py` 解析：`[agent_models]` 显式映射优先；
+Anthropic 父 provider 默认映射到对应 Claude 模型；DeepSeek/OpenAI-compatible 父
+provider 在无显式映射时继承父模型，避免要求无关 Anthropic key。`/statusline [要求]`
+通过同一 `SubagentManager.spawn(definition="statusline-setup")` 路径启动子代理，
+不绕过审批、Sandbox 或文件边界。
 
 ## Prompt/Context Fragment Registry（Step 82）
 

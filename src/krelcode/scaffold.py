@@ -47,6 +47,14 @@ api_key_env = "ANTHROPIC_API_KEY"
 api_key_env = "GEMINI_API_KEY"
 # prompt_cache = "auto"    # Gemini 2.5+ 协商为 server-managed implicit cache
 
+# ---- 内置 Agent 的逻辑模型档位映射（可选）----
+# Claude Code 兼容内置 Agent 使用 sonnet/haiku 档位。父 provider 为 anthropic
+# 时自动映射；DeepSeek/OpenAI 等环境默认继承父模型。下面的显式映射优先级最高。
+# [agent_models]
+# sonnet = "anthropic/claude-sonnet-4-5"
+# haiku = "anthropic/claude-haiku-4-5"
+# opus = "anthropic/claude-opus-4-1"
+
 # ---- 运行时 Sandbox（命令 / Skill 脚本子进程）----
 # [sandbox]
 # backend = "auto"        # auto / static / seatbelt(macOS) / bubblewrap(Linux)

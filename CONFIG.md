@@ -140,7 +140,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/agents feed <id> [after] [--limit N]` | 按稳定 sequence 读取子代理实时事件增量 |
 | `/agents pause <id>` · `/agents resume <id>` | 在 step 安全边界暂停/恢复，保留 Task 与上下文 |
 | `/agents kill <id>` | 终止整个子代理（区别于 interrupt） |
-| `/agents definitions` | 列出用户自定义 Agent Definition 与加载问题 |
+| `/agents definitions` | 列出内置与用户/项目 Agent Definition、权限/模型策略与加载问题 |
 | `/agents sidechains` · `/agents sidechain <id>` | 列出或读取持久化 sidechain JSONL |
 | `/jobs` · `/jobs list` | 列出当前进程管理的后台 Shell 任务、PID、状态、exit code、sequence 与日志 |
 | `/jobs output <id> [after] [--wait 秒]` | 按游标读取任务增量输出；wait 最多 30 秒 |
@@ -148,6 +148,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/skills [关键词]` | 列出或搜索 Skill |
 | `/skills reload` | 重读全部 Skill 目录并刷新 system prompt 索引 |
 | `/skills show <name>` | 查看元数据、资源与完整 `SKILL.md` |
+| `/statusline [要求]` | 启动内置 `statusline-setup` Agent；要求可描述希望展示的模型、分支、权限、上下文等字段 |
 | `/skill <name> [参数]` | 用户主动加载并执行 Skill；参数替换 `$ARGUMENTS` |
 | `/plugins [reload\|show <name>\|install\|update\|enable\|disable\|remove ...]` | 查看状态、热重载和 Plugin v2 基础生命周期 |
 | `/extensions [kind] [source]` | 统一列出 Plugin/Tool/Skill/Agent/Command/Hook/MCP 的来源、scope、启停与冲突 |
@@ -269,6 +270,12 @@ thinking_budget = 10000              # 扩展思考（≥1024；缺省不启用�
 model = "gemini-2.5-flash"
 api_key_env = "GEMINI_API_KEY"       # GOOGLE_API_KEY 兜底
 prompt_cache = "auto"                # 2.5+ 协商为 server-managed implicit cache
+
+[agent_models]                       # 可选：内置逻辑模型档位覆盖
+sonnet = "anthropic/claude-sonnet-4-5"
+haiku = "anthropic/claude-haiku-4-5"
+# opus = "anthropic/claude-opus-4-1"
+# DeepSeek 示例：haiku = "openai/deepseek-flash"
 
 [sandbox]
 backend = "auto"                     # auto / static / seatbelt / bubblewrap
@@ -672,10 +679,11 @@ Agent Definition 发现目录（后者覆盖前者同名项）：`~/.krelcode/ag
 name: reviewer
 description: 只读代码审查
 allowed-tools: [read_file, grep, glob, repo_map]
-model: deepseek/deepseek-flash  # 可选；provider/model 或沿用父 provider 的 model
+model: openai/deepseek-flash    # 可选；provider/model 或沿用父 provider 的 model
 permission-mode: read-only      # default / plan / read-only / auto-approve
 mcp-servers: [github, docs]     # 省略=继承全部；*=全部；[]=不使用 MCP
-fork-context: true     # 可选；默认继承父对话
+inherit-project-rules: false    # 可选；false=跳过 user/project/directory 规则
+fork-context: true     # 可选；默认 false；只记录血缘，不复制父完整 history
 isolated: false        # 可选；true=独立 git worktree
 ---
 你是严格的代码审查员，只报告可复现的问题并给出文件路径与行号。
@@ -685,7 +693,26 @@ isolated: false        # 可选；true=独立 git worktree
 MCP 服务器会让该定义在 spawn 时 fail-closed。`model` 只影响该子代理，不改变父级
 或 `/model` 当前选择；`permission-mode` 写入子代理独立 ToolContext，与审批/Sandbox
 共同生效。Definition frontmatter/正文属于用户显式配置，但不会绕过审批、Sandbox、
-只读模式或子代理防递归边界。单个坏定义只记录 issue，不阻断主 Agent。
+只读模式或子代理防递归边界。`inherit-project-rules: false`（别名
+`omit-project-rules: true`）跳过用户、项目与目录规则，但 Managed 安全策略仍然加载。
+单个坏定义只记录 issue，不阻断主 Agent。
+
+内置 Agent Definition（用户/项目同名文件可覆盖）：
+
+| 名称 | 公开职责 | 工具/权限 | 模型 |
+|------|----------|-----------|------|
+| `Explore` | 快速只读代码库搜索与解释，支持 quick/medium/very thorough | read-only；无 MCP；跳过 user/project 规则 | 继承 |
+| `Plan` | Plan Mode 只读研究与实施方案调查 | read-only；无 MCP；跳过 user/project 规则 | 继承 |
+| `general-purpose` | 复杂多步骤探索与修改；`spawn_agent` 默认值 | 全部子代理工具/MCP | 继承 |
+| `claude` | 无专用 Agent 匹配时的 catch-all | 全部子代理工具/MCP | 继承 |
+| `statusline-setup` | 配置声明式状态栏 | read/grep/glob/check_syntax/write/edit；无 MCP；`/statusline` 入口 | `sonnet` |
+| `claude-code-guide` | Claude Code 功能、配置、Hook、MCP、插件与 SDK 指南 | read-only；无 MCP | `haiku` |
+| `verifier` | Krelcode 额外内置的独立对抗式验证 Agent | 读取+命令；无 write/edit/MCP | 继承 |
+
+逻辑档位解析优先级：`[agent_models]` 显式覆盖 → Anthropic 父 provider 的默认档位映射
+（sonnet=`claude-sonnet-4-5`、haiku=`claude-haiku-4-5`、opus=`claude-opus-4-1`）
+→ 非 Anthropic 环境继承父 provider/model。显式覆盖值使用 `provider/model` 或裸模型名
+（裸模型名沿用父 provider）。
 
 Skill 发现目录（后者覆盖前者同名项）：`~/.agents/skills`、`~/.krelcode/skills`、
 `<workspace>/.agents/skills`、`<workspace>/.krelcode/skills`，再追加

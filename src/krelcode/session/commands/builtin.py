@@ -73,7 +73,7 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             argument_hint="[list|feed|pause|resume|kill|definitions|sidechains]",
             available_during_run=True,
             help=("查看子代理；/agents feed <id> [after] 读取事件流；\n"
-                  "/agents pause|resume|kill <id>；/agents definitions 查看自定义定义")),
+                  "/agents pause|resume|kill <id>；/agents definitions 查看内置与自定义定义")),
         CommandSpec(
             "jobs", "查看或控制后台 Shell 任务",
             argument_hint="[list|output <id> [after]|kill <id>]",
@@ -102,6 +102,11 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
                   "/output-style show <name> 查看正文；"
                   "/output-style reload 重载 user/project/config 文件；"
                   "/output-style off 恢复默认输出。")),
+        CommandSpec(
+            "statusline", "使用内置 statusline-setup agent 配置状态栏",
+            argument_hint="[要求]",
+            help=("启动 Claude Code 兼容的 statusline-setup 子代理；"
+                  "无参数时生成保守的默认状态栏，也可描述希望展示的字段")),
         CommandSpec(
             "extensions", "查看统一扩展目录与来源",
             argument_hint="[kind] [source]",

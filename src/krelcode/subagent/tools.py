@@ -24,9 +24,10 @@ class SpawnAgentTool:
         "子代理始终继承 Base/Managed/User/Project 指令和与本任务相关的 Memory，"
         "但不会继承父代理完整对话历史。fork_context 仅保留兼容标记。"
         "返回子代理 id；用 wait_agent 等待结果，list_agents 查看状态。"
-        "可传 definition 使用内置 verifier（读取与测试命令，不提供 write/edit 工具；"
-        "命令仍受审批与 Sandbox），"
-        "或 ~/.krelcode/agents 与项目 .krelcode/agents 中的自定义定义。"
+        "省略 definition 时默认使用 builtin general-purpose。"
+        "可显式选择 Explore、Plan、general-purpose、claude、statusline-setup、"
+        "claude-code-guide 或 verifier；也可使用 ~/.krelcode/agents 与项目 "
+        ".krelcode/agents 中的自定义定义。"
     )
     prompt = build_spawn_agent_prompt(include_fork=True)
     prompt_version = SPAWN_AGENT_PROMPT_VERSION
@@ -116,7 +117,10 @@ class SpawnAgentTool:
             "fork_context": {"type": "boolean",
                              "description": "兼容标记；子代理只继承指令与任务相关 Memory，不复制完整历史"},
             "definition": {"type": "string",
-                           "description": "可选 Agent Definition 名称（自定义系统提示与工具范围）"},
+                           "description": (
+                               "可选 Agent Definition 名称；省略时使用 general-purpose。"
+                               "内置值: Explore、Plan、general-purpose、claude、"
+                               "statusline-setup、claude-code-guide、verifier")},
         },
         "required": ["task"],
     }

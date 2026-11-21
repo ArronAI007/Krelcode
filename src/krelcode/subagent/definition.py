@@ -1,6 +1,8 @@
 """内置与用户自定义 Agent Definition 的发现与校验。
 
-内置 ``verifier`` 提供独立对抗式验证能力；用户定义仍可覆盖同名内置定义。
+内置 Claude Code 兼容 agents（Explore、Plan、general-purpose、claude、
+statusline-setup、claude-code-guide）与 Krelcode 的独立 ``verifier``；用户定义
+仍可覆盖同名内置定义。
 定义文件是带 frontmatter 的 Markdown：
 ``~/.krelcode/agents/reviewer.md`` 或
 ``<workspace>/.krelcode/agents/reviewer.md``。项目级同名定义覆盖全局。
@@ -34,6 +36,7 @@ class AgentDefinition:
     model: str = ""
     permission_mode: str = ""
     mcp_servers: Optional[Tuple[str, ...]] = None
+    inherit_project_rules: bool = True
 
     def system_prompt_with_base(self, base: str) -> str:
         tools = ", ".join(self.allowed_tools) if self.allowed_tools else "（继承默认工具池）"
@@ -45,6 +48,8 @@ class AgentDefinition:
         if self.mcp_servers is not None:
             mcp = ", ".join(self.mcp_servers) if self.mcp_servers else "（无）"
             runtime.append(f"MCP servers: {mcp}")
+        if not self.inherit_project_rules:
+            runtime.append("Project/user instruction files: omitted")
         runtime_text = ("\n" + "\n".join(runtime)) if runtime else ""
         return (
             f"{base.rstrip()}\n\n"
@@ -63,24 +68,51 @@ class AgentDefinitionIssue:
 
 
 def builtin_agent_definitions() -> Tuple[AgentDefinition, ...]:
-    """Return trusted built-in definitions that user/project files may override."""
+    """Return trusted built-ins that user/project files may override."""
     from ..agent.verification import (
         VERIFICATION_AGENT_ALLOWED_TOOLS,
         VERIFICATION_AGENT_DESCRIPTION,
         VERIFICATION_AGENT_NAME,
         VERIFICATION_AGENT_SYSTEM_PROMPT,
     )
+    from .builtin_agents import CLAUDE_BUILTIN_AGENT_SPECS
 
-    return (
+    definitions = [
         AgentDefinition(
-            name=VERIFICATION_AGENT_NAME,
-            description=VERIFICATION_AGENT_DESCRIPTION,
-            system_prompt=VERIFICATION_AGENT_SYSTEM_PROMPT,
-            allowed_tools=VERIFICATION_AGENT_ALLOWED_TOOLS,
+            name=spec.name,
+            description=spec.description,
+            system_prompt=spec.system_prompt,
+            allowed_tools=spec.allowed_tools,
             source="builtin",
-            mcp_servers=(),
-        ),
-    )
+            model=spec.model,
+            permission_mode=spec.permission_mode,
+            mcp_servers=spec.mcp_servers,
+            inherit_project_rules=spec.inherit_project_rules,
+        )
+        for spec in CLAUDE_BUILTIN_AGENT_SPECS
+    ]
+    definitions.append(AgentDefinition(
+        name=VERIFICATION_AGENT_NAME,
+        description=VERIFICATION_AGENT_DESCRIPTION,
+        system_prompt=VERIFICATION_AGENT_SYSTEM_PROMPT,
+        allowed_tools=VERIFICATION_AGENT_ALLOWED_TOOLS,
+        source="builtin",
+        mcp_servers=(),
+    ))
+    return tuple(definitions)
+
+
+def _frontmatter_bool(value: object, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 @dataclass(frozen=True)
@@ -195,6 +227,20 @@ class AgentDefinitionManager:
             mcp_servers = ("*",)
         else:
             mcp_servers = split_allowed_tools(raw_mcp)
+        inherit_project_rules = _frontmatter_bool(
+            metadata.get(
+                "inherit-project-rules",
+                metadata.get("inherit_project_rules")),
+            default=True,
+        )
+        omit_project_rules = _frontmatter_bool(
+            metadata.get(
+                "omit-project-rules",
+                metadata.get("omit_project_rules")),
+            default=False,
+        )
+        if omit_project_rules:
+            inherit_project_rules = False
         return AgentDefinition(
             name=name,
             description=description,
@@ -208,6 +254,7 @@ class AgentDefinitionManager:
             model=str(metadata.get("model") or "").strip(),
             permission_mode=permission_mode,
             mcp_servers=mcp_servers,
+            inherit_project_rules=inherit_project_rules,
         )
 
     def get(self, name: str) -> AgentDefinition:
@@ -236,6 +283,8 @@ class AgentDefinitionManager:
             if definition.mcp_servers is not None:
                 mcp = ",".join(definition.mcp_servers) or "none"
                 runtime.append(f"mcp={mcp}")
+            if not definition.inherit_project_rules:
+                runtime.append("project-rules=omitted")
             runtime_text = " · " + " · ".join(runtime) if runtime else ""
             location = str(definition.path) if definition.path else "built-in"
             lines.append(

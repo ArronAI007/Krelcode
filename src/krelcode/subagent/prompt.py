@@ -58,6 +58,14 @@ Before calling spawn_agent, confirm that the task contains enough evidence for
 an independent agent to begin without guessing. Keep the scope minimal and do
 not delegate work you will also do locally.
 
+When `definition` is omitted, the runtime selects the built-in
+`general-purpose` agent for complex exploration-plus-action tasks. Prefer
+`Explore` for fast read-only repository research, `Plan` for read-only
+implementation planning, and `claude` as the catch-all when no specialized
+agent fits. `statusline-setup` and `claude-code-guide` are focused helpers for
+their named domains. Explore and Plan intentionally omit user/project rule files
+and must not be delegated work that requires modifying the workspace.
+
 For risky changes that need independent adversarial verification, use
 `definition="verifier"` and provide the exact change scope, baseline, commands
 already run, expected behavior, and claims that must be challenged. The fork

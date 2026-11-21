@@ -189,6 +189,35 @@ async def handle_agents(ctx: CommandContext) -> CommandResult:
         "  /agents pause|resume|kill <id>")
 
 
+async def handle_statusline(ctx: CommandContext) -> CommandResult:
+    manager = ctx.subagents
+    if manager is None:
+        return _ok("  （子代理未启用，无法启动 statusline-setup）")
+    requirements = ctx.request.arguments.strip()
+    requested = (
+        requirements
+        or "Use a concise default layout with model, permission mode, git branch, "
+             "and context usage when those placeholders are supported."
+    )
+    task = (
+        "Configure Krelcode's declarative [status_line].template for the user.\n"
+        f"User requirements: {requested}\n"
+        "Inspect the workspace configuration and supported status-line placeholders "
+        "before editing. Prefer the project krelcode.toml when it is writable. If the "
+        "user's global config is outside the workspace boundary, do not bypass it: "
+        "return the exact TOML snippet and target path. Never execute shell content "
+        "inside the template."
+    )
+    try:
+        handle = await manager.spawn(task, definition="statusline-setup")
+    except (KeyError, ValueError) as exc:
+        return _ok(f"  [statusline] 启动失败: {exc}")
+    return _ok(
+        f"  [statusline] 已启动 {handle.id}（definition=statusline-setup）",
+        "  使用 /agents feed <id> 查看进度，或 /agents list 查看状态。",
+    )
+
+
 async def handle_jobs(ctx: CommandContext) -> CommandResult:
     manager = ctx.jobs
     if manager is None:
