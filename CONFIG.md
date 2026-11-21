@@ -242,7 +242,7 @@ default_provider = "openai"          # openai / anthropic / gemini / mock
 
 [prompt]
 profile = "auto"                     # auto / default / claude / deepseek / openai / gemini
-release = "2026.11.21"               # 当前内置的不可变 Prompt Release
+release = "2026.11.21.1"             # 当前内置的不可变 Prompt Release
 calibration_baselines = []           # live baseline 路径；用于模型 Profile 校准
 
 [prompt.authoring]                   # 可选；默认不存在即关闭

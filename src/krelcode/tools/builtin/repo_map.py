@@ -42,6 +42,22 @@ class RepoMapTool:
         "（Python 精确解析，JS/TS 正则提取）。用于快速了解仓库结构，"
         "之后可用 read_file 按行号精读。可用 path 限定子目录。"
     )
+    prompt = """\
+Use repo_map to orient in an unfamiliar repository or when module structure and
+symbol locations matter. Treat the map as an index: use returned paths and line
+numbers to read only the definitions relevant to the task. Do not infer behavior
+from symbol names alone, and do not repeatedly regenerate a map already present
+in context unless the workspace changed materially.
+"""
+    when_to_use = (
+        "The repository or subsystem is unfamiliar and its symbol structure must be located.",
+        "A broad but bounded overview is needed before selecting exact files.",
+    )
+    when_not_to_use = (
+        "The relevant file and symbol are already known; use read_file or find_refs.",
+        "A small focused content search would answer the question more cheaply.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {

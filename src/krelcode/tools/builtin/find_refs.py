@@ -75,6 +75,22 @@ class FindRefsTool:
         "分类为 [def] 定义 / [ref] 引用 / [import] 导入，输出 '路径:行号: [类型] 源码行'。"
         "比 grep 精确：不受字符串与注释里的同名词干扰。可用 path 限定子目录。"
     )
+    prompt = """\
+Use find_refs before changing a public symbol, signature, shared behavior, or
+Python API. Review relevant definitions, imports, callers, and nearby tests to
+understand behavioral assumptions rather than editing every match mechanically.
+Use grep for non-Python files or textual occurrences that are not semantic symbol
+references.
+"""
+    when_to_use = (
+        "A Python class, function, variable, or method is about to change.",
+        "Semantic references are needed without string/comment false positives.",
+    )
+    when_not_to_use = (
+        "The task concerns a non-Python file or ordinary text search.",
+        "A definition is already known and direct reads are sufficient.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {

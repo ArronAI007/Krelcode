@@ -31,6 +31,21 @@ class CheckSyntaxTool:
         "path 可以是单个 .py 文件或目录（缺省整个工作区）。"
         "适合在批量编辑后快速自检。"
     )
+    prompt = """\
+Use check_syntax as a fast Python-only parse check after syntax-sensitive edits
+or when a low-cost first sanity check is useful. It does not execute code and does
+not validate imports, types, behavior, lint, or tests. Follow it with the narrowest
+relevant behavioral verification rather than treating a clean parse as completion.
+"""
+    when_to_use = (
+        "Python files were edited and a fast syntax-only sanity check is useful.",
+        "A batch of Python files must be checked without executing them.",
+    )
+    when_not_to_use = (
+        "Behavior, types, imports, lint, or tests need verification.",
+        "The target is not Python source.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {

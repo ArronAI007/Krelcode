@@ -23,6 +23,21 @@ class GlobTool:
         "递归匹配用 '**'（如 '**/*.py'）；可用 path 限定起始子目录。"
         "自动跳过隐藏与依赖目录。"
     )
+    prompt = """\
+Use glob when the filename, extension, or directory pattern is uncertain and a
+bounded path search is needed. Prefer a specific base path and pattern over a
+whole-repository enumeration. Inspect the smallest useful result set, then read
+the relevant files. Do not use glob as a content search; use grep for content.
+"""
+    when_to_use = (
+        "The existence or location of files matching a path pattern is unknown.",
+        "A task must enumerate a bounded class of files such as tests or migrations.",
+    )
+    when_not_to_use = (
+        "The user named an exact file; read it directly.",
+        "The task is to find content rather than paths; use grep.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {

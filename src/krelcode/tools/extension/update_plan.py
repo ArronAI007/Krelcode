@@ -16,6 +16,22 @@ class UpdatePlanTool:
         "创建或更新本任务的结构化执行计划。多步骤任务在开始和阶段变化时调用；"
         "简单单步任务无需调用。每次提交完整快照，最多一个步骤为 in_progress。"
     )
+    prompt = """\
+Use update_plan for multi-step work that benefits from visible progress, not for
+trivial single-step tasks. Submit a complete current snapshot, keep at most one
+step in_progress, mark completed work promptly, and revise the plan when new
+evidence changes the approach. The plan is a status model, not a substitute for
+doing or verifying the work.
+"""
+    when_to_use = (
+        "A task has several meaningful stages or benefits from visible progress tracking.",
+        "The implementation approach changed enough that the current plan is stale.",
+    )
+    when_not_to_use = (
+        "The task is a simple one-command or one-file operation.",
+        "The tool would be used only to restate progress already obvious to the user.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {

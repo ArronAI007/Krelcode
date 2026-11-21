@@ -33,6 +33,23 @@ class GrepTool:
         "可用 path 限定子目录、include 过滤文件名（如 '*.py'）、"
         "ignore_case 忽略大小写。自动跳过隐藏与依赖目录。"
     )
+    prompt = """\
+Use grep to locate known text, identifiers, errors, call sites, or patterns in
+workspace files. Start with the narrowest useful path and include filter; widen
+the search only when the focused query is insufficient. Treat matches as pointers
+to evidence, not as a substitute for reading the relevant file section. Do not
+use grep for every task or dump an unbounded result set. Runtime secret-file
+filtering cannot be bypassed.
+"""
+    when_to_use = (
+        "The content to find is known but its file location is not.",
+        "An error message, identifier, call site, or text fragment must be located.",
+    )
+    when_not_to_use = (
+        "The user already named the target file and a direct read is more precise.",
+        "A semantic symbol/reference query is better served by find_refs or an LSP tool.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {

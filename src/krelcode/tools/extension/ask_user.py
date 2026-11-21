@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from ..base import ToolContext, ToolResult
+from ..prompt import ToolPromptExample
 
 
 class AskUserTool:
@@ -17,6 +18,52 @@ class AskUserTool:
         "简短问题并等待回答。可提供少量选项；不要用它询问可从工作区自行查明"
         "的信息，也不要在子代理中调用。"
     )
+    prompt = """\
+Use ask_user only when a decision cannot be discovered from the workspace and
+proceeding with an assumption would create a material risk. This tool is a
+blocker-resolution mechanism, not a substitute for investigation or effort.
+
+- First inspect the repository, configuration, tests, and available evidence.
+- State the specific blocker and the single decision that must be made. Explain
+  only the tradeoff needed to answer.
+- Offer concise options when the decision space is finite; keep free text enabled
+  unless the choice is truly closed.
+- Do not ask for information already available, approval for routine reversible
+  work, or a bundle of unrelated questions in one call.
+- Do not use ask_user merely to avoid choosing a safe implementation path.
+- If the user cancels or no interactive frontend exists, continue with the best
+  supported assumption only when it is safe; otherwise report the blocker and do
+  not repeat the same question.
+"""
+    when_to_use = (
+        "A user-owned product decision is missing and safe assumptions cannot resolve it.",
+        "A required irreversible action needs explicit user selection or confirmation.",
+    )
+    when_not_to_use = (
+        "The answer can be found by reading code, configuration, tests, or documentation.",
+        "The decision is routine and reversible, or the question is only to reduce the agent's own effort.",
+        "The task is running inside a subagent without an interactive user channel.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Resolve a product decision after investigation",
+            input={
+                "question": (
+                    "The existing API has no compatible way to expose both legacy and new IDs. "
+                    "Which contract should the migration use?"
+                ),
+                "options": [
+                    "Add a new field and preserve the legacy field",
+                    "Replace the legacy field with a breaking change",
+                ],
+                "allow_free_text": True,
+            },
+            description=(
+                "Ask one decision-focused question only after inspecting the compatibility constraints."
+            ),
+        ),
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {

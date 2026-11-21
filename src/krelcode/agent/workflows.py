@@ -538,7 +538,7 @@ TASK_WORKFLOWS: Tuple[TaskWorkflowDefinition, ...] = (
             "Run the checks and inspect the command, output, and exit status.",
             "Classify failures as product code, test expectation, dependency, environment, or invocation errors.",
             "Fix failures only within the user's requested scope, then rerun the affected checks.",
-            "For high-risk or cross-boundary changes, use spawn_agent(definition=\"verifier\") when available and provide the change scope, baseline, observed checks, and claims to challenge.",
+            "For high-risk or cross-boundary changes, obtain independent adversarial verification when available and follow that capability's own Prompt for invocation and evidence requirements.",
         ),
         completion=(
             "The exact commands or checks, their outcomes, and any skipped coverage are reported.",

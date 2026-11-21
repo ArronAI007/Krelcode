@@ -84,7 +84,7 @@ def test_spawn_agent_schema_still_uses_the_existing_argument_contract():
     assert "不得依赖父对话" in properties["task"]["description"]
 
 
-def test_spawn_agent_playbook_renders_meta_prompt_and_fork_guidance():
+def test_spawn_agent_playbook_uses_tool_owned_prompt_without_duplicate_fallback():
     tool = SpawnAgentTool(manager=None)  # type: ignore[arg-type]
     spec = ToolPromptSpec.from_tool(tool, source="builtin")
     enriched = DEFAULT_TOOL_PLAYBOOK_CATALOG.enrich_prompt_spec(spec)
@@ -93,14 +93,15 @@ def test_spawn_agent_playbook_renders_meta_prompt_and_fork_guidance():
     assert enriched.playbook_id == "subagents"
     assert enriched.instructions.startswith(build_spawn_agent_prompt().strip())
     assert "mental-model handoff" in flat
-    assert "does not copy the parent's full history" in flat
+    assert "does not copy the parent's full conversation history" in flat
 
     fragment = DEFAULT_TOOL_PLAYBOOK_CATALOG.fragments_for_prompt_specs(
         [spec])[0]
     assert fragment.id == "tool_playbook:subagents"
     assert "Inject the mental model" in fragment.content
     assert "Fork-context handoff" in fragment.content
-    assert "Do not make the child guess" in fragment.content
+    assert "Do not make the subagent guess" in fragment.content
+    assert "Do not make the child guess" not in fragment.content
 
 
 class _CapturingManager:

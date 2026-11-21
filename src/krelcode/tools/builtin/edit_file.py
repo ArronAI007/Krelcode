@@ -21,6 +21,7 @@ from ..paths import (
     read_text_file_with_snapshot,
     resolve_in_workspace,
 )
+from ..prompt import ToolPromptExample
 
 MAX_DIFF_LINES = 100
 
@@ -32,6 +33,68 @@ class EditFileTool:
         "old_string 必须与文件内容逐字符一致（含缩进/空行）且默认要求唯一匹配；"
         "匹配多处时会报错，确需全改时传 replace_all=true。"
     )
+    prompt = """\
+Use edit_file for a localized change to an existing text file. Read the target
+region immediately before editing and make the smallest coherent replacement
+that satisfies the task.
+
+- old_string must match the current file exactly, including whitespace and line
+  endings. Keep enough surrounding context to make the match unique.
+- Do not use replace_all unless changing every occurrence is explicitly intended
+  and you have inspected each call site or occurrence.
+- Preserve unrelated code, user edits, imports, formatting conventions, and
+  behavior outside the requested scope. Do not use an edit as an opportunity for
+  an unrelated refactor.
+- A localized change must not silently rewrite the whole file. Use write_file
+  only for a new file or an intentional whole-file replacement.
+- After the tool returns, inspect the unified diff. Run the narrowest relevant
+  verification when the edit changes executable behavior or a contract.
+- File mutations must remain ordered. Do not attempt to parallel-edit the same
+  file or race write_file against edit_file.
+
+If old_string is missing or ambiguous, re-read the exact current content and
+expand the context. Do not guess whitespace or force an ambiguous replacement.
+"""
+    when_to_use = (
+        "An existing text file needs a bounded, exact replacement.",
+        "The target region is known and can be made unique with surrounding context.",
+    )
+    when_not_to_use = (
+        "Creating a new file or intentionally replacing the entire file; use write_file.",
+        "The change requires broad generated rewrites or a mechanical transformation that should be performed by a reviewed script.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Make a unique localized edit",
+            input={
+                "path": "src/example/parser.py",
+                "old_string": (
+                    "def parse_header(value):\n"
+                    "    return value.split(\",\")"
+                ),
+                "new_string": (
+                    "def parse_header(value):\n"
+                    "    return split_quoted(value, \",\")"
+                ),
+            },
+            description=(
+                "Read the function first, preserve surrounding code, and inspect the returned diff."
+            ),
+        ),
+        ToolPromptExample(
+            title="Replace every occurrence intentionally",
+            input={
+                "path": "src/example/constants.py",
+                "old_string": "LEGACY_TIMEOUT",
+                "new_string": "REQUEST_TIMEOUT",
+                "replace_all": True,
+            },
+            description=(
+                "Use replace_all only after verifying that every occurrence should change."
+            ),
+        ),
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {

@@ -12,6 +12,7 @@ from ..paths import (
     atomic_write_text,
     resolve_in_workspace,
 )
+from ..prompt import ToolPromptExample
 
 
 class WriteFileTool:
@@ -20,6 +21,43 @@ class WriteFileTool:
         "把工作区内文件覆盖写为给定内容（文件不存在则创建，自动建父目录）。"
         "局部修改请优先用 edit_file，避免整文件重写。"
     )
+    prompt = """\
+Use write_file to create a new file or intentionally replace an entire existing
+file when the full final content is known.
+
+- Read an existing target before overwriting it. Preserve content that the task
+  did not ask to change, along with the repository's encoding and newline style.
+- For a localized change, use edit_file instead of rewriting the whole file.
+- Do not overwrite generated, vendored, lock, configuration, or user-owned files
+  unless they are in scope and their regeneration/ownership rules are understood.
+- The content argument must be the complete final file body, not a patch or
+  fragment.
+- After writing, inspect the result and run the narrowest relevant verification.
+- File mutations must remain ordered. Do not race write_file against another
+  edit or command that mutates the same path.
+"""
+    when_to_use = (
+        "A new text file must be created with a complete initial body.",
+        "An existing file intentionally needs a complete replacement and the result is fully known.",
+    )
+    when_not_to_use = (
+        "A localized edit can safely express the change with edit_file.",
+        "The complete final content is unknown or would discard unrelated user work.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Create a new source file",
+            input={
+                "path": "src/example/widget.py",
+                "content": (
+                    "class Widget:\n"
+                    "    \"\"\"Minimal widget implementation.\"\"\"\n"
+                ),
+            },
+            description="Provide the complete final file body for a new file.",
+        ),
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {

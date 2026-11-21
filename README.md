@@ -237,7 +237,7 @@ Base Prompt 固定拆为身份、执行循环、工具纪律、编码质量、�
 ```toml
 [prompt]
 profile = "auto"  # 或 default / claude / deepseek / openai / gemini
-release = "2026.11.21"
+release = "2026.11.21.1"
 calibration_baselines = ["benchmarks/baselines/deepseek-chat.json"]
 
 [prompt.authoring]  # 可选：Prompt 设计/评审契约，默认关闭
@@ -405,13 +405,15 @@ transport = "sse"
 
 ToolSearch 只搜索已通过运行时过滤的候选集，不能加载被禁用、离线 MCP、当前 run mode 不支持或权限模式禁止的工具。新加载的工具从下一次模型请求开始进入 `tools`，同一 Step 不能执行；工具名、Provider schema、目录和搜索结果全部按名称稳定排序，注册顺序变化不会改变 Prompt Cache 前缀。`/tools` 会显示每个工具的 tier、loaded 状态和排除原因。
 
-### 工具级 Prompt Playbook
+### 工具级 Prompt：主 Prompt 与工具 Prompt 分层
 
-具有 Playbook 的工具只有实际进入本轮 Provider `tools` 参数后，才会由独立 `ToolPlaybookCatalog` 注入对应的 L5 操作规则。Playbook 按工具族拆分（读取、仓库检索、编辑、命令验证、计划、ToolSearch、后台任务、子代理、LSP、Web、Memory），只渲染本轮真实可用的工具说明：被权限模式、运行模式、Intent、功能开关或 allowlist 过滤的工具不会泄漏其操作指令；discoverable/deferred 工具也只有在加载并进入下一次请求后才获得 Playbook。
+从 Step 120 起，Base Prompt 只回答“Agent 是什么、总体工作原则是什么、如何选择工具”。具体工具的使用时机、参数习惯、操作顺序、安全协议、禁止项和示例由该工具自己的 `prompt` / `when_to_use` / `when_not_to_use` / `prompt_examples` 承担，不再堆进主系统 Prompt。例如 `run_command` 自己声明专用工具偏好、Git 安全协议和 Sandbox 不可绕过；`edit_file` 自己声明精确匹配、`replace_all`、串行写入和 diff 检查；`ask_user` 自己声明先调查、只问单一阻塞决策。
 
-Playbook Fragment 使用 `tool_playbook:<id>` 来源、`managed` 信任级别和 session 稳定层，可进入缓存前缀但不可压缩、不可手动切换。其 token 计入 Context 预算，`/context plan|why|cache` 可查看 active tools、playbook content hash 和缓存归属。工具池或 Provider 能力变化会同时改变 Playbook 内容与工具目录 hash，避免提示词描述的能力和真实 Schema 不一致。
+`ToolPromptSpec` 是这些字段的规范化投影，也是 Provider Schema、目录检索、Prompt Plan 和观测 hash 的共同来源。当前默认内置工具、子代理工具、Skill 工具、LSP 工具、Web 工具和 Memory/`prompt_lab` 等 39 个已知工具均有自有 Prompt 契约；动态 MCP/Plugin 可按同一协议提供 `ToolPromptSpec`。`ToolDescriptor` 继续只负责 source、权限、tier 和运行模式，Provider wire 依然只接收 `name/description/parameters`，不会把操作正文塞回 JSON Schema。
 
-`ToolPromptSpec` 是工具模型面向的唯一来源：Provider Schema、工具描述、操作指令、when-to-use/exclusion、示例和别名都从同一个对象派生。`Tool` 不再承担 Prompt 语义，`ToolDescriptor` 继续只负责 source、权限、tier 和运行模式；Registry 生成的 legacy spec 仍兼容没有显式 PromptSpec 的旧工具。Provider 只接收 `name/description/parameters`，操作说明由 PromptAssembler 放入 L5 Playbook；`wire_hash` 与 `content_hash` 可用于判断是 wire Schema 变化还是仅 guidance 变化。
+`ToolPlaybookCatalog` 仍按工具族提供稳定的 L5 边框、标题、分组和缓存身份。工具自有 Prompt 存在时，Playbook 只附族元数据，绝不覆盖或重复追加规则；只有尚未迁移的 legacy 工具才使用族 guidance 作为 fallback。只有实际进入本轮 Provider `tools` 的工具才会渲染对应 Fragment：被权限模式、运行模式、Intent、feature、allowlist 排除或尚未加载的 discoverable/deferred 工具不会泄漏操作指令。
+
+Playbook Fragment 使用 `tool_playbook:<id>` 来源、`managed` 信任级别和 session 稳定层，可进入缓存前缀但不可压缩、不可手动切换。其 token 计入 Context 预算，`/context plan|why|cache` 可查看 active tools、playbook content hash 和缓存归属。`wire_hash` 与 `content_hash` 可用于判断是 wire Schema 变化还是仅工具 guidance 变化。
 
 ### 任务类型 Workflow Fragment
 

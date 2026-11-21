@@ -1242,7 +1242,7 @@ execute(args, ctx)            read_only/mcp_server            parameters(JSON Sc
                                       │
                               PromptAssembler
                                       │
-                    L5 Tool Playbook（同一 spec 的 guidance）
+              L5 Tool Playbook（族 metadata + tool-owned Prompt）
 ```
 
 关键边界：
@@ -1251,7 +1251,7 @@ execute(args, ctx)            read_only/mcp_server            parameters(JSON Sc
   `name/description/parameters`；操作指令、when/exclusion 和示例不得塞回 wire schema。
 - `wire_hash` 只覆盖 Provider 字节；`content_hash` 覆盖全部模型可见 guidance。两者同时记录，
   可区分“工具 Schema 变化”和“仅 Playbook 文案变化”。
-- `ToolPlaybookCatalog` 从实际 advertised specs 选择 guidance。内置工具族由工具名匹配，
+- `ToolPlaybookCatalog` 从实际 advertised specs 选择族元数据；只有 legacy spec 没有自有 instructions 时才使用 guidance fallback。内置工具族由工具名匹配，
   自定义工具可使用 `playbook_id` 分组或自动获得 `tool_playbook:tool:<name>`；已知工具的显式
   description 不会被默认族 guidance 覆盖。
 - `ToolRegistry` 拒绝 Tool 与 spec 名称不一致；旧工具未提供显式 spec 时由 `from_tool()`
@@ -1263,6 +1263,32 @@ execute(args, ctx)            read_only/mcp_server            parameters(JSON Sc
   `channel_record()` 只保留 name/source/version、计数、别名、playbook ID 与 hash；`/context plan`
   和 `/context why <tool|tool:<name>>` 可展示 wire/content hash，但不渲染描述、Schema、指令或
   示例正文。
+
+## Tool-owned Prompt 所有权下沉（Step 120）
+
+Claude Code 式分工不应把每个工具的参数习惯、操作顺序和安全特例都堆进 Base Prompt。
+Krelcode 从 Step 120 起把两层职责明确拆开：
+
+| 层 | 回答的问题 | 典型内容 | 来源 |
+|----|------------|----------|------|
+| Base Prompt | Agent 是什么、总体原则、如何选择工具 | 精确、最小修改、真实证据、验证、安全权威 | `core:base:*`，L1 static |
+| Tool-owned Prompt | 这个工具何时用、怎么用、禁止什么、如何验证 | 专用工具偏好、Git 安全、精确匹配、并行/串行、输出检查、示例 | Tool 类属性 → `ToolPromptSpec` |
+| Tool Playbook | 多个工具如何形成稳定目录和缓存身份 | 工具族标题、顺序、active tools、版本与 hash | `ToolPlaybookCatalog`，L5 session |
+| Runtime Contract | 本轮到底允许什么 | approval、Sandbox、权限模式、工具池过滤、MCP 健康 | `ModePermissionContract` / `TurnToolPool` |
+
+默认内置、子代理、Skill、LSP、Web、Memory 与 `prompt_lab` 共 39 个已知工具均拥有非空
+`prompt`、`when_to_use`、`when_not_to_use` 和版本；复杂工具还拥有可审查示例。工具 Prompt
+随 `ToolPromptSpec.from_tool()` 进入统一快照，Provider wire 仍只序列化
+`name/description/parameters`。`run_command` 的专用工具偏好、Git destructive-command
+禁令、staged diff 检查与 Sandbox 边界，`edit_file` 的 exact/unique/`replace_all`/diff 检查，
+以及 `ask_user` 的“先调查、只问单一阻塞决策”都位于各自工具，而不是 Base Prompt。
+
+`ToolPlaybookCatalog.enrich_prompt_spec()` 的兼容规则是：
+
+- 工具已有 `instructions`：只附加 `playbook_id/title/priority/version`，不得追加或覆盖规则。
+- legacy 工具没有 `instructions`：才使用族 guidance 作为 fallback，并在未来迁移时删除回退。
+- 工具未进入本轮 advertised/loaded 集合：对应 Prompt 不渲染，避免描述不存在的能力。
+- Provider/观测层只看到 hash 与计数；完整工具正文只进入 L5 instruction channel。
 
 `CacheBreakpointPlan.as_record()` 只包含 strategy、reason、候选 ID、kind、索引、token、
 字符数、digest、stability、anchor/moving 标志和跳过原因，不包含 Prompt、工具 Schema、
@@ -1473,7 +1499,7 @@ layer 正文。`ContextUsageSnapshot.source_count` 只统计实际贡献了非�
 Context v3 以 `PromptAssembler` 为唯一请求级装配入口，`ContextAssembler` 保留为来源收集与
 `ContextAssembly` 兼容归因层，同时把“来源”和“信任”拆开：
 
-- `ToolPlaybookCatalog` 只根据本轮 Provider 实际 advertised 的工具生成 L5 操作规则；
+- `ToolPlaybookCatalog` 只根据本轮 Provider 实际 advertised 的工具生成 L5 工具 Prompt；
   disable、权限/运行模式过滤、Intent 收窄和尚未加载的 deferred 工具不会获得 Playbook，
   避免提示词能力与真实工具边界不一致。
 - `TaskWorkflowClassifier` 在 turn 开始时只分类一次，`TaskWorkflowCatalog` 从固定任务类型

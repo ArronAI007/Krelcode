@@ -16,6 +16,21 @@ class GetTimeTool:
     read_only = True
     name = "get_time"
     description = "获取当前时间。可选参数 timezone（IANA 时区名，如 Asia/Shanghai）。"
+    prompt = """\
+Use get_time only when the current wall-clock date or time is required to answer
+the user or interpret time-sensitive evidence. Pass an explicit IANA timezone when
+the request requires one. Do not use it to measure command duration or replace
+repository evidence.
+"""
+    when_to_use = (
+        "The current date or time in a specific timezone is requested.",
+        "A time-sensitive comparison needs an authoritative current timestamp.",
+    )
+    when_not_to_use = (
+        "Elapsed or process timing is needed; use the relevant command/runtime measurement.",
+        "Historical or repository state is needed instead of the current clock.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {

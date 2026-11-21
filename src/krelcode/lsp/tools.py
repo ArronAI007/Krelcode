@@ -70,6 +70,21 @@ class LSPDiagnosticsTool(_LSPTool):
         "path 为相对工作区路径；返回 line:column、严重级别、源码与消息。"
         "该工具只读取文件并请求 LSP，不修改工作区。"
     )
+    prompt = """\
+Use lsp_diagnostics when the configured language server can provide stronger
+compiler/type evidence than text inspection, especially after edits. Fix actionable
+new diagnostics and distinguish pre-existing failures from regressions. A clean
+diagnostic result does not replace relevant tests for runtime behavior.
+"""
+    when_to_use = (
+        "A file uses a configured language server and compiler/type diagnostics would reduce uncertainty.",
+        "An edit may have introduced syntax, type, import, or API errors.",
+    )
+    when_not_to_use = (
+        "No language server is configured for the file.",
+        "Behavioral verification requires tests or a runtime check instead.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -137,6 +152,20 @@ class LSPHoverTool(_LSPTool):
         "获取文件中某个位置的类型、签名或文档说明。line/character 从 1 开始。"
         "适合在阅读代码时确认符号语义。"
     )
+    prompt = """\
+Use lsp_hover to resolve an ambiguous symbol's type, signature, or documentation
+when surrounding text is insufficient. Request the smallest relevant position and
+do not use hover as a broad repository scan.
+"""
+    when_to_use = (
+        "A symbol's type, signature, or language-server documentation is ambiguous.",
+        "A precise position can resolve an interpretation question.",
+    )
+    when_not_to_use = (
+        "The relevant implementation body must be read or edited.",
+        "No language server is configured for the file.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -182,6 +211,20 @@ class LSPDefinitionTool(_LSPTool):
         "查找符号定义位置。line/character 从 1 开始；返回工作区内的 "
         "file:line:column 位置列表。"
     )
+    prompt = """\
+Use lsp_definition to follow a symbol to its authoritative definition without a
+broad repository scan. Read only the returned definition and nearby context needed
+to understand behavior.
+"""
+    when_to_use = (
+        "A symbol's implementation location is unknown and semantic resolution is needed.",
+        "Following cross-file code should be more precise than text search.",
+    )
+    when_not_to_use = (
+        "The definition location is already known.",
+        "No language server is configured for the file.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -229,6 +272,20 @@ class LSPReferencesTool(_LSPTool):
         "查找符号引用。line/character 从 1 开始；可通过 "
         "include_declaration 控制是否包含定义。"
     )
+    prompt = """\
+Use lsp_references before changing shared APIs, signatures, or behavior. Review
+relevant callers and tests for behavioral assumptions instead of treating a count
+as proof that every occurrence is equivalent. Do not edit matches mechanically.
+"""
+    when_to_use = (
+        "A shared API, signature, or behavior may have multiple semantic callers.",
+        "A language-server reference set is more reliable than text search.",
+    )
+    when_not_to_use = (
+        "The search is for ordinary text or a non-semantic occurrence.",
+        "No language server is configured for the file.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {

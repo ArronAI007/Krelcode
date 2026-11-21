@@ -13,7 +13,7 @@ SPAWN_AGENT_PROMPT_VERSION = "1"
 
 
 SPAWN_AGENT_BASE_PROMPT = """\
-Write the `task` argument as a self-contained handoff for a fresh subagent. The
+Write the `task` argument as a self-contained mental-model handoff for a fresh subagent. The
 child cannot see this conversation, your private reasoning, or prior tool
 output. It sees only the task you pass plus its inherited instructions and
 task-relevant memory. Do not write the task as a note to a colleague who
@@ -57,6 +57,11 @@ Bad delegation examples:
 Before calling spawn_agent, confirm that the task contains enough evidence for
 an independent agent to begin without guessing. Keep the scope minimal and do
 not delegate work you will also do locally.
+
+For risky changes that need independent adversarial verification, use
+`definition="verifier"` and provide the exact change scope, baseline, commands
+already run, expected behavior, and claims that must be challenged. The fork
+flag does not copy the parent's full history; the task must carry the handoff.
 """
 
 

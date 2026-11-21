@@ -14,6 +14,7 @@ from ..paths import (
     resolve_in_workspace,
 )
 from ..secret_guard import classify_secret_path, redact_secret_text
+from ..prompt import ToolPromptExample
 
 MAX_LINES = 2000          # 单次最多返回行数（可被 limit 覆盖到更小）
 MAX_LINE_CHARS = 2000     # 单行超长截断
@@ -27,6 +28,33 @@ class ReadFileTool:
         "读取工作区内的文本文件，输出带行号（格式: '行号→内容'）。"
         "可用 offset（起始行，从 1 计）与 limit（行数）分段读取大文件。"
     )
+    prompt = """\
+Use read_file to inspect the exact file content needed to answer the user or
+make a safe edit. Start with the file the user named; do not read unrelated
+siblings merely to add background. For a large file, use offset and limit to
+stage the read around the relevant symbol or line range. Reuse content already
+present in context and do not reread an unchanged file unless its state is
+uncertain. Independent reads of known files may run in parallel. Treat line
+numbers and truncation notices as boundaries: continue with the indicated offset
+when more context is needed. Sensitive-file protections and redaction are part
+of the runtime contract and must not be bypassed.
+"""
+    when_to_use = (
+        "The task needs exact file content, line numbers, or a target region to edit.",
+        "A focused search result needs surrounding source context.",
+    )
+    when_not_to_use = (
+        "The path or filename is still unknown; use glob or grep first.",
+        "A broad repository summary is needed; use repo_map or grep before reading files.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Read a focused region",
+            input={"path": "src/example/parser.py", "offset": 120, "limit": 80},
+            description="Read enough context around the known symbol without loading the whole file.",
+        ),
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {

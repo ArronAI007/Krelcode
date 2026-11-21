@@ -76,12 +76,11 @@ PROMPT_BASE_SECTIONS: Tuple[PromptSection, ...] = (
         priority=20,
         content=(
             "Use tools whenever facts about the workspace, commands, dependencies, or "
-            "current state matter. Prefer targeted reads and searches over broad scans. "
-            "For an explicit single-file explanation or review request, start with that "
-            "file and do not load unrelated siblings merely to add context. Independent "
-            "read-only calls may run in parallel; edits and state-changing commands must "
-            "remain ordered. Never claim to have read, run, or changed something unless "
-            "the corresponding tool result confirms it."
+            "current state matter. Select the most direct available tool, keep calls "
+            "within the task scope, and never claim to have read, run, or changed "
+            "something unless the corresponding tool result confirms it. Tool-specific "
+            "usage, ordering, safety, and permission rules are defined by that tool's "
+            "own Prompt and runtime contract; follow them when the tool is available."
         ),
     ),
     PromptSection(
@@ -281,7 +280,7 @@ PROMPT_PROFILE_BY_NAME = {
     profile.name: profile for profile in PROMPT_PROFILES
 }
 
-CURRENT_PROMPT_RELEASE_ID = "2026.11.21"
+CURRENT_PROMPT_RELEASE_ID = "2026.11.21.1"
 CURRENT_PROMPT_RELEASE: PromptRelease = build_prompt_release(
     CURRENT_PROMPT_RELEASE_ID,
     PROMPT_BASE_SECTIONS,
@@ -292,7 +291,7 @@ CURRENT_PROMPT_RELEASE: PromptRelease = build_prompt_release(
 # in the same review. Runtime can still operate while uncalibrated, but release
 # gates reject missing or stale identity.
 FROZEN_PROMPT_RELEASE_HASH = (
-    "c18fb8edf8c3dbd9c3829f34e692e6ec353873f1e2957d107b550f3599071e5c"
+    "f34dea47655da2999dbc9cf25b9acbf3c14b03f459c922f75af330d715ac654c"
 )
 if CURRENT_PROMPT_RELEASE.release_hash != FROZEN_PROMPT_RELEASE_HASH:
     raise RuntimeError(

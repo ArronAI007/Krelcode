@@ -26,6 +26,23 @@ class JobStartTool:
         "结束而停止；用 job_output 轮询实时输出，用 job_kill 终止。适合 dev server、"
         "watcher、长时间测试等。不要重复启动同一个后台命令。"
     )
+    prompt = """\
+Use job_start for a command that must outlive or run alongside the current agent
+step: servers, watchers, long test runs, or other non-blocking processes. Use a
+normal foreground command when the result is needed immediately. Record the
+returned job id, verify startup through bounded output reads, and do not launch
+duplicate jobs for the same purpose. Runtime approval and Sandbox enforcement
+cannot be bypassed.
+"""
+    when_to_use = (
+        "A long-lived server, watcher, or process must keep running without blocking the turn.",
+        "A long command can run while the agent performs useful independent work.",
+    )
+    when_not_to_use = (
+        "A focused foreground command can complete within the normal timeout.",
+        "The process would be interactive or cannot be safely managed as a background job.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -85,6 +102,21 @@ class JobOutputTool:
         "避免重复读取；wait_seconds 可等待新输出或任务结束（最多 30 秒）。"
     )
     read_only = True
+    prompt = """\
+Use job_output to read incremental output from a known background job. Advance the
+after_sequence cursor instead of rereading the entire log, bound wait_seconds to
+the decision you need, and inspect status/exit metadata with the output. Do not
+treat an intermediate log line as completion or dump unbounded logs into context.
+"""
+    when_to_use = (
+        "A background job's startup, progress, completion, or failure must be inspected.",
+        "New output is needed after a known sequence cursor.",
+    )
+    when_not_to_use = (
+        "The job id or output cursor is unknown; inspect job_list or restart with a bounded command.",
+        "The process has already produced a complete result already present in context.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -137,6 +169,21 @@ class JobListTool:
     tool_tier = ToolTier.DISCOVERABLE
     description = "列出当前进程管理的后台 Shell 任务、状态、退出码与最新 sequence。"
     read_only = True
+    prompt = """\
+Use job_list to recover the current background-job state before waiting, polling,
+killing, or assuming a process is still alive. Reconcile job ids, statuses, exit
+codes, and latest sequence cursors. It is read-only and does not start or stop a
+process.
+"""
+    when_to_use = (
+        "The agent needs the current set or status of background jobs.",
+        "A prior job id or state is uncertain after context compaction or resume.",
+    )
+    when_not_to_use = (
+        "A specific job's output is needed; use job_output with its id.",
+        "The task requires starting or terminating a process.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {},
@@ -176,6 +223,21 @@ class JobKillTool:
     name = "job_kill"
     tool_tier = ToolTier.DISCOVERABLE
     description = "终止一个由 job_start 启动的后台任务及其整个进程组。"
+    prompt = """\
+Use job_kill when a background job is no longer needed, duplicate, hung, or
+leaking resources. Verify the job id and intended scope first. This terminates the
+whole process group and is not a graceful confirmation mechanism; report any useful
+partial output or remaining cleanup requirement afterward.
+"""
+    when_to_use = (
+        "A task-created background process is obsolete, duplicated, or consuming resources.",
+        "A hung or unsafe process must be stopped.",
+    )
+    when_not_to_use = (
+        "The process is still required and healthy.",
+        "A non-destructive status check or output read can resolve the uncertainty.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {

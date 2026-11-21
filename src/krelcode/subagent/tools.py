@@ -161,6 +161,21 @@ class WaitAgentTool:
         "（一次等多个，各自返回状态与报告）。timeout 秒数可选（默认 60，"
         "超时不取消任务，返回当前状态，可再次 wait）。"
     )
+    prompt = """\
+Wait for subagents when their result is required for the next step. Prefer bounded
+waits and continue useful non-overlapping work instead of polling repeatedly. A
+timeout reports current state and does not cancel the child. Inspect the final
+status and report; do not treat an intermediate feed message as a completed result.
+"""
+    when_to_use = (
+        "The parent's next action depends on one or more delegated results.",
+        "A child is expected to complete soon and a bounded blocking wait is cheaper than polling.",
+    )
+    when_not_to_use = (
+        "Useful independent parent work can proceed while the child runs.",
+        "No agent id is known or the task should be managed rather than merely waited on.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -232,6 +247,22 @@ class SendToAgentTool:
         "子代理空闲时立即开始；运行中默认排队（完成后自动处理）；"
         "interrupt=true 则打断当前任务立即处理本消息。"
     )
+    prompt = """\
+Use send_to_agent to add constraints, corrections, or a follow-up task to an
+existing child while preserving its context. Queue by default so current work is
+not lost; interrupt only when the current direction is unsafe or materially wrong.
+Send a concise, self-contained instruction and do not duplicate a message already
+queued unless changed evidence requires it.
+"""
+    when_to_use = (
+        "A running or idle child needs new constraints, a correction, or a follow-up task.",
+        "The current direction is unsafe or materially wrong and must be interrupted.",
+    )
+    when_not_to_use = (
+        "The child does not exist or should be resumed first.",
+        "The message merely repeats an instruction already queued without new evidence.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -281,6 +312,21 @@ class GetAgentFeedTool:
         "读取子代理实时事件流的增量。after_sequence 使用上次返回的 "
         "next_sequence；所有文本已脱敏，sequence 单调递增。"
     )
+    prompt = """\
+Use get_agent_feed for incremental progress visibility and diagnosis of a known
+child. Advance after_sequence instead of rereading events, and keep reads bounded.
+Feed events are evidence about progress; they are not the final result and do not
+prove task completion.
+"""
+    when_to_use = (
+        "A child's recent progress or failure needs diagnosis before waiting or intervening.",
+        "New events are needed after a known sequence cursor.",
+    )
+    when_not_to_use = (
+        "The child's final result is required; use wait_agent.",
+        "The full event history would be dumped without a diagnostic purpose.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -316,6 +362,21 @@ class GetAgentFeedTool:
 class PauseAgentTool:
     name = "pause_agent"
     description = "在下一个安全 step 边界暂停子代理；保留 Task、上下文和消息队列。"
+    prompt = """\
+Use pause_agent when a running child's direction must be inspected before more work
+continues, or when work must stop temporarily without discarding its context. Pause
+occurs at the next safe step boundary; inspect the feed/state before deciding to
+resume, send new input, or kill the child.
+"""
+    when_to_use = (
+        "The child's current direction needs inspection before it continues.",
+        "Temporary suspension is preferable to losing context or terminating the child.",
+    )
+    when_not_to_use = (
+        "The child is obsolete, unrecoverable, or unsafe; kill it instead.",
+        "The concern can be corrected immediately with a bounded send_to_agent message.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {"agent_id": {"type": "string"}},
@@ -339,6 +400,20 @@ class PauseAgentTool:
 class ResumeAgentTool:
     name = "resume_agent"
     description = "恢复已暂停的子代理；从原上下文和暂停点继续，不重建历史。"
+    prompt = """\
+Use resume_agent only after the concern that caused a pause is resolved and the
+child still has a valid task. Resume continues the existing context and pause point;
+do not use it to restart or silently broaden the task.
+"""
+    when_to_use = (
+        "A paused child is still relevant and the blocking concern is resolved.",
+        "The child should continue from its preserved context.",
+    )
+    when_not_to_use = (
+        "The child is completed, failed, obsolete, or unsafe.",
+        "The task scope changed enough that a fresh self-contained spawn is safer.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {"agent_id": {"type": "string"}},
@@ -365,6 +440,21 @@ class KillAgentTool:
         "终止整个子代理（与 interrupt 不同：不会继续处理原任务）。"
         "已有 history/feed/sidechain 会保留。"
     )
+    prompt = """\
+Use kill_agent when a child is obsolete, unsafe, unrecoverable, duplicated by a
+completed result, or no longer worth its resource use. This terminates the entire
+task rather than interrupting one step. Preserve and report any useful partial
+result, feed, or sidechain evidence.
+"""
+    when_to_use = (
+        "The child's task is no longer needed or is unsafe to continue.",
+        "The child cannot recover and continued execution would waste resources.",
+    )
+    when_not_to_use = (
+        "A temporary pause, correction, or new instruction can recover the work.",
+        "The child is already complete and its result can simply be collected.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {"agent_id": {"type": "string"}},
@@ -390,6 +480,20 @@ class ListAgentDefinitionsTool:
     read_only = True
     name = "list_agent_definitions"
     description = "列出内置与用户自定义 Agent Definition（名称、来源、工具范围）。"
+    prompt = """\
+Use list_agent_definitions before spawning when specialized agent roles may exist.
+Inspect names, sources, and available tool scopes, then choose the narrowest role
+that fits the task. Do not guess a definition name without checking the catalogue.
+"""
+    when_to_use = (
+        "A specialized role may better fit a bounded task.",
+        "The available custom agent definitions or their tool scopes are uncertain.",
+    )
+    when_not_to_use = (
+        "The task is ordinary work that the main agent can perform directly.",
+        "The appropriate role is already known and no catalogue check is needed.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {"type": "object", "properties": {}}
 
     def __init__(self, manager: SubagentManager) -> None:
@@ -406,6 +510,20 @@ class ListAgentsTool:
     read_only = True
     name = "list_agents"
     description = "列出全部子代理的状态（id/状态/轮数/任务与结果预览）。"
+    prompt = """\
+Use list_agents to recover the current child-agent set and status before managing,
+waiting for, resuming, or assuming a result. Treat previews as status evidence, not
+as final deliverables, and avoid re-spawning an already active duplicate.
+"""
+    when_to_use = (
+        "The current child agents or their states are uncertain.",
+        "The parent is resuming, compacting, or reconciling parallel delegated work.",
+    )
+    when_not_to_use = (
+        "A specific known child's final result is needed; use wait_agent.",
+        "No delegation has occurred and status is irrelevant to the task.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {"type": "object", "properties": {}}
 
     def __init__(self, manager: SubagentManager) -> None:

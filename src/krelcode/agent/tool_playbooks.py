@@ -171,12 +171,15 @@ class ToolPlaybookCatalog:
             item for item in self._playbooks if item.id == owner_id)
         guidance = next(
             item.text for item in playbook.guidance if item.tool == spec.name)
+        # A tool-owned Prompt is the canonical detailed contract.  Family
+        # playbooks only fill the gap for legacy tools that have not migrated
+        # their instructions into ToolPromptSpec yet.
         return spec.with_playbook(
             playbook_id=playbook.id,
             playbook_title=playbook.title,
             playbook_priority=playbook.priority,
             playbook_version=playbook.version,
-            fallback_instructions=guidance,
+            fallback_instructions="" if spec.instructions else guidance,
         )
 
     def resolve_prompt_specs(

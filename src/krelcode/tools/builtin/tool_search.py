@@ -22,6 +22,22 @@ class ToolSearchTool:
         "callable from the next model step; disabled, offline MCP, run-mode-blocked "
         "and permission-blocked tools are never returned."
     )
+    prompt = """\
+Use tool_search only when the currently advertised tools cannot perform the task
+or a relevant deferred capability is likely to exist. Search by capability, load
+the best match when appropriate, and call a newly loaded tool on the next model
+step because its full schema is not available in the requesting step. Do not
+search repeatedly for a tool that is already loaded and usable.
+"""
+    when_to_use = (
+        "The active tool directory lacks a capability the task appears to require.",
+        "A deferred or discoverable integration may provide the needed operation.",
+    )
+    when_not_to_use = (
+        "An advertised tool already performs the operation.",
+        "The search would be broad exploration without a concrete capability need.",
+    )
+    prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
