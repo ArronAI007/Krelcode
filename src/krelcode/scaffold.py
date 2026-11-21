@@ -18,7 +18,7 @@ CONFIG_TEMPLATE = '''# Krelcode 配置（默认按 user → project → local �
 # auto 先按模型名、再按 provider 匹配；profile 只追加指导，不能覆盖安全 section
 #
 # [prompt.authoring]                 # 可选 Prompt 设计/评审契约（默认关闭）
-# enabled = true                     # 启用 prompt_authoring:contract (L6) 与只读 prompt_lab 工具
+# enabled = true                     # 启用 prompt_authoring:contract、prompt_lab 与 content-light proposal store
 # 契约覆盖目标分析、Instruction/Evidence 分离、stable/dynamic、冲突检测、
 # 工具权限设计、可机器验证用例、canonical Candidate Prompt Schema
 # 以及 temporary PromptPlan 六项隔离评估（通过后仅进入人工审核）

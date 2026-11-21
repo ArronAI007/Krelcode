@@ -160,6 +160,14 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
                   "/context reset 清除启停设置；/context cache 查看缓存边界；\n"
                   "/context refresh 重新采集工作区上下文")),
         CommandSpec(
+            "prompt-release", "查看或人工审批 Prompt 发布提案",
+            argument_hint=(
+                "[list|status [id]|approve <id> <candidate-hash> [reason]|"
+                "reject <id> <candidate-hash> <reason>]"),
+            help=("查看 content-light Prompt Release proposal；approve/reject 只能由"
+                  "前台人类命令执行，Agent tool 无审批动作。批准只生成本地审核"
+                  "产物与 calibration artifact，不修改生产 Prompt、Registry 或配置。")),
+        CommandSpec(
             "export", "导出当前会话", argument_hint="[路径]",
             help="导出 Markdown；路径以 .json 结尾时输出可 /resume 的 native 快照"),
         CommandSpec(

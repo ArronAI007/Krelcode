@@ -2218,7 +2218,7 @@ Behavior Benchmark，避免 meta-prompt 自己改写自身权限或悄悄污染�
 ## Prompt Engineering Lab（Step 114）
 
 `prompt_lab` 是 Prompt Authoring Contract 的可选执行面，不是新的 Prompt 来源。只有
-`[prompt.authoring].enabled=true` 时才注册为只读 core Tool；ToolContext 携带当前 Agent 的
+`[prompt.authoring].enabled=true` 时才注册为 core Tool；它不修改生产 Prompt，`propose` 仅写 content-light 本地提案。ToolContext 携带当前 Agent 的
 `PromptFragmentRegistry`，其生命周期与主 Agent/子代理各自的 PromptAssembler 一致。
 
 ```text
@@ -2314,3 +2314,52 @@ Candidate
 写生产 Prompt 源、Registry 或 Prompt Release；Release 必须由独立人工流程完成。旧
 `PromptAuthoringRequest` evaluate 路径保留兼容，但只能得到 authoring-only 报告，永远不能获得
 Release 资格。
+
+## Connected Prompt Release Pipeline（Step 117）
+
+Step 117 不再让 Candidate、Benchmark、Conflict 与 Release/Calibration 各自停留在孤立 API，
+而是由 `agent/prompt_release_pipeline.py` 统一编排。链路固定为：
+
+```text
+PromptAuthoring Skill
+  -> PromptLab Candidate
+  -> PromptCandidateIsolator
+  -> temporary PromptPlan / six isolation gates
+  -> offline PromptBenchmarkRunner
+  -> PromptConflictAnalyzer report
+  -> explicit live BehaviorReport / optional Parity Gate
+  -> ModelProfileCalibration proposal
+  -> pending_approval
+  -> human /prompt-release decision
+```
+
+`PromptReleasePipeline.prepare_async()` 复用已有对象，不复制 Prompt 装配、Benchmark 或冲突
+算法。offline Benchmark 可由 runner 执行或注入现成 report；live Benchmark 默认关闭，必须由
+调用方显式注入 report 或提供 live runner，避免 Agent 在普通 Prompt 评估中产生网络请求和费用。
+
+每个阶段只保存 status、evidence hash、计数和失败 ID。`PromptReleaseProposal` 绑定 candidate、
+authoring、isolation、offline、live、parity、conflict、release/profile/contract/suite 与
+calibration 身份；`candidate` 字段仅使用 `content_light_record()`，不保存 Prompt、metric、
+rollback、答案或工具参数正文。缺少 offline/live 证据分别进入 `pending_offline`/`pending_live`；
+任一证据失败或身份不匹配即进入 blocked state。全部通过也只能到达 `pending_approval`。
+
+本地存储固定在工作区 `.krelcode/prompt-releases/`：
+
+```text
+proposals/       content-light proposal + stages
+approvals/       human decision bound to proposal/candidate hash
+calibrations/    approved calibration artifact
+artifacts/       approved manifest + approval identity
+```
+
+`prompt_lab` 增加 `propose` 与 `status`，其中 propose 只创建 review proposal；它没有
+approve/reject action。独立前台命令 `/prompt-release` 是唯一人工审批入口，approve/reject
+要求 proposal ID 与完整 candidate hash 同时匹配，并拒绝 `agent/model/system` actor。审批前
+会重新校验当前 Release/Profile/contract/suite；任一漂移会把 proposal 标记为 `stale` 并要求
+重新评估。批准仍保持 `production_modified=false`、`applied=false`，生产 Prompt 修改继续走
+源码 review 与 Git commit，不由 Proposal 自动改文件。
+
+内置 `builtin_skills/prompt-authoring/SKILL.md` 把上述边界作为用户可调用的 Prompt 工程流程：
+生成 canonical Candidate、运行六项隔离、提交 offline/live 证据、读取 content-light stages、
+最后由人类执行 `/prompt-release approve`。Skill 通过 package-data 随 wheel/uv tool 安装，
+其 `allowed-tools` 只有 `prompt_lab`。

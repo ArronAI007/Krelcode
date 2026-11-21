@@ -105,6 +105,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/context attachments` | 查看动态 Context Attachment 的 ID、kind、revision、generation、layer 与 token；不输出附件正文 |
 | `/context fragments [source]` | 列出全部或指定来源的 Fragment、启停状态、group、tokens 与 cache 属性 |
 | `/context authoring` | 查看可选 `PromptAuthoringContract` 的启用状态、version/hash、L6 位置与六项能力；不输出契约正文 |
+| `/prompt-release` | `list`、`status [id]` 或人类 `approve/reject <id> <candidate-hash>` content-light Prompt Release proposal；Agent tool 无审批入口 |
 | `/context enable\|disable\|toggle <id\|source>` | 手动启停单个 Fragment 或整个来源；精确 id 设置优先于 source 设置 |
 | `/context reset` | 清除当前会话的全部手动启停设置 |
 | `/context cache` | 显示稳定前缀字符/token 数、稳定/动态 Fragment、stable/dynamic/full hash、工具目录 hash、与上一请求相比的 hash/flag/token 差值及 cache segment 归因 |
@@ -439,9 +440,10 @@ Instruction 注入。
 主 Agent 与子代理都通过各自的 PromptAssembler 装配同一个 `prompt_authoring:contract`
 L6/session/cacheable Fragment；禁用时不会产生额外 token 或改变对话行为。兼容旧本地配置的
 布尔写法 `[prompt] authoring = true`，但推荐嵌套表。非布尔值或未知子键会在启动时以
-`ConfigError` fail-closed，不会按 truthy 字符串静默启用。同一开关还会注册只读 core 工具
-`prompt_lab`（`inspect/generate/compare/evaluate`），它不写文件、不修改 Registry，且只使用
-当前 Agent 自己的 Prompt Registry。
+`ConfigError` fail-closed，不会按 truthy 字符串静默启用。同一开关还会注册 core 工具
+`prompt_lab`（不修改生产 Prompt）（`inspect/generate/compare/evaluate/propose/status`），它不修改生产 Prompt、
+Registry、Release 或运行配置，且只使用当前 Agent 自己的 Prompt Registry；`propose` 仅写
+`.krelcode/prompt-releases/` 下的 content-light 审核提案。
 
 契约要求：先定义目标行为、目标 Fragment/layer、非目标和成功指标；严格区分
 Instruction（managed/user/project/agent-definition）与 Evidence（memory/web/MCP/tool/
@@ -451,9 +453,10 @@ Evidence 通道；候选必须经过生产 `PromptConflictAnalyzer`；明确 per
 `PromptAuthoringReport` 只保存 issue code、来源 ID、计数与 hash，不保存候选 Prompt 正文。
 Prompt Authoring 永远不能自动应用生产 Prompt，也不能借正文授予工具、文件、Sandbox 或审批
 权限。`/context authoring` 只显示状态和身份，完整契约正文仍按普通 Prompt Fragment 管理。
-`prompt_lab(action="inspect"|"generate"|"compare"|"evaluate")` 是同一开关下的只读工程入口：
-inspect/compare/evaluate 默认只返回来源、计数、冲突与 hash，不返回 Prompt 正文；generate 只
-返回 `applied=false` 的候选供人工审阅，必须再经过 evaluate 与人工 review 才能修改真实来源。
+`prompt_lab(action="inspect"|"generate"|"compare"|"evaluate"|"propose"|"status")`
+是同一开关下的 Prompt 工程入口：inspect/compare/evaluate/propose/status 默认只返回来源、
+计数、冲突与 hash，不返回 Prompt 正文；generate 只返回 `applied=false` 的候选供人工审阅。
+propose 自动执行 offline Benchmark 与冲突门禁，但不会隐式运行 live 模型 Benchmark。
 
 canonical Candidate Prompt 的字段固定为 `target_fragment`、`objective`、`proposed_prompt`、
 `constraints`、`expected_behavior`、`risk`、`evaluation_cases`、`rollback_plan`；全部必填且
@@ -482,6 +485,27 @@ PromptCandidate
 可以进入人工审核，不表示自动发布；服务始终返回 `production_modified=false`、`applied=false`
 和 `release_requires_manual_review=true`。旧 `PromptAuthoringRequest` evaluate 输入继续兼容，
 但返回 `legacy_authoring_only=true`、`review_allowed=false`，不能绕过隔离门禁。
+
+proposal 与审批入口：
+
+```text
+prompt_lab(action="propose", spec=<Candidate>, run_offline=true)
+  -> .krelcode/prompt-releases/proposals/<proposal-id>.json
+
+/prompt-release list
+/prompt-release status <proposal-id>
+/prompt-release approve <proposal-id> <candidate-hash> [reason]
+/prompt-release reject <proposal-id> <candidate-hash> <reason>
+```
+
+proposal 依次记录 `authoring`、`candidate`、`isolated_prompt_assembler`、
+`offline_benchmark`、`conflict_analysis`、`live_benchmark`、`prompt_parity`、
+`release_calibration`、`human_approval`、`release_artifacts`。缺少证据时停在 pending 状态；
+offline/live/parity/冲突/身份校验失败时 fail-closed。live Benchmark 只能由工程调用显式注入或
+显式 opt-in，避免普通候选评估产生网络请求和费用。Agent tool 没有 approve/reject action；
+人类审批绑定 candidate、proposal、isolation、benchmark、conflict、release/profile/contract/
+suite 与 calibration hash。审批只保存 approval/calibration 审核产物，不修改生产 Prompt，
+也不自动应用 Release。
 
 最终发布验收使用：
 

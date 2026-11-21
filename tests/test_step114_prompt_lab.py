@@ -134,7 +134,7 @@ def test_prompt_lab_has_a_canonical_read_only_core_spec():
     assert spec.name == tool.name
     assert spec.parameters["required"] == ["action"]
     assert spec.parameters["properties"]["action"]["enum"] == [
-        "inspect", "generate", "compare", "evaluate"]
+        "inspect", "generate", "compare", "evaluate", "propose", "status"]
     assert "prompt lab" in spec.aliases
     assert spec.when_to_use
     assert spec.when_not_to_use

@@ -277,6 +277,7 @@ class CandidateIsolationReport:
     case_results: Tuple[CandidateCaseResult, ...]
     baseline_plan: Mapping[str, object]
     candidate_plan: Mapping[str, object]
+    conflict_report: Mapping[str, object] = field(default_factory=dict)
     authoring_passed: bool = False
     production_modified: bool = False
     applied: bool = False
@@ -313,6 +314,7 @@ class CandidateIsolationReport:
             "case_results": [case.as_dict() for case in self.case_results],
             "baseline_plan": dict(self.baseline_plan),
             "candidate_plan": dict(self.candidate_plan),
+            "conflict_report": dict(self.conflict_report),
             "contains_prompt_content": self.contains_prompt_content,
         }
 
@@ -705,6 +707,9 @@ class PromptCandidateIsolator:
             case_results=case_results,
             baseline_plan=_plan_record(baseline),
             candidate_plan=_plan_record(candidate_plan),
+            conflict_report=(
+                candidate_plan.conflict_report.as_dict()
+                if candidate_plan.conflict_report is not None else {}),
             authoring_passed=bool(authoring_report and authoring_report.passed),
         )
 

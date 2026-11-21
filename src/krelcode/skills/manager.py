@@ -30,6 +30,7 @@ GLOBAL_SKILL_ROOTS = (
     Path(".agents") / "skills",
     Path(".krelcode") / "skills",
 )
+BUILTIN_SKILL_ROOT = Path(__file__).resolve().parent.parent / "builtin_skills"
 
 
 @dataclass(frozen=True)
@@ -46,11 +47,14 @@ class SkillManager:
         workspace_root: Path,
         *,
         home: Optional[Path] = None,
+        builtin_paths: Optional[Iterable[str | Path]] = None,
         extra_paths: Optional[Iterable[str | Path]] = None,
         enabled: bool = True,
     ) -> None:
         self.workspace_root = Path(workspace_root).resolve()
         self.home = (Path(home) if home is not None else Path.home()).expanduser().resolve()
+        self.builtin_paths = tuple(
+            Path(p).expanduser() for p in (builtin_paths or ()))
         self.extra_paths = tuple(Path(p).expanduser() for p in (extra_paths or ()))
         self.enabled = enabled
         self._skills: dict[str, Skill] = {}
@@ -61,6 +65,9 @@ class SkillManager:
 
     def _build_roots(self) -> List[_Root]:
         roots: List[_Root] = []
+        for raw in self.builtin_paths:
+            path = raw if raw.is_absolute() else self.workspace_root / raw
+            roots.append(_Root(path.resolve(), f"builtin:{raw}"))
         for rel in GLOBAL_SKILL_ROOTS:
             roots.append(_Root(self.home / rel, f"global:{rel.as_posix()}"))
         for rel in PROJECT_SKILL_ROOTS:

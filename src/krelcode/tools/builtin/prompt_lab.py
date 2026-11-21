@@ -7,6 +7,10 @@ from typing import Any, Dict
 
 from ...agent.prompt_candidate import PROMPT_CANDIDATE_SCHEMA
 from ...agent.prompt_lab import PromptLabError, PromptLabService
+from ...agent.prompt_release_pipeline import (
+    PromptPipelineError,
+    PromptPipelineRequest,
+)
 from ..base import ToolContext, ToolResult, ToolTier
 from ..prompt import ToolPromptExample
 
@@ -55,7 +59,7 @@ _SPEC_SCHEMA["properties"].update(PROMPT_CANDIDATE_SCHEMA["properties"])
 
 
 class PromptLabTool:
-    """Inspect, generate, compare, and evaluate Prompts without side effects."""
+    """Inspect, evaluate, and propose Prompts without production changes."""
 
     name = "prompt_lab"
     read_only = True
@@ -63,7 +67,7 @@ class PromptLabTool:
     aliases = ("prompt engineering", "prompt lab")
     search_terms = (
         "prompt", "prompt engineering", "fragment", "generate", "compare",
-        "evaluate", "conflict", "authoring",
+        "evaluate", "conflict", "authoring", "release", "proposal",
     )
     description = (
         "Read-only Prompt engineering lab. Inspect Prompt Fragments and hashes, "
@@ -72,8 +76,10 @@ class PromptLabTool:
         "PromptPlan. Evaluation runs six isolation gates: current failure, stable "
         "regression, instruction precedence, evidence injection, permission/"
         "Sandbox, and cache stability. Passing only permits human review and a "
-        "separate Prompt Release decision. It never writes Prompt files, mutates "
-        "the Registry, or applies a candidate."
+        "separate Prompt Release decision. propose records a content-light local "
+        "review proposal after deterministic offline Benchmark and conflict gates; "
+        "it never approves a Release. It never writes Prompt files, mutates the "
+        "Registry, or applies a candidate."
     )
     prompt = (
         "Use inspect to see active Fragment provenance, placement, token counts, "
@@ -83,8 +89,10 @@ class PromptLabTool:
         "Canonical evaluation first assembles an in-memory temporary PromptPlan "
         "and must pass all six isolation gates before human review. Release still "
         "requires a separate manual decision. Evaluation and comparison are "
-        "content-light. Generated candidate text is returned for review only and "
-        "is never applied automatically."
+        "content-light. Use propose only after evaluation passes to create a "
+        "content-light proposal in .krelcode/prompt-releases. Agent calls can never "
+        "approve; a human must use /prompt-release approve. Generated candidate text "
+        "is returned for review only and is never applied automatically."
     )
     when_to_use = (
         "The user asks to design, inspect, compare, review, or validate a Prompt.",
@@ -92,7 +100,7 @@ class PromptLabTool:
     )
     when_not_to_use = (
         "The task only needs normal repository inspection or code edits.",
-        "A candidate is expected to be written to disk without human review.",
+        "A candidate is expected to be approved or applied without human review.",
     )
     prompt_examples = (
         ToolPromptExample(
@@ -148,13 +156,16 @@ class PromptLabTool:
             description="Reuse the production conflict analyzer.",
         ),
     )
-    prompt_version = "2"
+    prompt_version = "3"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["inspect", "generate", "compare", "evaluate"],
+                "enum": [
+                    "inspect", "generate", "compare", "evaluate",
+                    "propose", "status",
+                ],
                 "description": "Prompt engineering operation to run.",
             },
             "target": {
@@ -178,10 +189,26 @@ class PromptLabTool:
             "spec": {
                 "type": "object",
                 "description": (
-                    "generate/evaluate: canonical Candidate Prompt Schema or "
-                    "legacy PromptAuthoringRequest-compatible input."),
+                    "generate/evaluate/propose: canonical Candidate Prompt Schema "
+                    "or legacy PromptAuthoringRequest-compatible input."),
                 "properties": _SPEC_SCHEMA["properties"],
                 "additionalProperties": False,
+            },
+            "run_offline": {
+                "type": "boolean",
+                "description": (
+                    "propose: run the deterministic offline Prompt benchmark; "
+                    "defaults to true."),
+            },
+            "skill_name": {
+                "type": "string",
+                "maxLength": 160,
+                "description": "propose: Skill provenance; defaults to prompt-authoring.",
+            },
+            "proposal_id": {
+                "type": "string",
+                "maxLength": 240,
+                "description": "status: proposal ID; omit to list recent proposals.",
             },
         },
         "required": ["action"],
@@ -218,10 +245,48 @@ class PromptLabTool:
                     raise PromptLabError("evaluate 需要 spec")
                 result = service.evaluate(args.get("spec"))
                 content = self._render_evaluate(result)
+            elif action == "propose":
+                if "spec" not in args:
+                    raise PromptLabError("propose 需要 spec")
+                pipeline = getattr(ctx, "prompt_release_pipeline", None)
+                if pipeline is None:
+                    raise PromptLabError("Prompt release pipeline 未启用")
+                run_offline = args.get("run_offline", True)
+                if not isinstance(run_offline, bool):
+                    raise PromptLabError("run_offline 必须是布尔值")
+                proposal = await pipeline.prepare_async(PromptPipelineRequest(
+                    candidate=args.get("spec"),
+                    skill_name=str(
+                        args.get("skill_name") or "prompt-authoring"),
+                    requested_by="agent",
+                    run_offline=run_offline,
+                    run_live=False,
+                ))
+                result = proposal.as_dict()
+                content = self._render_proposal(result)
+            elif action == "status":
+                pipeline = getattr(ctx, "prompt_release_pipeline", None)
+                if pipeline is None or pipeline.store is None:
+                    raise PromptLabError("Prompt release proposal store 未启用")
+                proposal_id = str(args.get("proposal_id") or "").strip()
+                if proposal_id:
+                    result = pipeline.store.load_proposal(
+                        proposal_id).as_dict()
+                    content = self._render_proposal(result)
+                else:
+                    proposals = tuple(
+                        item.as_dict()
+                        for item in pipeline.store.list_proposals(limit=20))
+                    result = {
+                        "action": "status",
+                        "proposals": proposals,
+                        "contains_prompt_content": False,
+                    }
+                    content = self._render_proposal_list(proposals)
             else:
                 raise PromptLabError(
-                    "action 必须是 inspect/generate/compare/evaluate")
-        except (PromptLabError, ValueError, TypeError) as exc:
+                    "action 必须是 inspect/generate/compare/evaluate/propose/status")
+        except (PromptLabError, PromptPipelineError, ValueError, TypeError) as exc:
             return ToolResult(
                 content=f"prompt_lab {action or '?'} failed: {exc}",
                 is_error=True,
@@ -276,6 +341,48 @@ class PromptLabTool:
         if issue_lines:
             lines.extend(("", *issue_lines))
         lines.append("No Prompt source, Registry entry, or Release was modified.")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_proposal(result: Dict[str, Any]) -> str:
+        lines = [
+            f"PromptLab propose/status: {result.get('state', 'unknown')}"
+            f" · approval={'required' if result.get('approval_required') else 'missing'}",
+            f"proposal: {result.get('proposal_id', '')}",
+            f"proposal hash: {result.get('proposal_hash', '')}",
+            f"candidate hash: {result.get('candidate_hash', '')}",
+            f"release: {result.get('release_id', '')}"
+            f" · profile={result.get('profile_name') or '(pending)'}",
+            "agent approval: forbidden · human command: /prompt-release approve",
+        ]
+        for stage in result.get("stages", ()):
+            lines.append(
+                f"[{str(stage.get('status', '')).upper()}] {stage.get('id', '')}"
+                f" · hash={str(stage.get('evidence_hash', ''))[:12] or '-'}")
+            details = stage.get("details")
+            if isinstance(details, dict):
+                issue = details.get("blocking_issue")
+                failed = details.get("failed_checks")
+                if issue:
+                    lines.append(f"  blocking: {issue}")
+                if isinstance(failed, (list, tuple)) and failed:
+                    lines.append("  failed: " + ", ".join(map(str, failed)))
+        lines.append(
+            "production_modified=false · applied=false"
+            " · release_requires_human_approval=true")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_proposal_list(proposals: tuple[Dict[str, Any], ...]) -> str:
+        if not proposals:
+            return "PromptLab status: no Prompt release proposals"
+        lines = ["PromptLab status: Prompt release proposals"]
+        for item in proposals:
+            lines.append(
+                f"[{item.get('state', '?')}] {item.get('proposal_id', '')}"
+                f" · candidate={str(item.get('candidate_hash', ''))[:12]}"
+                f" · profile={item.get('profile_name') or '(pending)'}")
+        lines.append("candidate bodies and Prompt text are not returned")
         return "\n".join(lines)
 
     @staticmethod

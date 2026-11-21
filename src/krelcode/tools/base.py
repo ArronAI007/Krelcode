@@ -246,6 +246,7 @@ class ToolContext:
     # keeps the side-effect-free tool boundary narrow while preserving the
     # per-agent registry snapshot for main agents and subagents.
     prompt_registry: Any = field(default=None, repr=False)
+    prompt_release_pipeline: Any = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not self.sandbox_enabled:

@@ -261,18 +261,35 @@ release/profile/calibration hash、状态与 base hash，但不会记录 Prompt 
 issue code、来源 ID、计数和 hash，不含候选正文。契约不会自动应用生产 Prompt，也不会通过
 Prompt 文本授予工具、文件、Sandbox 或审批权限。
 
-启用同一个开关还会注册只读 core 工具 `prompt_lab`，统一提供四种确定性操作：
+启用同一个开关还会注册 core 工具 `prompt_lab`，提供六个确定性操作：
 
 ```text
 inspect  -> Fragment 元数据、来源、层级、token、hash、enabled 与冲突 ID（不返回正文）
-generate -> 生成可人工审核的候选骨架，立即 evaluate；applied=false，不写 Registry/文件
+generate -> 生成可人工审核的候选骨架，立即 evaluate；不写 Registry/生产 Prompt
 compare  -> 比较 Fragment ID、唯一 source 或两段 inline instruction，复用生产冲突分析器
 evaluate -> 先进入 temporary PromptPlan，执行六项隔离检查，再返回 issue/ID/计数/hash
+propose  -> 串联 authoring、隔离装配、offline Benchmark、冲突分析与校准提案
+status   -> 只读查看 content-light proposal；Agent 没有 approve/reject action
 ```
 
-`prompt_lab` 不调用模型、不修改 Prompt、不扩大权限；`inspect`、`compare`、`evaluate` 的报告
-默认内容轻量，只有 `generate` 会返回候选正文供人工审阅。主 Agent 和子代理使用各自的
-Registry，因此子代理的 inspect/compare 不会泄漏父 Agent 的上下文现场。
+`propose` 只在 `.krelcode/prompt-releases/` 写入本地审核提案，不发送 live 模型请求；live
+Benchmark 必须显式 opt-in。`inspect`、`compare`、`evaluate`、`propose`、`status` 的报告默认
+内容轻量，只有 `generate` 会返回候选正文供人工审阅。`prompt_lab` 不修改生产 Prompt、
+Registry、Release 或运行配置，也不扩大权限。主 Agent 和子代理使用各自的 Registry，因此
+子代理的 inspect/compare 不会泄漏父 Agent 的上下文现场。
+
+Prompt Release proposal 由前台人类通过独立命令审批：
+
+```text
+/prompt-release list
+/prompt-release status [proposal-id]
+/prompt-release approve <proposal-id> <candidate-hash> [reason]
+/prompt-release reject <proposal-id> <candidate-hash> <reason>
+```
+
+批准记录绑定 proposal/candidate/isolation/offline/live/conflict/release/profile/contract/suite/
+calibration hash；审批只生成本地 approval/calibration artifact，仍是
+`production_modified=false`、`applied=false`。生产 Prompt 修改继续走正常代码 review/commit。
 
 generate/evaluate 使用封闭的 Candidate Prompt Schema v1；八个字段全部必填，未知字段、空正文、
 非法 risk 或越界数组都会 fail-closed：
@@ -315,7 +332,7 @@ stability、cacheability 与 Instruction authority 从 Registry 继承；新目�
 project/L6/session 默认值。`PromptCandidate.candidate_hash` 对完整候选内容确定且敏感，而
 `evaluate` 只返回 candidate metadata hash、issue、计数和报告，不返回 Prompt/rollback/metric 正文。
 
-REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`（当前工具池的 core/discoverable/deferred/loaded/excluded 状态）、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp [reload|auth <server>]`（状态、热重载、OAuth + PKCE 授权）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>|install|update|enable|disable|remove ...]`（插件生命周期）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/lsp`（语言服务器状态）、`/web`（网页工具安全配置）、`/output-style [list|show <name>|reload|off|<name>]`（声明式输出样式）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|conflicts|authoring|fragments|enable|disable|toggle|reset|cache|ledger|refresh]`（请求 token 分项、来源归因、Prompt Authoring 状态、Fragment 启停、缓存边界与工作区重采）、`/memory [list [scope]|show|add <text> --scope|search|pin|unpin|forget|mode|review|migrate]`（分层记忆、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`（当前工具池的 core/discoverable/deferred/loaded/excluded 状态）、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp [reload|auth <server>]`（状态、热重载、OAuth + PKCE 授权）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>|install|update|enable|disable|remove ...]`（插件生命周期）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/lsp`（语言服务器状态）、`/web`（网页工具安全配置）、`/output-style [list|show <name>|reload|off|<name>]`（声明式输出样式）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|conflicts|authoring|fragments|enable|disable|toggle|reset|cache|ledger|refresh]`（请求 token 分项、来源归因、Prompt Authoring 状态、Fragment 启停、缓存边界与工作区重采）、`/prompt-release [list|status|approve|reject]`（content-light Prompt Release proposal 与仅限前台人类的审批）、`/memory [list [scope]|show|add <text> --scope|search|pin|unpin|forget|mode|review|migrate]`（分层记忆、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
 
 所有命令由统一 `CommandRegistry` 发现：`/help`、slash 菜单、Tab 补全、运行态过滤和 InputProcessor 共用同一份 catalog。来源优先级为 `builtin > custom > skill > plugin > MCP`。用户/项目 Markdown Command 来自 `~/.krelcode/commands/*.md`、`<workspace>/.krelcode/commands/*.md`、`<workspace>/.commands/*.md` 与 `[commands].paths`；`$ARGUMENTS` / `${ARGUMENTS}` 渲染参数，`allowed-tools` 只能收窄工具集。允许用户调用的 Skill 会自动显示为 `/<skill-name> [参数]`，MCP Prompt 会命名空间化为 `/mcp__<server>__<prompt> [参数]`；`/skills reload`、`/mcp reload` 与 `/plugins reload` 会原地刷新对应来源，内置命令在命名冲突时保持最高优先级。
 
@@ -376,7 +393,7 @@ transport = "sse"
 
 内置 `repo_map` 工具：Python 用 ast 精确提取类/函数/方法+行号（零依赖，不引 tree-sitter），JS/TS 用正则，20K 字符预算，LLM 可按行号接 `read_file` 精读。
 
-默认工具 17 个：文件/检索与执行工具（`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`、`repo_map`、`find_refs`、`check_syntax` 等）、`get_time`、`ask_user`、`update_plan`、`tool_search`，以及 `job_start/job_output/job_list/job_kill`；显式启用 `[prompt.authoring].enabled=true` 时再注册只读 `prompt_lab`。另注册 9 个子代理工具：`spawn_agent`、`wait_agent`、`send_to_agent`、`list_agents`、`get_agent_feed`、`pause_agent`、`resume_agent`、`kill_agent`、`list_agent_definitions`。启用 Skills 时另加 5 个 Skill 工具，并叠加 MCP 远程工具和插件工具。
+默认工具 17 个：文件/检索与执行工具（`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`、`repo_map`、`find_refs`、`check_syntax` 等）、`get_time`、`ask_user`、`update_plan`、`tool_search`，以及 `job_start/job_output/job_list/job_kill`；显式启用 `[prompt.authoring].enabled=true` 时再注册 `prompt_lab`（仅生成 content-light proposal，不写生产 Prompt）。另注册 9 个子代理工具：`spawn_agent`、`wait_agent`、`send_to_agent`、`list_agents`、`get_agent_feed`、`pause_agent`、`resume_agent`、`kill_agent`、`list_agent_definitions`。启用 Skills 时另加 5 个 Skill 工具，并叠加 MCP 远程工具和插件工具。
 
 ### 动态工具目录与 ToolSearch
 
@@ -695,6 +712,25 @@ candidate 两个内存中的临时 `PromptPlan`，再依次检查当前失败用
 只得到 `review_allowed=true`，仍必须经过人工审核和独立的 Prompt Release 决策；Agent 不能
 修改生产 Prompt 源、写 Registry 或自行应用 Release。旧 `PromptAuthoringRequest` evaluate 输入
 仍可读取，但明确标记为 authoring-only，不能获得 release 资格。
+
+Step 117 补齐 Candidate Prompt 的发布连接链路：
+
+```text
+PromptAuthoring Skill
+  -> prompt_lab Candidate
+  -> Isolated PromptAssembler
+  -> Offline Benchmark
+  -> PromptConflictAnalyzer
+  -> Live Benchmark / Parity (显式 opt-in)
+  -> ModelProfileCalibration proposal
+  -> pending_approval
+  -> /prompt-release human decision
+```
+
+内置 `prompt-authoring` Skill 规定候选目标、Instruction/Evidence 分权、六项隔离门禁、离线/
+在线证据和人工审批边界。`propose` 永远是 content-light、fail-closed；缺少 offline/live 证据
+只能停在 `pending_offline` / `pending_live`，release/profile/contract/suite 身份漂移会把提案
+标记为 `stale`。Agent 不能批准自己的候选，只有前台 `/prompt-release` 可保存人类决定。
 
 ## 模块结构（依赖严格单向）
 

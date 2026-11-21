@@ -43,6 +43,11 @@ from .agent.prompts import (
     resolve_prompt_profile,
 )
 from .agent.prompt_authoring import prompt_authoring_fragment
+from .agent.prompt_release_pipeline import (
+    PromptReleaseApprovalService,
+    PromptReleasePipeline,
+    PromptReleaseProposalStore,
+)
 from .agent.rules import RuleLoader
 from .agent.runtime import AgentRuntime
 from .agent.usage import UsageTracker
@@ -97,7 +102,7 @@ from .session.restore import (
     restore_session as _restore_session,
 )
 from .session.runner import run_session
-from .skills import SkillManager, build_skill_tools
+from .skills import BUILTIN_SKILL_ROOT, SkillManager, build_skill_tools
 from .subagent.definition import AgentDefinitionManager
 from .subagent.manager import (
     SubagentManager,
@@ -375,6 +380,7 @@ def build_skill_manager(
     explicit_paths = configured_skill_paths(args, config)
     return SkillManager(
         Path(args.workspace).resolve(),
+        builtin_paths=(BUILTIN_SKILL_ROOT,),
         extra_paths=list(plugin_paths or ()) + explicit_paths,
         enabled=enabled,
     )
@@ -730,6 +736,18 @@ async def build_loop(
     # per-agent Registry used by PromptAssembler. ToolContext is copied for
     # every tool call by AgentLoop, so assigning it here propagates naturally.
     tool_context.prompt_registry = prompt_registry
+    prompt_release_pipeline = None
+    prompt_release_approval_service = None
+    if prompt_authoring_enabled:
+        release_store = PromptReleaseProposalStore(workspace_root)
+        prompt_release_pipeline = PromptReleasePipeline(
+            lambda: prompt_registry,
+            isolation_context=tool_context,
+            store=release_store,
+        )
+        prompt_release_approval_service = PromptReleaseApprovalService(
+            release_store)
+        tool_context.prompt_release_pipeline = prompt_release_pipeline
     directory_rules_enabled = (
         not args.no_context
         and context_options.include_rules
@@ -770,6 +788,8 @@ async def build_loop(
         compact_checkpoint_store=compact_checkpoint_store,
     )
     loop.redactor = redactor
+    loop.prompt_release_pipeline = prompt_release_pipeline
+    loop.prompt_release_approval_service = prompt_release_approval_service
     # fork_context 数据源：getter 形式，/resume 重绑定 loop.history 后依然正确
     manager.get_parent_history = lambda: loop.history
     # Subagent instruction inheritance compares rule/policy hashes from the

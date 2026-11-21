@@ -5,14 +5,14 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（Step 116）
+## 1. 项目统计（Step 117）
 
 | 维度 | 数值 |
 |------|------|
 | 源码 | 69,638 行（Python，**零第三方运行时依赖**） |
 | 测试 | 34,687 行 / 143 个 `test_*.py` 模块 / 1,514 个通过用例 + 2 个本地端口集成 skip |
 | 提交 | 161 个增量提交，每个功能阶段均包含测试与语义化 commit |
-| 工具 | 内置 17 + 只读 `memory_search`（装配 MemoryStore 时）+ 只读 `prompt_lab`（Prompt Authoring 开启时）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
+| 工具 | 内置 17 + 只读 `memory_search`（装配 MemoryStore 时）+ `prompt_lab`（Prompt Authoring 开启时；生产只读，proposal 仅写 `.krelcode/`）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
 | CLI 入口 | REPL 对话 · -m 单次（text/json/stream-json）· stream-json 持久会话 · Python SDK · doctor · init · review |
 | 文档 | README（上手）· CONFIG（全量参考）· DESIGN（契约）· ARCHITECTURE（对标）· PLAN（路线）· BUILD（本文） |
@@ -218,3 +218,4 @@ PYTHONPATH=src node --experimental-strip-types --test typescript-sdk/tests/sdk.t
 
 TypeScript SDK 的 `npm run typecheck` 需要本机已有 `typescript` 与 `@types/node`；
 没有网络依赖时仍可运行上面的 Node type-stripping 测试。
+| v1.07 | Connected Prompt Release Pipeline | 新增 `agent/prompt_release_pipeline.py`，串联 PromptAuthoring Skill、Candidate、temporary PromptPlan 六项隔离、offline/live Benchmark、Parity、Conflict Analyzer、Release/Calibration proposal 与人工审批。`prompt_lab` 增加 `propose/status` 且无 approve action；新增 `/prompt-release list|status|approve|reject`。提案、审批、calibration 与 release artifact 全部 content-light、原子写入 `.krelcode/prompt-releases/`，绑定 candidate/proposal/release/profile/contract/suite/calibration hash；缺证据停在 pending，身份漂移标记 stale，批准后仍 `production_modified=false/applied=false`。内置 `prompt-authoring` Skill 规定完整工程流程与 Agent 自批准禁令 |
