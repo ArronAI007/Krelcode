@@ -146,12 +146,13 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
                   "/memory migrate [scope] 迁移旧格式并备份。")),
         CommandSpec(
             "context", "查看、启停或刷新上下文槽位",
-            argument_hint=("[plan|why|sources|rules|fragments|enable|disable|"
+            argument_hint=("[plan|why|sources|rules|conflicts|fragments|enable|disable|"
                            "toggle|reset|cache|refresh]"),
             help=("显示上下文统计与 Fragment 来源；/context sources 查看 "
                   "ContextSource 装配诊断；/context rules 查看分层规则与 @import；"
                   "/context attachments 查看动态附件 revision；"
                   "/context plan 查看最近请求计划；/context why <id> 解释来源；"
+                  "/context conflicts 查看 Prompt 指令冲突与权威裁决；"
                   "/context ledger 查看统一请求/缓存身份与 cache miss 原因；"
                   "/context fragments [source] 查看来源；\n"
                   "/context enable|disable|toggle <id|source> 手动启停；"

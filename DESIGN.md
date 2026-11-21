@@ -1256,6 +1256,67 @@ execute(args, ctx)            read_only/mcp_server            parameters(JSON Sc
 消息正文或凭据。实际发送后的 `CacheSegmentSnapshot` 也从最终 wire 反向解析，校验 plan
 与 wire 一致；TUI 与 `/context cache` 展示断点数量、累计 token、stability 和 hash。
 
+## Prompt Conflict Analyzer（Step 110）
+
+Prompt 冲突分析发生在 `PromptAssembler` 对最终 Fragment 完成 L0-L12 稳定排序之后、生成
+`PromptPlan` 之前。它只分析 Instruction channel，不分析 Memory/Web/MCP/ToolResult 等
+Evidence，也不使用模型调用。当前可机器识别的冲突类型为：
+
+- `direct_negation`：主题高度重合，但一方为肯定/要求、另一方为否定/禁止。
+- `opposing_value`：同一上下文中选择了语义对立值，例如 tabs/spaces、sync/async、
+  制表符/空格；先把同义值归一为同一个 side，再比较剩余主题。
+- `conditional_*`：双方都带条件语义时的冲突，保留为低严重度 `info`；条件方与无条件方
+  不做自动冲突判定，避免把不同适用范围的规则误报为错误。
+
+分析器忽略 fenced code，支持中英文句末标点。英文按命令/标识符 token，中文在无分词器
+条件下使用 CJK bigram，使“使用制表符缩进”和“使用空格缩进”可以稳定对齐。候选集先按
+共享主题建立异极性索引，再按显式对立值建立 side-to-side 索引；不会对全部 Directive
+做无条件 O(n²) 扫描。Directive、候选比较、最终冲突和持久化反序列化分别有硬上限，
+达到上限时设置 `truncated=true`，并且所有文本解析函数都有进程内有界缓存。
+
+权威裁决顺序固定为：
+
+```text
+managed policy
+→ L5 mode/permission contract
+→ L1 base agent prompt
+→ directory rules
+→ project rules
+→ user rules
+→ agent style
+→ working context
+→ per-turn reminder
+```
+
+同一 tier 内先比较 rule precedence，再比较 layer；所有权威键完全相同时，不使用 Fragment ID
+或注册顺序进行任意裁决，而是标为 `ambiguous`。已裁决冲突记录 winner 与
+`managed_policy` / `layer_precedence` / `rule_precedence` / `authority_precedence`，未裁决
+冲突记录 `equal_authority`。
+
+```text
+Instruction Fragments
+  → sentence/directive extraction
+  → polarity + subject + condition + opposing values
+  → topic/opposing-value candidate index
+  → authority resolution
+  → PromptConflictReport
+  → PromptPlan / ProviderMessages / PromptPlanSnapshot
+```
+
+`PromptConflictReport` 是 content-light 契约：仅包含 fragment/source/layer/scope、冲突
+code/severity/status、confidence、winner、resolution、topic/directive hash、token 重叠数和
+聚合计数。指令原文、摘要、匹配句子和主题文本都不进入报告、Snapshot、Provider channel
+或 Context checkpoint。`conflict_hash` 独立保存分析结果身份；它不并入 `full_hash`，因为
+冲突报告是已包含 Instruction 的派生观测信息，不应仅因 analyzer 版本或展示策略变化制造
+Provider cache miss。
+
+诊断入口：
+
+- `/context plan` 显示冲突数、未裁决数、分析 fragment/directive 数与 analyzer hash。
+- `/context conflicts` 列出全部有界冲突记录。
+- `/context why conflict:<id>` 查看单条冲突裁决。
+- `/context why <fragment-id>` 同时显示与该 Fragment 相关的冲突，但始终不输出指令正文。
+
 ## 增量 Context Attachment（Step 101）
 
 动态上下文不再作为一个整体重建 system prompt。`ContextAttachmentStore` 为每个易变来源分配

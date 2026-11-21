@@ -78,6 +78,10 @@ from .fragments import (
 )
 from .tokens import estimate_text_tokens
 from .prompt_plan import PromptOmissionSnapshot
+from .prompt_conflicts import (
+    PromptConflictAnalyzer,
+    PromptConflictReport,
+)
 from .tool_playbooks import (
     DEFAULT_TOOL_PLAYBOOK_CATALOG,
     ToolPlaybookCatalog,
@@ -107,6 +111,7 @@ class ProviderMessages:
     instruction_blocks: Tuple[SystemPromptBlock, ...] = ()
     evidence_channel: EvidenceChannel = EvidenceChannel()
     tool_prompt_specs: Tuple[ToolPromptSpec, ...] = ()
+    conflict_report: Optional[PromptConflictReport] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "messages", tuple(self.messages))
@@ -163,6 +168,9 @@ class ProviderMessages:
                 if self.cache_boundary is not None else 0),
             "tool_prompt_specs": [
                 spec.as_record() for spec in self.tool_prompt_specs],
+            "conflict_report": (
+                self.conflict_report.as_dict()
+                if self.conflict_report is not None else None),
         }
 
     @property
@@ -202,6 +210,7 @@ class PromptPlan:
     issues: Tuple[ContextSourceIssue, ...] = ()
     context_assembly: Optional[ContextAssembly] = None
     tool_prompt_specs: Tuple[ToolPromptSpec, ...] = ()
+    conflict_report: Optional[PromptConflictReport] = None
 
     @property
     def cache_boundary(self) -> int:
@@ -266,6 +275,12 @@ class PromptPlan:
                 f" · stable hash {self.cache.stable_hash[:12]}"
                 if self.cache.enabled else "cache boundary: 未启用"
             ),
+            (
+                f"prompt conflicts: {self.conflict_report.conflict_count}"
+                f" · unresolved {self.conflict_report.unresolved_count}"
+                if self.conflict_report is not None else
+                "prompt conflicts: analyzer 未运行"
+            ),
         ]
 
 
@@ -281,6 +296,7 @@ class PromptAssembler:
         ] = None,
         tool_playbook_catalog: Optional[ToolPlaybookCatalog] = None,
         task_workflow_catalog: Optional[TaskWorkflowCatalog] = None,
+        conflict_analyzer: Optional[PromptConflictAnalyzer] = None,
     ) -> None:
         self.context_assembler = context_assembler or ContextAssembler(
             default_context_sources())
@@ -289,6 +305,7 @@ class PromptAssembler:
             tool_playbook_catalog or DEFAULT_TOOL_PLAYBOOK_CATALOG)
         self.task_workflow_catalog = (
             task_workflow_catalog or DEFAULT_TASK_WORKFLOW_CATALOG)
+        self.conflict_analyzer = conflict_analyzer or PromptConflictAnalyzer()
         self.engine = str(
             getattr(self.context_assembler, "engine", "v3") or "v3")
 
@@ -362,6 +379,7 @@ class PromptAssembler:
                 )
             )
         )
+        conflict_report = self.conflict_analyzer.analyze(fragments)
 
         prompt_fragments_for_request = tuple(
             fragment for fragment in fragments
@@ -443,6 +461,7 @@ class PromptAssembler:
             issues=dynamic_assembly.issues,
             context_assembly=assembly,
             tool_prompt_specs=tool_prompt_specs,
+            conflict_report=conflict_report,
         )
 
     def provider_messages(
@@ -475,6 +494,7 @@ class PromptAssembler:
             instruction_blocks=plan.instruction_blocks,
             evidence_channel=evidence_channel,
             tool_prompt_specs=plan.tool_prompt_specs,
+            conflict_report=plan.conflict_report,
         )
 
     def _snapshot_from_registry(self) -> Optional[PromptSnapshot]:

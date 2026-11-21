@@ -1108,11 +1108,14 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             lines = ["  （Prompt Fragment Registry 与请求缓存均未启用）"]
         return _ok(*lines)
 
+    if operation == "conflicts" and len(parts) == 1:
+        return _ok(*ContextInspectionService(ctx.loop).conflict_lines())
+
     if operation != "stats" or parts:
         return _ok(
             "  用法: /context | /context fragments [source] | "
             "/context attachments | "
-            "/context sources | /context rules | "
+            "/context sources | /context rules | /context conflicts | "
             "/context plan | /context why <id> | /context ledger | "
             "/context enable|disable|toggle <id|source> | "
             "/context reset | /context cache | /context refresh")

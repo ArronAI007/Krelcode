@@ -217,6 +217,11 @@ class ContextInspectionService:
             f" · scopes {self._scope_text(memory_scopes)}",
             f"  被裁剪: {', '.join(self.dropped_items) if self.dropped_items else '无'}",
         ]
+        if self.prompt_plan is not None:
+            lines.append(
+                f"  prompt conflicts: {self.prompt_plan.conflict_count}"
+                f" · unresolved {self.prompt_plan.unresolved_conflict_count}"
+                f" · analyzer hash {_short_hash(self.prompt_plan.conflict_hash)}")
         manager = getattr(self.loop, "context_manager", None)
         high = getattr(manager, "high_watermark_tokens", 0) if manager else 0
         low = getattr(manager, "low_watermark_tokens", 0) if manager else 0
@@ -256,6 +261,7 @@ class ContextInspectionService:
             lines.extend(self._prompt_distribution_lines(
                 request_plan, fragment_limit=fragment_limit))
             lines.extend(self._prompt_tool_spec_lines(request_plan))
+            lines.extend(self._prompt_conflict_lines(request_plan))
             lines.extend(self._prompt_omission_lines(request_plan))
             lines.extend(self._prompt_memory_lines(request_plan))
             lines.extend(self._prompt_diff_lines(request_plan))
@@ -413,6 +419,75 @@ class ContextInspectionService:
             lines.append(f"  … 另有 {omitted} 个 tool prompt spec 未展示")
         return lines
 
+    def _prompt_conflict_lines(
+        self,
+        plan: PromptPlanSnapshot,
+        *,
+        records: Optional[Sequence[Mapping[str, object]]] = None,
+        limit: int = 100,
+    ) -> list[str]:
+        """Render conflict metadata without instruction text or excerpts."""
+        source = tuple(records) if records is not None else tuple(plan.conflicts)
+        if not source:
+            return []
+        shown, omitted = _bounded(source, limit)
+        lines = [
+            f"  prompt conflicts: {len(source)}"
+            f" · unresolved {sum(bool(item.get('unresolved', False)) for item in source)}"
+            f" · analyzed {plan.conflict_analyzed_fragment_count}"
+            f" · directives {plan.conflict_directive_count}"
+            f" · analyzer hash {_short_hash(plan.conflict_hash)}",
+        ]
+        for item in shown:
+            if not isinstance(item, Mapping):
+                continue
+            lines.append(
+                f"  [conflict] {item.get('id', '?')}"
+                f" · {item.get('severity', 'unknown')}/{item.get('status', 'unknown')}"
+                f" · {item.get('code', 'unknown')}"
+                f" · {item.get('left_fragment_id', '?')}"
+                f" → {item.get('right_fragment_id', '?')}"
+                f" · winner={item.get('winner_fragment_id', '(none)')}"
+                f" · confidence={_int_value(item.get('confidence'))}"
+                f" · topic={_short_hash(str(item.get('topic_hash', '') or ''))}"
+                f" · resolution={item.get('resolution', '(unknown)')}")
+        if omitted:
+            lines.append(f"  … 另有 {omitted} 个 prompt conflict 未展示")
+        return lines
+
+    def conflict_lines(self, *, limit: int = 100) -> list[str]:
+        """Explain the latest PromptPlan conflict report."""
+        plan = self.prompt_plan
+        if plan is None:
+            return ["  [conflicts] 尚无最近请求的 Prompt conflict report"]
+        if not plan.conflicts:
+            return [
+                f"  [conflicts] none"
+                f" · analyzed {plan.conflict_analyzed_fragment_count}"
+                f" · directives {plan.conflict_directive_count}"
+                f" · analyzer hash {_short_hash(plan.conflict_hash)}",
+            ]
+        return self._prompt_conflict_lines(plan, limit=limit)
+
+    def _related_conflict_lines(
+        self,
+        fragment_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[str]:
+        plan = self.prompt_plan
+        if plan is None:
+            return []
+        records = [
+            item for item in plan.conflicts
+            if fragment_id in {
+                str(item.get("left_fragment_id", "")),
+                str(item.get("right_fragment_id", "")),
+                str(item.get("winner_fragment_id", "")),
+            }
+        ]
+        return self._prompt_conflict_lines(plan, records=records, limit=limit)
+
     def why_lines(self, target: str) -> list[str]:
         needle = str(target or "").strip()
         if not needle:
@@ -498,6 +573,17 @@ class ContextInspectionService:
     ) -> tuple[bool, list[str]]:
         if plan is None:
             return False, []
+        if needle in {"conflict", "conflicts"}:
+            return True, self.conflict_lines()
+        if needle.startswith("conflict:"):
+            conflict_id = needle.split(":", 1)[1]
+            records = tuple(
+                item for item in plan.conflicts
+                if str(item.get("id", "")) == conflict_id
+            )
+            if records:
+                return True, self._prompt_conflict_lines(
+                    plan, records=records)
         tool_specs = [
             item for item in plan.tool_prompt_specs
             if needle in {
@@ -602,6 +688,7 @@ class ContextInspectionService:
             if len(fragments) > 1:
                 lines.append("  其他匹配: " + _ids(
                     [item.id for item in fragments[1:]]))
+            lines.extend(self._related_conflict_lines(fragment.id))
             if plan.diff.available:
                 lines.append(
                     f"  previous request: {plan.diff.previous_turn_id}"

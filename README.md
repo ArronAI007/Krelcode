@@ -578,6 +578,8 @@ Step 103 增加内容轻量的 Prompt Plan 可观测性：每个 Fragment 记录
 
 Step 104 统一 Context / Cache Ledger：每次最终 Provider 请求（包括 microcompact/compact 后重装配）记录 stable/dynamic/instruction/evidence hash、tool catalog hash、attachment generation/revision、compact checkpoint、Working Context sequence、Memory evidence IDs、history digest、Provider request digest 与最终 complete request hash。`/context ledger` 直接给出 cache miss 及 tool/environment/Memory/history/working-context/compact/provider 等机器可读原因；Ledger 随 ContextPlan/checkpoint 持久化，Resume 记录 workspace/file/Memory/Working Context invalidation，子代理 sidechain 记录自己的 Ledger 并比较 parent policy instruction hash。`context_assembled` JSONL/stream-json 事件同步携带该内容无关 Ledger，记录中不含 Prompt、工具 Schema、history、Memory 或请求体正文。
 
+Step 110 增加确定性的 Prompt Conflict Analyzer：PromptAssembler 在最终 L0-L12 排序后识别直接否定、显式对立值与条件冲突，并按照 `Managed → L5 Mode Contract → L1 Base → Directory → Project → User → Style → Working Context → Turn Reminder` 裁决权威；同权规则明确标为 ambiguous，不按 Fragment ID 随机覆盖。分析器支持中英文与代码围栏过滤，使用主题候选索引和有界缓存，不调用模型。`/context conflicts`、`/context why conflict:<id>` 和 `/context plan` 可查看冲突来源、winner/resolution、置信度和 hash，但报告、Snapshot 与 Provider channel 均不保存指令正文；`conflict_hash` 也与 Provider 请求缓存 hash 解耦。
+
 ## 模块结构（依赖严格单向）
 
 ```

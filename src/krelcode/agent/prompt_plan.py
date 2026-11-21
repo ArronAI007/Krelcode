@@ -334,6 +334,13 @@ class PromptPlanSnapshot:
     tool_catalog_hash: str = ""
     tool_count: int = 0
     tool_prompt_specs: tuple[Mapping[str, object], ...] = ()
+    conflicts: tuple[Mapping[str, object], ...] = ()
+    conflict_count: int = 0
+    unresolved_conflict_count: int = 0
+    conflict_analyzed_fragment_count: int = 0
+    conflict_directive_count: int = 0
+    conflict_truncated: bool = False
+    conflict_hash: str = ""
     memory_hits: tuple[PromptMemoryHitSnapshot, ...] = ()
     diff: PromptPlanDiff = field(default_factory=PromptPlanDiff)
 
@@ -393,6 +400,12 @@ class PromptPlanSnapshot:
         tool_hash = tool_catalog_hash(tools)
         tool_prompt_specs = tuple(
             _tool_prompt_spec_record(tool) for tool in tools)
+        conflict_report = getattr(plan, "conflict_report", None)
+        conflict_values = (
+            tuple(conflict_report.conflicts)
+            if conflict_report is not None else ()
+        )
+        conflicts = tuple(item.as_record() for item in conflict_values)
         stable_tokens = sum(
             fragment.tokens for fragment in fragments if fragment.stable)
         fragment_tokens = sum(fragment.tokens for fragment in fragments)
@@ -431,6 +444,23 @@ class PromptPlanSnapshot:
             tool_catalog_hash=tool_hash,
             tool_count=len(tools),
             tool_prompt_specs=tool_prompt_specs,
+            conflicts=conflicts,
+            conflict_count=len(conflicts),
+            unresolved_conflict_count=(
+                conflict_report.unresolved_count
+                if conflict_report is not None else 0),
+            conflict_analyzed_fragment_count=(
+                conflict_report.analyzed_fragment_count
+                if conflict_report is not None else 0),
+            conflict_directive_count=(
+                conflict_report.directive_count
+                if conflict_report is not None else 0),
+            conflict_truncated=(
+                conflict_report.truncated
+                if conflict_report is not None else False),
+            conflict_hash=(
+                conflict_report.report_hash
+                if conflict_report is not None else ""),
             memory_hits=memory_hits,
         )
         return _with_diff(snapshot, previous)
@@ -458,6 +488,14 @@ class PromptPlanSnapshot:
             "tool_count": self.tool_count,
             "tool_prompt_specs": [
                 dict(item) for item in self.tool_prompt_specs],
+            "conflicts": [dict(item) for item in self.conflicts],
+            "conflict_count": self.conflict_count,
+            "unresolved_conflict_count": self.unresolved_conflict_count,
+            "conflict_analyzed_fragment_count": (
+                self.conflict_analyzed_fragment_count),
+            "conflict_directive_count": self.conflict_directive_count,
+            "conflict_truncated": self.conflict_truncated,
+            "conflict_hash": self.conflict_hash,
             "memory_hits": [item.as_dict() for item in self.memory_hits],
             "diff": self.diff.as_dict(),
         }
@@ -472,6 +510,21 @@ class PromptPlanSnapshot:
             if not isinstance(value, (list, tuple)):
                 return ()
             return tuple(item for item in value if isinstance(item, Mapping))
+
+        raw_conflict_values = raw.get("conflicts")
+        raw_conflicts = tuple(
+            item for item in (
+                raw_conflict_values[:501]
+                if isinstance(raw_conflict_values, (list, tuple)) else ()
+            )
+            if isinstance(item, Mapping)
+        )
+        conflicts = raw_conflicts[:500]
+        unresolved_conflicts = sum(
+            str(item.get("status", "")) == "ambiguous"
+            or item.get("unresolved") is True
+            for item in conflicts
+        )
 
         return cls(
             turn_id=_text(raw.get("turn_id")),
@@ -500,6 +553,22 @@ class PromptPlanSnapshot:
             tool_catalog_hash=_text(raw.get("tool_catalog_hash"), 128),
             tool_count=_integer(raw.get("tool_count")),
             tool_prompt_specs=mappings("tool_prompt_specs"),
+            conflicts=conflicts,
+            conflict_count=len(conflicts),
+            unresolved_conflict_count=unresolved_conflicts,
+            conflict_analyzed_fragment_count=_integer(
+                raw.get("conflict_analyzed_fragment_count")),
+            conflict_directive_count=_integer(
+                raw.get("conflict_directive_count")),
+            conflict_truncated=(
+                bool(raw.get("conflict_truncated", False))
+                or len(conflicts) < len(raw_conflicts)
+                or (
+                    isinstance(raw_conflict_values, (list, tuple))
+                    and len(raw_conflict_values) > 500
+                )
+            ),
+            conflict_hash=_text(raw.get("conflict_hash"), 128),
             memory_hits=tuple(
                 PromptMemoryHitSnapshot.from_dict(item)
                 for item in mappings("memory_hits")
