@@ -211,6 +211,11 @@ async def _run_turn(
             prepared = None
             prompt = result.run_prompt
             images = None
+            tool_allowlist = (
+                list(result.tool_allowlist)
+                if result.tool_allowlist is not None else None)
+            reminder_ids = (
+                list(result.reminder_ids) if result.reminder_ids else None)
         else:
             prepared = (
                 action if action is not None
@@ -218,7 +223,14 @@ async def _run_turn(
             images = list(message.images) or (
                 list(prepared.images) if prepared is not None else None)
             prompt = prepared.text if prepared is not None else message.content
-        query = runtime.start_query(prompt, images=images or None)
+            tool_allowlist = None
+            reminder_ids = None
+        query = runtime.start_query(
+            prompt,
+            images=images or None,
+            tool_allowlist=tool_allowlist,
+            reminder_ids=reminder_ids,
+        )
     except Exception as exc:
         writer.emit(encoder.result_message(
             subtype="error",
@@ -412,6 +424,12 @@ async def _run_command_action(
         "handled": result.handled,
         "output": list(result.output),
         "run_prompt": result.run_prompt is not None,
+        "command_source": (
+            result.command_source.value
+            if result.command_source is not None else None),
+        "command_trust": result.command_trust or None,
+        "reminder_ids": list(result.reminder_ids),
+        "template_hash": result.template_hash or None,
         "turn_id": command_turn_id,
         "sequence": sequence,
         "session_id": encoder.metadata.session_id,

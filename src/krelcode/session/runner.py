@@ -84,6 +84,7 @@ async def run_session(
         if args.message:
             message = args.message
             images = None
+            command_result = None
             if input_processor is not None:
                 action = await input_processor.process(
                     InputEnvelope(args.message, source="headless"))
@@ -107,6 +108,7 @@ async def run_session(
                         command_registry=input_processor.command_registry,
                     )
                     result = await controller.execute_command(action.text)
+                    command_result = result
                     output = [redactor.redact(line) for line in result.output]
                     if args.output_format == "json":
                         print(json.dumps({
@@ -114,6 +116,12 @@ async def run_session(
                             "command": action.command,
                             "output": output,
                             "run_prompt": result.run_prompt is not None,
+                            "command_source": (
+                                result.command_source.value
+                                if result.command_source is not None else None),
+                            "command_trust": result.command_trust or None,
+                            "reminder_ids": list(result.reminder_ids),
+                            "template_hash": result.template_hash or None,
                             "session": str(session_path) if session_path else None,
                         }, ensure_ascii=False))
                     else:
@@ -127,7 +135,18 @@ async def run_session(
                 loop.bus.subscribe(summary.on_event)
                 try:
                     reply = redactor.redact(await runtime.run_once(
-                        message, images=images))
+                        message,
+                        images=images,
+                        tool_allowlist=(
+                            list(command_result.tool_allowlist)
+                            if command_result is not None
+                            and command_result.tool_allowlist is not None
+                            else None),
+                        reminder_ids=(
+                            list(command_result.reminder_ids)
+                            if command_result is not None
+                            and command_result.reminder_ids else None),
+                    ))
                     payload = {
                         "ok": True,
                         "reply": reply,
@@ -150,7 +169,18 @@ async def run_session(
                 return code
             try:
                 print(redactor.redact(await runtime.run_once(
-                    message, images=images)))
+                    message,
+                    images=images,
+                    tool_allowlist=(
+                        list(command_result.tool_allowlist)
+                        if command_result is not None
+                        and command_result.tool_allowlist is not None
+                        else None),
+                    reminder_ids=(
+                        list(command_result.reminder_ids)
+                        if command_result is not None
+                        and command_result.reminder_ids else None),
+                )))
             except Exception as exc:
                 print(f"错误：{type(exc).__name__}: {exc}")
                 return 1

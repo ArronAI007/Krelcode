@@ -38,6 +38,12 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             "tools", "列出已注册工具",
             help="列出已注册工具"),
         CommandSpec(
+            "commands", "查看命令来源、信任与模板契约",
+            argument_hint="[show <name>]",
+            help=("查看全部 slash command 的来源、信任级别、参数策略、"
+                  "工具 allowlist、reminder 声明与模板 Hash；"
+                  "不显示命令正文或用户参数。")),
+        CommandSpec(
             "session", "显示当前会话文件",
             help="显示当前会话文件路径"),
         CommandSpec(
@@ -161,6 +167,7 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
                   "/context conflicts 查看 Prompt 指令冲突与权威裁决；"
                   "/context authoring 查看可选 PromptAuthoringContract 状态；"
                   "/context ledger 查看统一请求/缓存身份与 cache miss 原因；"
+                  "/context reminders 查看本轮 L12 reminder 选择；"
                   "/context fragments [source] 查看来源；\n"
                   "/context enable|disable|toggle <id|source> 手动启停；"
                   "/context reset 清除启停设置；/context cache 查看缓存边界；\n"

@@ -45,6 +45,20 @@ def _scope_values(source: str) -> tuple[str, str]:
     return InstructionSource.PROJECT.value, "project"
 
 
+def _reminder_ids(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    values = value if isinstance(value, (list, tuple, set, frozenset)) else (
+        str(value).replace(";", ",").split(","))
+    result: list[str] = []
+    for item in values:
+        for part in str(item).split():
+            text = part.strip()
+            if text and text not in result:
+                result.append(text)
+    return tuple(result)
+
+
 def _file_digest_and_size(path: Optional[Path], fallback: str) -> tuple[str, int]:
     if path is None:
         return prompt_content_hash(fallback), len(fallback.encode("utf-8"))
@@ -399,6 +413,9 @@ def custom_command_prompt_surfaces(
                 "path": str(getattr(command, "path", "") or ""),
                 "argument_hint": str(getattr(command, "argument_hint", "") or ""),
                 "allowed_tools": tuple(getattr(command, "allowed_tools", ()) or ()),
+                "reminder_ids": tuple(getattr(command, "reminder_ids", ()) or ()),
+                "argument_mode": "raw",
+                "trust_boundary": trust,
             },
         ))
     return tuple(surfaces)
@@ -440,6 +457,12 @@ def skill_prompt_surfaces(manager: object | None) -> tuple[PromptSurfaceDescript
                 "path": str(path or ""),
                 "argument_hint": str(getattr(skill, "argument_hint", "") or ""),
                 "allowed_tools": tuple(getattr(skill, "allowed_tools", ()) or ()),
+                "reminder_ids": _reminder_ids(
+                    (getattr(skill, "metadata", {}) or {}).get(
+                        "reminder-ids",
+                        (getattr(skill, "metadata", {}) or {}).get("reminders"))),
+                "argument_mode": "raw",
+                "trust_boundary": trust,
                 "size_bytes": size,
             },
         ))
@@ -473,6 +496,11 @@ def plugin_command_prompt_surfaces(
                 "path": str(getattr(command, "path", "") or ""),
                 "argument_hint": str(getattr(command, "argument_hint", "") or ""),
                 "allowed_tools": tuple(getattr(command, "allowed_tools", ()) or ()),
+                "reminder_ids": tuple(
+                    getattr(command, "reminder_ids", ()) or ()),
+                "argument_mode": "raw",
+                "trust_boundary": "project",
+                "plugin_scope": str(getattr(command, "scope", "user") or "user"),
             },
         ))
     return tuple(surfaces)
@@ -514,6 +542,9 @@ def mcp_prompt_surfaces(
                 "remote_name": name,
                 "command_name": str(record.get("command_name", "") or ""),
                 "argument_names": arguments,
+                "argument_mode": "named",
+                "reminder_ids": ("command:untrusted-instructions",),
+                "trust_boundary": "untrusted",
                 "body_loaded_on_invocation": True,
             },
             contract=MCP_PROMPT_SURFACE_CONTRACT,

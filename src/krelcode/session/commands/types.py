@@ -47,6 +47,10 @@ class CommandResult:
     run_prompt: Optional[str] = None
     clear_tool_outputs: bool = False
     tool_allowlist: Optional[tuple[str, ...]] = None
+    command_source: Optional[CommandSource] = None
+    command_trust: str = ""
+    reminder_ids: tuple[str, ...] = ()
+    template_hash: str = ""
 
     @classmethod
     def unhandled(cls) -> "CommandResult":

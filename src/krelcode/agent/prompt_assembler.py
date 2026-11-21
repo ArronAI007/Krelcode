@@ -76,6 +76,7 @@ from .fragments import (
     WORKSPACE_CLOSE,
     WORKSPACE_OPEN,
 )
+from .reminders import SelectedReminder
 from .tokens import estimate_text_tokens
 from .prompt_plan import PromptOmissionSnapshot
 from .prompt_conflicts import (
@@ -96,7 +97,7 @@ class PromptAssemblyRequest:
     context_request: ContextRequest
     prompt_snapshot: Optional[PromptSnapshot] = None
     tools: Tuple[object, ...] = ()
-    per_turn_reminders: Tuple[str, ...] = ()
+    per_turn_reminders: Tuple[str | SelectedReminder, ...] = ()
     attachments: Tuple[ContextAttachment, ...] = ()
 
 
@@ -380,7 +381,7 @@ class PromptAssembler:
         context_request: ContextRequest,
         snapshot: PromptSnapshot,
         attachments: Sequence[ContextAttachment] = (),
-        per_turn_reminders: Tuple[str, ...] = (),
+        per_turn_reminders: Tuple[str | SelectedReminder, ...] = (),
     ) -> PromptPlan:
         """Build a temporary plan without collecting live ContextSources.
 
@@ -427,7 +428,7 @@ class PromptAssembler:
         attachment_fragments: Sequence[PromptFragment] = (),
         dynamic_fragments: Sequence[PromptFragment] = (),
         tool_prompt_specs: Sequence[ToolPromptSpec] = (),
-        per_turn_reminders: Sequence[str] = (),
+        per_turn_reminders: Sequence[str | SelectedReminder] = (),
     ) -> PromptPlan:
         current_user = _current_user_message(context_request.history)
         conversation_fragments = _conversation_fragments(
@@ -904,7 +905,7 @@ def _normalize_tool_prompt_specs(
 def _conversation_fragments(
     history: Sequence[Message],
     current_user: Optional[Message],
-    reminders: Sequence[str],
+    reminders: Sequence[str | SelectedReminder],
 ) -> Tuple[PromptFragment, ...]:
     fragments: list[PromptFragment] = []
     if history:
@@ -952,6 +953,33 @@ def _conversation_fragments(
             trust=TRUST_USER,
         ))
     for index, raw in enumerate(reminders, 1):
+        if isinstance(raw, SelectedReminder):
+            spec = raw.spec
+            fragments.append(PromptFragment(
+                id=f"reminder:{spec.id}",
+                source=f"reminder:{spec.source}",
+                title=f"Per-turn reminder: {spec.id}",
+                content=spec.content.strip(),
+                group="runtime",
+                priority=spec.priority,
+                cacheable=False,
+                compactable=True,
+                toggleable=False,
+                metadata={
+                    "reminder_id": spec.id,
+                    "reminder_source": spec.source,
+                    "reminder_trigger": spec.trigger,
+                    "selection_reason": raw.reason,
+                    "requested": raw.requested,
+                    "catalog_trust": spec.trust,
+                    **dict(spec.metadata),
+                },
+                scope="session",
+                layer=LAYER_L12_REMINDER,
+                stability=STABILITY_TURN,
+                trust=spec.trust,
+            ))
+            continue
         text = str(raw).strip()
         if not text:
             continue

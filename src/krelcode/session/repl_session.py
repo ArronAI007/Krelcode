@@ -50,6 +50,7 @@ class SessionPrompt:
     text: str
     images: tuple[Any, ...] = ()
     tool_allowlist: Optional[tuple[str, ...]] = None
+    reminder_ids: tuple[str, ...] = ()
     label: str = ""
 
     @classmethod
@@ -59,6 +60,7 @@ class SessionPrompt:
         *,
         images: Sequence[Any] = (),
         tool_allowlist: Optional[Sequence[str]] = None,
+        reminder_ids: Sequence[str] = (),
         label: str = "",
     ) -> "SessionPrompt":
         return cls(
@@ -66,6 +68,7 @@ class SessionPrompt:
             images=tuple(images),
             tool_allowlist=(
                 tuple(tool_allowlist) if tool_allowlist is not None else None),
+            reminder_ids=tuple(reminder_ids),
             label=label or " ".join(text.split()),
         )
 
@@ -230,6 +233,8 @@ class ReplSessionRunner:
             tool_allowlist=(
                 list(prompt.tool_allowlist)
                 if prompt.tool_allowlist is not None else None),
+            reminder_ids=(
+                list(prompt.reminder_ids) if prompt.reminder_ids else None),
         )
         self.state.begin_turn(turn_id=query.turn_id)
         self.active_query = query

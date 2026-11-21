@@ -5,6 +5,12 @@ from __future__ import annotations
 from typing import Any, Iterable
 
 from .registry import CommandRegistry
+from .template import (
+    CommandArgumentMode,
+    CommandTemplate,
+    command_template_metadata,
+    split_reminder_ids,
+)
 from .types import CommandKind, CommandSource, CommandSpec
 
 
@@ -14,6 +20,12 @@ def custom_command_specs(manager: Any) -> tuple[CommandSpec, ...]:
         return ()
     specs: list[CommandSpec] = []
     for command in manager.list():
+        template = CommandTemplate.for_source(
+            CommandSource.CUSTOM,
+            scope=command.source,
+            allowed_tools=tuple(command.allowed_tools),
+            reminder_ids=tuple(command.reminder_ids),
+        )
         specs.append(CommandSpec(
             name=command.name,
             description=command.description,
@@ -23,8 +35,11 @@ def custom_command_specs(manager: Any) -> tuple[CommandSpec, ...]:
             help=f"[{command.source}] {command.description}",
             metadata={
                 "source": command.source,
+                "scope": command.source,
                 "path": str(command.path),
                 "allowed_tools": tuple(command.allowed_tools),
+                "reminder_ids": tuple(command.reminder_ids),
+                **command_template_metadata(template),
             },
         ))
     return tuple(specs)
@@ -41,6 +56,15 @@ def skill_command_specs(skills: Any) -> tuple[CommandSpec, ...]:
     specs: list[CommandSpec] = []
     for skill in skills.list(user_invocable_only=True):
         hint = " ".join(str(skill.argument_hint or "").split())
+        metadata = getattr(skill, "metadata", {}) or {}
+        reminders = split_reminder_ids(
+            metadata.get("reminder-ids", metadata.get("reminders")))
+        template = CommandTemplate.for_source(
+            CommandSource.SKILL,
+            scope=getattr(skill, "source", ""),
+            allowed_tools=tuple(getattr(skill, "allowed_tools", ()) or ()),
+            reminder_ids=reminders,
+        )
         specs.append(CommandSpec(
             name=skill.name,
             description=skill.description,
@@ -48,6 +72,14 @@ def skill_command_specs(skills: Any) -> tuple[CommandSpec, ...]:
             source=CommandSource.SKILL,
             argument_hint=hint,
             help=f"调用 Skill：{skill.description}",
+            metadata={
+                "scope": getattr(skill, "source", ""),
+                "path": str(getattr(skill, "skill_file", "")),
+                "allowed_tools": tuple(
+                    getattr(skill, "allowed_tools", ()) or ()),
+                "reminder_ids": reminders,
+                **command_template_metadata(template),
+            },
         ))
     return tuple(specs)
 
@@ -66,6 +98,10 @@ def mcp_prompt_command_specs(supervisor: Any) -> tuple[CommandSpec, ...]:
         description = " ".join(str(
             record.get("description") or f"MCP Prompt：{record['prompt_name']}"
         ).split())[:320]
+        template = CommandTemplate.for_source(
+            CommandSource.MCP,
+            allowed_tools=(),
+        ).bind(argument_mode=CommandArgumentMode.PASSTHROUGH)
         specs.append(CommandSpec(
             name=str(record["command_name"]),
             description=description,
@@ -77,6 +113,7 @@ def mcp_prompt_command_specs(supervisor: Any) -> tuple[CommandSpec, ...]:
                 "server": record["server"],
                 "prompt_name": record["prompt_name"],
                 "argument_names": names,
+                **command_template_metadata(template),
             },
         ))
     return tuple(specs)
@@ -94,6 +131,16 @@ def plugin_command_specs(manager: Any) -> tuple[CommandSpec, ...]:
         return ()
     specs: list[CommandSpec] = []
     for command in getattr(manager, "commands", ()):
+        template = CommandTemplate.for_source(
+            CommandSource.PLUGIN,
+            scope=getattr(command, "scope", "user"),
+            allowed_tools=tuple(command.allowed_tools),
+            reminder_ids=tuple(getattr(command, "reminder_ids", ())),
+        ).bind(
+            allowed_tools=tuple(command.allowed_tools),
+            reminder_ids=tuple(getattr(command, "reminder_ids", ())),
+            argument_mode=CommandArgumentMode.RAW,
+        )
         specs.append(CommandSpec(
             name=command.name,
             description=command.description,
@@ -104,7 +151,12 @@ def plugin_command_specs(manager: Any) -> tuple[CommandSpec, ...]:
             metadata={
                 "plugin": command.plugin_name,
                 "command": command.name,
+                "local_name": command.local_name,
                 "path": str(command.path),
+                "scope": getattr(command, "scope", "user"),
+                "allowed_tools": tuple(command.allowed_tools),
+                "reminder_ids": tuple(getattr(command, "reminder_ids", ())),
+                **command_template_metadata(template),
             },
         ))
     return tuple(specs)

@@ -304,6 +304,10 @@ def test_build_loop_registers_plugin_skills_agents_commands_and_extensions(tmp_p
         "/plugin__demo__deploy production"))
     assert "Deploy production" in (result.run_prompt or "")
     assert result.tool_allowlist == ("read_file",)
+    assert result.command_source.value == "plugin"
+    assert result.command_trust in {"user", "project"}
+    assert "command:scoped-instructions" in result.reminder_ids
+    assert "command:tool-scope" in result.reminder_ids
 
     records = collect_extension_records(
         plugins=loop.plugin_manager,

@@ -105,6 +105,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/context sources` | 查看已注册 ContextSource、最近装配 layer 顺序、来源 token、cache 属性、dropped item 与有界错误诊断 |
 | `/context rules` | 查看 user/project/directory 规则入口、@import 来源、字符数与越界/循环/敏感文件问题 |
 | `/context attachments` | 查看动态 Context Attachment 的 ID、kind、revision、generation、layer 与 token；不输出附件正文 |
+| `/context reminders` | 查看本轮 Reminder Catalog 选中/排除项、trigger、priority、token 预算、去重结果与 content-light 标志；不输出 reminder 正文 |
 | `/context fragments [source]` | 列出全部或指定来源的 Fragment、启停状态、group、tokens 与 cache 属性 |
 | `/context authoring` | 查看可选 `PromptAuthoringContract` 的启用状态、version/hash、L6 位置与六项能力；不输出契约正文 |
 | `/prompt-release` | `list`、`status [id]` 或人类 `approve/reject <id> <candidate-hash>` content-light Prompt Release proposal；Agent tool 无审批入口 |
@@ -158,6 +159,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/statusline [要求]` | 启动内置 `statusline-setup` Agent；要求可描述希望展示的模型、分支、权限、上下文等字段 |
 | `/skill <name> [参数]` | 用户主动加载并执行 Skill；参数替换 `$ARGUMENTS` |
 | `/plugins [reload\|show <name>\|install\|update\|enable\|disable\|remove ...]` | 查看状态、热重载和 Plugin v2 基础生命周期 |
+| `/commands [show <name>]` | 查看命令的 source/trust、参数策略、工具 allowlist、reminder 声明与模板 Hash；不显示正文或用户参数 |
 | `/extensions [kind] [source]` | 统一列出 Plugin/Tool/Skill/Agent/Command/Hook/MCP 的来源、scope、启停与冲突 |
 | `/lsp` | 查看语言服务器配置、按需启动状态与加载问题（不启动未使用的服务器） |
 | `/web` | 查看 WebFetch/WebSearch 网络边界、搜索后端与密钥环境变量是否就绪（不发起请求） |
@@ -186,6 +188,7 @@ name: review-api
 description: Review API changes with project rules
 argument-hint: <path>
 allowed-tools: [read_file, grep, glob]
+reminder-ids: [workflow:verification-gate]
 ---
 Review $ARGUMENTS. Check compatibility and cite file:line.
 ```
@@ -193,6 +196,12 @@ Review $ARGUMENTS. Check compatibility and cite file:line.
 - `name` 必须匹配 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`，正文不能为空；frontmatter 缺失、
   路径逃逸/越界 symlink、大于 256 KB 或单个坏文件只记录 issue。
 - `$ARGUMENTS` / `${ARGUMENTS}` 替换用户参数；没有占位符时参数追加到正文末尾。
+- `reminder-ids`（也接受 `reminders`）声明本命令希望请求的 Reminder ID。只有当前
+  Reminder Catalog 中已存在、未被预算裁掉的内部 reminder 才会进入 L12；未知 ID
+  只记录 content-light exclusion。外部 Command/MCP 不能通过该字段注入任意策略正文。
+- 每个 Prompt Command 由统一 `CommandTemplate` 绑定 source、trust、envelope、参数模式、
+  `allowed-tools`、reminder 声明与 stable hash；Custom/Plugin/Skill 为 scoped
+  instruction，MCP 固定为 untrusted evidence，工具 allowlist 只能继续收窄运行时能力。
   执行时以 `<custom_command>` envelope 进入正常 AgentLoop。
 - `allowed-tools` 只能收窄当前工具集，仍需经过权限、Hook、审批与 Sandbox。
 - 来源优先级：`builtin > custom > skill > plugin > MCP`。Plugin Markdown Command

@@ -74,6 +74,7 @@ class QueryEngine:
         *,
         images=None,
         tool_allowlist: Optional[list[str]] = None,
+        reminder_ids: Optional[list[str]] = None,
     ) -> QuerySession:
         turn_id = f"turn-{next(self._counter)}"
         queue: asyncio.Queue = asyncio.Queue(maxsize=self.queue_size)
@@ -99,6 +100,7 @@ class QueryEngine:
                 images=images,
                 turn_id=turn_id,
                 tool_allowlist=tool_allowlist,
+                reminder_ids=reminder_ids,
             ))
 
         def on_done(finished: asyncio.Task) -> None:

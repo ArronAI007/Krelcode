@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -23,6 +24,7 @@ from .commands import (
     CommandRegistry,
     CommandRequest,
     CommandResult,
+    CommandTemplate,
     builtin_command_registry,
     normalize_token,
     render_help,
@@ -138,6 +140,7 @@ class SessionController:
         *,
         images=None,
         tool_allowlist: Optional[list[str]] = None,
+        reminder_ids: Optional[list[str]] = None,
     ):
         """启动一轮查询并返回可消费事件的 QuerySession。"""
         if self.permission_manager.mode.value == "plan":
@@ -146,6 +149,7 @@ class SessionController:
             message,
             images=images,
             tool_allowlist=tool_allowlist,
+            reminder_ids=reminder_ids,
         )
 
     def start_run(self, message: str, *, images=None) -> asyncio.Task:
@@ -191,18 +195,46 @@ class SessionController:
         )
         context = self._command_context(request)
         if spec is not None and spec.kind is CommandKind.PROMPT:
-            return await execute_prompt_command(context)
-        handler = BUILTIN_HANDLERS.get(name)
-        if handler is None:
-            return CommandResult(
-                handled=True,
-                output=(f"  （未知命令: /{name}，/help 查看可用命令）",),
-            )
-        result = await handler(context)
+            result = await execute_prompt_command(context)
+        else:
+            handler = BUILTIN_HANDLERS.get(name)
+            if handler is None:
+                return CommandResult(
+                    handled=True,
+                    output=(f"  （未知命令: /{name}，/help 查看可用命令）",),
+                )
+            result = await handler(context)
         if self.session_lifecycle.session_path is not None:
             self.session_path = str(self.session_lifecycle.session_path)
         self.refresh_tool_services()
-        return result
+        return self._enrich_command_result(result, spec)
+
+    @staticmethod
+    def _enrich_command_result(result: CommandResult, spec) -> CommandResult:
+        """Attach a uniform content-light contract to every prompt result."""
+        if result.run_prompt is None:
+            return result
+        template = (
+            CommandTemplate.from_spec(spec)
+            if spec is not None
+            else CommandTemplate.for_source("builtin")
+        )
+        reminder_ids = tuple(dict.fromkeys((
+            *result.reminder_ids,
+            *template.reminder_ids,
+        )))
+        return replace(
+            result,
+            tool_allowlist=(
+                result.tool_allowlist
+                if result.tool_allowlist is not None
+                else (template.allowed_tools or None)
+            ),
+            command_source=result.command_source or template.source,
+            command_trust=result.command_trust or template.trust,
+            reminder_ids=reminder_ids,
+            template_hash=result.template_hash or template.template_hash,
+        )
 
     def set_permission_mode(self, mode) -> tuple[str, str]:
         """切换模式并让 Plan 协调器同步处理待确认状态。"""

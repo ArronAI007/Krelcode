@@ -29,11 +29,97 @@ from ..sources import (
     sync_plugin_commands,
     sync_skill_commands,
 )
-from ..types import CommandResult
+from ..template import (
+    COMMAND_TEMPLATE_VERSION,
+    CommandArgumentMode,
+    CommandRenderResult,
+    CommandTemplate,
+    split_reminder_ids,
+)
+from ..types import CommandResult, CommandSource
 
 
 def _ok(*output: str) -> CommandResult:
     return CommandResult(handled=True, output=tuple(output))
+
+
+def _result_from_render(
+    rendered: CommandRenderResult,
+    *,
+    output: str,
+) -> CommandResult:
+    return CommandResult(
+        handled=True,
+        output=(output,),
+        run_prompt=rendered.prompt,
+        tool_allowlist=rendered.tool_allowlist,
+        command_source=rendered.source,
+        command_trust=rendered.trust,
+        reminder_ids=rendered.reminder_ids,
+        template_hash=rendered.template_hash,
+    )
+
+
+def _template_for_command(ctx: CommandContext, name: str) -> CommandTemplate:
+    spec = ctx.command_registry.resolve(name)
+    if spec is not None:
+        return CommandTemplate.from_spec(spec)
+    return CommandTemplate.for_source(CommandSource.BUILTIN)
+
+
+async def handle_commands(ctx: CommandContext) -> CommandResult:
+    """Show command provenance and content-light template contracts."""
+    raw = ctx.request.arguments.strip()
+    try:
+        parts = shlex.split(raw) if raw else []
+    except ValueError as exc:
+        return _ok(f"  [commands] 参数解析失败: {exc}")
+    if parts and (parts[0].lower() != "show" or len(parts) > 2):
+        return _ok("  用法: /commands | /commands show <name>")
+    if parts:
+        spec = ctx.command_registry.resolve(parts[1])
+        if spec is None:
+            return _ok(f"  [commands] 未找到命令: {parts[1]}")
+        template = CommandTemplate.from_spec(spec)
+        return _ok(
+            f"  [command] {spec.usage} · {spec.kind.value}"
+            f" · source={spec.source.value}",
+            f"  trust={template.trust}"
+            f" · envelope={template.envelope.value}"
+            f" · arguments={template.argument_mode.value}",
+            f"  tools={', '.join(template.allowed_tools) or '(all)'}"
+            f" · reminders={', '.join(template.reminder_ids) or '(none)'}",
+            f"  template v{template.version}"
+            f" · hash {template.template_hash}"
+            f" · content-light=true",
+            f"  origin: {spec.metadata.get('path', '(builtin)')}",
+        )
+
+    specs = ctx.command_registry.list(include_hidden=True)
+    templates = [
+        (spec, CommandTemplate.from_spec(spec))
+        for spec in specs
+    ]
+    by_source: dict[str, int] = {}
+    for spec, _template in templates:
+        by_source[spec.source.value] = by_source.get(spec.source.value, 0) + 1
+    lines = [
+        f"  [commands] {len(templates)} 个命令"
+        f" · template v{COMMAND_TEMPLATE_VERSION}"
+        f" · sources "
+        + " · ".join(
+            f"{source} {count}"
+            for source, count in sorted(by_source.items())),
+    ]
+    for spec, template in templates:
+        lines.append(
+            f"  /{spec.name} · {spec.source.value}/{template.trust}"
+            f" · args={template.argument_mode.value}"
+            f" · tools={len(template.allowed_tools)}"
+            f" · reminders={len(template.reminder_ids)}"
+            f" · {template.template_hash[:12]}")
+    lines.append("  使用 /commands show <name> 查看单个契约；不显示命令正文。")
+    return _ok(*lines)
 
 
 async def handle_tools(ctx: CommandContext) -> CommandResult:
@@ -512,15 +598,31 @@ async def handle_plugin_command(ctx: CommandContext) -> CommandResult:
     if command is None:
         return _ok(f"  （Plugin Command 不可用: /{ctx.request.name}）")
     try:
-        prompt = command.render(ctx.request.arguments)
+        registry = getattr(ctx, "command_registry", None)
+        spec = registry.resolve(ctx.request.name) if registry is not None else None
+        template = (
+            CommandTemplate.from_spec(spec)
+            if spec is not None else CommandTemplate.for_source(
+                CommandSource.PLUGIN,
+                scope=command.scope,
+                allowed_tools=tuple(command.allowed_tools),
+                reminder_ids=tuple(command.reminder_ids),
+            )
+        )
+        rendered = template.render(
+            name=command.name,
+            body=command.prompt,
+            arguments=ctx.request.arguments,
+            attributes={"plugin": command.plugin_name, "name": command.local_name},
+        )
     except Exception as exc:
         return _ok(
             f"  [plugin] Command 渲染失败: {type(exc).__name__}: {exc}")
-    return CommandResult(
-        handled=True,
-        output=(f"  [plugin] 已加载并执行: {command.plugin_name}/{command.local_name}",),
-        run_prompt=prompt,
-        tool_allowlist=command.allowed_tools or None,
+    return _result_from_render(
+        rendered,
+        output=(
+            f"  [plugin] 已加载并执行: "
+            f"{command.plugin_name}/{command.local_name}"),
     )
 
 
@@ -531,15 +633,23 @@ async def handle_custom_command(ctx: CommandContext) -> CommandResult:
     if command is None:
         return _ok(f"  （Custom Command 不可用: /{ctx.request.name}）")
     try:
-        prompt = command.render(ctx.request.arguments)
+        registry = getattr(ctx, "command_registry", None)
+        spec = registry.resolve(ctx.request.name) if registry is not None else None
+        template = (
+            CommandTemplate.from_spec(spec)
+            if spec is not None else command.template()
+        )
+        rendered = template.render(
+            name=command.name,
+            body=command.prompt,
+            arguments=ctx.request.arguments,
+        )
     except Exception as exc:
         return _ok(
             f"  [custom] Command 渲染失败: {type(exc).__name__}: {exc}")
-    return CommandResult(
-        handled=True,
-        output=(f"  [custom:{command.source}] 已加载并执行: {command.name}",),
-        run_prompt=prompt,
-        tool_allowlist=command.allowed_tools or None,
+    return _result_from_render(
+        rendered,
+        output=f"  [custom:{command.source}] 已加载并执行: {command.name}",
     )
 
 
@@ -554,14 +664,23 @@ async def handle_skill(ctx: CommandContext) -> CommandResult:
     try:
         prompt = ctx.skills.user_prompt(name, arguments)
         skill = ctx.skills.get(name)
+        template = _template_for_command(ctx, name)
+        if skill is not None and not template.reminder_ids:
+            template = CommandTemplate.for_source(
+                CommandSource.SKILL,
+                scope=skill.source,
+                allowed_tools=tuple(skill.allowed_tools),
+                reminder_ids=split_reminder_ids(
+                    skill.metadata.get(
+                        "reminder-ids", skill.metadata.get("reminders"))),
+            )
+        rendered = template.bind(
+            argument_mode=CommandArgumentMode.PASSTHROUGH
+        ).render(name=name, body=prompt)
     except Exception as exc:
         return _ok(f"  [skill] {exc}")
-    return CommandResult(
-        handled=True,
-        output=(f"  [skill] 已加载并执行: {name}",),
-        run_prompt=prompt,
-        tool_allowlist=tuple(skill.allowed_tools) if skill else None,
-    )
+    return _result_from_render(
+        rendered, output=f"  [skill] 已加载并执行: {name}")
 
 
 async def handle_skill_command(ctx: CommandContext) -> CommandResult:
@@ -572,14 +691,23 @@ async def handle_skill_command(ctx: CommandContext) -> CommandResult:
     try:
         prompt = ctx.skills.user_prompt(name, ctx.request.arguments)
         skill = ctx.skills.get(name)
+        template = _template_for_command(ctx, name)
+        if skill is not None and not template.reminder_ids:
+            template = CommandTemplate.for_source(
+                CommandSource.SKILL,
+                scope=skill.source,
+                allowed_tools=tuple(skill.allowed_tools),
+                reminder_ids=split_reminder_ids(
+                    skill.metadata.get(
+                        "reminder-ids", skill.metadata.get("reminders"))),
+            )
+        rendered = template.bind(
+            argument_mode=CommandArgumentMode.PASSTHROUGH
+        ).render(name=name, body=prompt)
     except Exception as exc:
         return _ok(f"  [skill] {exc}")
-    return CommandResult(
-        handled=True,
-        output=(f"  [skill] 已加载并执行: {name}",),
-        run_prompt=prompt,
-        tool_allowlist=tuple(skill.allowed_tools) if skill else None,
-    )
+    return _result_from_render(
+        rendered, output=f"  [skill] 已加载并执行: {name}")
 
 
 def _parse_prompt_arguments(names: tuple[str, ...], raw: str) -> dict[str, str]:
@@ -628,10 +756,19 @@ async def handle_mcp_prompt_command(ctx: CommandContext) -> CommandResult:
         result=result,
         redactor=getattr(ctx.mcp_supervisor, "_redactor", None),
     )
-    return CommandResult(
-        handled=True,
-        output=(f"  [mcp] 已加载并执行: {server}/{prompt_name}",),
-        run_prompt=wrapped,
+    try:
+        template = _template_for_command(ctx, ctx.request.name)
+        if not template.reminder_ids:
+            template = CommandTemplate.for_source(CommandSource.MCP)
+        rendered = template.bind(
+            argument_mode=CommandArgumentMode.PASSTHROUGH
+        ).render(name=ctx.request.name, body=wrapped)
+    except Exception as exc:
+        return _ok(
+            f"  [mcp] Command 模板渲染失败: {type(exc).__name__}: {exc}")
+    return _result_from_render(
+        rendered,
+        output=f"  [mcp] 已加载并执行: {server}/{prompt_name}",
     )
 
 
@@ -878,6 +1015,10 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
     if operation == "ledger" and len(parts) == 1:
         inspection = ContextInspectionService(ctx.loop)
         return _ok(*inspection.ledger_lines())
+
+    if operation == "reminders" and len(parts) == 1:
+        inspection = ContextInspectionService(ctx.loop)
+        return _ok(*inspection.reminder_lines())
 
     if operation == "refresh" and len(parts) == 1:
         manager = ctx.skills or getattr(ctx.loop, "skill_manager", None)
@@ -1149,7 +1290,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             "/context attachments | "
             "/context sources | /context rules | /context conflicts | "
             "/context plan | /context why <id> | /context ledger | "
-            "/context authoring | "
+            "/context reminders | /context authoring | "
             "/context enable|disable|toggle <id|source> | "
             "/context reset | /context cache | /context refresh")
 

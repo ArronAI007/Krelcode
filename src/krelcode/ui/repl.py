@@ -1334,11 +1334,13 @@ async def run_repl(
         action: InputAction,
         *,
         tool_allowlist: Optional[list[str]] = None,
+        reminder_ids: Optional[list[str]] = None,
     ) -> SessionPrompt:
         return SessionPrompt.create(
             action.text,
             images=action.images,
             tool_allowlist=tool_allowlist,
+            reminder_ids=reminder_ids or (),
             label=_queue_label(action),
         )
 
@@ -1722,6 +1724,7 @@ async def run_repl(
                 skill_prompt = SessionPrompt.create(
                     handled_command.run_prompt,
                     tool_allowlist=handled_command.tool_allowlist,
+                    reminder_ids=handled_command.reminder_ids,
                     label=_queue_label(action),
                 )
                 runner.start(skill_prompt)

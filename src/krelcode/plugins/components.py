@@ -30,6 +30,8 @@ class PluginCommand:
     plugin_name: str
     argument_hint: str = ""
     allowed_tools: Tuple[str, ...] = ()
+    reminder_ids: Tuple[str, ...] = ()
+    scope: str = "user"
 
     def render(self, arguments: str = "") -> str:
         raw = arguments.strip()
@@ -39,9 +41,11 @@ class PluginCommand:
             "$ARGUMENTS", raw)
         if raw and not has_placeholder:
             text = text.rstrip() + "\n\n## User arguments\n\n" + raw
+        trust = "project" if self.scope == "project" else "user"
         return (
             f'<plugin_command plugin="{self.plugin_name}" '
-            f'name="{self.local_name}">\n{text.rstrip()}\n</plugin_command>'
+            f'name="{self.local_name}" trust="{trust}" instruction="false">\n'
+            f"{text.rstrip()}\n</plugin_command>"
         )
 
 
@@ -61,6 +65,24 @@ def safe_component_path(plugin_dir: Path, relative: str) -> Path:
     except OSError as exc:
         raise PluginComponentError(f"无法检查组件路径: {relative!r}: {exc}") from exc
     return path
+
+
+def _split_reminder_ids(value: Any) -> Tuple[str, ...]:
+    if value is None:
+        return ()
+    values = value if isinstance(value, (list, tuple, set, frozenset)) else (
+        str(value).replace(";", ",").split(","))
+    result: list[str] = []
+    for item in values:
+        for part in str(item).split():
+            text = part.strip()
+            if not text:
+                continue
+            if any(ch.isspace() for ch in text):
+                raise PluginComponentError(f"非法 reminder id: {text!r}")
+            if text not in result:
+                result.append(text)
+    return tuple(result)
 
 
 def component_files(
@@ -94,7 +116,11 @@ def component_files(
     return tuple(dict.fromkeys(result))
 
 
-def load_commands(manifest: PluginManifest) -> Tuple[PluginCommand, ...]:
+def load_commands(
+    manifest: PluginManifest,
+    *,
+    scope: str = "user",
+) -> Tuple[PluginCommand, ...]:
     commands: list[PluginCommand] = []
     for path in component_files(
         manifest.plugin_dir, manifest.command_paths, suffix=".md"
@@ -137,6 +163,9 @@ def load_commands(manifest: PluginManifest) -> Tuple[PluginCommand, ...]:
             plugin_name=manifest.name,
             argument_hint=str(metadata.get("argument-hint") or ""),
             allowed_tools=split_allowed_tools(metadata.get("allowed-tools")),
+            reminder_ids=_split_reminder_ids(
+                metadata.get("reminder-ids", metadata.get("reminders"))),
+            scope=str(scope),
         ))
     return tuple(commands)
 

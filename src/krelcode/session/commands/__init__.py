@@ -7,6 +7,14 @@ from .builtin import (
 )
 from .context import CommandContext
 from .registry import CommandConflict, CommandRegistry, normalize_token
+from .template import (
+    CommandArgumentMode,
+    CommandEnvelope,
+    CommandRenderResult,
+    CommandTemplate,
+    split_reminder_ids,
+    trust_for_source,
+)
 from .sources import (
     custom_command_specs,
     mcp_prompt_command_specs,
@@ -26,8 +34,10 @@ from .types import (
 )
 
 __all__ = [
+    "CommandArgumentMode",
     "CommandConflict",
     "CommandContext",
+    "CommandEnvelope",
     "CommandKind",
     "CommandRequest",
     "CommandRegistry",
@@ -46,4 +56,6 @@ __all__ = [
     "sync_mcp_prompt_commands",
     "sync_plugin_commands",
     "sync_skill_commands",
+    "split_reminder_ids",
+    "trust_for_source",
 ]

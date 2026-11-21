@@ -88,6 +88,11 @@ def test_mcp_prompt_command_renders_prompt_for_agent(tmp_path):
                 '<mcp_prompt server="stub" name="review" '
                 'trust="untrusted" instruction="false">' in result.run_prompt
             )
+            assert '<command_invocation ' in result.run_prompt
+            assert result.command_source is CommandSource.MCP
+            assert result.command_trust == "untrusted"
+            assert "command:untrusted-instructions" in result.reminder_ids
+            assert len(result.template_hash) == 64
             assert "[user]\n请评审文件 main.py" in result.run_prompt
         finally:
             await supervisor.close_all()
@@ -154,6 +159,11 @@ def test_repl_mcp_prompt_enters_agent_history(tmp_path):
             )
             assert rc == 0
             user_message = next(m for m in loop.history if m.role == "user")
+            assert loop.last_reminder_selection is not None
+            assert (
+                "command:untrusted-instructions"
+                in loop.last_reminder_selection.ids
+            )
             assert 'trust="untrusted" instruction="false"' in user_message.content
             assert "[user]\n请评审文件 src/app.py" in user_message.content
         finally:

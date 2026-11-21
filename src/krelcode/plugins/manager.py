@@ -282,7 +282,7 @@ class PluginManager:
                     )
                     if manifest.entrypoint else []
                 )
-                plugin_commands = load_commands(manifest)
+                plugin_commands = load_commands(manifest, scope=scope)
                 plugin_hooks = load_hook_definitions(manifest)
                 plugin_mcp = load_mcp_servers(manifest)
                 plugin_skills = tuple(

@@ -969,6 +969,44 @@ class ContextInspectionService:
                 f"{', '.join(diff.reasons) if diff.reasons else '(none)'}")
         return lines
 
+    def reminder_lines(self) -> list[str]:
+        """Explain this turn's reminder selection without exposing content."""
+        catalog = getattr(self.loop, "reminder_catalog", None)
+        selection = getattr(self.loop, "last_reminder_selection", None)
+        catalog_size = int(getattr(catalog, "size", 0) or 0)
+        if selection is None:
+            return [
+                f"  [reminders] 尚无真实回合选择 · catalog {catalog_size}",
+                "  content-light=true · 下一步模型请求开始时按 turn 边界选择",
+            ]
+        lines = [
+            f"  [reminders] catalog {selection.catalog_size}"
+            f" · selected {len(selection.selected)}"
+            f" · excluded {len(selection.excluded)}"
+            f" · duplicates {selection.duplicate_count}"
+            f" · {selection.selected_tokens}/{selection.budget_tokens} tokens",
+            f"  selection hash {_short_hash(selection.content_hash)}"
+            f" · catalog v{selection.catalog_version} · L12 · turn-only"
+            f" · cacheable=false · content-light=true",
+        ]
+        if not selection.selected:
+            lines.append("  selected: (none)")
+        for item in selection.selected:
+            spec = item.spec
+            lines.append(
+                f"  [selected] {item.id} · source={spec.source}"
+                f" · trigger={spec.trigger} · trust={spec.trust}"
+                f" · priority={spec.priority} · {item.tokens} tokens"
+                f" · requested={str(item.requested).lower()}"
+                f" · reason={item.reason}")
+        for item in selection.excluded:
+            lines.append(
+                f"  [excluded] {item.id} · {item.reason}"
+                f" · source={item.source or '(unknown)'}"
+                f" · trigger={item.trigger or '(unknown)'}"
+                f" · {item.tokens} tokens")
+        return lines
+
     def memory_metadata(self) -> tuple[tuple[str, ...], dict[str, int], int]:
         return self.memory_selection
 

@@ -79,6 +79,10 @@ def test_controller_registers_and_executes_skill_command(tmp_path):
     assert result.handled is True
     assert "已加载并执行: explain" in result.output[0]
     assert "EXPLAIN BODY: src/app.py" in result.run_prompt
+    assert '<command_invocation ' in result.run_prompt
+    assert result.command_source is CommandSource.SKILL
+    assert result.command_trust == "project"
+    assert "command:scoped-instructions" in result.reminder_ids
 
 
 def test_skill_reload_refreshes_command_catalog(tmp_path):
@@ -130,3 +134,5 @@ def test_repl_dynamic_skill_command_enters_agent_history(tmp_path):
 
     assert rc == 0
     assert "DYNAMIC EXPLAIN: src/main.py" in loop.history[1].content
+    assert loop.last_reminder_selection is not None
+    assert "command:scoped-instructions" in loop.last_reminder_selection.ids

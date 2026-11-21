@@ -10,6 +10,7 @@ from ....security_review.prompt import (
 )
 from ....security_review.tools import SECURITY_REVIEW_TOOL_NAMES
 from ..context import CommandContext
+from ..template import CommandTemplate
 from ..types import CommandResult
 
 
@@ -55,10 +56,29 @@ async def handle_security_review(ctx: CommandContext) -> CommandResult:
             handled=True,
             output=("  没有可审查的 git 变更（工作区干净）。",),
         )
+    spec = ctx.command_registry.resolve(ctx.request.name)
+    template = (
+        CommandTemplate.from_spec(spec)
+        if spec is not None
+        else CommandTemplate.for_source(
+            "builtin",
+            allowed_tools=tuple(sorted(SECURITY_REVIEW_TOOL_NAMES)),
+        )
+    )
+    rendered = template.bind(
+        allowed_tools=tuple(sorted(SECURITY_REVIEW_TOOL_NAMES)),
+    ).render(
+        name=ctx.request.name,
+        body=security_review_command_prompt(review_input),
+    )
     return CommandResult(
         handled=True,
-        run_prompt=security_review_command_prompt(review_input),
-        tool_allowlist=tuple(sorted(SECURITY_REVIEW_TOOL_NAMES)),
+        run_prompt=rendered.prompt,
+        tool_allowlist=rendered.tool_allowlist,
+        command_source=rendered.source,
+        command_trust=rendered.trust,
+        reminder_ids=rendered.reminder_ids,
+        template_hash=rendered.template_hash,
     )
 
 

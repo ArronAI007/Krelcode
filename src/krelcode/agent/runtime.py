@@ -85,10 +85,15 @@ class AgentRuntime:
         *,
         images=None,
         tool_allowlist: Optional[list[str]] = None,
+        reminder_ids: Optional[list[str]] = None,
     ) -> str:
         """执行一次完整 turn；供 headless/API 复用。"""
         query = self.start_query(
-            message, images=images, tool_allowlist=tool_allowlist)
+            message,
+            images=images,
+            tool_allowlist=tool_allowlist,
+            reminder_ids=reminder_ids,
+        )
         async for _ in query.events:
             pass
         return await query.wait()
@@ -104,6 +109,7 @@ class AgentRuntime:
         *,
         images=None,
         tool_allowlist: Optional[list[str]] = None,
+        reminder_ids: Optional[list[str]] = None,
     ) -> QuerySession:
         """启动一条可消费 QueryEvent 流；同一 Runtime 不允许并发两轮。"""
         if self.is_running:
@@ -112,6 +118,7 @@ class AgentRuntime:
             message,
             images=images,
             tool_allowlist=tool_allowlist,
+            reminder_ids=reminder_ids,
         )
         self._task = self._query.task
         return self._query

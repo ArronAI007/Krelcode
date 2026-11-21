@@ -12,6 +12,7 @@ from ...skills.parser import (
     parse_skill_document,
     split_allowed_tools,
 )
+from .template import CommandTemplate, split_reminder_ids
 
 MAX_COMMAND_BYTES = 256_000
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -26,19 +27,19 @@ class CustomCommand:
     source: str
     argument_hint: str = ""
     allowed_tools: Tuple[str, ...] = ()
+    reminder_ids: Tuple[str, ...] = ()
+
+    def template(self) -> CommandTemplate:
+        return CommandTemplate.for_source(
+            "custom",
+            scope=self.source,
+            allowed_tools=self.allowed_tools,
+            reminder_ids=self.reminder_ids,
+        )
 
     def render(self, arguments: str = "") -> str:
-        raw = arguments.strip()
-        has_placeholder = (
-            "$ARGUMENTS" in self.prompt or "${ARGUMENTS}" in self.prompt)
-        text = self.prompt.replace("${ARGUMENTS}", raw).replace(
-            "$ARGUMENTS", raw)
-        if raw and not has_placeholder:
-            text = text.rstrip() + "\n\n## User arguments\n\n" + raw
-        return (
-            f'<custom_command name="{self.name}" source="{self.source}">\n'
-            f"{text.rstrip()}\n</custom_command>"
-        )
+        return self.template().render(
+            name=self.name, body=self.prompt, arguments=arguments).prompt
 
 
 @dataclass(frozen=True)
@@ -142,6 +143,8 @@ class CustomCommandManager:
             source=root.source,
             argument_hint=str(metadata.get("argument-hint") or ""),
             allowed_tools=split_allowed_tools(metadata.get("allowed-tools")),
+            reminder_ids=split_reminder_ids(
+                metadata.get("reminder-ids", metadata.get("reminders"))),
         )
 
     def list(self) -> tuple[CustomCommand, ...]:

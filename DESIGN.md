@@ -2616,3 +2616,57 @@ approve/reject action。独立前台命令 `/prompt-release` 是唯一人工审�
 生成 canonical Candidate、运行六项隔离、提交 offline/live 证据、读取 content-light stages、
 最后由人类执行 `/prompt-release approve`。Skill 通过 package-data 随 wheel/uv tool 安装，
 其 `allowed-tools` 只有 `prompt_lab`。
+
+## Command Template 与 Reminder Catalog（Step F）
+
+Prompt-producing slash commands 不再由各来源各自解释“参数、信任、工具范围和提醒”。
+Step F 新增纯数据契约 `CommandTemplate`：
+
+```text
+CommandSpec
+  → CommandTemplate(source/trust/envelope/argument_mode/allowlist/reminder_ids/hash)
+  → source adapter render
+  → CommandRenderResult(prompt + content-light contract)
+  → SessionPrompt(tool_allowlist + reminder_ids)
+  → AgentRuntime / QueryEngine
+  → AgentLoop turn boundary
+```
+
+Builtin 继续是 Managed Prompt；Custom/Skill/Plugin 标记为 user 或 project scoped
+instruction；MCP Prompt 固定为 untrusted evidence。Custom/Plugin 的 Markdown frontmatter
+可声明 `reminder-ids`，但它只能引用当前进程内已注册的内部 Reminder ID，不能携带任意
+外部正文。`allowed-tools` 仍只能收窄 ToolPool，不能扩大权限或绕过 Sandbox/审批。
+
+`ReminderCatalog` 是 content-light、声明式、稳定排序的 per-turn 选择器：
+
+```text
+ReminderContext(command/task/intent/mode/tools/budget)
+  → trigger matching + explicit IDs
+  → stable ID/content de-duplication
+  → priority ordering
+  → per-reminder limit + turn token budget
+  → ReminderSelection(selected/excluded/reasons/hash)
+```
+
+`AgentLoop` 在每个 turn 边界只选择一次，后续所有 model steps 复用同一
+`ReminderSelection`，避免工具循环中途发生 Prompt 漂移。`PromptAssembler` 将 selected
+reminder 映射为固定 ID `reminder:<id>` 的 L12 Fragment：turn、non-cacheable、compactable，
+不进入 stable prefix；metadata 只保留 source/trigger/reason/priority 等归因信息。
+
+诊断入口：
+
+- `/commands [show <name>]`：查看模板版本、source、trust、参数模式、allowlist、reminder
+  声明和 template hash；
+- `/context reminders`：查看本轮 catalog size、selected/excluded、去重、预算裁剪与
+  selection hash；
+- REPL/headless/stream-json 的命令结果都携带 `command_source`、`command_trust`、
+  `reminder_ids` 与 `template_hash`，但日志与诊断永不输出命令正文、用户参数或 reminder
+  正文。
+
+生产不变量：
+
+1. 外部 Command/MCP 正文不能提升为 Managed instruction。
+2. Reminder 固定位于 L12，不污染 stable cache prefix。
+3. 同一 turn 的多步工具循环使用同一 reminder selection。
+4. 未知 reminder ID、超预算项与重复 content 只形成 content-light exclusion。
+5. Canonical Command Template 与 Reminder Catalog 不扫描磁盘、不执行工具、不依赖 UI。

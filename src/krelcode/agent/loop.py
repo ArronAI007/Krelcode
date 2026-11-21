@@ -124,6 +124,13 @@ from .prompt_surface import (
     main_prompt_surface,
     update_observation,
 )
+from .reminders import (
+    DEFAULT_REMINDER_BUDGET_TOKENS,
+    ReminderCatalog,
+    ReminderContext,
+    ReminderSelection,
+    default_reminder_catalog,
+)
 from .streaming_tools import StreamingToolExecutor
 from .tokens import estimate_history_tokens
 from .tool_pool import TurnToolPool
@@ -213,6 +220,7 @@ class AgentLoop:
         tool_microcompactor: Optional[ToolMicrocompactor] = None,
         compact_checkpoint_store: Optional[CompactCheckpointPort] = None,
         today_provider: Optional[Callable[[], str]] = None,
+        reminder_catalog: Optional[ReminderCatalog] = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -273,6 +281,10 @@ class AgentLoop:
             registry_provider=lambda: getattr(
                 self, "prompt_registry", None),
         )
+        self.reminder_catalog = reminder_catalog or default_reminder_catalog()
+        self.last_reminder_selection: Optional[ReminderSelection] = None
+        self._turn_reminder_selection: Optional[ReminderSelection] = None
+        self._turn_requested_reminder_ids: tuple[str, ...] = ()
         # Observability-only catalogue. App assembly replaces this minimal
         # entry with the full tool/workflow/subagent/extension directory.
         self.prompt_surface_registry = PromptSurfaceRegistry({
@@ -339,6 +351,9 @@ class AgentLoop:
         self.history = self.history[:1] if self.history and self.history[0].role == "system" else []
         self._turn_intent = TurnIntent()
         self._turn_workflow = None
+        self._turn_reminder_selection = None
+        self._turn_requested_reminder_ids = ()
+        self.last_reminder_selection = None
         self.last_prompt_plan = None
         self.last_provider_messages = None
         self.last_context_assembly = None
@@ -552,9 +567,14 @@ class AgentLoop:
         *,
         turn_id: Optional[str] = None,
         tool_allowlist: Optional[list[str]] = None,
+        reminder_ids: Optional[Iterable[str]] = None,
     ) -> str:
         """QueryEngine 的窄入口；允许 runner 替换 ``run`` 时仍传入 turn id。"""
-        self._begin_turn(turn_id, tool_allowlist=tool_allowlist)
+        self._begin_turn(
+            turn_id,
+            tool_allowlist=tool_allowlist,
+            reminder_ids=reminder_ids,
+        )
         self._turn_prepared = True
         try:
             return await self.run(user_input, images=images)
@@ -618,6 +638,7 @@ class AgentLoop:
         *,
         turn_id: Optional[str] = None,
         tool_allowlist: Optional[list[str]] = None,
+        reminder_ids: Optional[Iterable[str]] = None,
     ) -> str:
         """处理一轮用户输入：内部可能经历多次 LLM 调用与工具执行。
 
@@ -627,7 +648,11 @@ class AgentLoop:
         若结尾是未答完的 user 消息则补一条中止说明（保角色交替），再重抛。
         """
         if not self._turn_prepared:
-            self._begin_turn(turn_id, tool_allowlist=tool_allowlist)
+            self._begin_turn(
+                turn_id,
+                tool_allowlist=tool_allowlist,
+                reminder_ids=reminder_ids,
+            )
         if self.pending_context_refresh:
             await self.refresh_workspace_context()
         # Keep the last completed request visible until this turn's first
@@ -649,6 +674,7 @@ class AgentLoop:
             intent=self._turn_intent,
             runtime=self._turn_tool_context.runtime,
         )
+        self._select_turn_reminders()
         await self._emit(RunStarted(
             user_input,
             turn_id=self._current_turn_id,
@@ -724,10 +750,17 @@ class AgentLoop:
         turn_id: Optional[str],
         *,
         tool_allowlist: Optional[list[str]] = None,
+        reminder_ids: Optional[Iterable[str]] = None,
     ) -> None:
         resolved_turn_id = turn_id or f"turn-{next(self._turn_counter)}"
         self._current_turn_id = resolved_turn_id
         self._turn_workflow = None
+        self._turn_reminder_selection = None
+        self._turn_requested_reminder_ids = tuple(dict.fromkeys(
+            str(item).strip()
+            for item in (reminder_ids or ())
+            if str(item).strip()
+        ))
         self._turn_abort_signal = TurnAbortSignal()
         snapshot = self.tool_context.runtime
         if self.runtime_snapshot_provider is not None:
@@ -745,6 +778,44 @@ class AgentLoop:
             runtime=snapshot,
             abort=self._turn_abort_signal,
         )
+
+    def _select_turn_reminders(self) -> ReminderSelection:
+        """Select reminders once per turn, never once per model step."""
+        if self._turn_reminder_selection is not None:
+            return self._turn_reminder_selection
+        workflow = self._turn_workflow
+        runtime = self._turn_tool_context.runtime
+        tool_pool = self._active_tool_pool
+        context = ReminderContext(
+            requested_reminder_ids=self._turn_requested_reminder_ids,
+            task_type=(
+                workflow.task_type.value if workflow is not None else ""),
+            workflow_id=(
+                workflow.definition.id if workflow is not None else ""),
+            intent=self._turn_intent.mode,
+            permission_mode=runtime.permission_mode.value,
+            run_mode=runtime.run_mode.value,
+            active_tools=(
+                tuple(tool_pool.names()) if tool_pool is not None else ()),
+            token_usage_ratio=self._current_context_usage_ratio(),
+        )
+        selection = self.reminder_catalog.select(
+            context,
+            budget_tokens=DEFAULT_REMINDER_BUDGET_TOKENS,
+        )
+        self._turn_reminder_selection = selection
+        self.last_reminder_selection = selection
+        return selection
+
+    def _current_context_usage_ratio(self) -> float:
+        manager = self.context_manager
+        max_tokens = max(
+            int(getattr(manager, "max_tokens", 0) or 0),
+            0,
+        )
+        if not max_tokens:
+            return 0.0
+        return min(1.0, estimate_history_tokens(self.history) / max_tokens)
 
     def abort_current_turn(self, reason: str = "用户中止") -> None:
         """向正在执行的工具广播协作式取消；Task.cancel 仍由 Runtime 负责。"""
@@ -971,11 +1042,13 @@ class AgentLoop:
             working_context=self.working_context_store.snapshot(),
             relevant_memory=tuple(self.restored_memory_context),
         )
+        reminder_selection = self._select_turn_reminders()
         prompt_plan = await self.prompt_assembler.assemble(
             PromptAssemblyRequest(
                 context_request=context_request,
                 prompt_snapshot=getattr(self, "prompt_snapshot", None),
                 tools=tuple(prompt_specs or ()),
+                per_turn_reminders=reminder_selection.selected,
                 attachments=attachment_snapshot.items,
             ))
         context_assembly = prompt_plan.context_assembly

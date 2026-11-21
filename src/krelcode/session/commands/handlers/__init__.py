@@ -12,6 +12,7 @@ from .security_ops import handle_security_review
 from .runtime_ops import (
     handle_agents,
     handle_allow,
+    handle_commands,
     handle_compact,
     handle_context,
     handle_custom_command,
@@ -55,6 +56,7 @@ BUILTIN_HANDLERS: dict[str, CommandHandler] = {
     "help": handle_help,
     "history": handle_history,
     "tools": handle_tools,
+    "commands": handle_commands,
     "session": handle_session,
     "sessions": handle_sessions,
     "resume": handle_resume,
