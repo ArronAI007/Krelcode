@@ -16,6 +16,7 @@ from ..fsutils import is_hidden_file, is_pruned_dir
 from ..paths import (
     PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,
 )
+from ..prompt import ToolPromptExample
 from ..secret_guard import classify_secret_path
 
 MAX_FILES = 1_000
@@ -44,6 +45,16 @@ relevant behavioral verification rather than treating a clean parse as completio
     when_not_to_use = (
         "Behavior, types, imports, lint, or tests need verification.",
         "The target is not Python source.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Check edited Python files",
+            input={"path": "src/krelcode/tools"},
+            description=(
+                "Run a bounded parse-only check after syntax-sensitive edits; "
+                "follow it with behavioral verification."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {

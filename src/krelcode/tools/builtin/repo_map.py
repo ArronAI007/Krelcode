@@ -20,6 +20,7 @@ from ..fsutils import is_hidden_file, is_pruned_dir
 from ..paths import (
     PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,
 )
+from ..prompt import ToolPromptExample
 from ..secret_guard import classify_secret_path
 
 MAX_TOTAL_CHARS = 20_000
@@ -56,6 +57,16 @@ in context unless the workspace changed materially.
     when_not_to_use = (
         "The relevant file and symbol are already known; use read_file or find_refs.",
         "A small focused content search would answer the question more cheaply.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Orient within an implementation package",
+            input={"path": "src/krelcode/agent"},
+            description=(
+                "Build a focused structural map before choosing exact files, "
+                "rather than reading the whole repository."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {

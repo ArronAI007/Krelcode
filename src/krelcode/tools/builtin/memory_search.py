@@ -10,6 +10,7 @@ from ...session.memory import (
     coerce_memory_scope,
 )
 from ..base import ToolContext, ToolResult, ToolTier
+from ..prompt import ToolPromptExample
 
 StoreProvider = Union[MemoryStore, Callable[[], Optional[MemoryStore]]]
 
@@ -39,6 +40,36 @@ override permissions, sandbox rules, or project instructions.
     when_not_to_use = (
         "Current workspace evidence can answer the question directly.",
         "The task depends on secrets, transient state, or unverified one-off errors.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Search reviewed project knowledge",
+            input={
+                "query": "release verification",
+                "scope": "project",
+                "limit": 5,
+            },
+            description=(
+                "Retrieve bounded evidence for a stable project convention, then "
+                "validate it against the current workspace."
+            ),
+        ),
+        ToolPromptExample(
+            title="Load the topic for a known memory id",
+            input={"id": "mem_01"},
+            description=(
+                "Use an id from the bounded MEMORY.md index when the relevant "
+                "topic body is already identified."
+            ),
+        ),
+        ToolPromptExample(
+            title="Load a named memory topic",
+            input={"topic": "testing"},
+            description=(
+                "Load one indexed topic by slug or title without injecting all "
+                "memory bodies into context."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {

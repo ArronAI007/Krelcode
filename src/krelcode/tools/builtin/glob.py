@@ -10,6 +10,7 @@ from ..fsutils import filter_pruned
 from ..paths import (
     PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,
 )
+from ..prompt import ToolPromptExample
 from ..secret_guard import classify_secret_path
 
 MAX_RESULTS = 200
@@ -36,6 +37,16 @@ the relevant files. Do not use glob as a content search; use grep for content.
     when_not_to_use = (
         "The user named an exact file; read it directly.",
         "The task is to find content rather than paths; use grep.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Locate tests by filename pattern",
+            input={"pattern": "tests/test_*.py", "path": "tests"},
+            description=(
+                "Resolve candidate paths with a bounded glob, then inspect only "
+                "the files relevant to the task."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {

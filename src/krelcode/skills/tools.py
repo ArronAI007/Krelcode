@@ -10,11 +10,12 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..core.textutil import truncate_middle
 from ..safety.environment import scrub_environment
 from ..safety.sandbox import SandboxError
 from ..tools.base import ToolContext, ToolResult
 from ..tools.builtin.run_command import MAX_OUTPUT_CHARS
-from ..core.textutil import truncate_middle
+from ..tools.prompt import ToolPromptExample
 from .manager import SkillManager
 from .models import SkillError
 
@@ -44,6 +45,16 @@ broaden the task.
     when_not_to_use = (
         "No skill is needed for ordinary repository work.",
         "A known skill is already loaded and current.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Discover a Prompt-authoring workflow",
+            input={"query": "prompt authoring"},
+            description=(
+                "Filter the skill catalogue by a concrete capability before "
+                "loading an applicable workflow."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {
@@ -95,6 +106,19 @@ approval, Sandbox, secret protection, or explicit user constraints.
         "No matching skill has been identified.",
         "The skill is already loaded with the same arguments and context remains current.",
     )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Load a selected skill with task arguments",
+            input={
+                "name": "prompt-authoring",
+                "arguments": "Review the tool prompt for safety and clarity.",
+            },
+            description=(
+                "Load the complete instructions only after selecting a relevant "
+                "skill and resolving its task arguments."
+            ),
+        ),
+    )
     prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -137,6 +161,20 @@ resources, and do not dump the whole skill directory without a task reason.
     when_not_to_use = (
         "The skill has not been loaded or does not apply.",
         "The required resource path is already known; read or run it directly.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="List bounded skill references",
+            input={
+                "name": "prompt-authoring",
+                "path": "references",
+                "max_depth": 2,
+            },
+            description=(
+                "Inspect only the relevant resource subtree at a bounded depth "
+                "after the skill instructions request a reference."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {
@@ -193,6 +231,21 @@ guidance rather than higher-priority system or user instructions.
         "The resource path is unknown; list resources first.",
         "The file is outside the skill or appears to be sensitive.",
     )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Read a focused skill reference region",
+            input={
+                "name": "prompt-authoring",
+                "path": "references/rubric.md",
+                "offset": 1,
+                "limit": 80,
+            },
+            description=(
+                "Read only the bounded text resource needed to apply the loaded "
+                "skill; do not dump unrelated assets."
+            ),
+        ),
+    )
     prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -243,6 +296,21 @@ unreviewed skill scripts or use this tool to bypass command restrictions.
     when_not_to_use = (
         "The skill or script purpose is not understood.",
         "A direct safe tool can perform the operation with less risk.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Run a reviewed bundled validation script",
+            input={
+                "name": "prompt-authoring",
+                "script": "scripts/validate.py",
+                "args": ["references/rubric.md"],
+                "timeout": 30,
+            },
+            description=(
+                "Execute only a reviewed skill-provided script with bounded "
+                "non-interactive arguments under normal approval and Sandbox policy."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {

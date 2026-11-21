@@ -92,6 +92,8 @@ def test_every_known_tool_owns_usage_when_and_exclusion_contract():
         assert spec.instructions.strip(), tool.name
         assert spec.when_to_use, tool.name
         assert spec.when_not_to_use, tool.name
+        assert spec.examples, tool.name
+        assert all(example.description for example in spec.examples), tool.name
         assert spec.version, tool.name
         assert len(spec.content_hash) == 64
         assert len(spec.wire_hash) == 64

@@ -10,6 +10,7 @@ from typing import Any, Dict
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..base import ToolContext, ToolResult
+from ..prompt import ToolPromptExample
 
 
 class GetTimeTool:
@@ -29,6 +30,16 @@ repository evidence.
     when_not_to_use = (
         "Elapsed or process timing is needed; use the relevant command/runtime measurement.",
         "Historical or repository state is needed instead of the current clock.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Resolve the current time in a project timezone",
+            input={"timezone": "Asia/Shanghai"},
+            description=(
+                "Request an explicit IANA timezone when a current timestamp is "
+                "needed for the user's locale."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from ..base import ToolContext, ToolResult, ToolTier
+from ..prompt import ToolPromptExample
 
 
 class ToolSearchTool:
@@ -36,6 +37,16 @@ search repeatedly for a tool that is already loaded and usable.
     when_not_to_use = (
         "An advertised tool already performs the operation.",
         "The search would be broad exploration without a concrete capability need.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Load a deferred web capability",
+            input={"query": "web fetch", "load": True, "limit": 3},
+            description=(
+                "Search by a concrete missing capability and load the best "
+                "matching schema for the next model step."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {

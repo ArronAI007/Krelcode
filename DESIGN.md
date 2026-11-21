@@ -1356,6 +1356,33 @@ Krelcode 从 Step 120 起把两层职责明确拆开：
 消息正文或凭据。实际发送后的 `CacheSegmentSnapshot` 也从最终 wire 反向解析，校验 plan
 与 wire 一致；TUI 与 `/context cache` 展示断点数量、累计 token、stability 和 hash。
 
+## Tool Prompt Lint 与 examples 契约（Step E）
+
+`ToolPromptSpec` 只保证运行时能构造统一对象，不能证明模型侧 guidance 可执行。
+Step E 新增旁路 `tools/prompt_lint.py`，把结构校验从 AgentLoop、
+Provider adapter 和 `/prompts` 展示逻辑中解耦：
+
+```text
+ToolRegistry.prompt_entries()
+  → lint_tool_prompt_spec(spec, source)
+  → PromptLintIssue[] (stable TPLxxx code + severity + field)
+  → ToolPromptLintReport (counts + content_light=true)
+  → /prompts lint [tool] / SDK/log-safe diagnostics
+```
+
+lint 检查 name 格式、顶层 object Schema、`required` 的合法性与引用、每个 example 的
+未知字段、JSON Schema 类型/枚举/范围/必填约束、重复 input/title、空 description、
+guidance 冲突、长度上限、疑似真实凭据形状和可选参数覆盖。它不检查 example 路径是否真实
+存在，也不执行工具；因此 lint 只读、确定且不会触发工作区扫描。
+
+来源决定缺失 examples 的严重级别：`builtin/skill/subagent` 是 error，
+`mcp/plugin` 是 warning，保持离线外部能力可注册但不静默降低本地生产契约。报告只包含
+工具名、字段路径、错误码、计数和 content-light 标志，不包含 instructions、Schema 注解、
+example input 或 Secret 文本。`/prompts lint` 不刷新 Prompt Surface 目录，也不触发磁盘扫描。
+
+截至 Step E，内置、扩展、子代理、LSP、Web、Skill、Memory 与 `prompt_lab` 共 39 个模型可见
+工具均有至少一个 schema-valid example；复杂工具用多个 example 区分正常、安全或边界调用。
+
 ## Prompt Conflict Analyzer（Step 110）
 
 Prompt 冲突分析发生在 `PromptAssembler` 对最终 Fragment 完成 L0-L12 稳定排序之后、生成

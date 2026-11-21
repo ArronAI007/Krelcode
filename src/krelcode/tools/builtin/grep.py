@@ -18,6 +18,7 @@ from ..fsutils import is_hidden_file, is_pruned_dir
 from ..paths import (
     PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,
 )
+from ..prompt import ToolPromptExample
 from ..secret_guard import classify_secret_path
 
 DEFAULT_MAX_RESULTS = 100
@@ -48,6 +49,22 @@ filtering cannot be bypassed.
     when_not_to_use = (
         "The user already named the target file and a direct read is more precise.",
         "A semantic symbol/reference query is better served by find_refs or an LSP tool.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Find a known pattern in Python sources",
+            input={
+                "pattern": "ToolPromptSpec\\(",
+                "path": "src",
+                "include": "*.py",
+                "ignore_case": False,
+                "max_results": 30,
+            },
+            description=(
+                "Bound the search to the relevant subtree and a focused pattern; "
+                "read promising matches next."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {

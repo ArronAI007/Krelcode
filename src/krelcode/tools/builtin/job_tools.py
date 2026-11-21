@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 from ..base import ToolContext, ToolResult, ToolTier
 from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
+from ..prompt import ToolPromptExample
 
 
 def _manager(ctx: ToolContext):
@@ -41,6 +42,19 @@ cannot be bypassed.
     when_not_to_use = (
         "A focused foreground command can complete within the normal timeout.",
         "The process would be interactive or cannot be safely managed as a background job.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Start a development server without blocking",
+            input={
+                "command": "python -m http.server 8000",
+                "cwd": ".",
+            },
+            description=(
+                "Start a long-lived process, retain its job id, and verify startup "
+                "with bounded output reads."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {
@@ -116,6 +130,20 @@ treat an intermediate log line as completion or dump unbounded logs into context
         "The job id or output cursor is unknown; inspect job_list or restart with a bounded command.",
         "The process has already produced a complete result already present in context.",
     )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Read incremental output from a running job",
+            input={
+                "job_id": "job_01",
+                "after_sequence": 0,
+                "wait_seconds": 5,
+            },
+            description=(
+                "Use the last sequence cursor and a bounded wait to inspect only "
+                "new startup or progress output."
+            ),
+        ),
+    )
     prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -183,6 +211,16 @@ process.
         "A specific job's output is needed; use job_output with its id.",
         "The task requires starting or terminating a process.",
     )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Recover current background-job state",
+            input={},
+            description=(
+                "List active jobs and their sequence cursors before polling, "
+                "waiting, or terminating a process."
+            ),
+        ),
+    )
     prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -236,6 +274,16 @@ partial output or remaining cleanup requirement afterward.
     when_not_to_use = (
         "The process is still required and healthy.",
         "A non-destructive status check or output read can resolve the uncertainty.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Stop an obsolete background job",
+            input={"job_id": "job_01"},
+            description=(
+                "Verify the specific job id and terminate only the obsolete or "
+                "unsafe process group."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {

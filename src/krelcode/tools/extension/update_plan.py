@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from ..base import ToolContext, ToolResult
+from ..prompt import ToolPromptExample
 
 ALLOWED_STATUSES = ("pending", "in_progress", "completed")
 
@@ -30,6 +31,23 @@ doing or verifying the work.
     when_not_to_use = (
         "The task is a simple one-command or one-file operation.",
         "The tool would be used only to restate progress already obvious to the user.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Publish a multi-step implementation snapshot",
+            input={
+                "items": [
+                    {"step": "Inspect the parser and tests", "status": "completed"},
+                    {"step": "Implement the bounded fix", "status": "in_progress"},
+                    {"step": "Run focused verification", "status": "pending"},
+                ],
+                "explanation": "The evidence changed the implementation order.",
+            },
+            description=(
+                "Submit the complete plan, with at most one in-progress step, "
+                "when the approach or evidence changes."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {

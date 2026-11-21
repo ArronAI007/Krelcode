@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
 from ..tools.base import ToolContext, ToolResult, ToolTier
+from ..tools.prompt import ToolPromptExample
 from ..tools.secret_guard import classify_secret_path
 from .client import LSPError
 from .manager import LSPManager
@@ -83,6 +84,16 @@ diagnostic result does not replace relevant tests for runtime behavior.
     when_not_to_use = (
         "No language server is configured for the file.",
         "Behavioral verification requires tests or a runtime check instead.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Check one edited file for actionable diagnostics",
+            input={"path": "src/krelcode/app.py", "severity": "warning"},
+            description=(
+                "Use compiler/type evidence on a known file, then distinguish new "
+                "regressions from pre-existing diagnostics."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {
@@ -165,6 +176,20 @@ do not use hover as a broad repository scan.
         "The relevant implementation body must be read or edited.",
         "No language server is configured for the file.",
     )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Resolve a symbol at a precise position",
+            input={
+                "path": "src/krelcode/app.py",
+                "line": 120,
+                "character": 16,
+            },
+            description=(
+                "Query only the ambiguous symbol position when source context does "
+                "not establish its type or signature."
+            ),
+        ),
+    )
     prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -223,6 +248,20 @@ to understand behavior.
     when_not_to_use = (
         "The definition location is already known.",
         "No language server is configured for the file.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Follow a symbol to its definition",
+            input={
+                "path": "src/krelcode/app.py",
+                "line": 120,
+                "character": 16,
+            },
+            description=(
+                "Resolve a semantic definition location instead of scanning the "
+                "repository by text."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {
@@ -284,6 +323,21 @@ as proof that every occurrence is equivalent. Do not edit matches mechanically.
     when_not_to_use = (
         "The search is for ordinary text or a non-semantic occurrence.",
         "No language server is configured for the file.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Review semantic references before an API change",
+            input={
+                "path": "src/krelcode/app.py",
+                "line": 120,
+                "character": 16,
+                "include_declaration": True,
+            },
+            description=(
+                "Inspect semantic callers and tests before changing a shared API; "
+                "do not edit every location mechanically."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {

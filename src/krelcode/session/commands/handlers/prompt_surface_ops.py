@@ -11,6 +11,7 @@ from ....agent.prompt_surface import (
     PromptSurfaceRegistry,
 )
 from ....agent.prompt_surface_catalog import refresh_prompt_surfaces
+from ....tools.prompt_lint import lint_tool_registry
 from ..context import CommandContext
 from ..types import CommandResult
 
@@ -51,14 +52,26 @@ async def handle_prompts(ctx: CommandContext) -> CommandResult:
         parts = shlex.split(ctx.request.arguments) if ctx.request.arguments else []
     except ValueError as exc:
         return _ok(f"  [prompts] 参数解析失败: {exc}")
-    registry = _registry(ctx)
     operation = parts[0].lower() if parts else "summary"
+
+    if operation == "lint" and len(parts) <= 2:
+        tool_names = {parts[1]} if len(parts) == 2 else None
+        tool_registry = getattr(ctx.loop, "registry", None)
+        if tool_registry is None:
+            return _ok("  [prompts lint] 当前会话没有 ToolRegistry")
+        if tool_names is not None and tool_registry.get(parts[1]) is None:
+            return _ok(f"  [prompts lint] 未找到工具: {parts[1]}")
+        report = lint_tool_registry(tool_registry, tool_names=tool_names)
+        scope = f" tool={parts[1]}" if len(parts) == 2 else ""
+        return _ok(*report.lines(), f"  scope={scope or ' all'}")
+
+    registry = _registry(ctx)
 
     if operation == "summary" and len(parts) <= 1:
         lines = registry.summary_lines()
         lines.extend((
             "  usage: /prompts list [kind|source] | /prompts show <id>"
-            " | /prompts coverage | /prompts hash",
+            " | /prompts lint [tool] | /prompts coverage | /prompts hash",
             "  Prompt bodies are never included; values are metadata and hashes only.",
         ))
         return _ok(*lines)
@@ -166,7 +179,8 @@ async def handle_prompts(ctx: CommandContext) -> CommandResult:
 
     return _ok(
         "  用法: /prompts | /prompts list [kind|source] | "
-        "/prompts show <id> | /prompts coverage | /prompts hash")
+        "/prompts show <id> | /prompts lint [tool] | "
+        "/prompts coverage | /prompts hash")
 
 
 __all__ = ["handle_prompts"]

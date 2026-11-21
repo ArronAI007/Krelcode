@@ -179,6 +179,16 @@ status and report; do not treat an intermediate feed message as a completed resu
         "Useful independent parent work can proceed while the child runs.",
         "No agent id is known or the task should be managed rather than merely waited on.",
     )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Wait briefly for delegated results",
+            input={"agent_id": "agent-01,agent-02", "timeout": 30},
+            description=(
+                "Use a bounded wait only when the parent's next action depends on "
+                "the child reports; a timeout does not cancel them."
+            ),
+        ),
+    )
     prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -266,6 +276,23 @@ queued unless changed evidence requires it.
         "The child does not exist or should be resumed first.",
         "The message merely repeats an instruction already queued without new evidence.",
     )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Queue a corrective follow-up",
+            input={
+                "agent_id": "agent-01",
+                "message": (
+                    "Limit changes to src/example/parser.py and its focused test. "
+                    "Do not modify public APIs; rerun the parser suite afterward."
+                ),
+                "interrupt": False,
+            },
+            description=(
+                "Preserve the child's context and current step by queuing a concise "
+                "correction instead of interrupting unnecessarily."
+            ),
+        ),
+    )
     prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -330,6 +357,20 @@ prove task completion.
         "The child's final result is required; use wait_agent.",
         "The full event history would be dumped without a diagnostic purpose.",
     )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Inspect new child events for diagnosis",
+            input={
+                "agent_id": "agent-01",
+                "after_sequence": 12,
+                "limit": 50,
+            },
+            description=(
+                "Advance the event cursor and keep the feed bounded when diagnosing "
+                "progress or a failure."
+            ),
+        ),
+    )
     prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -380,6 +421,16 @@ resume, send new input, or kill the child.
         "The child is obsolete, unrecoverable, or unsafe; kill it instead.",
         "The concern can be corrected immediately with a bounded send_to_agent message.",
     )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Pause at the next safe step boundary",
+            input={"agent_id": "agent-01"},
+            description=(
+                "Stop further progress temporarily while preserving task context "
+                "for inspection or correction."
+            ),
+        ),
+    )
     prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -416,6 +467,16 @@ do not use it to restart or silently broaden the task.
     when_not_to_use = (
         "The child is completed, failed, obsolete, or unsafe.",
         "The task scope changed enough that a fresh self-contained spawn is safer.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Resume a corrected paused child",
+            input={"agent_id": "agent-01"},
+            description=(
+                "Continue from the preserved pause point only after the blocking "
+                "concern has been resolved."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {
@@ -458,6 +519,16 @@ result, feed, or sidechain evidence.
         "A temporary pause, correction, or new instruction can recover the work.",
         "The child is already complete and its result can simply be collected.",
     )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Terminate an obsolete child task",
+            input={"agent_id": "agent-01"},
+            description=(
+                "Kill only when the whole task is obsolete or unsafe; preserve any "
+                "useful partial feed and sidechain evidence."
+            ),
+        ),
+    )
     prompt_version = "1"
     parameters: Dict[str, Any] = {
         "type": "object",
@@ -497,6 +568,16 @@ that fits the task. Do not guess a definition name without checking the catalogu
         "The task is ordinary work that the main agent can perform directly.",
         "The appropriate role is already known and no catalogue check is needed.",
     )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Inspect available specialized roles",
+            input={},
+            description=(
+                "Check definition names and tool scopes before choosing a role for "
+                "a bounded delegated task."
+            ),
+        ),
+    )
     prompt_version = "1"
     parameters: Dict[str, Any] = {"type": "object", "properties": {}}
 
@@ -526,6 +607,16 @@ as final deliverables, and avoid re-spawning an already active duplicate.
     when_not_to_use = (
         "A specific known child's final result is needed; use wait_agent.",
         "No delegation has occurred and status is irrelevant to the task.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Recover the child-agent roster",
+            input={},
+            description=(
+                "Inspect current ids and statuses before waiting, resuming, sending "
+                "input, or assuming that delegated work completed."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {"type": "object", "properties": {}}

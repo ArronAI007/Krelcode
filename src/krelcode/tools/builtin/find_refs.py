@@ -20,6 +20,7 @@ from ..fsutils import is_hidden_file, is_pruned_dir
 from ..paths import (
     PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,
 )
+from ..prompt import ToolPromptExample
 from ..secret_guard import classify_secret_path
 
 DEFAULT_MAX_RESULTS = 100
@@ -89,6 +90,20 @@ references.
     when_not_to_use = (
         "The task concerns a non-Python file or ordinary text search.",
         "A definition is already known and direct reads are sufficient.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Find symbol references before an API change",
+            input={
+                "symbol": "ToolPromptSpec",
+                "path": "src",
+                "max_results": 50,
+            },
+            description=(
+                "Discover likely call sites in the affected source tree, then "
+                "verify semantic details with reads or LSP evidence."
+            ),
+        ),
     )
     prompt_version = "1"
     parameters: Dict[str, Any] = {

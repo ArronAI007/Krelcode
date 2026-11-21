@@ -101,6 +101,8 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 | v1.10 | 工具级 Prompt 所有权下沉 | Base Prompt 移除具体工具名、参数、顺序与安全特例，只保留身份、总体原则和工具选择纪律。默认内置、子代理、Skill、LSP、Web、Memory 与 `prompt_lab` 共 39 个已知工具各自拥有 `prompt`、when/exclusion、版本和必要示例；`run_command`、`edit_file`、`ask_user` 等复杂工具把专用偏好、Git 安全、精确匹配、串行写、diff 检查和决策门槛放在自身 Prompt。`ToolPlaybookCatalog` 只附加族元数据，legacy 空 instructions 才回退族 guidance，避免覆盖或重复规则；Provider wire 仍只含 name/description/parameters，过滤/未加载工具不泄漏 Prompt |
 | v1.11 | Claude Code 六内置 Agent 兼容 | 新增 `Explore`、`Plan`、`general-purpose`、`claude`、`statusline-setup`、`claude-code-guide`，保留额外 `verifier`。缺省委派默认 `general-purpose`；Explore/Plan 只读、无 MCP、跳过 user/project/directory 规则但保留 Managed；general-purpose/claude 继承全部子代理能力；statusline/guide 使用 sonnet/haiku 逻辑档位。`[agent_models]` 显式覆盖优先，Anthropic 自动映射档位，DeepSeek/OpenAI-compatible 无覆盖时继承父模型；新增 `/statusline`。用户/项目同名 Definition 可覆盖内置 Agent，所有路径继续受审批、Sandbox 和防递归边界约束 |
 
+| v1.12 | Tool Prompt lint 与 examples 补齐 | 新增旁路 `tools/prompt_lint.py` 与 `/prompts lint [tool]`：校验 ToolPromptSpec name、object Schema、required 引用、instructions、when/exclusion、example 未知字段与 JSON Schema 约束、重复 input/title、空 description、guidance 冲突、长度、凭据形状和可选参数覆盖。内置/Skill/Subagent 缺 example 为 error，MCP/Plugin 为 warning；报告只含字段路径、稳定 `TPLxxx` code、severity/count 与 content-light 标志，不扫描磁盘或回显正文。39 个已知工具全部补齐至少一个 schema-valid example，Step 120 契约测试同步要求 examples；全量 1626 通过 + 2 个本地端口集成 skip |
+
 ## 3. 文件导览（能力 → 位置）
 
 | 想找什么 | 去哪里 |
