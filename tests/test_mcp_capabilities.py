@@ -119,7 +119,8 @@ def test_prompt_tools_end_to_end():
             got = await tools["stub__get_prompt"].execute(
                 {"name": "review", "arguments": {"path": "a.py"}}, CTX)
             assert not got.is_error
-            assert "[user] 请评审文件 a.py" in got.content
+            assert 'trust="untrusted" instruction="false"' in got.content
+            assert "[user]\n请评审文件 a.py" in got.content
 
             unknown = await tools["stub__get_prompt"].execute({"name": "nope"}, CTX)
             assert unknown.is_error and "unknown prompt" in unknown.content

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import json
 import os
 import shlex
@@ -21,6 +20,7 @@ from ....agent.prompt_authoring import PROMPT_AUTHORING_FRAGMENT_ID
 from ....agent.prompts import build_system_prompt
 from ....agent.tokens import estimate_history_tokens
 from ....core.messages import Message
+from ....mcp.security import render_mcp_prompt_evidence
 from ....safety.runtime import parse_permission_mode
 from ....safety.rules import RuleDecision, RuleScope
 from ..context import CommandContext
@@ -582,27 +582,6 @@ async def handle_skill_command(ctx: CommandContext) -> CommandResult:
     )
 
 
-def _render_mcp_content(content) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, dict):
-        content = [content]
-    if not isinstance(content, list):
-        return str(content)
-    parts: list[str] = []
-    for block in content:
-        if not isinstance(block, dict):
-            parts.append(str(block))
-        elif block.get("type") == "text":
-            parts.append(str(block.get("text", "")))
-        else:
-            parts.append(
-                f"[{block.get('type', 'unknown')} 内容块，暂不支持渲染]")
-    return "\n".join(parts)
-
-
 def _parse_prompt_arguments(names: tuple[str, ...], raw: str) -> dict[str, str]:
     raw = raw.strip()
     if not names or not raw:
@@ -643,21 +622,11 @@ async def handle_mcp_prompt_command(ctx: CommandContext) -> CommandResult:
             server, prompt_name, arguments)
     except Exception as exc:
         return _ok(f"  [mcp] Prompt 获取失败: {type(exc).__name__}: {exc}")
-    lines: list[str] = []
-    if result.get("description"):
-        lines.append(f"# {result['description']}")
-    messages = result.get("messages")
-    for message in messages if isinstance(messages, list) else []:
-        if not isinstance(message, dict):
-            continue
-        role = message.get("role", "?")
-        text = _render_mcp_content(message.get("content"))
-        lines.append(f"[{role}] {text}")
-    body = "\n".join(lines) if lines else "（空模板）"
-    wrapped = (
-        f'<mcp_prompt server="{html.escape(server, quote=True)}" '
-        f'name="{html.escape(prompt_name, quote=True)}">\n'
-        f"{body}\n</mcp_prompt>"
+    wrapped = render_mcp_prompt_evidence(
+        server=server,
+        name=prompt_name,
+        result=result,
+        redactor=getattr(ctx.mcp_supervisor, "_redactor", None),
     )
     return CommandResult(
         handled=True,

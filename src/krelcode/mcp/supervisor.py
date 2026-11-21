@@ -18,11 +18,11 @@ import os
 import re
 from typing import Any, Callable, Dict, List, Optional
 
-from ..core.redact import redact_obvious_secrets
 from ..agent.prompt_surface_contract import MCP_INSTRUCTIONS_SURFACE_CONTRACT
 from ..tools.base import ToolDescriptor, ToolSource
 from ..tools.registry import ToolRegistry
 from .client import MCPClient, MCPServerConfig
+from .security import harden_untrusted_text, safe_label
 from .tools import discover_tools, sanitize, server_prefix
 
 
@@ -332,20 +332,31 @@ class MCPSupervisor:
         records: List[Dict[str, Any]] = []
         for server, prompts in self.prompts.items():
             for prompt in prompts:
-                remote_name = str(prompt.get("name", "")).strip()
+                remote_name = safe_label(
+                    prompt.get("name", ""), max_chars=200,
+                    redactor=self._redactor)
                 if not remote_name:
                     continue
                 arguments = prompt.get("arguments") or []
                 argument_names = tuple(
-                    str(item.get("name"))
+                    safe_label(
+                        item.get("name"), max_chars=120,
+                        redactor=self._redactor)
                     for item in arguments
                     if isinstance(item, dict) and item.get("name")
                 )
+                description = harden_untrusted_text(
+                    prompt.get("description") or "",
+                    redactor=self._redactor,
+                    neutralize_instructions=True,
+                    truncation_marker=(
+                        "…[untrusted MCP prompt metadata truncated]"),
+                ).text
                 records.append({
                     "command_name": f"mcp__{sanitize(server)}__{sanitize(remote_name)}",
                     "server": server,
                     "prompt_name": remote_name,
-                    "description": str(prompt.get("description") or ""),
+                    "description": description,
                     "argument_names": argument_names,
                 })
         return records
@@ -397,14 +408,15 @@ class MCPSupervisor:
                 continue
             text = str(client.instructions or "").strip()
             if text:
-                clean = redact_obvious_secrets(
-                    self._redactor.redact(text)
-                    if self._redactor is not None else text)
-                limit = MCP_INSTRUCTIONS_SURFACE_CONTRACT.max_output_chars
-                if len(clean) > limit:
-                    marker = "\n…[MCP instructions truncated]"
-                    clean = clean[:max(0, limit - len(marker))] + marker
-                entries.append((name, clean))
+                clean = harden_untrusted_text(
+                    text,
+                    max_chars=MCP_INSTRUCTIONS_SURFACE_CONTRACT.max_output_chars,
+                    redactor=self._redactor,
+                    neutralize_instructions=True,
+                    truncation_marker="\n…[MCP instructions truncated]",
+                ).text.strip()
+                if clean:
+                    entries.append((name, clean))
         return tuple(sorted(entries))
 
     async def close_all(self) -> None:

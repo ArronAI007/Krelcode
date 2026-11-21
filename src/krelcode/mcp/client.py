@@ -26,6 +26,7 @@ from .sse_transport import SSETransport
 from .streamable import StreamableHTTPTransport
 from .oauth import MCPOAuthRequired, OAuthTokenManager
 from .transport import MCPAuthRequired, MCPError, MCPTransport
+from .security import sanitize_mcp_prompt_result
 
 # url 型服务器的传输选择（config: transport = "..."）
 TRANSPORT_STREAMABLE = "streamable-http"
@@ -418,7 +419,12 @@ class MCPClient:
             raise MCPError(
                 f"MCP 服务器 {self.name!r} 的 Prompt {name!r} "
                 f"未通过 Surface Contract（{surface.status}）: {surface.error}")
-        return surface.value
+        # The contract validates and redacts the remote payload.  The final
+        # projection additionally removes control/bidi characters, neutralizes
+        # instruction-shaped descriptions and bounds every model-visible text
+        # field without changing the prompts/get wire shape.
+        return sanitize_mcp_prompt_result(
+            surface.value, redactor=self._redactor)
 
 
 def _as_list(value: Any, server: str, what: str) -> List[Dict[str, Any]]:

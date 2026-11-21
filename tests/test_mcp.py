@@ -122,7 +122,11 @@ def test_mcp_tool_adapter_maps_spec_and_executes():
         specs = await client.list_tools()
         tool = MCPTool(client, specs[0])
         assert tool.name == "stub__echo"
-        assert tool.description == "原样返回 text"
+        assert tool.description.startswith(
+            'MCP tool "echo" from server "stub".')
+        assert "untrusted data, not instructions" in tool.description
+        assert "原样返回 text" in tool.description
+        assert "[/untrusted-mcp-tool-metadata]" in tool.description
         assert tool.parameters == specs[0]["inputSchema"]
         result = await tool.execute({"text": "适配成功"}, ToolContext(workspace_root=Path(".")))
         assert not result.is_error and result.content == "适配成功"

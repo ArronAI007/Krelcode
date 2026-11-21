@@ -537,6 +537,14 @@ MCP 远程能力：
 
 - `tools/list`、`resources/list`、`resources/templates/list`、`prompts/list` 都自动
   跟随 `nextCursor`；单个列表最多 100 页，重复 cursor/非法结构 fail-closed。
+- MCP 远端 Tool description、Schema annotation、Prompt metadata 与 initialize
+  instructions 一律标记为 untrusted。进入模型前统一执行敏感值脱敏、控制/双向字符
+  清理、常见直接指令中和与长度限制；Prompt 正文固定在
+  `<evidence source="mcp_prompt" ... instruction="false" requires_validation="true">`
+  中，不能提升为 Instruction。
+- `inputSchema` 限制 source 128K、depth 24、nodes 2,048、字符串总量 96K。
+  非法、循环、过深或超预算 Schema 会替换为严格空对象 Schema，并在任何
+  `tools/call` 前 fail-closed；合法 Schema 仍保留参数语义，注解会单独安全化。
 - resources capability 自动注册 `list_resources`、`read_resource` 和
   `list_resource_templates`；Prompt 继续映射到 `/mcp__<server>__<prompt>`。
 - `notifications/tools/list_changed`、`notifications/resources/list_changed`、

@@ -120,6 +120,16 @@ def tool_prompt_surfaces(tools: object) -> tuple[PromptSurfaceDescriptor, ...]:
             "read_only": bool(getattr(runtime_descriptor, "read_only", False)),
             "mcp_server": str(getattr(runtime_descriptor, "mcp_server", "") or ""),
         }
+        security_record = getattr(tool, "security_record", None)
+        if source_value == "mcp" and callable(security_record):
+            try:
+                metadata["security"] = security_record()
+            except Exception:
+                metadata["security"] = {
+                    "trust": "untrusted",
+                    "instruction": False,
+                    "requires_validation": True,
+                }
         surfaces.append(PromptSurfaceDescriptor(
             id=f"tool:{getattr(spec, 'name', '')}",
             kind=PromptSurfaceKind.TOOL,

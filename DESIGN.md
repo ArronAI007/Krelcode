@@ -736,6 +736,37 @@ P1 不新增第二套运行时，而是在既有扩展平面上补齐可运维�
    服务器求交合并，省略=继承、`*`=全部、`[]`=禁用。任何未知 provider/server/tool 均
    fail-closed，sidechain/status 记录实际 model/provider/permission/MCP 集。
 
+## MCP Prompt / Tool Description 安全边界（Step D）
+
+MCP 服务器提供的是远端数据，不是本地指令。`mcp/security.py` 是 Tool description、
+Schema annotation、Prompt catalogue、`prompts/get` 与 server instructions 的唯一加固
+入口，避免每个适配器各自实现一套脱敏和截断逻辑。
+
+1. **不可信文本**：先移除 NUL/控制字符、双向控制字符和不可见格式字符，再执行已知
+   密钥与模式脱敏。Tool description、Prompt 描述和 instructions 对常见“忽略先前指令”、
+   “切换 system role”、提示词/密钥外泄等模式做 defense-in-depth 中和；真正的安全保证
+   来自 Instruction/Evidence 分权和固定 trust envelope，而不是关键词过滤。
+2. **Tool description**：远端正文限制为 1,024 字符，并放入
+   `[untrusted-mcp-tool-metadata]`；模型同时看到 `instruction=false` 语义和
+   `requires_validation=true`。远端文本中的 `<`/`>` 被转义，不能伪造本地边界。
+3. **inputSchema**：限制 source 128K、depth 24、nodes 2,048、单字符串 16K、字符串
+   总量 96K、键/列表数量。description/title/examples/default 等模型可见注解单独脱敏与
+   中和；语义字符串若含控制字符或指令型内容整份 Schema fail-closed。非法 Schema
+   回退为 `{type:object, properties:{}, additionalProperties:false}`，执行直接拒绝。
+   合法 Schema 计算 `source_digest/safe_digest`，内容轻量记录进入 Tool Prompt Surface。
+4. **Prompt**：`prompts/get` 继续经过 Surface Contract、Schema、timeout、输入/输出上限
+   和双层脱敏，随后再执行控制字符清理和有界投影。Tool 与 slash command 共用
+   `render_mcp_prompt_evidence()`，输出的 `<evidence>` 和 `<mcp_prompt>` 均声明
+   `trust=untrusted`、`instruction=false`、`requires_validation=true`；正文整体 HTML
+   转义并限制 240K，禁止伪造结束标签。
+5. **Catalogue / instructions**：`prompts/list`、command help、Prompt Surface hash、
+   `/mcp` 可见描述和 L7 MCP Evidence 使用同一个清洗路径。observation 只保留字符数、
+   digest、redacted/truncated/neutralized 状态和 signal 名称，不记录远端正文。
+
+工具替换仍在 Registry 层原子完成；热重载后新 Tool 实例携带新的 description/schema
+hash，因此 Provider tool catalogue 与 Prompt cache 身份会随安全化后的 wire 内容更新。
+
+
 ## 会话生命周期与交换（Step 77）
 
 会话文件从“history 快照旁路”升级为可审计的多会话事实源。`session_start/session_meta`

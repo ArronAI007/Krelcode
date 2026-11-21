@@ -80,8 +80,15 @@ def test_mcp_prompt_command_renders_prompt_for_agent(tmp_path):
                 "/mcp__stub__review path=main.py")
             assert result.handled is True
             assert "已加载并执行: stub/review" in result.output[0]
-            assert '<mcp_prompt server="stub" name="review">' in result.run_prompt
-            assert "[user] 请评审文件 main.py" in result.run_prompt
+            assert (
+                '<evidence source="mcp_prompt" server="stub" name="review" '
+                'trust="untrusted" instruction="false"' in result.run_prompt
+            )
+            assert (
+                '<mcp_prompt server="stub" name="review" '
+                'trust="untrusted" instruction="false">' in result.run_prompt
+            )
+            assert "[user]\n请评审文件 main.py" in result.run_prompt
         finally:
             await supervisor.close_all()
 
@@ -147,7 +154,8 @@ def test_repl_mcp_prompt_enters_agent_history(tmp_path):
             )
             assert rc == 0
             user_message = next(m for m in loop.history if m.role == "user")
-            assert "[user] 请评审文件 src/app.py" in user_message.content
+            assert 'trust="untrusted" instruction="false"' in user_message.content
+            assert "[user]\n请评审文件 src/app.py" in user_message.content
         finally:
             await supervisor.close_all()
 

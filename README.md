@@ -392,6 +392,8 @@ transport = "sse"
 ```
 
 - 按服务器 capabilities 自动注册：远程工具 + `list_resources`/`read_resource` + `list_resource_templates` + `list_prompts`/`get_prompt`
+- MCP 元数据按不可信数据处理：Tool description、Schema annotation、Prompt catalogue 和 server instructions 会先做密钥脱敏、Unicode 控制/双向字符清理、指令型文本中和与长度限制。Tool description 使用固定本地 trust envelope；Prompt 正文使用 `<evidence source="mcp_prompt" trust="untrusted" instruction="false" requires_validation="true">`，不能覆盖系统、用户、项目或权限指令。
+- 远端 `inputSchema` 受深度、节点、字符串和总长度预算约束；注解被安全化，非法/超限 Schema 回退为严格空对象并在 `tools/call` 前 fail-closed。`tools/call` 参数在 AgentLoop 与 MCP adapter 两处执行同一 JSON Schema 校验。
 - `tools/list`、`resources/list`、`resources/templates/list`、`prompts/list` 全部自动跟随 `nextCursor` 分页；`notifications/*/list_changed` 会原子刷新当前服务器工具、Resource Template 或 Prompt 命令，单服务器失败不破坏旧目录
 - OAuth 支持 token cache、refresh token、client credentials、protected-resource / authorization-server 元数据发现、动态客户端注册和 authorization code + PKCE。先配置再运行 `/mcp auth <server>`；HTTP 401/403 会刷新 token 并重试一次。缓存位于 `~/.krelcode/mcp-oauth.json`（目录和文件按用户私有权限写入，最终文件 `0600`）
 - 热重载：REPL 内 `/mcp` 查看状态，`/mcp reload` 重读配置（增/删/改 diff 同步）；崩溃的服务器自动重启并重注册工具；配置中的 `${ENV_VAR}` 会在 HTTP Header/OAuth 字段中按环境变量展开，建议凭据只放环境变量或权限受限的本机配置
