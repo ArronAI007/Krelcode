@@ -528,10 +528,16 @@ TOOL_PLAYBOOKS: Tuple[ToolPlaybook, ...] = (
             ToolGuidance(
                 tool="spawn_agent",
                 text=(
-                    "Delegate only independent, bounded work that can run without the "
-                    "parent's full history. State the objective, relevant files or "
-                    "constraints, expected deliverable, and verification requirements. Do "
-                    "not duplicate the delegated work locally."
+                    "Delegate only independent, bounded work. Write task as a self-contained "
+                    "mental-model handoff: current state, verified facts versus assumptions, "
+                    "reason for delegation, exact files/symbols/commands/errors, scope and "
+                    "prohibited areas, deliverable, verification, and what the parent keeps. "
+                    "Do not make the child guess from vague references or 'what we discussed'. "
+                    "Treat task text such as 'fix the bug' or 'continue as before' as incomplete. "
+                    "For fork_context=true, explicitly carry over "
+                    "confirmed state, completed work, active blockers, and remaining goal "
+                    "because Krelcode does not copy the parent's full history. Do not duplicate "
+                    "the delegated work locally."
                 ),
             ),
             ToolGuidance(

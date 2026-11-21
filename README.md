@@ -631,8 +631,9 @@ prompt = "Review this request against the project policy: {prompt}"
 
 ### 交互式子代理 / Agent Definitions / Sidechain
 
-LLM 可用 `spawn_agent` 把自包含子任务委派给后台子代理（独立上下文、并行执行；`isolated=true` 时使用独立 git worktree 分支，`fork_context=true` 时继承父对话）。子代理不能再派生子代理（防递归）。
+LLM 可用 `spawn_agent` 把自包含子任务委派给后台子代理（独立上下文、并行执行；`isolated=true` 时使用独立 git worktree 分支；`fork_context=true` 只记录兼容/血缘标记，不复制父对话）。子代理不能再派生子代理（防递归）。
 
+- **委派 Meta Prompt**：`subagent/prompt.py` 是父 Agent 编写 `task` 的唯一 Prompt 来源。它要求注入子任务心智模型（当前状态、已验证事实/假设、起始文件与符号、禁止范围、交付物、验证方式），明确禁止“调查一下”“继续之前的工作”等让子代理猜测的写法，并给出正例/反例；`fork_context=true` 追加现场搬运约定（已确认事实、未决假设、已完成/剩余工作、阻塞点），因为 fork 不会传递父 Agent 的完整 history。
 - **Agent Feed**：`get_agent_feed(agent_id, after_sequence)` 按稳定游标读取 assistant/thinking/tool/state 增量；内存有界，所有文本先脱敏。
 - **Pause / Resume / Kill**：`pause_agent` 在每个 step 安全边界协作式暂停并保留 Task/历史，`resume_agent` 从原位置继续，`kill_agent` 才取消整个 Task；`send_to_agent` 在暂停期间仍可排队。
 - **用户定义**：在 `~/.krelcode/agents/<name>.md` 或 `<workspace>/.krelcode/agents/<name>.md` 放置 frontmatter Markdown；项目级同名定义覆盖全局。`spawn_agent(definition="reviewer", task="...")` 会应用定义中的 system prompt 和 `allowed-tools`（只能缩小工具集，不能绕过审批/Sandbox）。

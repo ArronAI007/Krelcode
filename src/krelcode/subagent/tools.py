@@ -9,7 +9,9 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from ..tools.base import ToolContext, ToolResult
+from ..tools.prompt import ToolPromptExample
 from .manager import STATUS_PAUSED, STATUS_RUNNING, SubagentManager
+from .prompt import SPAWN_AGENT_PROMPT_VERSION, build_spawn_agent_prompt
 
 
 class SpawnAgentTool:
@@ -24,10 +26,68 @@ class SpawnAgentTool:
         "返回子代理 id；用 wait_agent 等待结果，list_agents 查看状态。"
         "可传 definition 使用 ~/.krelcode/agents 或项目 .krelcode/agents 中的自定义定义。"
     )
+    prompt = build_spawn_agent_prompt(include_fork=True)
+    prompt_version = SPAWN_AGENT_PROMPT_VERSION
+    when_to_use = (
+        "An independent, bounded subtask can run in the background without the "
+        "parent's full conversation history.",
+        "Parallel read-only investigation or an isolated worktree task will "
+        "materially shorten the critical path.",
+    )
+    when_not_to_use = (
+        "The next step depends immediately on the result, so a local blocking "
+        "tool call is simpler.",
+        "The work needs the parent's full private history or cannot be described "
+        "as a self-contained handoff.",
+        "The parent would duplicate the same work while the child runs.",
+    )
+    prompt_examples = (
+        ToolPromptExample(
+            title="Delegate a bounded regression fix",
+            input={
+                "task": (
+                    "In src/example/parser.py, parse_header() drops quoted commas. "
+                    "Reproduce with tests/test_parser.py::test_quoted_comma. Update "
+                    "parser.py and add one focused regression test; do not refactor "
+                    "other tokenization paths. Run the focused test and parser suite. "
+                    "Return changed paths, test results, and remaining uncertainty."
+                ),
+                "isolated": True,
+            },
+            description=(
+                "Names the current state, exact entry points, boundaries, deliverable, "
+                "and verification so the child does not guess."
+            ),
+        ),
+        ToolPromptExample(
+            title="Fork with an explicit state handoff",
+            input={
+                "task": (
+                    "Confirmed: SessionStore already writes provider_meta; resume still "
+                    "drops it while rebuilding from JSONL in session/restore.py. "
+                    "Completed: failing test added. Remaining: fix restore mapping and "
+                    "verify legacy records still load. Do not edit provider adapters. "
+                    "Run the session tests and report any compatibility risk."
+                ),
+                "fork_context": True,
+            },
+            description=(
+                "For fork_context=true, hand-carry confirmed state, completed work, "
+                "remaining scope, and checks because the parent history is not copied."
+            ),
+        ),
+    )
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
-            "task": {"type": "string", "description": "自包含的任务描述"},
+            "task": {
+                "type": "string",
+                "description": (
+                    "自包含委派说明：写明当前状态/心智模型、已验证事实与假设、"
+                    "为什么委派、精确文件/符号/命令/错误、禁止范围、交付物和验证方式；"
+                    "不得依赖父对话或要求子代理猜测。"
+                ),
+            },
             "isolated": {"type": "boolean",
                          "description": "true=在独立 git worktree 分支中执行（需工作区为 git 仓库）"},
             "fork_context": {"type": "boolean",

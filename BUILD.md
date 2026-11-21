@@ -5,13 +5,13 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（Step 117）
+## 1. 项目统计（Step 118）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 69,638 行（Python，**零第三方运行时依赖**） |
-| 测试 | 34,687 行 / 143 个 `test_*.py` 模块 / 1,514 个通过用例 + 2 个本地端口集成 skip |
-| 提交 | 161 个增量提交，每个功能阶段均包含测试与语义化 commit |
+| 源码 | 71,450 行（Python，**零第三方运行时依赖**） |
+| 测试 | 35,614 行 / 145 个 `test_*.py` 模块 / 1,532 个通过用例 + 2 个本地端口集成 skip |
+| 提交 | 164 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 17 + 只读 `memory_search`（装配 MemoryStore 时）+ `prompt_lab`（Prompt Authoring 开启时；生产只读，proposal 仅写 `.krelcode/`）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
 | CLI 入口 | REPL 对话 · -m 单次（text/json/stream-json）· stream-json 持久会话 · Python SDK · doctor · init · review |
@@ -20,9 +20,9 @@
 源码按层分布：
 
 ```
-agent 20444 · session 11747 · benchmarks 7456 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4369
-ui 3965 · llm 3797 · tools 3865 · safety 2861 · mcp 2679 · subagent 2366
-lsp 1295 · plugins 1105 · core 1023 · skills 957 · web 891 · jobs 582 · entrypoints 226
+agent 21821 · session 11880 · benchmarks 7456 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4400
+ui 3965 · llm 3797 · tools 3979 · safety 2861 · mcp 2679 · subagent 2525
+lsp 1295 · plugins 1105 · core 1023 · skills 965 · web 891 · jobs 582 · entrypoints 226
 ```
 
 core 只有 1023 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
@@ -90,13 +90,13 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 | v0.99 | ToolPromptSpec 统一工具契约 | 新增 `ToolPromptSpec`，把 Provider description/Schema、工具指令、when/exclusion、示例、别名、来源/版本和 Playbook 元数据收敛为单一来源。`Tool` 保持执行职责，`ToolDescriptor` 保持安全/路由职责；Registry、TurnToolPool、ToolSearch、PromptAssembler 和 L5 Playbook 共用同一 spec。Provider wire 只接收 name/description/parameters，`wire_hash/content_hash` 贯通 PromptPlan/ProviderMessages/`/context`，所有观测字段不含工具正文。旧工具空 description 使用稳定占位，兼容历史注册 |
 | v1.00 | Prompt Conflict Analyzer | 最终 Prompt 排序后做无模型、content-light 的跨层冲突分析：识别直接否定、显式对立值和条件冲突，固定 Managed → Mode Contract → Base → Directory → Project → User → Style → Working → Reminder 权威顺序；同权冲突不按 ID 裁决。中英文分句/CJK bigram、代码围栏过滤、主题候选索引与有界缓存把基础 Prompt 分析降到约 2ms。报告贯通 PromptPlan、Provider channel、Snapshot 与 `/context conflicts|why`，只保存来源、分类、winner、置信度和 hash，不保存指令正文，也不改变 Provider `full_hash` |
 | v1.01 | Prompt Release 与 Profile 校准 | 新增不可变 `PromptRelease` 与内容无关 release hash；`ModelProfileCalibration` 绑定真实 live baseline 的 release/profile/contract/suite/provider/model，支持精确与最长 pattern scope。运行时 `calibrated/uncalibrated/stale` 可见，calibration 不进入指令通道；主 Agent、`/model`、子代理、`/context why` 与 Benchmark report 共用身份链。Baseline schema v2 嵌入 calibration，gate 对 Release/Profile/contract/frozen-suite/state 漂移 fail-closed |
-
 | v1.02 | 最终完全对齐验收 | 新增 `benchmarks/acceptance.py`：冻结 17 个 requirement/12 个 capability area，以 static/runtime/offline/live 四层证据执行 18 个 required checks。最终 `accepted` 要求 9 个离线生产面、运行时探针、冻结 Prompt Release/Parity contract/suite 和 fresh 的真实 provider report/gate 同时通过；Live 校验独立核对 16-case × 至少 3-trial、stability/pass@k、runtime error、24h 时效和 gate-report 时序，不信任裸 `passed=true`。缺 Live Gate 只能 `pending_live`（退出 2），任何 required 失败为 `failed`（退出 1）；最终 JSON 再执行 content-light 自检与异常/凭据内容清除，统一入口为 `--live --gate <baseline> --final-acceptance` |
 | v1.03 | Prompt Authoring Contract | 新增默认关闭的 L6 `prompt_authoring:contract`，通过 `[prompt.authoring].enabled` 显式启用并共享给主/子 Agent。契约自身覆盖目标分析、Instruction/Evidence 分权、stable/dynamic、冲突检测、工具权限与可验证性；`PromptAuthoringValidator` 复用生产 Conflict Analyzer，检查无效来源角色、动态缓存污染、read-only 写工具、通配符/自动批准边界、权限提升文案和 success/regression/security 机器指标，报告只含 ID/计数/hash。`/context authoring` 提供内容轻量状态入口，不自动应用 Prompt 或扩大运行时权限 |
-
 | v1.04 | Prompt Engineering Lab | 在 `[prompt.authoring].enabled` 下注册只读 core 工具 `prompt_lab(action=inspect|generate|compare|evaluate)`，复用 Fragment Registry、PromptConflictAnalyzer 和 PromptAuthoringValidator；inspect/compare/evaluate 内容轻量，generate 只返回 `applied=false` 候选。主/子 Agent 的 ToolContext 分别绑定自己的 Registry，工具不写文件、不修改 Registry、不扩大权限，Plan/read-only 模式可用 |
 | v1.05 | Candidate Prompt Schema | PromptAuthoringContract 升为 v2，新增封闭 `PromptCandidate`/`PROMPT_CANDIDATE_SCHEMA`：八个字段必填，risk 仅 low/medium/high，evaluation cases 固定 success/regression/security，未知字段与超界输入 fail-closed。`prompt_lab.generate` 输出 canonical candidate，evaluate 接受新 schema 并兼容旧 authoring 输入；已存在目标自动继承 layer/scope/stability/cacheability/authority，新目标使用 project/L6/session。候选只生成确定性 hash 与 content-light metadata，不写文件、不修改 Registry、不自动应用 |
 | v1.06 | 隔离候选评估 | PromptAuthoringContract 升为 v3；canonical candidate 先通过 baseline/candidate temporary `PromptPlan`，执行当前失败、稳定回归、Instruction 优先级、Evidence 注入、permission/Sandbox、cache stability 六项固定门禁。通过只允许人工 review，Prompt Release 仍需独立人工决策；评估复用真实 ToolContext/Sandbox L5 合同，报告 content-light，且始终 `production_modified=false`、`applied=false`。旧 authoring evaluate 明确不能绕过 Release 资格 |
+| v1.07 | Connected Prompt Release Pipeline | 新增 `agent/prompt_release_pipeline.py`，串联 PromptAuthoring Skill、Candidate、temporary PromptPlan 六项隔离、offline/live Benchmark、Parity、Conflict Analyzer、Release/Calibration proposal 与人工审批。`prompt_lab` 增加 `propose/status` 且无 approve action；新增 `/prompt-release list|status|approve|reject`。提案、审批、calibration 与 release artifact 全部 content-light、原子写入 `.krelcode/prompt-releases/`，绑定 candidate/proposal/release/profile/contract/suite/calibration hash；缺证据停在 pending，身份漂移标记 stale，批准后仍 `production_modified=false/applied=false`。内置 `prompt-authoring` Skill 规定完整工程流程与 Agent 自批准禁令 |
+| v1.08 | 子代理委派 Meta Prompt | 新增 canonical `subagent/prompt.py`，统一父 Agent 的 `spawn_agent.task` 写作契约：心智模型注入、事实/假设分离、禁止猜测、正例/反例、范围边界、交付物与验证；接入 ToolPromptSpec 与 subagents playbook。`fork_context=true` 追加明确现场搬运指导，并说明 fork 只记录血缘、不复制父完整 history。Meta Prompt 不注入子代理 task 正文，不改变任务 Schema、审批、工具范围或 Sandbox |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -218,4 +218,3 @@ PYTHONPATH=src node --experimental-strip-types --test typescript-sdk/tests/sdk.t
 
 TypeScript SDK 的 `npm run typecheck` 需要本机已有 `typescript` 与 `@types/node`；
 没有网络依赖时仍可运行上面的 Node type-stripping 测试。
-| v1.07 | Connected Prompt Release Pipeline | 新增 `agent/prompt_release_pipeline.py`，串联 PromptAuthoring Skill、Candidate、temporary PromptPlan 六项隔离、offline/live Benchmark、Parity、Conflict Analyzer、Release/Calibration proposal 与人工审批。`prompt_lab` 增加 `propose/status` 且无 approve action；新增 `/prompt-release list|status|approve|reject`。提案、审批、calibration 与 release artifact 全部 content-light、原子写入 `.krelcode/prompt-releases/`，绑定 candidate/proposal/release/profile/contract/suite/calibration hash；缺证据停在 pending，身份漂移标记 stale，批准后仍 `production_modified=false/applied=false`。内置 `prompt-authoring` Skill 规定完整工程流程与 Agent 自批准禁令 |

@@ -507,12 +507,15 @@ version、commands、errors、handoff notes 或其他扩展字段。缺少字段
   注入（与父代理同一套预算解析：显式 > 模型目录 > 兜底）；每个子代理
   spawn 时以**当时的** self.llm 建独立 ContextManager——/model 热切换后
   新子代理自动用新模型；switcher 同步更新 subagents.llm
-- **fork_context**（Step 42，依赖型子任务）：spawn(fork_context=true) 深拷贝
-  父历史（replace 逐消息拷贝，去父 system 换子代理 system）；尾部消毒——
-  spawn 时父历史尾部必然悬挂 assistant(tool_calls)（spawn 调用本身），
-  sanitize_history 弹掉；若消毒后尾部是未答完的 user 消息（触发委派那句），
-  弹出并与子任务合并（"[委派的子任务]" 标记）——保上下文又保角色严格交替；
-  get_parent_history 以 getter 注入（/resume 重绑定 loop.history 后依然正确）
+- **fork_context**（Step 42 初版，Step 92 收口）：当前语义是兼容/血缘标记，
+  不复制父历史；子代理仍只收到显式 task、继承指令与本任务相关 Memory。
+  handle.forked 与 sidechain 的 parent_history_inherited=false 用于审计。
+- **委派 Meta Prompt**（Step 118）：`subagent/prompt.py` 统一生成父 Agent 的
+  spawn_agent 操作契约：先注入当前状态、已验证事实与假设、相关路径/符号/命令、
+  禁止范围、交付物和验证方式；明确禁止让子代理猜测；提供正例/反例。
+  fork_context=true 追加现场搬运指导，要求区分确认事实/未决假设，并写明已完成、
+  剩余目标与阻塞点。该 Prompt 只进入 ToolPromptSpec/L5，不注入子代理 task 正文，
+  不扩大工具、审批或 Sandbox 权限。
 - **防递归**：子代理工具集 = default_tools()（不含 spawn 系），委派深度硬限制 1 层
 - **可观测**：SubagentSpawned/SubagentFinished 上父总线——渲染器打状态行、
   recorder 落 JSONL 审计；REPL /agents 列状态
