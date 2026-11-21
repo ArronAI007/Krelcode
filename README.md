@@ -239,6 +239,9 @@ Base Prompt 固定拆为身份、执行循环、工具纪律、编码质量、�
 profile = "auto"  # 或 default / claude / deepseek / openai / gemini
 release = "2026.11.21"
 calibration_baselines = ["benchmarks/baselines/deepseek-chat.json"]
+
+[prompt.authoring]  # 可选：Prompt 设计/评审契约，默认关闭
+enabled = true
 ```
 
 profile 只能追加非权威的模型适配 section，不能替换或弱化共享安全规则。`/model`
@@ -249,7 +252,16 @@ Release、section/profile catalog hash 与 Benchmark calibration 身份。没有
 仍可运行，但 live release gate fail-closed。`/context why core:base:safety` 可查看
 release/profile/calibration hash、状态与 base hash，但不会记录 Prompt 正文。
 
-REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`（当前工具池的 core/discoverable/deferred/loaded/excluded 状态）、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp [reload|auth <server>]`（状态、热重载、OAuth + PKCE 授权）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>|install|update|enable|disable|remove ...]`（插件生命周期）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/lsp`（语言服务器状态）、`/web`（网页工具安全配置）、`/output-style [list|show <name>|reload|off|<name>]`（声明式输出样式）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|fragments|enable|disable|toggle|reset|cache|ledger|refresh]`（请求 token 分项、来源归因、Fragment 启停、缓存边界与工作区重采）、`/memory [list [scope]|show|add <text> --scope|search|pin|unpin|forget|mode|review|migrate]`（分层记忆、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
+启用 `[prompt.authoring].enabled` 后，主 Agent 与子代理都会装配同一个
+`prompt_authoring:contract` L6/session Fragment。它只在设计、评审或修改 Prompt 时
+要求执行目标分析、Instruction/Evidence 分离、stable/dynamic 分层、冲突检测、工具权限
+设计和机器可验证的 success/regression/security 用例；默认关闭以避免常驻 token 成本。
+`/context authoring` 可查看 contract version/hash、装配状态与能力清单。Python 侧可调用
+`PromptAuthoringValidator`/`PromptAuthoringContract.validate()` 校验候选 Prompt；报告只含
+issue code、来源 ID、计数和 hash，不含候选正文。契约不会自动应用生产 Prompt，也不会通过
+Prompt 文本授予工具、文件、Sandbox 或审批权限。
+
+REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`（当前工具池的 core/discoverable/deferred/loaded/excluded 状态）、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp [reload|auth <server>]`（状态、热重载、OAuth + PKCE 授权）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>|install|update|enable|disable|remove ...]`（插件生命周期）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/lsp`（语言服务器状态）、`/web`（网页工具安全配置）、`/output-style [list|show <name>|reload|off|<name>]`（声明式输出样式）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|conflicts|authoring|fragments|enable|disable|toggle|reset|cache|ledger|refresh]`（请求 token 分项、来源归因、Prompt Authoring 状态、Fragment 启停、缓存边界与工作区重采）、`/memory [list [scope]|show|add <text> --scope|search|pin|unpin|forget|mode|review|migrate]`（分层记忆、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
 
 所有命令由统一 `CommandRegistry` 发现：`/help`、slash 菜单、Tab 补全、运行态过滤和 InputProcessor 共用同一份 catalog。来源优先级为 `builtin > custom > skill > plugin > MCP`。用户/项目 Markdown Command 来自 `~/.krelcode/commands/*.md`、`<workspace>/.krelcode/commands/*.md`、`<workspace>/.commands/*.md` 与 `[commands].paths`；`$ARGUMENTS` / `${ARGUMENTS}` 渲染参数，`allowed-tools` 只能收窄工具集。允许用户调用的 Skill 会自动显示为 `/<skill-name> [参数]`，MCP Prompt 会命名空间化为 `/mcp__<server>__<prompt> [参数]`；`/skills reload`、`/mcp reload` 与 `/plugins reload` 会原地刷新对应来源，内置命令在命名冲突时保持最高优先级。
 
@@ -600,6 +612,14 @@ Step 110 增加确定性的 Prompt Conflict Analyzer：PromptAssembler 在最终
 Step 111 增加 Prompt Release 与模型 Profile 校准闭环：Base section 和 Profile catalog 被归一化为不可变 `PromptRelease` 身份；`ModelProfileCalibration` 只能引用真实 live Benchmark baseline，并绑定 release/profile/contract/behavior-suite/provider/model。Calibration 是内容无关证据，不进入 System Instruction。运行时无匹配证据显示 `uncalibrated`，Release/contract/suite 变化显示 `stale`；Baseline schema v2 和 Release gate 对上述任一漂移 fail-closed。主 Agent、`/model`、子代理、`/context why`、Benchmark report/baseline 共用同一身份链，持久化记录不包含 Prompt、答案、工具参数或密钥。
 
 Step 112 增加可执行最终验收：`benchmarks/acceptance.py` 冻结 17 个 requirement、12 个 capability area，检查静态证据、生产对象运行时探针、9 个离线执行面和 fresh live authority。Live Gate 不能只凭 `passed=true` 注入，验收器会独立核对 source report、真实 provider、冻结 contract/suite、16-case/3-trial manifest、case stability/pass@k、runtime error、时间窗以及 gate/report 生成时序。最终报告执行第二次内容轻量自检；异常文本、Prompt 正文、答案、工具参数、会话正文和凭据形状内容会被拒绝并从报告中清除。
+
+Step 113 增加可选 `PromptAuthoringContract`：`[prompt.authoring].enabled=true` 时才装配
+`prompt_authoring:contract` L6/session Fragment，主 Agent 与子代理共用同一份契约。它把
+Prompt 目标分析、Instruction/Evidence 分权、stable/dynamic 缓存边界、冲突检测、工具权限
+设计和机器可验证性变成确定性检查；`PromptAuthoringValidator` 复用生产
+`PromptConflictAnalyzer`，并要求 success/regression/security 三类可判定用例。验证报告只含
+issue code、来源 ID、计数与 hash，不保存候选 Prompt 正文；契约不会自动应用修改，也不会
+授予新工具、文件访问、Sandbox/审批绕过或额外指令权威。
 
 ## 模块结构（依赖严格单向）
 

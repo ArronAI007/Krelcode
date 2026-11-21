@@ -2171,3 +2171,46 @@ credential-shaped 值。若某个 probe 误携带内容，相关 detail/evidence
 而不是把泄漏内容写入报告。CLI 使用
 `python -m krelcode.benchmarks.prompt --live --gate <baseline> --final-acceptance`，
 且禁止 `--include-content`、`--no-sdk`、`--case` 或没有 fresh Live Gate 的离线验收。
+
+## Prompt Authoring Contract（Step 113）
+
+Prompt Authoring 不是 Base Prompt 的常驻能力，也不是一个可以自动修改生产 Prompt 的
+高权限工具。Krelcode 将它实现为默认关闭的 L6/session/cacheable Fragment
+`prompt_authoring:contract`：只有 `[prompt.authoring].enabled=true` 时才由主 Agent 与
+子代理各自的 PromptAssembler 装配。配置解析 fail-closed；缺失为关闭，非法 truthy 字符串
+不会被当作启用。
+
+```text
+[prompt.authoring]
+enabled = true
+    → prompt_authoring:contract
+    → L6 / managed / session / cacheable / toggleable
+    → PromptAssembler
+    → PromptPlan / ProviderMessages
+```
+
+契约正文只规定 Prompt 作者应遵循的执行流程，不复制或替换 Base safety/tool contract：
+
+1. **目标分析**：目标行为、目标 Fragment/layer、非目标与可观测成功指标先于指令正文。
+2. **Instruction/Evidence 分权**：managed/user/project/agent-definition 可以产生指令；
+   memory/web/MCP/tool-result/retrieval 只能作为需要验证的 Evidence。
+3. **stable/dynamic 分层**：固定规则和安全边界进入 cacheable 前缀；日期、环境、会话状态、
+   当前请求、Memory 与工具结果进入动态/Evidence 通道。
+4. **冲突检测**：候选不实现第二套检测算法，直接复用生产 `PromptConflictAnalyzer`；
+   同权未裁决冲突阻断通过，高权威已裁决冲突作为 warning 保留来源记录。
+5. **工具权限设计**：显式 permission mode、工具范围、read-only/mutating、审批与 Sandbox；
+   Prompt 正文不能扩大运行时权限。
+6. **可验证性**：success、regression、security 三类用例均需机器可判定 metric；主观描述、
+   人工观感和仅靠 LLM Judge 的“看起来更好”不满足要求。
+
+`PromptAuthoringValidator` 接受与 Provider wire 无关的
+`PromptAuthoringRequest/Item/Tool/ValidationCase`。报告 `PromptAuthoringReport` 是
+content-light：只含 issue code、来源/item/tool/case ID、分类计数、request/report hash 与
+标准 `PromptConflictReport`，不保存候选 Prompt、指标正文或工具参数。Issue 覆盖目标缺失、
+Evidence 冒充 Instruction、动态内容进入稳定缓存、候选冲突、read-only 声明写工具、
+auto-approve/通配符缺少 Sandbox 或安全验证、权限提升文案以及不可机器验证的指标等失败面。
+
+`PromptAuthoringContract` 本身不调用模型，也不写 Prompt Registry、文件或配置。启用开关只
+添加可追踪、可手动关闭的 L6 Fragment；`/context fragments` 与 `/context authoring` 展示
+位置、version/hash 和启停状态。生产 Prompt 的修改仍需人工 review、对应专项测试与真实
+Behavior Benchmark，避免 meta-prompt 自己改写自身权限或悄悄污染稳定前缀。

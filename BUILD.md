@@ -5,13 +5,13 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（Step 112）
+## 1. 项目统计（Step 113）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 66,316 行（Python，**零第三方运行时依赖**） |
-| 测试 | 33,430 行 / 143 个测试文件 / 1,428 个通过用例 + 2 个本地端口集成 skip |
-| 提交 | 158 个增量提交，每个功能阶段均包含测试与语义化 commit |
+| 源码 | 67,273 行（Python，**零第三方运行时依赖**） |
+| 测试 | 33,894 行 / 144 个测试文件 / 1,449 个通过用例 + 2 个本地端口集成 skip |
+| 提交 | 159 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 16 + 只读 `memory_search`（装配 MemoryStore 时）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
 | CLI 入口 | REPL 对话 · -m 单次（text/json/stream-json）· stream-json 持久会话 · Python SDK · doctor · init · review |
@@ -20,7 +20,7 @@
 源码按层分布：
 
 ```
-agent 17566 · session 11719 · benchmarks 7456 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4353
+agent 18480 · session 11746 · benchmarks 7456 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4369
 ui 3965 · llm 3797 · tools 3479 · safety 2861 · mcp 2679 · subagent 2362
 lsp 1295 · plugins 1105 · core 1023 · skills 957 · web 891 · jobs 582 · entrypoints 226
 ```
@@ -92,6 +92,7 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 | v1.01 | Prompt Release 与 Profile 校准 | 新增不可变 `PromptRelease` 与内容无关 release hash；`ModelProfileCalibration` 绑定真实 live baseline 的 release/profile/contract/suite/provider/model，支持精确与最长 pattern scope。运行时 `calibrated/uncalibrated/stale` 可见，calibration 不进入指令通道；主 Agent、`/model`、子代理、`/context why` 与 Benchmark report 共用身份链。Baseline schema v2 嵌入 calibration，gate 对 Release/Profile/contract/frozen-suite/state 漂移 fail-closed |
 
 | v1.02 | 最终完全对齐验收 | 新增 `benchmarks/acceptance.py`：冻结 17 个 requirement/12 个 capability area，以 static/runtime/offline/live 四层证据执行 18 个 required checks。最终 `accepted` 要求 9 个离线生产面、运行时探针、冻结 Prompt Release/Parity contract/suite 和 fresh 的真实 provider report/gate 同时通过；Live 校验独立核对 16-case × 至少 3-trial、stability/pass@k、runtime error、24h 时效和 gate-report 时序，不信任裸 `passed=true`。缺 Live Gate 只能 `pending_live`（退出 2），任何 required 失败为 `failed`（退出 1）；最终 JSON 再执行 content-light 自检与异常/凭据内容清除，统一入口为 `--live --gate <baseline> --final-acceptance` |
+| v1.03 | Prompt Authoring Contract | 新增默认关闭的 L6 `prompt_authoring:contract`，通过 `[prompt.authoring].enabled` 显式启用并共享给主/子 Agent。契约自身覆盖目标分析、Instruction/Evidence 分权、stable/dynamic、冲突检测、工具权限与可验证性；`PromptAuthoringValidator` 复用生产 Conflict Analyzer，检查无效来源角色、动态缓存污染、read-only 写工具、通配符/自动批准边界、权限提升文案和 success/regression/security 机器指标，报告只含 ID/计数/hash。`/context authoring` 提供内容轻量状态入口，不自动应用 Prompt 或扩大运行时权限 |
 ## 3. 文件导览（能力 → 位置）
 
 | 想找什么 | 去哪里 |

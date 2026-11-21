@@ -36,11 +36,13 @@ from .agent.fragments import (
     sync_rule_fragments,
 )
 from .agent.prompts import (
+    prompt_authoring_enabled_from_config,
     prompt_calibration_paths_from_config,
     prompt_profile_from_config,
     prompt_release_id_from_config,
     resolve_prompt_profile,
 )
+from .agent.prompt_authoring import prompt_authoring_fragment
 from .agent.rules import RuleLoader
 from .agent.runtime import AgentRuntime
 from .agent.usage import UsageTracker
@@ -520,6 +522,7 @@ async def build_loop(
                     f"[rules] 跳过 {issue.code}: {issue.path}: "
                     f"{issue.message}")
     bus = EventBus()
+    prompt_authoring_enabled = prompt_authoring_enabled_from_config(config)
     llm = build_llm(args, config, log=log)
     prompt_profile_setting = prompt_profile_from_config(config)
     prompt_release_setting = prompt_release_id_from_config(config)
@@ -654,8 +657,13 @@ async def build_loop(
         )
 
     def subagent_catalog_fragments():
+        fragments = []
         catalog = skills_fragment(skill_manager.prompt_index())
-        return (catalog,) if catalog is not None else ()
+        if catalog is not None:
+            fragments.append(catalog)
+        if prompt_authoring_enabled:
+            fragments.append(prompt_authoring_fragment())
+        return tuple(fragments)
 
     manager = SubagentManager(
         llm=llm,
@@ -708,6 +716,8 @@ async def build_loop(
         memory_fragment = memory_store.fragment()
         if memory_fragment is not None:
             prompt_registry.register(memory_fragment)
+    if prompt_authoring_enabled:
+        prompt_registry.register(prompt_authoring_fragment())
     output_style_manager.apply_to_registry(prompt_registry)
     prompt_snapshot = prompt_registry.snapshot()
     directory_rules_enabled = (
@@ -765,6 +775,7 @@ async def build_loop(
     loop.prompt_profile_resolution = prompt_profile_resolution
     loop.prompt_profile_name = prompt_profile_resolution.name
     loop.prompt_profile_config = prompt_profile_setting
+    loop.prompt_authoring_enabled = prompt_authoring_enabled
     loop.context_options = context_options
     loop.context_engine = context_options.engine
     loop.context_enabled = not args.no_context

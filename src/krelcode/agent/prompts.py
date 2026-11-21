@@ -569,6 +569,33 @@ def prompt_calibration_paths_from_config(
     return tuple(dict.fromkeys(paths))
 
 
+def prompt_authoring_enabled_from_config(
+    config: Optional[Mapping[str, object]],
+) -> bool:
+    """Read the opt-in Prompt Authoring Contract setting fail-closed.
+
+    Canonical form is ``[prompt.authoring] enabled = true``.  A boolean
+    ``[prompt] authoring = true`` is accepted for early local configurations,
+    but malformed values are rejected rather than silently enabling the
+    contract.
+    """
+
+    section = (config or {}).get("prompt")
+    if section is None:
+        return False
+    if not isinstance(section, Mapping):
+        raise ConfigError("[prompt] 必须是 TOML table")
+    raw = section.get("authoring", False)
+    if isinstance(raw, Mapping):
+        if set(raw).difference({"enabled"}):
+            raise ConfigError("[prompt.authoring] 仅支持 enabled")
+        raw = raw.get("enabled", False)
+    if not isinstance(raw, bool):
+        raise ConfigError(
+            "[prompt.authoring].enabled 必须是布尔值 true/false")
+    return raw
+
+
 __all__ = [
     "BASE_SYSTEM_PROMPT",
     "CLAUDE_PROMPT_PROFILE",
@@ -591,6 +618,7 @@ __all__ = [
     "base_prompt_hash",
     "build_system_prompt",
     "prompt_calibration_paths_from_config",
+    "prompt_authoring_enabled_from_config",
     "prompt_profile_from_config",
     "prompt_release_id_from_config",
     "render_prompt_sections",

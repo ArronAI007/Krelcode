@@ -104,6 +104,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/context rules` | 查看 user/project/directory 规则入口、@import 来源、字符数与越界/循环/敏感文件问题 |
 | `/context attachments` | 查看动态 Context Attachment 的 ID、kind、revision、generation、layer 与 token；不输出附件正文 |
 | `/context fragments [source]` | 列出全部或指定来源的 Fragment、启停状态、group、tokens 与 cache 属性 |
+| `/context authoring` | 查看可选 `PromptAuthoringContract` 的启用状态、version/hash、L6 位置与六项能力；不输出契约正文 |
 | `/context enable\|disable\|toggle <id\|source>` | 手动启停单个 Fragment 或整个来源；精确 id 设置优先于 source 设置 |
 | `/context reset` | 清除当前会话的全部手动启停设置 |
 | `/context cache` | 显示稳定前缀字符/token 数、稳定/动态 Fragment、stable/dynamic/full hash、工具目录 hash、与上一请求相比的 hash/flag/token 差值及 cache segment 归因 |
@@ -242,6 +243,9 @@ default_provider = "openai"          # openai / anthropic / gemini / mock
 profile = "auto"                     # auto / default / claude / deepseek / openai / gemini
 release = "2026.11.21"               # 当前内置的不可变 Prompt Release
 calibration_baselines = []           # live baseline 路径；用于模型 Profile 校准
+
+[prompt.authoring]                   # 可选；默认不存在即关闭
+enabled = true                       # 装配 prompt_authoring:contract L6/session Fragment
 
 [providers.openai]
 model = "gpt-4o-mini"                # 覆盖 KRELCODE_MODEL
@@ -430,6 +434,21 @@ provider/model pattern。匹配记录还必须与当前 Release、Profile hash�
 漂移时状态为 `stale`。这两种状态都可正常对话，但 `/context why` 会明确展示，且
 `--gate` 不会接受旧现场。Calibration 只是 Benchmark 证据，不会作为额外 System
 Instruction 注入。
+
+`[prompt.authoring].enabled` 是 Prompt 设计/评审能力的显式开关，默认 `false`。启用后，
+主 Agent 与子代理都通过各自的 PromptAssembler 装配同一个 `prompt_authoring:contract`
+L6/session/cacheable Fragment；禁用时不会产生额外 token 或改变对话行为。兼容旧本地配置的
+布尔写法 `[prompt] authoring = true`，但推荐嵌套表。非布尔值或未知子键会在启动时以
+`ConfigError` fail-closed，不会按 truthy 字符串静默启用。
+
+契约要求：先定义目标行为、目标 Fragment/layer、非目标和成功指标；严格区分
+Instruction（managed/user/project/agent-definition）与 Evidence（memory/web/MCP/tool/
+retrieval）；稳定规则进入 cacheable 前缀，日期/环境/session/Memory/tool result 进入动态或
+Evidence 通道；候选必须经过生产 `PromptConflictAnalyzer`；明确 permission mode、工具范围、
+审批和 Sandbox 边界；提供 success/regression/security 三类机器可验证用例。Python API 的
+`PromptAuthoringReport` 只保存 issue code、来源 ID、计数与 hash，不保存候选 Prompt 正文。
+Prompt Authoring 永远不能自动应用生产 Prompt，也不能借正文授予工具、文件、Sandbox 或审批
+权限。`/context authoring` 只显示状态和身份，完整契约正文仍按普通 Prompt Fragment 管理。
 
 最终发布验收使用：
 

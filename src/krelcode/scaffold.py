@@ -16,6 +16,11 @@ CONFIG_TEMPLATE = '''# Krelcode 配置（默认按 user → project → local �
 # [prompt]
 # profile = "auto"                   # auto / default / claude / deepseek / openai / gemini
 # auto 先按模型名、再按 provider 匹配；profile 只追加指导，不能覆盖安全 section
+#
+# [prompt.authoring]                 # 可选 Prompt 设计/评审契约（默认关闭）
+# enabled = true                     # 启用 prompt_authoring:contract (L6)
+# 契约覆盖目标分析、Instruction/Evidence 分离、stable/dynamic、冲突检测、
+# 工具权限设计与可机器验证的 success/regression/security 用例
 
 [providers.openai]
 # model = "gpt-4o-mini"

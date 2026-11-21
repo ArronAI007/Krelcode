@@ -16,6 +16,7 @@ from ....agent.fragments import (
     skills_fragment,
     workspace_fragments,
 )
+from ....agent.prompt_authoring import PROMPT_AUTHORING_FRAGMENT_ID
 from ....agent.prompts import build_system_prompt
 from ....agent.tokens import estimate_history_tokens
 from ....core.messages import Message
@@ -1108,6 +1109,30 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             lines = ["  （Prompt Fragment Registry 与请求缓存均未启用）"]
         return _ok(*lines)
 
+    if operation == "authoring" and len(parts) == 1:
+        fragment = registry.get(PROMPT_AUTHORING_FRAGMENT_ID) if registry else None
+        configured = bool(getattr(ctx.loop, "prompt_authoring_enabled", False))
+        if fragment is None:
+            return _ok(
+                "  [authoring] disabled · PromptAuthoringContract 未装配",
+                "  启用: [prompt.authoring] enabled = true",
+                "  默认关闭；启用后仅在涉及 Prompt 设计/评审时使用 L6 契约",
+            )
+        enabled = bool(registry.is_enabled(fragment))
+        metadata = fragment.metadata
+        return _ok(
+            f"  [authoring] {'enabled' if enabled else 'disabled'}"
+            f" · contract v{metadata.get('prompt_authoring_contract', '?')}"
+            f" · hash {str(metadata.get('prompt_authoring_hash', ''))[:12]}",
+            f"  configured={str(configured).lower()}"
+            f" · fragment={fragment.id} · {fragment.layer}"
+            f" · {fragment.stability} · {fragment.trust}"
+            f" · {fragment.tokens} tokens",
+            "  capabilities: objective-analysis · instruction-evidence-separation"
+            " · stable-dynamic-placement · conflict-detection"
+            " · tool-permission-design · machine-verifiable-validation",
+        )
+
     if operation == "conflicts" and len(parts) == 1:
         return _ok(*ContextInspectionService(ctx.loop).conflict_lines())
 
@@ -1117,6 +1142,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             "/context attachments | "
             "/context sources | /context rules | /context conflicts | "
             "/context plan | /context why <id> | /context ledger | "
+            "/context authoring | "
             "/context enable|disable|toggle <id|source> | "
             "/context reset | /context cache | /context refresh")
 
