@@ -2214,3 +2214,22 @@ auto-approve/通配符缺少 Sandbox 或安全验证、权限提升文案以及�
 添加可追踪、可手动关闭的 L6 Fragment；`/context fragments` 与 `/context authoring` 展示
 位置、version/hash 和启停状态。生产 Prompt 的修改仍需人工 review、对应专项测试与真实
 Behavior Benchmark，避免 meta-prompt 自己改写自身权限或悄悄污染稳定前缀。
+
+## Prompt Engineering Lab（Step 114）
+
+`prompt_lab` 是 Prompt Authoring Contract 的可选执行面，不是新的 Prompt 来源。只有
+`[prompt.authoring].enabled=true` 时才注册为只读 core Tool；ToolContext 携带当前 Agent 的
+`PromptFragmentRegistry`，其生命周期与主 Agent/子代理各自的 PromptAssembler 一致。
+
+```text
+inspect  → metadata + source + layer + token + hash + conflict IDs
+generate → candidate → evaluate → applied=false
+compare  → Fragment ID / unique source / inline text → PromptConflictReport
+evaluate → PromptAuthoringValidator → content-light report
+```
+
+边界固定为：不调用模型、不写文件、不写 Registry、不自动应用候选、不改变 permission mode
+或 Tool allowlist。`inspect`、`compare`、`evaluate` 的返回不包含候选正文；只有 `generate`
+返回候选正文供人工审核。输入有上限，Fragment 匹配要求唯一，错误以 `ToolResult(is_error=True)`
+回填给模型而不是伪造成功。工具复用生产 `PromptConflictAnalyzer` 与
+`PromptAuthoringValidator`，因此交互诊断、Benchmark 和真实 Prompt 校验使用同一套检查语义。

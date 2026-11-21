@@ -261,6 +261,19 @@ release/profile/calibration hash、状态与 base hash，但不会记录 Prompt 
 issue code、来源 ID、计数和 hash，不含候选正文。契约不会自动应用生产 Prompt，也不会通过
 Prompt 文本授予工具、文件、Sandbox 或审批权限。
 
+启用同一个开关还会注册只读 core 工具 `prompt_lab`，统一提供四种确定性操作：
+
+```text
+inspect  -> Fragment 元数据、来源、层级、token、hash、enabled 与冲突 ID（不返回正文）
+generate -> 生成可人工审核的候选骨架，立即 evaluate；applied=false，不写 Registry/文件
+compare  -> 比较 Fragment ID、唯一 source 或两段 inline instruction，复用生产冲突分析器
+evaluate -> 用 PromptAuthoringValidator 检查候选，只返回 issue/ID/计数/hash
+```
+
+`prompt_lab` 不调用模型、不修改 Prompt、不扩大权限；`inspect`、`compare`、`evaluate` 的报告
+默认内容轻量，只有 `generate` 会返回候选正文供人工审阅。主 Agent 和子代理使用各自的
+Registry，因此子代理的 inspect/compare 不会泄漏父 Agent 的上下文现场。
+
 REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`（当前工具池的 core/discoverable/deferred/loaded/excluded 状态）、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp [reload|auth <server>]`（状态、热重载、OAuth + PKCE 授权）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>|install|update|enable|disable|remove ...]`（插件生命周期）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/lsp`（语言服务器状态）、`/web`（网页工具安全配置）、`/output-style [list|show <name>|reload|off|<name>]`（声明式输出样式）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|conflicts|authoring|fragments|enable|disable|toggle|reset|cache|ledger|refresh]`（请求 token 分项、来源归因、Prompt Authoring 状态、Fragment 启停、缓存边界与工作区重采）、`/memory [list [scope]|show|add <text> --scope|search|pin|unpin|forget|mode|review|migrate]`（分层记忆、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
 
 所有命令由统一 `CommandRegistry` 发现：`/help`、slash 菜单、Tab 补全、运行态过滤和 InputProcessor 共用同一份 catalog。来源优先级为 `builtin > custom > skill > plugin > MCP`。用户/项目 Markdown Command 来自 `~/.krelcode/commands/*.md`、`<workspace>/.krelcode/commands/*.md`、`<workspace>/.commands/*.md` 与 `[commands].paths`；`$ARGUMENTS` / `${ARGUMENTS}` 渲染参数，`allowed-tools` 只能收窄工具集。允许用户调用的 Skill 会自动显示为 `/<skill-name> [参数]`，MCP Prompt 会命名空间化为 `/mcp__<server>__<prompt> [参数]`；`/skills reload`、`/mcp reload` 与 `/plugins reload` 会原地刷新对应来源，内置命令在命名冲突时保持最高优先级。
@@ -322,7 +335,7 @@ transport = "sse"
 
 内置 `repo_map` 工具：Python 用 ast 精确提取类/函数/方法+行号（零依赖，不引 tree-sitter），JS/TS 用正则，20K 字符预算，LLM 可按行号接 `read_file` 精读。
 
-默认工具 17 个：文件/检索与执行工具（`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`、`repo_map`、`find_refs`、`check_syntax` 等）、`get_time`、`ask_user`、`update_plan`、`tool_search`，以及 `job_start/job_output/job_list/job_kill`。另注册 9 个子代理工具：`spawn_agent`、`wait_agent`、`send_to_agent`、`list_agents`、`get_agent_feed`、`pause_agent`、`resume_agent`、`kill_agent`、`list_agent_definitions`。启用 Skills 时另加 5 个 Skill 工具，并叠加 MCP 远程工具和插件工具。
+默认工具 17 个：文件/检索与执行工具（`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`、`repo_map`、`find_refs`、`check_syntax` 等）、`get_time`、`ask_user`、`update_plan`、`tool_search`，以及 `job_start/job_output/job_list/job_kill`；显式启用 `[prompt.authoring].enabled=true` 时再注册只读 `prompt_lab`。另注册 9 个子代理工具：`spawn_agent`、`wait_agent`、`send_to_agent`、`list_agents`、`get_agent_feed`、`pause_agent`、`resume_agent`、`kill_agent`、`list_agent_definitions`。启用 Skills 时另加 5 个 Skill 工具，并叠加 MCP 远程工具和插件工具。
 
 ### 动态工具目录与 ToolSearch
 
@@ -620,6 +633,13 @@ Prompt 目标分析、Instruction/Evidence 分权、stable/dynamic 缓存边界�
 `PromptConflictAnalyzer`，并要求 success/regression/security 三类可判定用例。验证报告只含
 issue code、来源 ID、计数与 hash，不保存候选 Prompt 正文；契约不会自动应用修改，也不会
 授予新工具、文件访问、Sandbox/审批绕过或额外指令权威。
+
+Step 114 增加同一开关下的只读 `prompt_lab(action=inspect|generate|compare|evaluate)` 工具。
+它把 Prompt 工程操作收敛为一个稳定 ToolPromptSpec，复用现有 Fragment Registry、
+PromptConflictAnalyzer 与 PromptAuthoringValidator；inspect 只返回元数据与 hash，compare
+支持 Fragment/source/inline 三种操作数，evaluate 返回内容轻量报告，generate 只生成
+`applied=false` 的可审阅候选。工具默认关闭、无文件写权限，Plan/read-only 模式下仍可安全
+使用；主/子代理的 ToolContext 分别绑定自己的 Prompt Registry。
 
 ## 模块结构（依赖严格单向）
 

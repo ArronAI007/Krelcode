@@ -123,6 +123,7 @@ from .tools.builtin.job_tools import (
     JobStartTool,
 )
 from .tools.builtin.memory_search import MemorySearchTool
+from .tools.builtin.prompt_lab import PromptLabTool
 from .tools.builtin.read_file import ReadFileTool
 from .tools.builtin.repo_map import RepoMapTool
 from .tools.builtin.run_command import RunCommandTool
@@ -608,6 +609,9 @@ async def build_loop(
     web_runtime = WebRuntime.from_options(web_options)
     builtin_tools = default_tools(
         memory_store, lsp_manager=lsp_manager, web_runtime=web_runtime)
+    if prompt_authoring_enabled:
+        builtin_tools.append(PromptLabTool())
+
     def child_tool_factory() -> List[Tool]:
         tools = (
             default_tools(memory_store, lsp_manager=lsp_manager, web_runtime=web_runtime)
@@ -615,6 +619,8 @@ async def build_loop(
             + list(extra_tools or [])
             + list(plugin_manager.tools)
         )
+        if prompt_authoring_enabled:
+            tools.append(PromptLabTool())
         # MCP is registered asynchronously after loop construction; resolve it
         # lazily so spawned agents see the current connected server catalogue.
         for name in registry.names():
@@ -720,6 +726,10 @@ async def build_loop(
         prompt_registry.register(prompt_authoring_fragment())
     output_style_manager.apply_to_registry(prompt_registry)
     prompt_snapshot = prompt_registry.snapshot()
+    # prompt_lab is a read-only execution tool and must inspect the same
+    # per-agent Registry used by PromptAssembler. ToolContext is copied for
+    # every tool call by AgentLoop, so assigning it here propagates naturally.
+    tool_context.prompt_registry = prompt_registry
     directory_rules_enabled = (
         not args.no_context
         and context_options.include_rules

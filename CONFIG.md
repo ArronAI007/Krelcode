@@ -439,7 +439,9 @@ Instruction 注入。
 主 Agent 与子代理都通过各自的 PromptAssembler 装配同一个 `prompt_authoring:contract`
 L6/session/cacheable Fragment；禁用时不会产生额外 token 或改变对话行为。兼容旧本地配置的
 布尔写法 `[prompt] authoring = true`，但推荐嵌套表。非布尔值或未知子键会在启动时以
-`ConfigError` fail-closed，不会按 truthy 字符串静默启用。
+`ConfigError` fail-closed，不会按 truthy 字符串静默启用。同一开关还会注册只读 core 工具
+`prompt_lab`（`inspect/generate/compare/evaluate`），它不写文件、不修改 Registry，且只使用
+当前 Agent 自己的 Prompt Registry。
 
 契约要求：先定义目标行为、目标 Fragment/layer、非目标和成功指标；严格区分
 Instruction（managed/user/project/agent-definition）与 Evidence（memory/web/MCP/tool/
@@ -449,6 +451,9 @@ Evidence 通道；候选必须经过生产 `PromptConflictAnalyzer`；明确 per
 `PromptAuthoringReport` 只保存 issue code、来源 ID、计数与 hash，不保存候选 Prompt 正文。
 Prompt Authoring 永远不能自动应用生产 Prompt，也不能借正文授予工具、文件、Sandbox 或审批
 权限。`/context authoring` 只显示状态和身份，完整契约正文仍按普通 Prompt Fragment 管理。
+`prompt_lab(action="inspect"|"generate"|"compare"|"evaluate")` 是同一开关下的只读工程入口：
+inspect/compare/evaluate 默认只返回来源、计数、冲突与 hash，不返回 Prompt 正文；generate 只
+返回 `applied=false` 的候选供人工审阅，必须再经过 evaluate 与人工 review 才能修改真实来源。
 
 最终发布验收使用：
 

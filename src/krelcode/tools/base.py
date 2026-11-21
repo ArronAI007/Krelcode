@@ -242,6 +242,10 @@ class ToolContext:
     plan_emitter: Optional[PlanEmitter] = field(default=None, repr=False)
     shell_jobs: Any = field(default=None, repr=False)
     tool_catalog: Optional[ToolCatalog] = field(default=None, repr=False)
+    # Prompt Lab uses the active registry through the execution context. This
+    # keeps the side-effect-free tool boundary narrow while preserving the
+    # per-agent registry snapshot for main agents and subagents.
+    prompt_registry: Any = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not self.sandbox_enabled:

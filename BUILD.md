@@ -5,14 +5,14 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（Step 113）
+## 1. 项目统计（Step 114）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 67,273 行（Python，**零第三方运行时依赖**） |
-| 测试 | 33,894 行 / 144 个测试文件 / 1,449 个通过用例 + 2 个本地端口集成 skip |
-| 提交 | 159 个增量提交，每个功能阶段均包含测试与语义化 commit |
-| 工具 | 内置 16 + 只读 `memory_search`（装配 MemoryStore 时）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
+| 源码 | 68,119 行（Python，**零第三方运行时依赖**） |
+| 测试 | 34,300 行 / 145 个测试文件 / 1,464 个通过用例 + 2 个本地端口集成 skip |
+| 提交 | 160 个增量提交，每个功能阶段均包含测试与语义化 commit |
+| 工具 | 内置 17 + 只读 `memory_search`（装配 MemoryStore 时）+ 只读 `prompt_lab`（Prompt Authoring 开启时）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
 | CLI 入口 | REPL 对话 · -m 单次（text/json/stream-json）· stream-json 持久会话 · Python SDK · doctor · init · review |
 | 文档 | README（上手）· CONFIG（全量参考）· DESIGN（契约）· ARCHITECTURE（对标）· PLAN（路线）· BUILD（本文） |
@@ -93,6 +93,9 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 
 | v1.02 | 最终完全对齐验收 | 新增 `benchmarks/acceptance.py`：冻结 17 个 requirement/12 个 capability area，以 static/runtime/offline/live 四层证据执行 18 个 required checks。最终 `accepted` 要求 9 个离线生产面、运行时探针、冻结 Prompt Release/Parity contract/suite 和 fresh 的真实 provider report/gate 同时通过；Live 校验独立核对 16-case × 至少 3-trial、stability/pass@k、runtime error、24h 时效和 gate-report 时序，不信任裸 `passed=true`。缺 Live Gate 只能 `pending_live`（退出 2），任何 required 失败为 `failed`（退出 1）；最终 JSON 再执行 content-light 自检与异常/凭据内容清除，统一入口为 `--live --gate <baseline> --final-acceptance` |
 | v1.03 | Prompt Authoring Contract | 新增默认关闭的 L6 `prompt_authoring:contract`，通过 `[prompt.authoring].enabled` 显式启用并共享给主/子 Agent。契约自身覆盖目标分析、Instruction/Evidence 分权、stable/dynamic、冲突检测、工具权限与可验证性；`PromptAuthoringValidator` 复用生产 Conflict Analyzer，检查无效来源角色、动态缓存污染、read-only 写工具、通配符/自动批准边界、权限提升文案和 success/regression/security 机器指标，报告只含 ID/计数/hash。`/context authoring` 提供内容轻量状态入口，不自动应用 Prompt 或扩大运行时权限 |
+
+| v1.04 | Prompt Engineering Lab | 在 `[prompt.authoring].enabled` 下注册只读 core 工具 `prompt_lab(action=inspect|generate|compare|evaluate)`，复用 Fragment Registry、PromptConflictAnalyzer 和 PromptAuthoringValidator；inspect/compare/evaluate 内容轻量，generate 只返回 `applied=false` 候选。主/子 Agent 的 ToolContext 分别绑定自己的 Registry，工具不写文件、不修改 Registry、不扩大权限，Plan/read-only 模式可用 |
+
 ## 3. 文件导览（能力 → 位置）
 
 | 想找什么 | 去哪里 |

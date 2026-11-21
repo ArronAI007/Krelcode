@@ -430,6 +430,10 @@ class SubagentManager:
             prompt_fragments.append(memory_fragment)
         prompt_registry = PromptFragmentRegistry(prompt_fragments)
         prompt_snapshot = prompt_registry.snapshot()
+        # Each subagent gets its own Prompt Registry. Bind it to the child
+        # execution context before constructing the loop so prompt_lab never
+        # inspects the parent agent's registry or history.
+        tool_context.prompt_registry = prompt_registry
         own_working_context = WorkingContextStore(
             tool_context.workspace_root, redactor=self.redactor)
         loop = AgentLoop(
