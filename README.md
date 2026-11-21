@@ -417,6 +417,8 @@ Playbook Fragment 使用 `tool_playbook:<id>` 来源、`managed` 信任级别和
 
 每个用户 turn 在进入模型前只做一次确定性任务分类，并选择一个 L9 Workflow Fragment：`general`、`bug-fix`、`feature-implementation`、`refactor`、`code-explanation`、`code-review`、`test-verification` 或 `repository-exploration`。Workflow 提供该任务类型的执行顺序、完成条件和禁止项，例如 bug fix 必须先建立失败证据、定位根因、最小修复并做回归验证；code review 必须按风险排序、给出文件/行号证据且不得擅自修改代码。
 
+`test-verification` 把实现者总结视为待验证声明，并在高风险变更时引导使用内置 `verifier` 子代理；`refactor` 明确要求原有测试保持不变，禁止通过改写、删除、跳过或弱化测试来“通过”重构。
+
 Workflow 是 turn 级 `managed` instruction，不进入稳定缓存前缀，也不会被 compact 删除。分类只读取用户指令正文，忽略附件正文和 fenced code；显式“解释指定文件”的 TurnIntent 优先映射到 `code-explanation`。分类结果、置信度、命中信号、Workflow 版本与内容 hash 进入 PromptPlan/ProviderMessages 和 `/context why workflow:<id>`，方便解释某轮为什么采用了该执行策略。
 
 ### P2：差异化能力
@@ -634,6 +636,7 @@ prompt = "Review this request against the project policy: {prompt}"
 LLM 可用 `spawn_agent` 把自包含子任务委派给后台子代理（独立上下文、并行执行；`isolated=true` 时使用独立 git worktree 分支；`fork_context=true` 只记录兼容/血缘标记，不复制父对话）。子代理不能再派生子代理（防递归）。
 
 - **委派 Meta Prompt**：`subagent/prompt.py` 是父 Agent 编写 `task` 的唯一 Prompt 来源。它要求注入子任务心智模型（当前状态、已验证事实/假设、起始文件与符号、禁止范围、交付物、验证方式），明确禁止“调查一下”“继续之前的工作”等让子代理猜测的写法，并给出正例/反例；`fork_context=true` 追加现场搬运约定（已确认事实、未决假设、已完成/剩余工作、阻塞点），因为 fork 不会传递父 Agent 的完整 history。
+- **内置 verifier**：`spawn_agent(definition="verifier", task="...")` 使用独立对抗式验证代理。Prompt 预设验证模型会偷懒、自我说服和被“绿色命令/编译成功/作者总结”迷惑，显式列出借口识别规则和强制证据响应；最终只输出结构化 `pass|fail|blocked` 报告。检查矩阵会按 backend/API、frontend、iOS/Android、数据库迁移（强制 down/rollback）、data/ML、基础设施、依赖升级和 refactor 自动组合。Verifier 只获得 `read_file/grep/glob/repo_map/find_refs/check_syntax/run_command`，不提供 write/edit 工具；命令仍受审批与 Sandbox 约束。项目或全局同名 Definition 可覆盖内置版本。
 - **Agent Feed**：`get_agent_feed(agent_id, after_sequence)` 按稳定游标读取 assistant/thinking/tool/state 增量；内存有界，所有文本先脱敏。
 - **Pause / Resume / Kill**：`pause_agent` 在每个 step 安全边界协作式暂停并保留 Task/历史，`resume_agent` 从原位置继续，`kill_agent` 才取消整个 Task；`send_to_agent` 在暂停期间仍可排队。
 - **用户定义**：在 `~/.krelcode/agents/<name>.md` 或 `<workspace>/.krelcode/agents/<name>.md` 放置 frontmatter Markdown；项目级同名定义覆盖全局。`spawn_agent(definition="reviewer", task="...")` 会应用定义中的 system prompt 和 `allowed-tools`（只能缩小工具集，不能绕过审批/Sandbox）。

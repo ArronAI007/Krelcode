@@ -537,7 +537,9 @@ TOOL_PLAYBOOKS: Tuple[ToolPlaybook, ...] = (
                     "For fork_context=true, explicitly carry over "
                     "confirmed state, completed work, active blockers, and remaining goal "
                     "because Krelcode does not copy the parent's full history. Do not duplicate "
-                    "the delegated work locally."
+                    "the delegated work locally. For risky changes, delegate independent "
+                    "verification to definition=\"verifier\" and provide the change scope, "
+                    "baseline, commands already run, and claims that must be challenged."
                 ),
             ),
             ToolGuidance(

@@ -470,8 +470,8 @@ TASK_WORKFLOWS: Tuple[TaskWorkflowDefinition, ...] = (
         steps=(
             "Establish a baseline from relevant tests, diagnostics, or current behavior.",
             "State the behavior and compatibility invariants that must remain unchanged.",
-            "Refactor in small coherent steps, updating call sites and tests with each boundary.",
-            "Run the same meaningful checks after the refactor and investigate behavior changes.",
+            "Refactor in small coherent steps and update call sites without changing existing test expectations.",
+            "Run the pre-existing relevant tests unchanged; add new tests only for previously uncovered behavior.",
         ),
         completion=(
             "The structure is simpler or clearer for the stated reason.",
@@ -480,6 +480,7 @@ TASK_WORKFLOWS: Tuple[TaskWorkflowDefinition, ...] = (
         avoid=(
             "Do not add features or fix unrelated issues unless explicitly requested.",
             "Do not perform broad mechanical renames without checking semantic references.",
+            "Do not rewrite, delete, skip, or weaken existing tests to accommodate a refactor.",
         ),
     ),
     TaskWorkflowDefinition(
@@ -532,14 +533,17 @@ TASK_WORKFLOWS: Tuple[TaskWorkflowDefinition, ...] = (
         objective="Produce trustworthy verification evidence for the requested behavior.",
         priority=60,
         steps=(
+            "Treat the implementer's description as a claim, not evidence; identify the exact behavior and changed files to verify.",
             "Identify the smallest test or diagnostic set that exercises the requested behavior.",
             "Run the checks and inspect the command, output, and exit status.",
             "Classify failures as product code, test expectation, dependency, environment, or invocation errors.",
             "Fix failures only within the user's requested scope, then rerun the affected checks.",
+            "For high-risk or cross-boundary changes, use spawn_agent(definition=\"verifier\") when available and provide the change scope, baseline, observed checks, and claims to challenge.",
         ),
         completion=(
             "The exact commands or checks, their outcomes, and any skipped coverage are reported.",
             "Failures that remain are explained without fabricating successful results.",
+            "The verdict distinguishes confirmed behavior from unverified risk and does not rely on the author's summary.",
         ),
         avoid=(
             "Do not weaken or delete tests merely to make the suite pass.",

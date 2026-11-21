@@ -5,13 +5,13 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（Step 118）
+## 1. 项目统计（Step 119）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 71,450 行（Python，**零第三方运行时依赖**） |
-| 测试 | 35,614 行 / 145 个 `test_*.py` 模块 / 1,532 个通过用例 + 2 个本地端口集成 skip |
-| 提交 | 164 个增量提交，每个功能阶段均包含测试与语义化 commit |
+| 源码 | 71,834 行（Python，**零第三方运行时依赖**） |
+| 测试 | 35,823 行 / 146 个 `test_*.py` 模块 / 1,541 个通过用例 + 2 个本地端口集成 skip |
+| 提交 | 165 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 内置 17 + 只读 `memory_search`（装配 MemoryStore 时）+ `prompt_lab`（Prompt Authoring 开启时；生产只读，proposal 仅写 `.krelcode/`）+ 交互式子代理 9 + MCP/Plugin 动态注册 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
 | CLI 入口 | REPL 对话 · -m 单次（text/json/stream-json）· stream-json 持久会话 · Python SDK · doctor · init · review |
@@ -20,8 +20,8 @@
 源码按层分布：
 
 ```
-agent 21821 · session 11880 · benchmarks 7456 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4400
-ui 3965 · llm 3797 · tools 3979 · safety 2861 · mcp 2679 · subagent 2525
+agent 22156 · session 11880 · benchmarks 7456 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4400
+ui 3965 · llm 3797 · tools 3979 · safety 2861 · mcp 2679 · subagent 2574
 lsp 1295 · plugins 1105 · core 1023 · skills 965 · web 891 · jobs 582 · entrypoints 226
 ```
 
@@ -97,6 +97,7 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 | v1.06 | 隔离候选评估 | PromptAuthoringContract 升为 v3；canonical candidate 先通过 baseline/candidate temporary `PromptPlan`，执行当前失败、稳定回归、Instruction 优先级、Evidence 注入、permission/Sandbox、cache stability 六项固定门禁。通过只允许人工 review，Prompt Release 仍需独立人工决策；评估复用真实 ToolContext/Sandbox L5 合同，报告 content-light，且始终 `production_modified=false`、`applied=false`。旧 authoring evaluate 明确不能绕过 Release 资格 |
 | v1.07 | Connected Prompt Release Pipeline | 新增 `agent/prompt_release_pipeline.py`，串联 PromptAuthoring Skill、Candidate、temporary PromptPlan 六项隔离、offline/live Benchmark、Parity、Conflict Analyzer、Release/Calibration proposal 与人工审批。`prompt_lab` 增加 `propose/status` 且无 approve action；新增 `/prompt-release list|status|approve|reject`。提案、审批、calibration 与 release artifact 全部 content-light、原子写入 `.krelcode/prompt-releases/`，绑定 candidate/proposal/release/profile/contract/suite/calibration hash；缺证据停在 pending，身份漂移标记 stale，批准后仍 `production_modified=false/applied=false`。内置 `prompt-authoring` Skill 规定完整工程流程与 Agent 自批准禁令 |
 | v1.08 | 子代理委派 Meta Prompt | 新增 canonical `subagent/prompt.py`，统一父 Agent 的 `spawn_agent.task` 写作契约：心智模型注入、事实/假设分离、禁止猜测、正例/反例、范围边界、交付物与验证；接入 ToolPromptSpec 与 subagents playbook。`fork_context=true` 追加明确现场搬运指导，并说明 fork 只记录血缘、不复制父完整 history。Meta Prompt 不注入子代理 task 正文，不改变任务 Schema、审批、工具范围或 Sandbox |
+| v1.09 | 对抗式 Verification Agent | 新增 canonical `agent/verification.py` 与内置 `verifier` Definition：先建模验证 Agent 会偷懒、自我说服、把绿色命令/编译成功/作者总结当正确性，再用 `RECOGNIZE_YOUR_OWN_RATIONALIZATIONS` 强制补证，并以固定 JSON `OUTPUT FORMAT` 返回 verdict/claims/checks/behavior/rollback。检查矩阵覆盖 backend/API、frontend、iOS/Android、数据库 down/rollback、data/ML、infrastructure、dependency upgrade 与 refactor；refactor 要求原测试保持不变。Verifier 不含 write/edit 工具，用户同名 Definition 可覆盖内置版本 |
 
 ## 3. 文件导览（能力 → 位置）
 

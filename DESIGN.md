@@ -516,6 +516,15 @@ version、commands、errors、handoff notes 或其他扩展字段。缺少字段
   fork_context=true 追加现场搬运指导，要求区分确认事实/未决假设，并写明已完成、
   剩余目标与阻塞点。该 Prompt 只进入 ToolPromptSpec/L5，不注入子代理 task 正文，
   不扩大工具、审批或 Sandbox 权限。
+- **独立 Verifier**（Step 119）：`agent/verification.py` 定义内置 `verifier`
+  Agent Definition 的 canonical Prompt。它不描述“如何实现”，而是先建模验证
+  Agent 的失败模式：停在一份绿色输出、把无关失败合理化、把编译当行为正确、
+  相信实现者总结、因迁移简单而跳过 rollback、因 refactor 而默许测试改写。
+  `RECOGNIZE_YOUR_OWN_RATIONALIZATIONS` 为每种借口规定必须补取的证据；
+  `OUTPUT FORMAT` 固定为可机器检查的 verdict/claims/checks/behavior/rollback JSON。
+  检查矩阵覆盖 backend/API、frontend、iOS/Android、数据库迁移、data/ML、
+  infrastructure、dependency upgrade 与 refactor；组合变更取并集。内置定义
+  只开放读取和命令工具，不含 write_file/edit_file，项目/全局同名定义可覆盖。
 - **防递归**：子代理工具集 = default_tools()（不含 spawn 系），委派深度硬限制 1 层
 - **可观测**：SubagentSpawned/SubagentFinished 上父总线——渲染器打状态行、
   recorder 落 JSONL 审计；REPL /agents 列状态
@@ -887,8 +896,9 @@ running ──pause()──> paused ──resume()──> running
 - **Kill** 与 interrupt/shutdown 分离：设置 `kill_requested`、取消 Task、状态进入
   `killed`，终态 `SubagentFinished(killed)` 只发一次；隔离 worktree 先存档到分支再回收，
   之后拒绝追加任务。
-- **Definition** 从 `~/.krelcode/agents`、项目 `.krelcode/agents`、项目
-  `.agents/agents` 发现 Markdown；项目覆盖全局。frontmatter 提供 description、
+- **Definition** 先加载内置 `verifier`，再从 `~/.krelcode/agents`、项目
+  `.krelcode/agents`、项目 `.agents/agents` 发现 Markdown；项目覆盖全局与内置。
+  frontmatter 提供 description、
   allowed-tools、isolated、fork-context，正文是角色 system prompt。allowlist 只能
   缩小默认工具池；未知工具、坏 frontmatter 或空正文 fail-closed/隔离。
 - **Sidechain** 记录 start、definition 元数据、初始/排队/打断消息、feed、状态转换、

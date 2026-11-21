@@ -1,5 +1,6 @@
-"""用户自定义 Agent Definition 的发现与校验。
+"""内置与用户自定义 Agent Definition 的发现与校验。
 
+内置 ``verifier`` 提供独立对抗式验证能力；用户定义仍可覆盖同名内置定义。
 定义文件是带 frontmatter 的 Markdown：
 ``~/.krelcode/agents/reviewer.md`` 或
 ``<workspace>/.krelcode/agents/reviewer.md``。项目级同名定义覆盖全局。
@@ -61,6 +62,27 @@ class AgentDefinitionIssue:
     message: str
 
 
+def builtin_agent_definitions() -> Tuple[AgentDefinition, ...]:
+    """Return trusted built-in definitions that user/project files may override."""
+    from ..agent.verification import (
+        VERIFICATION_AGENT_ALLOWED_TOOLS,
+        VERIFICATION_AGENT_DESCRIPTION,
+        VERIFICATION_AGENT_NAME,
+        VERIFICATION_AGENT_SYSTEM_PROMPT,
+    )
+
+    return (
+        AgentDefinition(
+            name=VERIFICATION_AGENT_NAME,
+            description=VERIFICATION_AGENT_DESCRIPTION,
+            system_prompt=VERIFICATION_AGENT_SYSTEM_PROMPT,
+            allowed_tools=VERIFICATION_AGENT_ALLOWED_TOOLS,
+            source="builtin",
+            mcp_servers=(),
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class _Root:
     path: Path
@@ -112,7 +134,10 @@ class AgentDefinitionManager:
             self.reload()
 
     def reload(self) -> None:
-        found: Dict[str, AgentDefinition] = {}
+        found: Dict[str, AgentDefinition] = {
+            definition.name: definition
+            for definition in builtin_agent_definitions()
+        }
         issues = []
         for root in self._roots:
             if not root.path.is_dir():
@@ -212,7 +237,8 @@ class AgentDefinitionManager:
                 mcp = ",".join(definition.mcp_servers) or "none"
                 runtime.append(f"mcp={mcp}")
             runtime_text = " · " + " · ".join(runtime) if runtime else ""
+            location = str(definition.path) if definition.path else "built-in"
             lines.append(
                 f"{definition.name} [{definition.source}] {definition.description} "
-                f"· tools: {tools}{runtime_text} · {definition.path}")
+                f"· tools: {tools}{runtime_text} · {location}")
         return tuple(lines)

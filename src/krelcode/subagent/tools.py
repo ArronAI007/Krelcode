@@ -24,7 +24,9 @@ class SpawnAgentTool:
         "子代理始终继承 Base/Managed/User/Project 指令和与本任务相关的 Memory，"
         "但不会继承父代理完整对话历史。fork_context 仅保留兼容标记。"
         "返回子代理 id；用 wait_agent 等待结果，list_agents 查看状态。"
-        "可传 definition 使用 ~/.krelcode/agents 或项目 .krelcode/agents 中的自定义定义。"
+        "可传 definition 使用内置 verifier（读取与测试命令，不提供 write/edit 工具；"
+        "命令仍受审批与 Sandbox），"
+        "或 ~/.krelcode/agents 与项目 .krelcode/agents 中的自定义定义。"
     )
     prompt = build_spawn_agent_prompt(include_fork=True)
     prompt_version = SPAWN_AGENT_PROMPT_VERSION
@@ -33,6 +35,9 @@ class SpawnAgentTool:
         "parent's full conversation history.",
         "Parallel read-only investigation or an isolated worktree task will "
         "materially shorten the critical path.",
+        "A non-trivial implementation needs independent adversarial verification; "
+        "use definition=\"verifier\" with the exact scope, baseline, observed "
+        "checks, and claims to challenge.",
     )
     when_not_to_use = (
         "The next step depends immediately on the result, so a local blocking "
@@ -74,6 +79,24 @@ class SpawnAgentTool:
             description=(
                 "For fork_context=true, hand-carry confirmed state, completed work, "
                 "remaining scope, and checks because the parent history is not copied."
+            ),
+        ),
+        ToolPromptExample(
+            title="Request independent adversarial verification",
+            input={
+                "task": (
+                    "Verify the current refactor of src/example/parser.py against "
+                    "HEAD. Claim: behavior is unchanged and all existing parser tests "
+                    "still pass without edits. Baseline: parser suite passed before the "
+                    "change. Challenge hidden behavior drift, public API compatibility, "
+                    "error/default/order changes, and any weakened tests. Run the "
+                    "original tests unchanged and return the structured verification report."
+                ),
+                "definition": "verifier",
+            },
+            description=(
+                "Uses the built-in verifier to challenge an implementation claim with "
+                "independent evidence instead of trusting the implementer's summary."
             ),
         ),
     )
@@ -366,7 +389,7 @@ class KillAgentTool:
 class ListAgentDefinitionsTool:
     read_only = True
     name = "list_agent_definitions"
-    description = "列出用户自定义 Agent Definition（名称、来源、工具范围）。"
+    description = "列出内置与用户自定义 Agent Definition（名称、来源、工具范围）。"
     parameters: Dict[str, Any] = {"type": "object", "properties": {}}
 
     def __init__(self, manager: SubagentManager) -> None:

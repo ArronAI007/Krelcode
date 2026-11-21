@@ -56,9 +56,10 @@ def test_spawn_agent_exposes_canonical_tool_prompt_spec():
     assert spec.version == SPAWN_AGENT_PROMPT_VERSION
     assert spec.when_to_use
     assert spec.when_not_to_use
-    assert len(spec.examples) == 2
+    assert len(spec.examples) == 3
     assert spec.examples[0].input["isolated"] is True
     assert spec.examples[1].input["fork_context"] is True
+    assert spec.examples[2].input["definition"] == "verifier"
     assert "fork_context 仅保留兼容标记" in spec.description
     assert "不会继承父代理完整对话历史" in spec.description
     assert len(spec.content_hash) == 64
