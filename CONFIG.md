@@ -16,6 +16,7 @@ krelcode [子命令] [选项]
 | `doctor` | 环境自检（Python/key/配置/git/工作区/Sandbox/MCP 命令），✓⚠✗ 报告；有 ✗ 退出码 1 | — |
 | `init` | 生成 `krelcode.toml` + `AGENTS.md` 模板（不覆盖已有文件） | `--force` |
 | `review` | 评审当前 git 变更（只读工具集，天然安全） | `--staged`（只评审暂存区）、`--focus "重点"` |
+| `security-review` | 防御性安全审查：security-review Workflow、本地只读工具池、JSON Schema 报告与 CI 风险门禁 | `--staged`、`--focus "重点"`、`--fail-on <严重度>`、`--output-format json` |
 
 ### 通用旗标
 
@@ -31,6 +32,7 @@ krelcode [子命令] [选项]
 | `--output-format` | text | `text` 普通输出；`json` 单行结果（配合 `-m`）；`stream-json` JSONL 事件流（配合 `-m` 或 stream-json stdin） |
 | `--input-format` | text | `text` 普通 REPL/`-m`；`stream-json` 从 stdin 逐行读取 user/control 消息（SDK/管道） |
 | `--max-steps` | 64 | 单轮任务最大 LLM 迭代步数；达到上限时本轮安全中止，可显式调高 |
+| `--fail-on` | high | `security-review` 达到 `critical/high/medium/low/info` 时以退出码 1 表示门禁失败；`never` 关闭门禁 |
 | `--repeat-failure-limit` | 3 | 同签名调用连续失败 N 次判定卡死中止 |
 | `--token-budget` | 不限 | 单轮 token 预算，超限优雅中止 |
 | `--retries` | 2 | LLM 瞬态失败（429/5xx/网络）重试次数，尊重 Retry-After，0 关闭 |
@@ -114,6 +116,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/prompts` · `/prompts list [kind\|source]` | 只读列出主 Agent、Tool、Workflow、Subagent、Compact、Review、Hook、MCP、Skill、Plugin Command、Custom Command 与 Output Style 的来源、权限、Hash、Token 和最近真实渲染状态；筛选值可传 kind 或 source 子串 |
 | `/prompts show <id>` | 查看单个 Prompt Surface 的 source/owner/version、instruction/evidence 角色、authority/trust、stability、content hash、capability、有界 metadata、Surface Contract（Schema ID/hash、timeout、输入/输出上限、脱敏策略）与最近执行状态；永远不显示 Prompt 正文 |
 | `/prompts coverage` · `/prompts hash` | 查看核心 Surface 覆盖、kind/role/trust 计数与 content-light 目录 Hash；refresh 只更新旁路目录，不改变 Provider 请求 |
+| `/security-review [--staged] [--focus <重点>]` | 对当前 git 变更启动 `security-review` Workflow；本轮只开放 `read_file/grep/glob/find_refs/repo_map/tool_search`，要求返回结构化 Security Review JSON 报告 |
 | `/memory` · `/memory list [scope]` | 列出全部或指定 user/project/session 作用域记忆及 ID、类型和内容 |
 | `/memory scopes` | 显示各作用域条数与存储路径 |
 | `/memory show <id>` | 查看作用域、类型、source、时间、tag、token 与完整内容；ID 支持唯一后缀 |

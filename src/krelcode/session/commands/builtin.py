@@ -190,6 +190,11 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
                   "/compact preview --auto 仅在超预算时预览；"
                   "/compact <focus> 带重点生成交接摘要")),
         CommandSpec(
+            "security-review", "对当前 git 变更执行只读安全审查",
+            argument_hint="[--staged] [--focus <重点>]",
+            help=("启动 security-review Workflow，仅暴露本地只读工具；"
+                  "返回结构化 JSON 安全报告与风险门禁结论")),
+        CommandSpec(
             "stop", "中止正在运行的任务", kind=control,
             available_during_run=True,
             help="中止正在运行的任务（历史自动修复）"),

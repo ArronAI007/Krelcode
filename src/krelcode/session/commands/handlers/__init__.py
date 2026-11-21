@@ -8,6 +8,7 @@ from ..context import CommandContext
 from ..types import CommandResult, CommandSource
 from .memory_ops import handle_memory
 from .prompt_surface_ops import handle_prompts
+from .security_ops import handle_security_review
 from .runtime_ops import (
     handle_agents,
     handle_allow,
@@ -79,6 +80,7 @@ BUILTIN_HANDLERS: dict[str, CommandHandler] = {
     "context": handle_context,
     "prompts": handle_prompts,
     "prompt-release": handle_prompt_release,
+    "security-review": handle_security_review,
     "memory": handle_memory,
     "web": handle_web,
     "export": handle_export,

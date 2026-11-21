@@ -28,7 +28,7 @@ def test_default_max_steps_matches_agent_default():
 
 def test_subcommands_documented():
     text = (ROOT / "CONFIG.md").read_text(encoding="utf-8")
-    for cmd in ("doctor", "init", "review"):
+    for cmd in ("doctor", "init", "review", "security-review"):
         assert f"`{cmd}`" in text
 
 
@@ -45,7 +45,8 @@ def test_repl_commands_documented():
                     "/rewind", "/rename", "/delete", "/memory",
                     "/memory list", "/memory show", "/memory add",
                     "/memory search", "/memory pin",
-                    "/memory forget", "/memory review", "/memory migrate"):
+                    "/memory forget", "/memory review", "/memory migrate",
+                    "/security-review"):
         assert f"`{command}" in text, f"CONFIG.md 缺少 REPL 命令: {command}"
 
 

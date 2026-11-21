@@ -255,6 +255,8 @@ def output_style_prompt_surfaces(
 def auxiliary_prompt_surfaces() -> tuple[PromptSurfaceDescriptor, ...]:
     from .compression import SUMMARY_SYSTEM_PROMPT
     from ..review import REVIEW_SYSTEM_PROMPT
+    from ..security_review.prompt import SECURITY_REVIEW_SYSTEM_PROMPT
+    from ..security_review.report import SECURITY_REVIEW_SURFACE_CONTRACT
 
     return (
         PromptSurfaceDescriptor(
@@ -274,6 +276,34 @@ def auxiliary_prompt_surfaces() -> tuple[PromptSurfaceDescriptor, ...]:
             capabilities=("json_schema", "summary_merge", "fallback_summary"),
             metadata={"no_tools": True, "bounded_output": True},
             contract=COMPACT_SURFACE_CONTRACT,
+        ),
+        PromptSurfaceDescriptor(
+            id="aux:security-review",
+            kind=PromptSurfaceKind.REVIEW,
+            source="security_review.runner",
+            owner="SecurityReviewRunner",
+            version="security-review-v1",
+            role=SourceRole.INSTRUCTION,
+            authority=InstructionSource.MANAGED.value,
+            trust="managed",
+            stability="static",
+            scope="managed",
+            content_hash=prompt_content_hash(SECURITY_REVIEW_SYSTEM_PROMPT),
+            token_estimate=estimate_text_tokens(SECURITY_REVIEW_SYSTEM_PROMPT),
+            description="Defensive Security Review with a structured report contract.",
+            capabilities=(
+                "workflow",
+                "read_only_tools",
+                "json_schema",
+                "security_gate",
+            ),
+            metadata={
+                "run_mode": "review",
+                "permission_mode": "read-only",
+                "workflow": "security-review",
+                "structured_report": True,
+            },
+            contract=SECURITY_REVIEW_SURFACE_CONTRACT,
         ),
         PromptSurfaceDescriptor(
             id="aux:review",

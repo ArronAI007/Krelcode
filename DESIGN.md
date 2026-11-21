@@ -45,6 +45,7 @@ src/krelcode/
 │   └── builtin/      # 每个工具一个文件，互相独立
 ├── skills/      # 文件系统型 Agent Skills：发现/解析/渐进加载/资源/脚本
 ├── plugins/     # 轻量本地插件：manifest → 隔离 import → Tool 适配/命名空间
+├── security_review/ # Security Review Workflow、只读工具池、结构化报告与 runner
 ├── safety/      # 策略层（实现 ApprovalPolicy 端口）
 │   └── policy.py     # Decision / AllowAllPolicy（Step 6 加沙箱与交互审批）
 ├── session/     # 交互会话层 + 状态适配器
@@ -52,7 +53,7 @@ src/krelcode/
 │   ├── attachments.py # @文本/图片展开（工作区约束与预算）
 │   ├── state.py      # SessionViewState：idle/running/stopping 与 turn 现场
 │   ├── commands/     # CommandSpec/Registry → dispatcher/handlers
-│   │   ├── builtin.py # 29 个内置命令元数据与 help 渲染
+│   │   ├── builtin.py # 40 个内置命令元数据与 help 渲染
 │   │   ├── registry.py # 解析、别名、隐藏/启用、运行态与来源冲突
 │   │   ├── sources.py # Skill / MCP Prompt → dynamic CommandSpec
 │   │   └── handlers/  # 会话、上下文、Skill、MCP 等执行器
@@ -64,7 +65,7 @@ src/krelcode/
 │   └── repl.py
 ├── entrypoints/ # 进程入口：light cli fast-path → full main → lazy app
 │   ├── cli.py   # --version 零配置/零 Agent 依赖；其余 argv 原样下发
-│   └── main.py  # 完整参数解析 + doctor/init/review/REPL 路由
+│   └── main.py  # 完整参数解析 + doctor/init/review/security-review/REPL 路由
 ├── app.py       # 组装根(composition root)：唯一知道所有具体类的地方
 └── __main__.py  # 与控制台脚本共用 entrypoints.cli:main
 ```
@@ -1967,6 +1968,53 @@ runner 可在 cli 层增加独立动态导入项，而无需把对应实现拉�
 - 输出：文本模式打印评审 + [usage]；JSON 模式与 -m 同构
   （ok/review/usage/cost_usd/tools_used/denied）
 - 复用失败安全的 _git runner；非仓库/无变更 → 友好提示，退出码 0
+
+## Security Review（Step C）
+
+Security Review 与普通 code review 使用不同的风险模型和执行边界，代码位于
+`src/krelcode/security_review/`：
+
+```text
+git diff / staged / focus
+        │
+        ▼
+security-review Task Workflow + untrusted evidence boundary
+        │
+        ▼
+local read-only ToolRegistry
+(read_file / grep / glob / find_refs / repo_map / tool_search)
+        │
+        ▼
+PromptSurfaceContract
+(redaction + input/output limits + timeout + JSON Schema)
+        │
+        ▼
+SecurityReviewReport
+(summary / severity / verdict / findings / CWE / evidence / remediation / coverage)
+        │
+        ├─ text renderer
+        ├─ `krelcode security-review --output-format json`
+        └─ `/security-review` slash command
+```
+
+核心约束：
+
+- Workflow 分类新增 `security_review`，显式安全审查请求优先于普通
+  `code_review`；Workflow 要求 source-to-sink 验证、去重、证据和覆盖限制。
+- Headless runner 使用独立 `ToolRegistry`，只有本地只读工具；`RunMode.REVIEW`、
+  `PermissionMode.READ_ONLY`、tool allowlist 和 SandboxPolicy 形成四层边界。
+- diff、文件名、注释与源码字符串统一标记为 untrusted evidence；其中嵌入的指令
+  不得改变系统规则、扩大范围或触发执行。
+- 报告由 `security-review-report-v1` 严格 Schema 校验。Finding ID 必须为
+  `SEC-NNN`，位置/严重度/置信度/CWE/证据/修复建议可机器读取；`high` 或
+  `critical` 不允许 `pass` verdict。
+- CLI 默认文本报告；`--output-format json` 输出包含 report、scope、gate、usage、
+  tools_used 和 denied 的单行 JSON。`--fail-on` 默认 `high`，达到阈值时退出码为 1。
+- `/security-review` 复用当前会话，但通过 `CommandResult.tool_allowlist` 把本轮
+  工具池收窄到同一只读集合，并要求模型返回同一结构化报告。
+- Prompt Surface Registry 登记 `aux:security-review`，Contract 记录
+  Schema hash、300 秒超时、输入/输出上限与脱敏策略；执行 observation 不保存报告或
+  Prompt 正文。
 
 ## 分层测试策略（每层可独立验证）
 

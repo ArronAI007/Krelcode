@@ -339,7 +339,7 @@ stability、cacheability 与 Instruction authority 从 Registry 继承；新目�
 project/L6/session 默认值。`PromptCandidate.candidate_hash` 对完整候选内容确定且敏感，而
 `evaluate` 只返回 candidate metadata hash、issue、计数和报告，不返回 Prompt/rollback/metric 正文。
 
-REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`（当前工具池的 core/discoverable/deferred/loaded/excluded 状态）、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp [reload|auth <server>]`（状态、热重载、OAuth + PKCE 授权）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>|install|update|enable|disable|remove ...]`（插件生命周期）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/lsp`（语言服务器状态）、`/web`（网页工具安全配置）、`/output-style [list|show <name>|reload|off|<name>]`（声明式输出样式）、`/statusline [要求]`（启动 `statusline-setup` 子代理）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|conflicts|authoring|fragments|enable|disable|toggle|reset|cache|ledger|refresh]`（请求 token 分项、来源归因、Prompt Authoring 状态、Fragment 启停、缓存边界与工作区重采）、`/prompts [list [kind|source]|show <id>|coverage|hash]`（跨 Agent/Tool/Workflow/Subagent/Compact/Review/扩展来源的 content-light Prompt Surface 目录、Schema/超时/输出上限契约与真实执行观测）、`/prompt-release [list|status|approve|reject]`（content-light Prompt Release proposal 与仅限前台人类的审批）、`/memory [list [scope]|show|add <text> --scope --type --why --how --topic|search|pin|unpin|forget|mode|review|migrate]`（索引、按需主题、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`（当前工具池的 core/discoverable/deferred/loaded/excluded 状态）、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp [reload|auth <server>]`（状态、热重载、OAuth + PKCE 授权）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>|install|update|enable|disable|remove ...]`（插件生命周期）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/lsp`（语言服务器状态）、`/web`（网页工具安全配置）、`/output-style [list|show <name>|reload|off|<name>]`（声明式输出样式）、`/statusline [要求]`（启动 `statusline-setup` 子代理）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|conflicts|authoring|fragments|enable|disable|toggle|reset|cache|ledger|refresh]`（请求 token 分项、来源归因、Prompt Authoring 状态、Fragment 启停、缓存边界与工作区重采）、`/prompts [list [kind|source]|show <id>|coverage|hash]`（跨 Agent/Tool/Workflow/Subagent/Compact/Review/扩展来源的 content-light Prompt Surface 目录、Schema/超时/输出上限契约与真实执行观测）、`/prompt-release [list|status|approve|reject]`（content-light Prompt Release proposal 与仅限前台人类的审批）、`/security-review [--staged] [--focus <重点>]`（只读安全审查与结构化 JSON 报告）、`/memory [list [scope]|show|add <text> --scope --type --why --how --topic|search|pin|unpin|forget|mode|review|migrate]`（索引、按需主题、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
 
 所有命令由统一 `CommandRegistry` 发现：`/help`、slash 菜单、Tab 补全、运行态过滤和 InputProcessor 共用同一份 catalog。来源优先级为 `builtin > custom > skill > plugin > MCP`。用户/项目 Markdown Command 来自 `~/.krelcode/commands/*.md`、`<workspace>/.krelcode/commands/*.md`、`<workspace>/.commands/*.md` 与 `[commands].paths`；`$ARGUMENTS` / `${ARGUMENTS}` 渲染参数，`allowed-tools` 只能收窄工具集。允许用户调用的 Skill 会自动显示为 `/<skill-name> [参数]`，MCP Prompt 会命名空间化为 `/mcp__<server>__<prompt> [参数]`；`/skills reload`、`/mcp reload` 与 `/plugins reload` 会原地刷新对应来源，内置命令在命名冲突时保持最高优先级。
 
@@ -553,6 +553,22 @@ krelcode review --focus "安全" --output-format json   # CI 集成
 ```
 
 评审模式只给模型**只读工具**（可查上下文、绝无写/执行能力），输出以「结论: 可合入 / 建议修改后合入 / 需要修改」收尾。
+
+### Security Review
+
+```bash
+krelcode security-review
+krelcode security-review --staged --focus "authentication"
+krelcode security-review --output-format json --fail-on high
+```
+
+Security Review 是独立 Workflow，不复用可写 Agent 工具：本轮仅暴露
+`read_file/grep/glob/find_refs/repo_map/tool_search`。模型必须把 diff、源码注释和
+文件内容视为不可信数据，先追踪 source-to-sink 和可利用前置条件，再返回通过
+JSON Schema 校验的结构化报告。报告包含 `summary`、风险等级、verdict、findings、
+CWE/文件行号、证据、修复建议、覆盖范围与限制；`--fail-on high` 适合作为 CI 门禁。
+REPL 中可使用 `/security-review [--staged] [--focus <重点>]`，同样把本轮工具池收窄为
+只读集合。
 
 ### Headless / CI 模式
 

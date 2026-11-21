@@ -23,15 +23,22 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="krelcode", description="Krelcode coding agent (统一 Provider + tool-calling 循环 + MCP)"
     )
-    p.add_argument("command", nargs="?", choices=("doctor", "init", "review"), default=None,
+    p.add_argument("command", nargs="?",
+                   choices=("doctor", "init", "review", "security-review"),
+                   default=None,
                    help="子命令：doctor=环境自检；init=生成配置/规则模板；"
-                        "review=评审当前 git 变更（缺省进入对话）")
+                        "review=评审当前 git 变更；security-review=只读安全审查；"
+                        "缺省进入对话")
     p.add_argument("--force", action="store_true",
                    help="init 子命令：覆盖已存在的模板文件")
     p.add_argument("--staged", action="store_true",
-                   help="review 子命令：只评审已暂存变更（git diff --cached）")
+                   help="review/security-review 子命令：只处理已暂存变更（git diff --cached）")
     p.add_argument("--focus", default=None,
-                   help="review 子命令：附加评审重点（如 '安全' / '性能'）")
+                   help="review/security-review 子命令：附加评审重点")
+    p.add_argument(
+        "--fail-on", choices=("never", "info", "low", "medium", "high", "critical"),
+        default="high",
+        help="security-review 子命令：达到该严重度时返回非零退出码（默认 high）")
     p.add_argument("--provider", default=None,
                    help="openai / anthropic / gemini / mock（默认: KRELCODE_PROVIDER 或配置文件 default_provider 或 openai）")
     p.add_argument("--mock", action="store_true", help="等价于 --provider mock（含演示脚本），无需 API key")
@@ -165,6 +172,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             from krelcode.review import run_review
 
             return asyncio.run(run_review(args))
+        if args.command == "security-review":
+            from krelcode.security_review.runner import run_security_review
+
+            return asyncio.run(run_security_review(args))
 
         # Agent/Provider/MCP/Sandbox composition stays behind the full CLI
         # boundary and is loaded only for conversation/headless runs.
