@@ -35,12 +35,15 @@ from .memory import (
     MemoryKind,
     MemoryScope,
     MemoryStore,
+    MemoryType,
     coerce_memory_kind,
+    coerce_memory_type,
     extract_test_command,
     memory_digest,
     memory_texts_conflict,
     normalize_memory_text,
     sanitize_memory_text,
+    validate_memory_structure,
 )
 
 MAX_CANDIDATES = 200
@@ -188,6 +191,9 @@ class MemoryCandidateDraft:
     confidence: float
     evidence: tuple[MemoryEvidence, ...] = ()
     topic: str = "general"
+    memory_type: MemoryType | str = MemoryType.REFERENCE
+    why: str = ""
+    how_to_apply: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "trigger", MemoryCandidateTrigger(self.trigger))
@@ -197,6 +203,15 @@ class MemoryCandidateDraft:
         object.__setattr__(
             self, "evidence", tuple(self.evidence or ()))
         object.__setattr__(self, "topic", str(self.topic or "general")[:120])
+        object.__setattr__(
+            self, "memory_type", coerce_memory_type(self.memory_type))
+        object.__setattr__(
+            self, "why", " ".join(str(self.why or "").split())[:600])
+        object.__setattr__(
+            self,
+            "how_to_apply",
+            " ".join(str(self.how_to_apply or "").split())[:600],
+        )
 
 
 @dataclass(frozen=True)
@@ -216,12 +231,16 @@ class MemoryCandidate:
     evidence: tuple[MemoryEvidence, ...] = ()
     conflict_ids: tuple[str, ...] = ()
     existing_memory_id: str = ""
+    memory_type: MemoryType | str = MemoryType.REFERENCE
+    why: str = ""
+    how_to_apply: str = ""
 
     def __post_init__(self) -> None:
         trigger = MemoryCandidateTrigger(self.trigger)
         status = MemoryCandidateStatus(self.status)
         scope = MemoryScope(self.scope)
         kind = coerce_memory_kind(self.kind)
+        memory_type = coerce_memory_type(self.memory_type)
         if scope is not MemoryScope.PROJECT:
             raise ValueError("Auto Memory 候选只能使用 project scope")
         if kind is not MemoryKind.KNOWLEDGE:
@@ -232,6 +251,7 @@ class MemoryCandidate:
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "scope", scope)
         object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "memory_type", memory_type)
         object.__setattr__(
             self, "confidence", round(
                 max(0.0, min(float(self.confidence), 1.0)), 2))
@@ -240,6 +260,13 @@ class MemoryCandidate:
         object.__setattr__(
             self, "conflict_ids", tuple(dict.fromkeys(self.conflict_ids or ())))
         object.__setattr__(self, "updated_at", str(self.updated_at or self.created_at))
+        object.__setattr__(
+            self, "why", " ".join(str(self.why or "").split())[:600])
+        object.__setattr__(
+            self,
+            "how_to_apply",
+            " ".join(str(self.how_to_apply or "").split())[:600],
+        )
 
     @property
     def trigger_value(self) -> str:
@@ -248,6 +275,19 @@ class MemoryCandidate:
     @property
     def status_value(self) -> str:
         return self.status.value
+
+    @property
+    def memory_type_value(self) -> str:
+        return coerce_memory_type(self.memory_type).value
+
+    @property
+    def structurally_complete(self) -> bool:
+        if coerce_memory_type(self.memory_type) not in {
+            MemoryType.FEEDBACK,
+            MemoryType.PROJECT,
+        }:
+            return True
+        return bool(self.why and self.how_to_apply)
 
     def as_record(self) -> dict[str, object]:
         return {
@@ -261,6 +301,9 @@ class MemoryCandidate:
             "updated_at": self.updated_at,
             "scope": self.scope.value,
             "kind": self.kind.value,
+            "memory_type": self.memory_type_value,
+            "why": self.why,
+            "how_to_apply": self.how_to_apply,
             "status": self.status.value,
             "topic": self.topic,
             "evidence": [item.as_record() for item in self.evidence],
@@ -338,6 +381,9 @@ class MemoryCandidateQueue:
                 updated_at=str(payload.get("updated_at") or ""),
                 status=str(payload.get("status") or MemoryCandidateStatus.PENDING.value),
                 topic=str(payload.get("topic") or "general"),
+                memory_type=str(payload.get("memory_type") or "reference"),
+                why=str(payload.get("why") or ""),
+                how_to_apply=str(payload.get("how_to_apply") or ""),
                 evidence=tuple(evidence),
                 conflict_ids=conflicts,
                 existing_memory_id=str(payload.get("existing_memory_id") or ""),
@@ -414,6 +460,8 @@ class MemoryCandidateQueue:
         text = self._sanitize_text(draft.text, MAX_CANDIDATE_CHARS)
         if not text or not _meaningful_candidate_text(text):
             return None, False
+        why = self._sanitize_text(draft.why, 600)
+        how_to_apply = self._sanitize_text(draft.how_to_apply, 600)
         evidence_items: list[MemoryEvidence] = []
         for item in draft.evidence:
             safe_item = self._sanitize_evidence(item)
@@ -439,6 +487,9 @@ class MemoryCandidateQueue:
                     created_at=now,
                     updated_at=now,
                     topic=draft.topic,
+                    memory_type=draft.memory_type,
+                    why=why,
+                    how_to_apply=how_to_apply,
                     evidence=evidence,
                 )
                 records.append(candidate)
@@ -468,6 +519,9 @@ class MemoryCandidateQueue:
                 status=status,
                 trigger=draft.trigger if reopen else existing.trigger,
                 topic=draft.topic or existing.topic,
+                memory_type=draft.memory_type,
+                why=why or existing.why,
+                how_to_apply=how_to_apply or existing.how_to_apply,
                 updated_at=now,
             )
             records = [updated if item.id == existing.id else item for item in records]
@@ -621,6 +675,15 @@ _FORMAL_TEST_COMMAND_RE = re.compile(
     r"dotnet\s+test|mvn\s+test|gradlew?(?:\s+test)?|make\s+test|"
     r"ruff\s+check)\b"
 )
+_MEMORY_TYPE_PREFIX_RE = re.compile(
+    r"^(user|feedback|project|reference)\s*:\s*", re.IGNORECASE)
+_WHY_SECTION_RE = re.compile(
+    r"(?is)(?:\*\*)?why(?:\*\*)?\s*:\s*(.*?)"
+    r"(?=(?:\*\*)?how\s+to\s+apply(?:\*\*)?\s*:|$)"
+)
+_HOW_SECTION_RE = re.compile(
+    r"(?is)(?:\*\*)?how\s+to\s+apply(?:\*\*)?\s*:\s*(.*)$"
+)
 
 
 class MemoryCandidateExtractor:
@@ -660,6 +723,7 @@ class MemoryCandidateExtractor:
                     turn,
                     evidence_kind="user_correction",
                     excerpt=user_input,
+                    memory_type=MemoryType.FEEDBACK,
                 ))
 
         architecture = self._architecture_pattern(user_input)
@@ -700,7 +764,18 @@ class MemoryCandidateExtractor:
         command: str = "",
         exit_code: Optional[int] = None,
         topic: str = "general",
+        memory_type: MemoryType | str = MemoryType.PROJECT,
+        why: str = "",
+        how_to_apply: str = "",
     ) -> MemoryCandidateDraft:
+        clean_text, prefix_type = self._type_prefix(text)
+        normalized_type = prefix_type or coerce_memory_type(memory_type)
+        without_structure, parsed_why, parsed_how = self._parse_structure(clean_text)
+        safe_why = parsed_why or why or self._default_why(trigger)
+        safe_how = parsed_how or how_to_apply or self._default_how(trigger)
+        if normalized_type not in {MemoryType.FEEDBACK, MemoryType.PROJECT}:
+            safe_why = parsed_why or why
+            safe_how = parsed_how or how_to_apply
         evidence = MemoryEvidence(
             kind=evidence_kind,
             turn_id=turn.turn_id,
@@ -712,12 +787,68 @@ class MemoryCandidateExtractor:
             created_at=self.clock(),
         )
         return MemoryCandidateDraft(
-            text=text,
+            text=without_structure,
             trigger=trigger,
             confidence=confidence,
             evidence=(evidence,),
             topic=topic,
+            memory_type=normalized_type,
+            why=safe_why,
+            how_to_apply=safe_how,
         )
+
+    @staticmethod
+    def _type_prefix(text: str) -> tuple[str, Optional[MemoryType]]:
+        raw = str(text or "").strip()
+        match = _MEMORY_TYPE_PREFIX_RE.match(raw)
+        if match is None:
+            return raw, None
+        return raw[match.end():].strip(), MemoryType(match.group(1).lower())
+
+    @staticmethod
+    def _parse_structure(text: str) -> tuple[str, str, str]:
+        raw = str(text or "").strip()
+        why_match = _WHY_SECTION_RE.search(raw)
+        how_match = _HOW_SECTION_RE.search(raw)
+        if why_match is None and how_match is None:
+            return raw, "", ""
+        first = min(
+            match.start() for match in (why_match, how_match)
+            if match is not None)
+        body = raw[:first].strip() or raw
+        why = " ".join(why_match.group(1).split()) if why_match else ""
+        how = " ".join(how_match.group(1).split()) if how_match else ""
+        return body, why, how
+
+    @staticmethod
+    def _default_why(trigger: MemoryCandidateTrigger) -> str:
+        return {
+            MemoryCandidateTrigger.EXPLICIT_REMEMBER:
+                "用户明确要求将这一稳定事实用于后续工作。",
+            MemoryCandidateTrigger.USER_CORRECTION:
+                "用户纠正了此前的错误理解，避免后续重复犯错。",
+            MemoryCandidateTrigger.SUCCESSFUL_TEST_REUSE:
+                "该验证命令已在当前项目中成功执行并可重复使用。",
+            MemoryCandidateTrigger.ARCHITECTURE_PATTERN:
+                "用户多次确认了这一项目级约束或设计意图。",
+            MemoryCandidateTrigger.TASK_COMPLETION:
+                "任务完成时已确认该事实具有跨任务复用价值。",
+        }[trigger]
+
+    @staticmethod
+    def _default_how(trigger: MemoryCandidateTrigger) -> str:
+        return {
+            MemoryCandidateTrigger.EXPLICIT_REMEMBER:
+                "仅在相关任务中作为 Evidence 使用，并结合当前代码与用户请求验证。",
+            MemoryCandidateTrigger.USER_CORRECTION:
+                "遇到同类决策时先应用该纠正；若工作区事实已变化，以当前事实为准。",
+            MemoryCandidateTrigger.SUCCESSFUL_TEST_REUSE:
+                "需要同类验证时优先复用该命令，并确认工作目录、依赖和参数仍然匹配。",
+            MemoryCandidateTrigger.ARCHITECTURE_PATTERN:
+                "设计或修改相关模块时先检查该约束是否仍成立，不得用它替代代码检查。",
+            MemoryCandidateTrigger.TASK_COMPLETION:
+                "仅在后续任务与该事实直接相关时引用，并重新验证路径、符号和行为。",
+        }[trigger]
 
     @staticmethod
     def _explicit_remember(text: str) -> str:
@@ -950,6 +1081,7 @@ class AutoMemoryCoordinator:
                 and candidate.status is MemoryCandidateStatus.PENDING
                 and candidate.confidence >= self.auto_threshold
                 and not candidate.conflict_ids
+                and candidate.structurally_complete
             ):
                 candidate = self.accept(candidate.id) or candidate
                 if candidate.status is MemoryCandidateStatus.ACCEPTED:
@@ -977,10 +1109,16 @@ class AutoMemoryCoordinator:
         conflicts = self._memory_conflicts(candidate)
         candidate = self.queue.set_external_conflict_ids(
             candidate.id, conflicts) or candidate
+        validate_memory_structure(
+            candidate.memory_type, candidate.why, candidate.how_to_apply)
         entry = self.store.add(
             candidate.text,
             scope=MemoryScope.PROJECT,
             kind=MemoryKind.KNOWLEDGE,
+            memory_type=candidate.memory_type,
+            topic=candidate.topic,
+            why=candidate.why,
+            how_to_apply=candidate.how_to_apply,
             tags=("auto-memory", candidate.trigger.value),
             source="auto-memory:review",
             metadata={

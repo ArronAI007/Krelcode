@@ -52,7 +52,7 @@ krelcode [子命令] [选项]
 | `--no-sandbox` | — | 同时关闭审批策略与运行时 Sandbox（AllowAll，自担风险） |
 | `--memory-mode off\|suggest\|auto` | 配置/`suggest` | Auto Memory：关闭；候选等待审核；高置信无冲突候选自动写入 |
 | `--memory-suggest-threshold` | `0.55` | 候选进入项目本地审核队列的最低置信度 |
-| `--memory-auto-threshold` | `0.80` | `auto` 模式自动晋级为长期 knowledge 的最低置信度 |
+| `--memory-auto-threshold` | `0.80` | `auto` 模式自动晋级为结构化长期记忆的最低置信度（仍需无冲突且 Why/How 完整） |
 | `--no-mcp` | — | 不启动配置中的 MCP 服务器 |
 | `--resume` | — | 恢复会话：裸旗=最新，`--resume <path>`=指定 |
 | `--no-session` | — | 关闭会话 JSONL 录制 |
@@ -114,13 +114,13 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/memory` · `/memory list [scope]` | 列出全部或指定 user/project/session 作用域记忆及 ID、类型和内容 |
 | `/memory scopes` | 显示各作用域条数与存储路径 |
 | `/memory show <id>` | 查看作用域、类型、source、时间、tag、token 与完整内容；ID 支持唯一后缀 |
-| `/memory add <text> [--scope user\|project\|session]` | 写入指定作用域，缺省 project；兼容 `/memory add <scope> <text>` 旧语法 |
+| `/memory add <text> [--scope user\|project\|session] [--type user\|feedback\|project\|reference] [--why <原因>] [--how <应用方式>] [--topic <主题>]` | 写入指定作用域，缺省 project/reference；feedback/project 强制 Why/How；兼容 `/memory add <scope> <text>` |
 | `/memory remove <id>` · `/memory forget <id>` | 删除指定记忆并重建 memory Fragment；两者语义相同 |
 | `/memory pin\|unpin <id>` | 固定/取消固定记忆；固定项在搜索和 Prompt 注入中优先 |
 | `/memory search <关键词> [--scope <scope>]` | 在有界作用域内按相关度搜索已审核记忆，不搜索待审核候选 |
 | `/memory mode [off\|suggest\|auto]` | 查看或切换当前进程的 Auto Memory 模式 |
 | `/memory review [pending\|accepted\|rejected\|superseded\|all]` | 按状态查看候选、触发来源、置信度、证据数与冲突 |
-| `/memory review accept\|reject <id>` | 接受为 `project/knowledge`，或拒绝且永不自动写入 |
+| `/memory review accept\|reject <id>` | 按候选语义类型接受；feedback/project 结构不完整时 fail-closed，或拒绝且永不自动写入 |
 | `/memory migrate [user\|project\|session]` | 幂等迁移旧 JSONL：补全 schema、脱敏、去重、保留 pinned；仅在变更时备份 |
 | `/compact` | 立即执行工具微压缩+Structured Compact v2（不等预算），完成后显示 generation、来源节省量、checkpoint 与实际边界 |
 | `/compact preview [--auto]` | 预览工具微压缩与 compact 的 head/compact/keep 边界、高低水位、来源节省量、条数、预计 tokens 与待摘要消息；不改 history。`--auto` 仅在超预算时预览 |
@@ -284,7 +284,7 @@ network = false                      # 默认禁止子进程联网；CLI --sandb
 [permissions]
 mode = "default"                     # default / read-only / auto-approve / plan
 
-[memory]                             # Auto Memory（只记录稳定、可复用、已验证知识）
+[memory]                             # Auto Memory（typed Feedback/Project 必须有 Why/How）
 mode = "suggest"                     # off / suggest / auto；默认只入队，不自动写
 suggest_threshold = 0.55             # 候选入队阈值
 auto_threshold = 0.80                # auto 模式晋级阈值；冲突候选永不自动晋级
@@ -644,7 +644,7 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 ├── checkpoints/       文件快照（/undo、/rewind 数据源；meta 带 session/turn 身份）
 ├── compact-checkpoints/  compact 前完整脱敏 history + Structured Compact 摘要（/rewind 数据源）
 ├── tool_outputs/      超长工具输出全文（历史里留截断+路径引用）
-├── memory/            # entries.jsonl + candidates.jsonl + sessions/<session-id>.jsonl
+├── memory/            # entries.jsonl + candidates.jsonl + MEMORY.md + topics/ + sessions/
 ├── jobs/              后台 Shell 任务脱敏日志（每任务 output.log，默认 10 MiB 上限）
 ├── sidechains/        子代理 JSONL（按 manager run-id 分目录；定义/feed/状态/history/结果）
 ├── exports/           /export 缺省输出目录
@@ -660,12 +660,20 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 `~/.krelcode/memory/entries.jsonl`（跨工作区 user 记忆，权限与隐私由本机用户边界保护）。
 
 Memory 作用域：`user`（跨工作区）→ `project`（当前工作区 `.krelcode/memory/entries.jsonl`）
-→ `session`（`.krelcode/memory/sessions/<session-id>.jsonl`）。每层独立限长、限条数、
-脱敏与原子删除；读取时以文件所在目录决定 scope，旧 project 记录缺少新字段时自动按
-`note/manual` 兼容。fork/resume 会重新绑定当前会话，no-session 模式下的 session 记忆仅在进程内存在。
+→ `session`（`.krelcode/memory/sessions/<session-id>.jsonl`）。语义类型为
+`user/feedback/project/reference`，feedback/project 强制 `Why` 与 `How to apply`。每层独立
+限长、限条数、脱敏与原子删除；读取时以文件所在目录决定 scope，旧 project 记录缺少新字段
+时安全按 `reference` 兼容。fork/resume 会重新绑定当前会话，no-session 模式下的 session
+记忆仅在进程内存在。
+
+请求只始终加载严格限长的 `MEMORY.md` 索引（≤200 主题、每行≤150 字符、总长≤24,000
+字符），主题正文位于 `topics/*.md`，通过 `memory_search(id=...|topic=...)` 按需读取。
+Markdown 是可重建视图，JSONL 为权威源；user 作用域主题只写入 `~/.krelcode/memory/`，
+不会复制到项目目录。
+
 Auto Memory 候选保存在项目本地 `.krelcode/memory/candidates.jsonl`，不会跨 workspace；
-模型生成的候选一律为 `knowledge` 类型，写入前执行脱敏、摘要去重、冲突检测与置信度阈值。
-Memory Fragment 明确声明为 untrusted contextual knowledge，而不是 system instructions。
+模型生成的候选按 user/feedback/project/reference 分类，写入前执行脱敏、摘要去重、冲突检测
+与置信度阈值。Memory 仍是 untrusted L7 Evidence，不是 system instructions。
 `/memory migrate [scope]` 会把旧 JSONL 补全为新 schema，脱敏并合并规范化文本重复项，保留
 pinned/tag/metadata，跳过损坏行；只有内容实际变化时才创建同目录
 `entries.jsonl.bak-YYYYMMDD-HHMMSS[-N]`，随后原子重写。迁移幂等，二次执行不会重复备份。

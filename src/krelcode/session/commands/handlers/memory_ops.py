@@ -10,6 +10,7 @@ from ....session.memory import (
     SCOPE_LABELS,
     MemoryEntry,
     coerce_memory_scope,
+    coerce_memory_type,
     sync_memory_fragment,
 )
 from ....session.memory_candidates import (
@@ -60,7 +61,9 @@ def _candidate_lines(candidates) -> list[str]:
             f" · 冲突 {len(item.conflict_ids)}" if item.conflict_ids else "")
         lines.append(
             f"  {item.id} · {item.status.value} · 置信度 {item.confidence:.2f}"
-            f" · {trigger} · 证据 {len(item.evidence)}{conflict}")
+            f" · {item.memory_type_value} · {trigger}"
+            f" · 证据 {len(item.evidence)}{conflict}"
+            + ("" if item.structurally_complete else " · 待补 Why/How"))
         lines.append(f"    {item.text}")
     if candidates:
         lines.append(
@@ -74,7 +77,8 @@ def _entry_lines(entries) -> list[str]:
         scope = coerce_memory_scope(entry.scope)
         pinned = " · pinned" if entry.pinned else ""
         lines.append(
-            f"  {entry.id} · {scope.value}/{entry.kind_value}{pinned}"
+            f"  {entry.id} · {scope.value}/{entry.kind_value}"
+            f" · type={entry.memory_type_value}{pinned}"
             f" · {entry.text}")
     return lines
 
@@ -105,12 +109,13 @@ async def _written(
     ))
 
 
-def _parse_add(rest: str) -> tuple[str, object]:
+def _parse_add(rest: str) -> tuple[str, object, dict[str, str]]:
     tokens = _parts(rest)
     if not tokens:
         raise ValueError
     scope_value = ""
     text_tokens: list[str] = []
+    options = {"memory_type": "", "why": "", "how": "", "topic": ""}
     index = 0
     while index < len(tokens):
         token = tokens[index]
@@ -120,6 +125,24 @@ def _parse_add(rest: str) -> tuple[str, object]:
             continue
         if token.startswith("--scope="):
             scope_value = token.split("=", 1)[1]
+            index += 1
+            continue
+        option_aliases = {
+            "--type": "memory_type",
+            "--why": "why",
+            "--how": "how",
+            "--topic": "topic",
+        }
+        if token in option_aliases and index + 1 < len(tokens):
+            options[option_aliases[token]] = tokens[index + 1]
+            index += 2
+            continue
+        matched_option = next(
+            (name for name in option_aliases if token.startswith(name + "=")),
+            "",
+        )
+        if matched_option:
+            options[option_aliases[matched_option]] = token.split("=", 1)[1]
             index += 1
             continue
         text_tokens.append(token)
@@ -139,7 +162,7 @@ def _parse_add(rest: str) -> tuple[str, object]:
             text = " ".join(tokens[1:]).strip()
     if not text:
         raise ValueError
-    return text, scope
+    return text, scope, options
 
 
 async def handle_memory(ctx: CommandContext) -> CommandResult:
@@ -192,6 +215,10 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
                 f"  Auto Memory · mode={auto_memory.mode.value}"
                 f" · pending={auto_memory.queue.pending_count()}"
                 f" · queue={auto_memory.queue.path}")
+        lines.append(f"  Workspace index · {store.index_path}")
+        lines.append(f"  Workspace topics · {store.topics_dir}")
+        lines.append(f"  User index · {store.user_index_path}")
+        lines.append(f"  User topics · {store.user_topics_dir}")
         return _ok(*lines)
 
     if operation == "show":
@@ -203,33 +230,51 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
                 else "  用法: /memory show <id>")
         return _ok(
             f"  [memory] {entry.id}",
-            f"  作用域: {entry.scope_value} · 类型: {entry.kind_value}"
+            f"  作用域: {entry.scope_value} · 类型: {entry.memory_type_value}"
+            f" · legacy kind: {entry.kind_value}"
             f" · source: {entry.source}"
             + (" · pinned" if entry.pinned else ""),
+            f"  topic: {entry.topic or '(entry-specific)'}"
+            f" · structured: {str(entry.is_structured).lower()}",
             f"  created: {entry.created_at} · updated: {entry.updated_at}",
             f"  tags: {', '.join(entry.tags) or '(none)'}"
             f" · tokens: {estimate_text_tokens(entry.text)}",
+            *([f"  Why: {entry.why}"] if entry.why else []),
+            *([f"  How to apply: {entry.how_to_apply}"]
+              if entry.how_to_apply else []),
             "  内容:",
             entry.text,
         )
 
     if operation == "add":
         try:
-            text, scope = _parse_add(rest)
-            entry = store.add(text, scope=scope)
+            text, scope, options = _parse_add(rest)
+            memory_type = coerce_memory_type(
+                options.get("memory_type") or "reference")
+            entry = store.add(
+                text,
+                scope=scope,
+                memory_type=memory_type,
+                topic=options.get("topic") or "",
+                why=options.get("why") or "",
+                how_to_apply=options.get("how") or "",
+            )
         except (OSError, ValueError) as exc:
             return _ok(
                 "  [memory] 写入失败: "
                 + (str(exc) if str(exc) else
-                   "用法: /memory add <text> [--scope user|project|session]"))
+                   "用法: /memory add <text> [--scope user|project|session] "
+                   "[--type user|feedback|project|reference] "
+                   "[--why <原因>] [--how <应用方式>] [--topic <主题>]"))
         sync_memory_fragment(ctx.loop, store)
         await _written(
             ctx, memory_id=entry.id, action="added", scope=entry.scope_value,
             kind=entry.kind_value, tokens=estimate_text_tokens(entry.text))
         return _ok(
-            f"  [memory] 已写入{SCOPE_LABELS[scope]}记忆 {entry.id}",
-            "  语法: /memory add <text> --scope user|project|session；"
-            "旧语法 /memory add <scope> <text> 仍兼容")
+            f"  [memory] 已写入{SCOPE_LABELS[scope]}记忆 {entry.id}"
+            f" · type={entry.memory_type_value}",
+            "  feedback/project 必须同时提供 --why 和 --how；"
+            "主题正文按需由 memory_search(id|topic) 读取")
 
     if operation in {"remove", "forget"}:
         entry_id = rest.split(maxsplit=1)[0] if rest else ""
@@ -358,13 +403,17 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
                 conflict_count=len(accepted.conflict_ids),
                 digest=accepted.digest,
             ))
+            accepted_entry = _resolve_entry(
+                store, accepted.existing_memory_id or "")
             await _written(
                 ctx, memory_id=accepted.existing_memory_id or "",
-                action="accepted", scope="project", kind="knowledge",
+                action="accepted",
+                scope=accepted_entry.scope_value if accepted_entry else "project",
+                kind=accepted_entry.kind_value if accepted_entry else "knowledge",
                 source="auto-memory:review")
             return _ok(
                 f"  [memory] 已接受 {accepted.id}"
-                f" → knowledge {accepted.existing_memory_id}")
+                f" → {accepted.memory_type_value} {accepted.existing_memory_id}")
         try:
             rejected = auto_memory.reject(candidate.id)
         except OSError as exc:
@@ -412,4 +461,5 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
 
     return _ok(
         "  用法: /memory [list [scope]|scopes|show|add|remove|forget|"
-        "pin|unpin|search|mode|review|migrate]")
+        "pin|unpin|search|mode|review|migrate]",
+        "  add 支持 --type user|feedback|project|reference、--why、--how、--topic")

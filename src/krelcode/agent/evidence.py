@@ -218,6 +218,19 @@ def render_memory_evidence_set(
                 "pinned: "
                 f"{str(bool(record.metadata.get('pinned'))).lower()}"
             )
+        memory_type = _one_line(record.metadata.get("memory_type", ""))
+        if memory_type:
+            lines.append(f"memory_type: {html.escape(memory_type, quote=False)}")
+        topic = _one_line(record.metadata.get("topic", ""))
+        if topic:
+            lines.append(f"topic: {html.escape(topic, quote=False)}")
+        why = _one_line(record.metadata.get("why", ""))
+        if why:
+            lines.append(f"why: {html.escape(why, quote=False)}")
+        how_to_apply = _one_line(record.metadata.get("how_to_apply", ""))
+        if how_to_apply:
+            lines.append(
+                f"how_to_apply: {html.escape(how_to_apply, quote=False)}")
         lines.extend(("", html.escape(record.content, quote=False)))
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
@@ -277,6 +290,10 @@ def evidence_record_from_memory(
         "created_at": str(getattr(entry, "created_at", "") or ""),
         "updated_at": str(getattr(entry, "updated_at", "") or ""),
         "tags": tags,
+        "memory_type": str(getattr(entry, "memory_type_value", "") or ""),
+        "topic": str(getattr(entry, "topic", "") or ""),
+        "why": str(getattr(entry, "why", "") or ""),
+        "how_to_apply": str(getattr(entry, "how_to_apply", "") or ""),
         "entry_metadata": entry_metadata,
     }
     return EvidenceRecord(

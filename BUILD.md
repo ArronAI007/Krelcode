@@ -221,3 +221,19 @@ PYTHONPATH=src node --experimental-strip-types --test typescript-sdk/tests/sdk.t
 
 TypeScript SDK 的 `npm run typecheck` 需要本机已有 `typescript` 与 `@types/node`；
 没有网络依赖时仍可运行上面的 Node type-stripping 测试。
+
+## Step 122 Memory 索引与按需主题验收
+
+```bash
+PYTHONPATH=src pytest -q tests/test_step122_memory_index.py \
+  tests/test_memory_store.py tests/test_step91_auto_memory.py \
+  tests/test_step102_memory_evidence.py tests/test_command_handlers.py
+```
+
+预期：
+
+- `MEMORY.md` 只含受限索引，主题正文不在默认 Context 中；
+- `memory_search(id=...|topic=...)` 才展开主题与 Why/How；
+- feedback/project 缺少 Why/How 时写入失败，候选保持不可接受；
+- user 主题文件只出现在 `~/.krelcode/memory/topics/`；
+- 专用 L5 Prompt 同时存在 What NOT to save 与 Task/Plan/Memory/Compact 边界。

@@ -21,6 +21,7 @@ from .agent.context import (
     build_workspace_context_bundle,
 )
 from .agent.loop import AgentLoop
+from .agent.memory_contract import memory_contract_fragment
 from .agent.context_assembler import ContextAssembler
 from .agent.context_source import (
     DirectoryRulesContextSource,
@@ -727,6 +728,8 @@ async def build_loop(
         workspace_root, config=output_style_config)
     prompt_registry = PromptFragmentRegistry(
         base_fragments(prompt_profile_resolution))
+    if memory_store is not None:
+        prompt_registry.register(memory_contract_fragment())
     if workspace_context is not None:
         sync_rule_fragments(prompt_registry, workspace_context)
     # v3 keeps Memory out of the system Prompt Registry. It is assembled as a

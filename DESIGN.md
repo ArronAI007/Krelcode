@@ -1037,8 +1037,8 @@ PromptWriter [Panel Dock] → 上分隔线 → 输入 → 下分隔线 → 状�
   但调用与结果都不进入 `loop.history`；运行中拒绝并发执行，Esc/Ctrl-C 可终止进程组。
 - **Memory 快捷模式**：`#text` 默认写 project 作用域；Step 86 进一步增加
   `#user:` / `#project:` / `#session:`。单条 2,000 字符、每作用域 200 条；常见
-  token/key 形态和当前 SecretRedactor 值都会替换为 `***`。`#` 只打开面板。近期最多
-  12 条/4,000 字符作为 `memory:scoped` 动态 runtime Fragment 注入；它与 `AGENTS.md`
+  token/key 形态和当前 SecretRedactor 值都会替换为 `***`。`#` 只打开面板。请求只加载
+  有界 `MEMORY.md` 索引；主题正文通过 `memory_search` 按需读取。Memory 与 `AGENTS.md`
   分离，不进入对话消息，也不会阻断 prompt cache 稳定前缀。
 
 ## Context 可观测性与基线（Step 84）
@@ -1561,6 +1561,8 @@ MemoryEntry
 ├─ id / text
 ├─ scope      user | project | session
 ├─ kind       note | preference | fact | workflow | knowledge
+├─ memory_type user | feedback | project | reference
+├─ topic / why / how_to_apply
 ├─ source     manual | legacy | future extractor
 ├─ tags[]
 ├─ pinned
@@ -1568,15 +1570,19 @@ MemoryEntry
 └─ metadata{}
 ```
 
+`kind` 只保留旧 JSONL 分类；新的 Prompt/用户语义由 `memory_type` 表达。feedback/project
+必须在写入前同时具备 Why 与 How to apply。旧记录缺失结构时安全降级为 reference，避免把
+不完整事实误当作可执行项目知识。
+
 | Scope | 存储位置 | 生命周期 | 使用范围 |
 |-------|----------|----------|----------|
 | user | `~/.krelcode/memory/entries.jsonl` | 跨进程、跨工作区 | 当前 OS 用户私有 |
 | project | `<workspace>/.krelcode/memory/entries.jsonl` | 跟随工作区 | 当前仓库/目录 |
 | session | `<workspace>/.krelcode/memory/sessions/<session-id>.jsonl` | 跟随会话 | 当前逻辑会话 |
 
-作用域按 `user → project → session` 由宽到窄排列。Prompt 渲染顺序相同，使更具体的
-作用域靠后可见；12 条/4,000 字符的稀缺注入预算按 `session → project → user` 分配，
-避免大量全局偏好挤掉当前任务记忆。
+作用域按 `user → project → session` 由宽到窄排列。索引固定最多 200 个主题、每行 150
+字符、总长 24,000 字符，只展示标题/type/scope/hook；正文按需读取，避免大量全局记忆挤占
+当前任务预算。
 
 存储与兼容规则：
 
@@ -1589,15 +1595,19 @@ MemoryEntry
 - `remove(id)` 只重写命中的 scope 文件，使用同目录临时文件原子替换；不会改动其他层。
 - session scope 在 `--no-session` 或尚未绑定会话时驻留进程内存。正常启动、`/fork`、
   `/resume` 切换 recorder 时同步重新绑定 session id；旧会话文件不会被继续写入。
-- `MemoryStore.fragment()` 生成 `memory:scoped` 动态 runtime Fragment，metadata 只包含
-  各 scope 条数。它仍由 Prompt/Context Fragment Registry 管理，可手动启停且不进入
-  prompt cache 稳定前缀。
+- `MemoryStore.index_view()` 生成 `memory:scoped` L7 Evidence layer，但内容只包含严格
+  限长的 `MEMORY.md` 索引，不包含主题正文。JSONL 是权威源，Markdown 索引/主题是可重建
+  视图；变更后原子重建，陈旧主题视图同步删除。
+- 索引上限为 200 主题、每行 150 字符、总计 24,000 字符。user 主题视图只写入
+  `~/.krelcode/memory/`，project/session 写入工作区，避免跨项目私密正文泄漏。
+- `memory_search(query)` 负责定位主题，`memory_search(id|topic)` 才按需读取完整主题及
+  Why/How。Memory 仍是 untrusted、requires_validation、不可缓存的 Evidence。
 
 交互入口：
 
 - `#内容` = project；`#user: 内容` / `#project: 内容` / `#session: 内容` 显式选择 scope。
-- `/memory [list]` 查看 ID、scope、kind 和内容；`/memory scopes` 查看条数与路径；
-  `/memory add <scope> <text>` 写入；`/memory remove <id>` 删除；
+- `/memory [list]` 查看 ID、scope/kind、语义 type 和内容；`/memory scopes` 查看条数、
+  索引与主题路径；`/memory add` 支持 `--type/--why/--how/--topic`；`/memory remove <id>` 删除；
   `/memory pin|unpin <id>` 调整搜索与注入优先级；`/memory search <关键词>` 检索。
 - TUI Memory 面板展示 scope 与创建时间；命令和快捷写入后统一调用
   `sync_memory_fragment()`，下一次模型 Step 通过 ContextAssembler 看到新快照。
@@ -1624,20 +1634,23 @@ MemoryCandidateQueue  (.krelcode/memory/candidates.jsonl, project-local)
            ↓ suggest / auto
 /memory review  ........................ 人工接受或拒绝
            ↓
-MemoryStore(project/knowledge)  → memory_search / memory Fragment
+MemoryStore(typed entry)  → MEMORY.md index → memory_search(topic) on demand
 ```
 
 - 默认模式是 `suggest`：只生成候选，不写长期记忆；`auto` 仅在候选置信度达到
   `0.80`、证据成立且与已有候选/记忆无冲突时晋级；`off` 完全停止提取。
-- 候选队列按 workspace 隔离，并记录 project id；模型生成的候选被强制为
-  `project/knowledge`，不能借候选写入 user scope，也不能升级为 system instruction。
+- 候选队列按 workspace 隔离，并记录 project id；候选语义类型为
+  `user/feedback/project/reference`，但队列本身仍 project-local。feedback/project 必须有
+  Why/How，缺失时停在 pending 且不得自动或人工 accept。
 - 稳定知识必须带证据：turn/session、用户原句、工具名、命令与 exit code。重复成功的
   测试命令只累积 evidence，不重复建候选；不同正式测试命令被标为冲突并阻止自动晋级。
 - 文本、证据、tags 与 metadata 在落盘前统一经过 SecretRedactor 和密钥模式过滤；覆盖
   API key、Authorization/Bearer、Cookie、常见平台 token 与私钥块。脱敏后无实质信息的
   候选直接丢弃。
-- `memory_search` 是本地只读工具，返回带 `role="contextual_knowledge"` 和
-  `trust="untrusted"` 边界的已审核记录；Memory Fragment 同样声明内容不是系统指令。
+- 专用 L5 `memory:lifecycle-contract` 固定 What NOT to save 清单，并明确 Task（当前步骤）、
+  Plan（实施方案）、Memory（长期可复用事实）与 Compact（当前会话交接）的所有权。
+- `memory_search` 是本地只读工具，返回 `[Evidence: Memory]` envelope 的已审核记录；
+  Memory 索引同样声明 `instruction=false`，不能升级为系统指令。
 
 ## 分层规则、目录规则与 @import（Step 87）
 

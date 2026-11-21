@@ -104,7 +104,8 @@ auto_threshold = 0.80
   一个发布周期用于故障回退，未知值会安全回落到 v3。
 - `mode=off`：不提取 Auto Memory 候选。
 - `mode=suggest`：候选写入本地审核队列，不自动进入长期记忆；这是默认值。
-- `mode=auto`：置信度达到 `auto_threshold` 且不存在冲突时才写入 `project/knowledge`。
+- `mode=auto`：置信度达到 `auto_threshold`、不存在冲突且 feedback/project 的 Why/How 完整时
+  才写入结构化长期记忆。
 - `suggest_threshold` 控制候选是否值得进入审核队列；`auto_threshold` 只对 `auto`
   模式生效，不能绕过冲突检查和脱敏。
 
@@ -230,6 +231,8 @@ attachment。它不会重写持久 history；下一真实模型请求会使用�
 /memory scopes
 /memory show <id>
 /memory add <text> [--scope user|project|session]
+             [--type user|feedback|project|reference]
+             [--why <原因>] [--how <应用方式>] [--topic <主题>]
 /memory add <user|project|session> <text>       # 旧语法仍兼容
 /memory search <query> [--scope <scope>]
 /memory pin <id>
@@ -242,7 +245,7 @@ attachment。它不会重写持久 history；下一真实模型请求会使用�
 /memory migrate [user|project|session]
 ```
 
-`add` 默认写入 `project`。ID 可填写完整值或唯一后缀；`show`、`pin`、`unpin`、
+`add` 默认写入 `project`、语义类型 `reference`。ID 可填写完整值或唯一后缀；`show`、`pin`、`unpin`、
 `forget` 和 `remove` 都支持唯一后缀。`search` 只检索已审核的 MemoryEntry，不搜索待审核
 候选。
 
@@ -258,6 +261,10 @@ attachment。它不会重写持久 history；下一真实模型请求会使用�
   "text": "项目测试命令是 pytest -q",
   "scope": "project",
   "kind": "knowledge",
+  "memory_type": "project",
+  "topic": "tests",
+  "why": "项目要求所有变更使用统一测试入口。",
+  "how_to_apply": "验证 Python 变更时优先运行该命令。",
   "source": "manual",
   "tags": ["tests"],
   "created_at": "2026-11-16T12:00:00+08:00",
@@ -267,8 +274,18 @@ attachment。它不会重写持久 history；下一真实模型请求会使用�
 }
 ```
 
-`kind` 支持 `note`、`preference`、`fact`、`workflow`、`knowledge`。`knowledge` 只表示
-经过模型提取或人工审核的可复用知识，不表示高信任指令。
+`kind` 是兼容旧 JSONL 的存储分类，支持 `note`、`preference`、`fact`、`workflow`、
+`knowledge`。面向用户和 Prompt 的语义类型是 `memory_type`：
+
+| Type | 用途 |
+|------|------|
+| `user` | 稳定角色、目标、偏好或背景 |
+| `feedback` | 用户纠正或经过确认的非显然工作方式 |
+| `project` | 不能仅从代码/Git 推导的项目意图、约束、原因或时间 |
+| `reference` | 外部系统入口，例如监控面板、Issue、Runbook |
+
+`feedback` / `project` 必须同时包含 `Why` 与 `How to apply`。写入层会拒绝缺少任一字段的
+新记录；旧记录缺失时只按 `reference` 降级读取，不会伪装成结构化长期知识。
 
 Memory 在 provider 请求中固定映射为 `EvidenceSource.MEMORY`，原始记录 ID、scope、kind、
 origin、pinned 状态保留为机器可读元数据。模型生成内容仍是 `untrusted` 且
@@ -283,7 +300,13 @@ origin、pinned 状态保留为机器可读元数据。模型生成内容仍是 
 | `session` | `<workspace>/.krelcode/memory/sessions/<session-id>.jsonl` | 当前会话；fork 可复制独立副本 |
 
 每层独立执行 2,000 字符/条、200 条和 tag/metadata 限制。检索优先 pinned，再按查询相关度
-和更新时间排序；实际注入仍受条数与总字符预算限制。
+和更新时间排序。请求只始终加载严格限长的 `MEMORY.md` 索引：最多 200 个主题、每行 150
+字符、总计 24,000 字符。索引只含标题、主题链接、scope/type 和一句 hook，不包含正文；
+`memory_search(query=...)` 搜索相关主题，`memory_search(id=...|topic=...)` 才按需读取正文。
+
+`MEMORY.md` 与 `topics/*.md` 是可重建视图，JSONL 始终是权威数据源。project/session 的视图
+位于工作区，user 作用域的视图只写入 `~/.krelcode/memory/`，不会把跨工作区私密正文复制到
+项目目录。
 
 ### Auto Memory 候选
 
@@ -297,8 +320,15 @@ origin、pinned 状态保留为机器可读元数据。模型生成内容仍是 
 - 任务完成后提取的高价值事实。
 
 候选写入前会脱敏、按规范化文本摘要去重、与现有记忆做保守冲突检测并记录证据摘要。
-`/memory review accept <id>` 将其写入 `project/knowledge`；`reject` 标记拒绝且不会自动
-写入。`off` 不生成新候选，但已有候选仍可审核。
+候选会按触发来源归类为 `feedback` 或 `project`，并自动补充可审核的 Why/How；显式
+`user:` / `reference:` 前缀则保留对应类型。`feedback/project` 候选缺少结构时保持 pending，
+不能进入 `auto` 写入或人工 accept。`/memory review accept <id>` 按候选类型写入；`reject`
+标记拒绝且不会自动写入。`off` 不生成新候选，但已有候选仍可审核。
+
+专用 L5 `memory:lifecycle-contract` Prompt 明确区分四种状态：Task 保存当前步骤与阻塞，
+Plan 保存实施方案与审批状态，Memory 只保存未来仍有用且无法从工作区推导的长期事实，
+Compact 只保存当前会话交接。它还包含明确的 **What NOT to save** 清单：代码模式、路径、
+Git 历史、一次性调试过程、已有指令、临时任务状态和秘密均不得写入长期记忆。
 
 ## 7. `/compact`
 
@@ -346,14 +376,17 @@ SHA-256；`/rewind` 恢复后若文件已变化或缺失，会移除陈旧文件
 ├── memory/
 │   ├── entries.jsonl
 │   ├── candidates.jsonl
+│   ├── MEMORY.md
+│   ├── topics/<scope>-<type>-<topic>.md
 │   └── sessions/<session-id>.jsonl
 ├── context-checkpoints/
 └── compact-checkpoints/
 ```
 
-Memory 使用逐行 JSON，采用临时文件加原子替换；读取时以文件路径决定作用域。旧 project
+Memory 使用逐行 JSON，采用临时文件加原子替换；读取时以文件路径决定作用域。Markdown
+索引和主题文件在每次变更后从 JSONL 原子重建，删除或改 pin 状态会同步移除陈旧主题视图。旧 project
 记录可以缺少 `scope/kind/source/tags/updated_at/metadata/pinned` 字段，读取时按
-`project/note/manual` 兼容。
+`project/note/manual/reference` 兼容。
 
 ### `/memory migrate [scope]`
 

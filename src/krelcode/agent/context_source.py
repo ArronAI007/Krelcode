@@ -485,7 +485,7 @@ class MemoryContextSource:
     def collect(self, request: ContextRequest) -> Sequence[ContextLayer]:
         if self.store is None:
             return ()
-        content, selected = self.store.context_view()
+        content, selected, topics = self.store.index_view()
         if not content:
             return ()
         scope_counts = {
@@ -499,11 +499,14 @@ class MemoryContextSource:
             evidence_record_from_memory(entry) for entry in selected)
         metadata = evidence_metadata(
             records,
-            origin="scoped_memory",
+            origin="scoped_memory_index",
             extra={
                 "memory_entry_ids": tuple(entry.id for entry in selected),
                 "memory_scope_counts": scope_counts,
                 "entries": len(selected),
+                "memory_index_only": True,
+                "memory_topics": tuple(
+                    topic.relative_path for topic in topics),
                 "memory_tokens": estimate_text_tokens(content),
                 "memory_hits": tuple({
                     "id": record.id,
