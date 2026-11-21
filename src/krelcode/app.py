@@ -800,6 +800,9 @@ async def build_loop(
         working_context_store=working_context_store,
         compact_checkpoint_store=compact_checkpoint_store,
     )
+    if getattr(loop, "context_manager", None) is not None:
+        loop.context_manager.prompt_surface_registry = (
+            loop.prompt_surface_registry)
     loop.redactor = redactor
     loop.prompt_release_pipeline = prompt_release_pipeline
     loop.prompt_release_approval_service = prompt_release_approval_service
@@ -1113,7 +1116,9 @@ async def async_main(args: argparse.Namespace) -> int:
     supervisor = MCPSupervisor(
         loop.registry, log=note,
         sampler=build_mcp_sampler(loop.llm),
-        roots=build_mcp_roots(loop.tool_context.workspace_root))
+        roots=build_mcp_roots(loop.tool_context.workspace_root),
+        redactor=redactor,
+        prompt_surface_registry=loop.prompt_surface_registry)
     loop.mcp_supervisor = supervisor
     def merged_mcp_config(source: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         active = current_config if source is None else source
@@ -1169,7 +1174,8 @@ async def async_main(args: argparse.Namespace) -> int:
             hooks = HookRunner(
                 loop.tool_context.workspace_root, specs, log=note,
                 redactor=redactor,
-                prompt_runner=run_prompt_hook)
+                prompt_runner=run_prompt_hook,
+                prompt_surface_registry=loop.prompt_surface_registry)
             hooks.attach(loop.bus)
         else:
             hooks.replace_specs(specs)

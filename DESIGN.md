@@ -2109,6 +2109,10 @@ Subagent、Hook、MCP Prompt、Skill、Plugin/Custom Command 与 Output Style �
 - instruction/evidence role、authority、trust、stability；
 - content hash、Token 估算、可用能力、可用状态与有界 metadata。
 
+可执行 Surface 还携带 `PromptSurfaceContract`：输入/输出 JSON Schema、超时、输入/输出字符
+上限、输出解析模式、超限策略和输入/输出脱敏开关。Schema 是可持久化的结构化安全契约，不是
+Prompt 正文；Snapshot 不保存任何实际模型输入、工具结果、MCP 返回正文或密钥。
+
 目录刷新先在临时映射中验证全部 descriptor 并拒绝重复 ID，然后一次性替换；已有 observation
 按相同 surface ID 保留。`PromptSurfaceSnapshot` 可往返序列化，catalogue hash 只由 schema 与
 surface 元数据决定，不受刷新 generation 影响。MCP Prompt 与 server instructions 固定为
@@ -2118,6 +2122,41 @@ surface 元数据决定，不受刷新 generation 影响。MCP Prompt 与 server
 observation；失败观测不会影响请求。`/prompts list|show|coverage|hash` 只显示来源、Hash、
 Token、权限与最近 render 计数，不显示 Prompt 正文。该层当前严格只读：不自动禁用、改写、
 发布或重排任何 Surface。
+
+## Prompt Surface Contract（Step 126）
+
+Review、Compact、Prompt Hook 和 MCP Prompt 不再各自维护互不一致的调用安全逻辑，而是通过
+`PromptSurfaceExecutor.execute(surface_id, contract, value, runner)` 执行：
+
+1. **输入脱敏**：递归处理字符串、对象键值和常见凭据形态；provider key、`api_key`、
+   `authorization`、Cookie、Bearer、云厂商/代码托管 token 与私钥均替换为 `***`。
+2. **输入 Schema**：执行前校验 provider-neutral 输入形状和长度，非法输入不会到达模型、
+   Hook runner 或 MCP 服务器。
+3. **超时**：使用 `asyncio.wait_for` 包住整个辅助调用；Timeout 返回结构化结果并取消等待。
+4. **输出上限**：文本 Surface 可截断；Compact/MCP 等结构化 Surface 采用 fail-closed，
+   超限时不解析不完整 JSON。
+5. **输出脱敏与 Schema**：解析前先脱敏，再执行声明 Schema 校验；非法 JSON/Schema 返回
+   `schema_error`。
+6. **只读观测**：结果只向 `PromptSurfaceRegistry` 写入 status、schema/timeout/truncate/
+   redaction 标志、耗时、输出 hash 与 token，不写入正文。
+
+各 Surface 的默认边界：
+
+| Surface | 输出模式 | 超时 | 输出上限 | 超限策略 |
+|---------|----------|------|----------|----------|
+| Review | text | 300s | 64,000 chars | truncate |
+| Compact | compact-summary-v2 JSON | 180s | 64,000 chars | fail-closed |
+| Prompt Hook | JSON or text | Hook `timeout` | 64,000 chars | truncate |
+| MCP Prompt | MCP messages JSON | Server `timeout` | 1,000,000 chars | fail-closed |
+
+Review 的 diff 在进入模型前脱敏，模型回复在打印前再次脱敏。Compact 使用既有
+`COMPACT_SUMMARY_JSON_SCHEMA`，超时、Schema 失败或输出超限继续走 Working Context/History
+降级摘要。Prompt Hook 的模板变量和 JSON payload 共享同一输入脱敏，MCP `prompts/get`
+参数在发往服务器前脱敏，返回 messages 逐字段脱敏。MCP server instructions 同样应用脱敏和
+256,000 字符上限。
+
+`/prompts show <id>` 对存在 contract 的 Surface 展示 version、Schema ID/hash、timeout、
+输出上限、脱敏策略和最近一次 contract observation，但仍不包含 Prompt 正文。
 
 ## Context / Cache Ledger（Step 104）
 

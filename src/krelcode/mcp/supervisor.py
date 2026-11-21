@@ -18,6 +18,8 @@ import os
 import re
 from typing import Any, Callable, Dict, List, Optional
 
+from ..core.redact import redact_obvious_secrets
+from ..agent.prompt_surface_contract import MCP_INSTRUCTIONS_SURFACE_CONTRACT
 from ..tools.base import ToolDescriptor, ToolSource
 from ..tools.registry import ToolRegistry
 from .client import MCPClient, MCPServerConfig
@@ -70,11 +72,15 @@ class MCPSupervisor:
         log: Callable[[str], None] = print,
         sampler: Optional[Any] = None,
         roots: Optional[List[Dict[str, Any]]] = None,
+        redactor: Optional[Any] = None,
+        prompt_surface_registry: Optional[Any] = None,
     ) -> None:
         self.registry = registry
         self._log = log
         self._sampler = sampler      # 服务器 sampling 请求的回调（app 注入）
         self._roots = list(roots or [])
+        self._redactor = redactor
+        self._prompt_surface_registry = prompt_surface_registry
         self.clients: Dict[str, MCPClient] = {}
         self.configs: Dict[str, MCPServerConfig] = {}
         self.prompts: Dict[str, tuple[Dict[str, Any], ...]] = {}
@@ -119,6 +125,8 @@ class MCPSupervisor:
                 lambda method, params, server=name:
                 self._handle_notification(server, method, params)),
             log=self._log,
+            redactor=self._redactor,
+            prompt_surface_registry=self._prompt_surface_registry,
         )
         try:
             await client.start()
@@ -266,6 +274,8 @@ class MCPSupervisor:
             sampler=self._sampler,
             roots=self._roots,
             log=self._log,
+            redactor=self._redactor,
+            prompt_surface_registry=self._prompt_surface_registry,
         )
         if client.oauth is None:
             raise ValueError(f"MCP 服务器 {name!r} 的 OAuth 配置不可用")
@@ -387,7 +397,14 @@ class MCPSupervisor:
                 continue
             text = str(client.instructions or "").strip()
             if text:
-                entries.append((name, text))
+                clean = redact_obvious_secrets(
+                    self._redactor.redact(text)
+                    if self._redactor is not None else text)
+                limit = MCP_INSTRUCTIONS_SURFACE_CONTRACT.max_output_chars
+                if len(clean) > limit:
+                    marker = "\n…[MCP instructions truncated]"
+                    clean = clean[:max(0, limit - len(marker))] + marker
+                entries.append((name, clean))
         return tuple(sorted(entries))
 
     async def close_all(self) -> None:

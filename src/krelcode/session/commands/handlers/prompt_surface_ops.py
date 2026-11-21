@@ -35,11 +35,15 @@ def _surface_line(registry: PromptSurfaceRegistry, surface) -> str:
         if not observation.is_current(surface.content_hash):
             state += "/stale"
     available = "" if surface.available else " · unavailable"
+    contract = (
+        f" · contract={surface.contract.version}"
+        f"/{surface.contract.timeout_seconds:g}s"
+        if surface.contract is not None else "")
     return (
         f"  {surface.id} · {surface.kind.value}"
         f" · {surface.role.value}/{surface.authority}"
         f" · trust={surface.trust} · {surface.token_estimate}t"
-        f" · {surface.content_hash[:12]} · {state}{available}")
+        f" · {surface.content_hash[:12]} · {state}{contract}{available}")
 
 
 async def handle_prompts(ctx: CommandContext) -> CommandResult:
@@ -90,6 +94,10 @@ async def handle_prompts(ctx: CommandContext) -> CommandResult:
         observation = registry.observation(surface.id)
         metadata = json.dumps(
             dict(surface.metadata), ensure_ascii=False, sort_keys=True)
+        contract = (
+            json.dumps(
+                surface.contract.as_record(), ensure_ascii=False, sort_keys=True)
+            if surface.contract is not None else "(none)")
         lines = [
             f"  [prompts] {surface.id}",
             f"  kind={surface.kind.value} · collection={registry.collection_for(surface.id)}",
@@ -103,6 +111,7 @@ async def handle_prompts(ctx: CommandContext) -> CommandResult:
             f"  capabilities={', '.join(surface.capabilities) or '(none)'}",
             f"  description={surface.description or '(none)'}",
             f"  metadata={metadata}",
+            f"  contract={contract}",
         ]
         if observation is None:
             lines.append("  observation=unobserved")
@@ -114,6 +123,12 @@ async def handle_prompts(ctx: CommandContext) -> CommandResult:
                 f" · turn:{observation.last_turn_id or '(none)'}"
                 f" · step:{observation.last_step}"
                 f" · tokens:{observation.last_tokens}"
+                f" · contract:{observation.contract_status or 'unobserved'}"
+                f" · schema:{str(observation.schema_valid).lower()}"
+                f" · timed_out:{str(observation.timed_out).lower()}"
+                f" · truncated:{str(observation.truncated).lower()}"
+                f" · redacted:{str(observation.redaction_applied).lower()}"
+                f" · elapsed_ms:{observation.elapsed_ms}"
                 f" · rendered_hash:{observation.last_content_hash[:12] or '(none)'}")
         return _ok(*lines)
 

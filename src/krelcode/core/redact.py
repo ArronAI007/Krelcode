@@ -8,11 +8,53 @@
 
 from __future__ import annotations
 
+import re
 from typing import Iterable, List, Optional, Tuple
 
 MASK = "***"
 # 太短的秘密不脱敏：防止误把常见短词（如模型名/提示词片段）整体打码。
 MIN_SECRET_LEN = 6
+
+_COOKIE_HEADER_RE = re.compile(
+    r"(?i)\b((?:set-)?cookie\s*:\s*).*?"
+    r"(?=(?:\s+(?:authorization|proxy-authorization|api[_-]?key|"
+    r"access[_-]?token|auth[_-]?token|secret|password)\s*[:=])|$)"
+)
+_KEY_VALUE_SECRET_RE = re.compile(
+    r"(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|"
+    r"client[_-]?secret|secret|password|passwd|cookie|set-cookie|authorization|"
+    r"proxy-authorization|private[_-]?key)"
+    r"(\s*[:=]\s*)(?:(?:bearer|basic|token)\s+)?([^\s,;]+)"
+)
+_TOKEN_PATTERNS = (
+    re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{30,}\b"),
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}\b"),
+    re.compile(
+        r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
+    re.compile(
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?"
+        r"-----END [A-Z ]*PRIVATE KEY-----",
+        re.DOTALL,
+    ),
+)
+
+
+def redact_obvious_secrets(text: Optional[str]) -> str:
+    """Mask common credential shapes without requiring a known secret value."""
+    value = str(text or "")
+    if not value:
+        return ""
+    value = _COOKIE_HEADER_RE.sub(
+        lambda match: match.group(1) + MASK, value)
+    value = _KEY_VALUE_SECRET_RE.sub(
+        lambda match: match.group(1) + match.group(2) + MASK, value)
+    for pattern in _TOKEN_PATTERNS:
+        value = pattern.sub(MASK, value)
+    return value
 
 
 class SecretRedactor:
@@ -33,9 +75,9 @@ class SecretRedactor:
         return tuple(self._secrets)
 
     def redact(self, text: Optional[str]) -> str:
-        if not text or not self._secrets:
-            return text or ""
-        out = text
+        out = redact_obvious_secrets(text)
+        if not self._secrets:
+            return out
         for s in self._secrets:
             if s in out:
                 out = out.replace(s, MASK)

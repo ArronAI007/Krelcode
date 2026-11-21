@@ -112,7 +112,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/context ledger` | 显示统一请求身份、instruction/evidence/tool/attachment/working/compact/memory/history/wire hash、完整请求 hash、cache miss 原因、Resume invalidation 与子代理指令继承状态 |
 | `/context refresh` | 重采目录树/git/规则文件；规则变化才更新稳定 Fragment，环境变化只替换对应 snapshot/delta attachment |
 | `/prompts` · `/prompts list [kind\|source]` | 只读列出主 Agent、Tool、Workflow、Subagent、Compact、Review、Hook、MCP、Skill、Plugin Command、Custom Command 与 Output Style 的来源、权限、Hash、Token 和最近真实渲染状态；筛选值可传 kind 或 source 子串 |
-| `/prompts show <id>` | 查看单个 Prompt Surface 的 source/owner/version、instruction/evidence 角色、authority/trust、stability、content hash、capability、有界 metadata 与 observation；永远不显示 Prompt 正文 |
+| `/prompts show <id>` | 查看单个 Prompt Surface 的 source/owner/version、instruction/evidence 角色、authority/trust、stability、content hash、capability、有界 metadata、Surface Contract（Schema ID/hash、timeout、输入/输出上限、脱敏策略）与最近执行状态；永远不显示 Prompt 正文 |
 | `/prompts coverage` · `/prompts hash` | 查看核心 Surface 覆盖、kind/role/trust 计数与 content-light 目录 Hash；refresh 只更新旁路目录，不改变 Provider 请求 |
 | `/memory` · `/memory list [scope]` | 列出全部或指定 user/project/session 作用域记忆及 ID、类型和内容 |
 | `/memory scopes` | 显示各作用域条数与存储路径 |

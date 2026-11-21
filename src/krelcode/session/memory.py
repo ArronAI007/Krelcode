@@ -47,7 +47,7 @@ from ..agent.fragments import (
     refresh_registry_snapshot,
 )
 from ..agent.tokens import estimate_text_tokens
-from ..core.redact import MASK, SecretRedactor
+from ..core.redact import MASK, SecretRedactor, redact_obvious_secrets
 
 MAX_ENTRY_CHARS = 2_000
 MAX_ENTRIES = 200
@@ -64,35 +64,9 @@ FRAGMENT_ID = "memory:scoped"
 LEGACY_FRAGMENT_ID = "memory:project"
 INDEX_FRAGMENT_ID = "memory:index"
 
-_KEY_VALUE_SECRET_RE = re.compile(
-    r"(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|"
-    r"client[_-]?secret|secret|password|passwd|cookie|set-cookie|authorization|"
-    r"proxy-authorization|private[_-]?key)"
-    r"(\s*[:=]\s*)(?:(?:bearer|basic|token)\s+)?([^\s,;]+)"
-)
-_TOKEN_PATTERNS = (
-    re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"),
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
-    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
-    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
-    re.compile(r"\bAIza[0-9A-Za-z_-]{30,}\b"),
-    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"),
-    re.compile(
-        r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
-    re.compile(
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?"
-        r"-----END [A-Z ]*PRIVATE KEY-----",
-        re.DOTALL,
-    ),
-)
 _SCOPE_PREFIX_RE = re.compile(
     r"^\s*(user|project|session)\s*:\s*(.*)$", re.IGNORECASE | re.DOTALL)
 _SAFE_SESSION_ID_RE = re.compile(r"[^A-Za-z0-9_.-]+")
-_COOKIE_HEADER_RE = re.compile(
-    r"(?i)\b((?:set-)?cookie\s*:\s*).*?"
-    r"(?=(?:\s+(?:authorization|proxy-authorization|api[_-]?key|"
-    r"access[_-]?token|auth[_-]?token|secret|password)\s*[:=])|$)"
-)
 _SENSITIVE_METADATA_KEY_RE = re.compile(
     r"(?i)(?:^|[_-])(?:api[_-]?key|access[_-]?token|auth[_-]?token|"
     r"refresh[_-]?token|client[_-]?secret|secret|password|passwd|cookie|"
@@ -400,13 +374,7 @@ class MemoryMigrationReport:
 
 
 def _redact_obvious_secrets(text: str) -> str:
-    text = _COOKIE_HEADER_RE.sub(
-        lambda match: match.group(1) + MASK, text)
-    text = _KEY_VALUE_SECRET_RE.sub(
-        lambda match: match.group(1) + match.group(2) + MASK, text)
-    for pattern in _TOKEN_PATTERNS:
-        text = pattern.sub(MASK, text)
-    return text
+    return redact_obvious_secrets(text)
 
 
 def sanitize_memory_text(

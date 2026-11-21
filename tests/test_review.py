@@ -113,6 +113,25 @@ def test_run_review_feeds_diff_to_llm(repo, capsys):
     assert "+    return 2" in user_prompt and "```diff" in user_prompt
 
 
+def test_run_review_redacts_input_diff_and_model_output(repo, capsys):
+    (repo / "app.py").write_text(
+        "def f():\n    api_key = 'supersecretvalue'\n    return 2\n",
+        encoding="utf-8",
+    )
+    provider = MockProvider(scripted=[
+        "发现 sk-reviewsecret123，需要移除。\n\n结论: 需要修改",
+    ])
+
+    rc = asyncio.run(run_review(Args(repo), llm=provider))
+
+    assert rc == 0
+    sent = provider.calls[0][-1].content
+    output = capsys.readouterr().out
+    assert "supersecretvalue" not in sent
+    assert "sk-reviewsecret123" not in output
+    assert "***" in sent and "***" in output
+
+
 def test_run_review_readonly_toolset_available(repo):
     (repo / "app.py").write_text("def f():\n    return 2\n", encoding="utf-8")
     provider = MockProvider(scripted=["纯文本评审，无工具调用。"])

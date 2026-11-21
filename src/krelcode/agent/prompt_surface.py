@@ -25,6 +25,7 @@ from typing import Mapping, Optional, Sequence, Tuple
 
 from .evidence import EvidenceSource, InstructionSource, SourceRole
 from .fragments import PROMPT_STABILITY_LEVELS, PROMPT_TRUST_LEVELS
+from .prompt_surface_contract import PromptSurfaceContract
 from .tokens import estimate_text_tokens
 
 
@@ -147,6 +148,7 @@ class PromptSurfaceDescriptor:
     available: bool = True
     capabilities: Tuple[str, ...] = ()
     metadata: Mapping[str, object] = field(default_factory=dict)
+    contract: Optional[PromptSurfaceContract] = None
 
     def __post_init__(self) -> None:
         surface_id = _text(self.id, 200)
@@ -197,6 +199,10 @@ class PromptSurfaceDescriptor:
         object.__setattr__(self, "available", bool(self.available))
         object.__setattr__(self, "capabilities", _strings(self.capabilities))
         object.__setattr__(self, "metadata", _bounded_metadata(self.metadata))
+        if self.contract is not None and not isinstance(
+            self.contract, PromptSurfaceContract,
+        ):
+            raise TypeError("Prompt Surface contract 类型非法")
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -216,6 +222,7 @@ class PromptSurfaceDescriptor:
             "available": self.available,
             "capabilities": list(self.capabilities),
             "metadata": dict(self.metadata),
+            "contract": self.contract.as_dict() if self.contract else None,
         }
 
     @classmethod
@@ -240,6 +247,11 @@ class PromptSurfaceDescriptor:
                 raw.get("metadata")
                 if isinstance(raw.get("metadata"), Mapping) else {}
             ),
+            contract=(
+                PromptSurfaceContract.from_dict(raw_contract)
+                if isinstance((raw_contract := raw.get("contract")), Mapping)
+                else None
+            ),
         )
 
 
@@ -255,6 +267,12 @@ class PromptSurfaceObservation:
     last_step: int = 0
     last_content_hash: str = ""
     last_tokens: int = 0
+    contract_status: str = ""
+    schema_valid: bool = False
+    timed_out: bool = False
+    truncated: bool = False
+    redaction_applied: bool = False
+    elapsed_ms: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -266,6 +284,12 @@ class PromptSurfaceObservation:
             "last_step": self.last_step,
             "last_content_hash": self.last_content_hash,
             "last_tokens": self.last_tokens,
+            "contract_status": self.contract_status,
+            "schema_valid": self.schema_valid,
+            "timed_out": self.timed_out,
+            "truncated": self.truncated,
+            "redaction_applied": self.redaction_applied,
+            "elapsed_ms": self.elapsed_ms,
         }
 
     @classmethod
@@ -279,6 +303,12 @@ class PromptSurfaceObservation:
             last_step=_integer(raw.get("last_step")),
             last_content_hash=str(raw.get("last_content_hash", "") or ""),
             last_tokens=_integer(raw.get("last_tokens")),
+            contract_status=_text(raw.get("contract_status"), 80),
+            schema_valid=bool(raw.get("schema_valid", False)),
+            timed_out=bool(raw.get("timed_out", False)),
+            truncated=bool(raw.get("truncated", False)),
+            redaction_applied=bool(raw.get("redaction_applied", False)),
+            elapsed_ms=_integer(raw.get("elapsed_ms")),
         )
 
     def is_current(self, content_hash: str) -> bool:
@@ -468,6 +498,12 @@ class PromptSurfaceRegistry:
         turn_id: str = "",
         step: int = 0,
         rendered_at: Optional[float] = None,
+        contract_status: str = "",
+        schema_valid: bool = False,
+        timed_out: bool = False,
+        truncated: bool = False,
+        redaction_applied: bool = False,
+        elapsed_ms: int = 0,
     ) -> bool:
         surface = self.get(surface_id)
         if surface is None:
@@ -485,6 +521,12 @@ class PromptSurfaceRegistry:
             last_content_hash=(
                 _text(content_hash, 128) if content_hash else surface.content_hash),
             last_tokens=_integer(tokens) if tokens else surface.token_estimate,
+            contract_status=_text(contract_status, 80),
+            schema_valid=bool(schema_valid),
+            timed_out=bool(timed_out),
+            truncated=bool(truncated),
+            redaction_applied=bool(redaction_applied),
+            elapsed_ms=_integer(elapsed_ms),
         )
         return True
 

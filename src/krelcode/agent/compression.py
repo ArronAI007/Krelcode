@@ -24,6 +24,7 @@ from dataclasses import dataclass, replace
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..core.messages import Message
+from ..core.redact import redact_obvious_secrets
 from ..llm.base import LLMProvider, collect
 from .compact_summary import (
     CompactFile,
@@ -40,6 +41,13 @@ from .compact_summary import (
 from .tokens import (
     estimate_history_tokens,
     estimate_message_tokens,
+)
+from .prompt_surface_contract import (
+    COMPACT_SURFACE_CONTRACT,
+    PromptSurfaceContract,
+    PromptSurfaceExecutor,
+    PromptSurfaceResult,
+    observe_surface_result,
 )
 from .tool_microcompact import (
     DEFAULT_KEEP_RECENT_TOOLS as MICROCOMPACT_KEEP_RECENT_TOOLS,
@@ -195,6 +203,8 @@ class ContextManager:
         low_watermark_ratio: float = DEFAULT_LOW_WATERMARK_RATIO,
         working_context_provider: Optional[Callable[[], object]] = None,
         redactor=None,
+        surface_contract: PromptSurfaceContract = COMPACT_SURFACE_CONTRACT,
+        prompt_surface_registry=None,
     ) -> None:
         self.llm = llm
         self.max_tokens = max_tokens
@@ -204,6 +214,9 @@ class ContextManager:
             0.95, max(0.1, float(low_watermark_ratio)))
         self.working_context_provider = working_context_provider
         self.redactor = redactor
+        self.surface_contract = surface_contract
+        self.prompt_surface_registry = prompt_surface_registry
+        self.last_surface_result: Optional[PromptSurfaceResult] = None
         self.microcompactor = microcompactor or ToolMicrocompactor(
             keep_recent=self.keep_recent_tools,
             min_compact_chars=MIN_EVICT_CHARS,
@@ -576,20 +589,38 @@ class ContextManager:
             + "<conversation_to_compact>\n" + rendered
             + "\n</conversation_to_compact>"
         )
-        model_summary: Optional[CompactSummary] = None
-        raw_text = ""
-        try:
+        async def run_surface(safe_prompt: object) -> str:
             finished = await collect(
                 self.llm,
-                [Message.system(SUMMARY_SYSTEM_PROMPT), Message.user(prompt)],
+                [
+                    Message.system(SUMMARY_SYSTEM_PROMPT),
+                    Message.user(str(safe_prompt)),
+                ],
             )
-            raw_text = (finished.message.content or "").strip()
-            if raw_text:
+            return str(finished.message.content or "")
+
+        surface_result = await PromptSurfaceExecutor().execute(
+            "aux:compact",
+            self.surface_contract,
+            prompt,
+            run_surface,
+            redactor=self.redactor,
+            observer=lambda _surface_id, result: observe_surface_result(
+                self.prompt_surface_registry, result),
+        )
+        self.last_surface_result = surface_result
+        model_summary: Optional[CompactSummary] = None
+        raw_text = surface_result.text.strip()
+        if surface_result.ok and raw_text:
+            try:
                 model_summary = CompactSummary.from_model_json_text(raw_text)
-        except (Exception, CompactSummaryError):
-            model_summary = None
+            except (Exception, CompactSummaryError):
+                model_summary = None
         if model_summary is None and not raw_text:
-            raw_text = "摘要失败，已使用结构化现场生成降级摘要。"
+            raw_text = (
+                f"摘要失败（{surface_result.status}），"
+                "已使用结构化现场生成降级摘要。"
+            )
 
         working_fallback = build_working_context_fallback(
             snapshot,
@@ -617,16 +648,19 @@ class ContextManager:
             compacted_messages=compacted_messages,
             created_at=time.time(),
         )
-        if self.redactor is not None:
-            merged = _redact_compact_summary(merged, self.redactor.redact)
+        merged = _redact_compact_summary(
+            merged,
+            self.redactor.redact if self.redactor is not None else None,
+        )
         return merged
 
 
-def _redact_compact_summary(summary: CompactSummary, redact) -> CompactSummary:
+def _redact_compact_summary(summary: CompactSummary, redact=None) -> CompactSummary:
     """Redact every persisted summary field without parsing rendered JSON."""
 
     def clean(value: object) -> str:
-        return redact(str(value or ""))
+        text = redact_obvious_secrets(str(value or ""))
+        return redact(text) if redact is not None else text
 
     return replace(
         summary,

@@ -16,15 +16,21 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .agent.cyber_risk import prepend_cyber_risk_prompt
 from .agent.loop import AgentLoop
+from .agent.prompt_surface_catalog import refresh_prompt_surfaces
+from .agent.prompt_surface_contract import (
+    REVIEW_SURFACE_CONTRACT,
+    PromptSurfaceExecutor,
+    observe_surface_result,
+)
 from .agent.usage import UsageTracker
 from .core.events import EventBus, PermissionDenied, ToolCallCompleted
+from .core.redact import SecretRedactor
 from .core.textutil import truncate_middle
 from .llm.base import LLMProvider
 from .llm.providers.mock import MockProvider
@@ -151,6 +157,8 @@ async def run_review(args: argparse.Namespace, llm: Optional[LLMProvider] = None
         return 0
 
     provider = llm or build_review_llm(args, config)
+    redactor = SecretRedactor()
+    redactor.add(getattr(provider, "api_key", None))
     bus = EventBus()
     summary = _ReviewSummary()
     bus.subscribe(summary.on_event)
@@ -172,16 +180,38 @@ async def run_review(args: argparse.Namespace, llm: Optional[LLMProvider] = None
         system_prompt=REVIEW_SYSTEM_PROMPT,
         max_steps=getattr(args, "max_steps", 12),
     )
+    loop.redactor = redactor
+    refresh_prompt_surfaces(loop)
 
-    try:
-        reply = await loop.run(prompt)
-    except Exception as e:
+    async def run_surface(safe_prompt: object) -> str:
+        return await loop.run(str(safe_prompt))
+
+    surface_result = await PromptSurfaceExecutor().execute(
+        "aux:review",
+        REVIEW_SURFACE_CONTRACT,
+        prompt,
+        run_surface,
+        redactor=redactor,
+        observer=lambda _surface_id, result: observe_surface_result(
+            loop.prompt_surface_registry, result),
+    )
+    if not surface_result.ok:
+        message = surface_result.error or surface_result.status
         if json_mode:
-            print(json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"},
-                             ensure_ascii=False))
+            print(json.dumps({
+                "ok": False,
+                "error": message,
+                "surface_contract": {
+                    "status": surface_result.status,
+                    "timed_out": surface_result.timed_out,
+                    "truncated": surface_result.truncated,
+                    "schema_valid": surface_result.schema_valid,
+                },
+            }, ensure_ascii=False))
         else:
-            print(f"错误：{type(e).__name__}: {e}")
+            print(f"错误：{message}")
         return 1
+    reply = surface_result.text
 
     if json_mode:
         print(json.dumps({

@@ -20,6 +20,13 @@ from .prompt_surface import (
     prompt_content_hash,
     prompt_structure_hash,
 )
+from .prompt_surface_contract import (
+    COMPACT_SURFACE_CONTRACT,
+    MCP_INSTRUCTIONS_SURFACE_CONTRACT,
+    MCP_PROMPT_SURFACE_CONTRACT,
+    REVIEW_SURFACE_CONTRACT,
+    contract_for_hook,
+)
 from .tokens import estimate_text_tokens
 from .workflows import DEFAULT_TASK_WORKFLOW_CATALOG, TaskClassification
 
@@ -266,6 +273,7 @@ def auxiliary_prompt_surfaces() -> tuple[PromptSurfaceDescriptor, ...]:
             description="Structured compact JSON handoff contract.",
             capabilities=("json_schema", "summary_merge", "fallback_summary"),
             metadata={"no_tools": True, "bounded_output": True},
+            contract=COMPACT_SURFACE_CONTRACT,
         ),
         PromptSurfaceDescriptor(
             id="aux:review",
@@ -282,6 +290,7 @@ def auxiliary_prompt_surfaces() -> tuple[PromptSurfaceDescriptor, ...]:
             description="Read-only git diff review contract.",
             capabilities=("read_only_tools", "structured_verdict"),
             metadata={"permission_mode": "read-only", "max_steps": 12},
+            contract=REVIEW_SURFACE_CONTRACT,
         ),
     )
 
@@ -317,6 +326,8 @@ def hook_prompt_surfaces(hooks: object | None) -> tuple[PromptSurfaceDescriptor,
                 "tools": tuple(getattr(spec, "tools", ()) or ()),
                 "plugin_root": str(getattr(spec, "plugin_root", "") or ""),
             },
+            contract=contract_for_hook(
+                float(getattr(spec, "timeout", 0.0) or 60.0)),
         ))
     return tuple(surfaces)
 
@@ -465,6 +476,7 @@ def mcp_prompt_surfaces(
                 "argument_names": arguments,
                 "body_loaded_on_invocation": True,
             },
+            contract=MCP_PROMPT_SURFACE_CONTRACT,
         ))
     instructions = getattr(supervisor, "server_instructions", None)
     if callable(instructions):
@@ -484,6 +496,7 @@ def mcp_prompt_surfaces(
                 description="MCP server instructions injected as evidence.",
                 capabilities=("server_instructions", "requires_validation"),
                 metadata={"server": server},
+                contract=MCP_INSTRUCTIONS_SURFACE_CONTRACT,
             ))
     return tuple(surfaces)
 

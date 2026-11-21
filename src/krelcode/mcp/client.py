@@ -14,6 +14,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .. import __version__
+from ..agent.prompt_surface_contract import (
+    MCP_PROMPT_SURFACE_CONTRACT,
+    PromptSurfaceContract,
+    PromptSurfaceExecutor,
+    observe_surface_result,
+)
+from ..core.redact import SecretRedactor
 from .stdio_transport import StdioTransport
 from .sse_transport import SSETransport
 from .streamable import StreamableHTTPTransport
@@ -78,6 +85,8 @@ class MCPClient:
         ] = None,
         oauth_token_path: Optional[Path] = None,
         log: Optional[Callable[[str], None]] = None,
+        redactor: Optional[SecretRedactor] = None,
+        prompt_surface_registry: Optional[Any] = None,
     ) -> None:
         """sampler: async (messages, params) -> {"text": str, "model": str}，
         服务器发起 sampling/createMessage 时回调（通常由共享 LLM 实现）；
@@ -89,6 +98,12 @@ class MCPClient:
         self._roots = list(roots or [])
         self._on_notification = on_notification
         self._log = log or (lambda _message: None)
+        self._redactor = redactor
+        self._prompt_surface_registry = prompt_surface_registry
+        self._prompt_contract: PromptSurfaceContract = (
+            MCP_PROMPT_SURFACE_CONTRACT.with_limits(
+                timeout_seconds=self.config.timeout))
+        self._surface_executor = PromptSurfaceExecutor()
         self._next_id = 0
         self._pending: Dict[int, asyncio.Future] = {}
         self._started = False
@@ -379,11 +394,31 @@ class MCPClient:
         return await self._list_paginated("prompts/list", "prompts")
 
     async def get_prompt(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        result = await self._request(
-            "prompts/get", {"name": name, "arguments": arguments or {}})
-        if not isinstance(result, dict):
-            raise MCPError(f"MCP 服务器 {self.name!r} 返回了非法 prompts/get 结果")
-        return result
+        safe_arguments = arguments if isinstance(arguments, dict) else {}
+
+        async def run_surface(safe_input: object) -> object:
+            data = safe_input if isinstance(safe_input, dict) else {}
+            return await self._request("prompts/get", {
+                "name": str(data.get("name", "")),
+                "arguments": (
+                    data.get("arguments")
+                    if isinstance(data.get("arguments"), dict) else {}),
+            })
+
+        surface = await self._surface_executor.execute(
+            f"mcp-prompt:{self.name}:{name}",
+            self._prompt_contract,
+            {"server": self.name, "name": name, "arguments": safe_arguments},
+            run_surface,
+            redactor=self._redactor,
+            observer=lambda _surface_id, result: observe_surface_result(
+                self._prompt_surface_registry, result),
+        )
+        if not surface.ok or not isinstance(surface.value, dict):
+            raise MCPError(
+                f"MCP 服务器 {self.name!r} 的 Prompt {name!r} "
+                f"未通过 Surface Contract（{surface.status}）: {surface.error}")
+        return surface.value
 
 
 def _as_list(value: Any, server: str, what: str) -> List[Dict[str, Any]]:

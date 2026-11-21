@@ -42,6 +42,11 @@ from .core.events import (
 )
 from .core.hooks import HookResult
 from .core.messages import ToolCall
+from .agent.prompt_surface_contract import (
+    PromptSurfaceExecutor,
+    contract_for_hook,
+    observe_surface_result,
+)
 from .safety.environment import scrub_environment
 
 SUPPORTED_TRIGGERS = (
@@ -199,12 +204,14 @@ class HookRunner:
         prompt_runner: Optional[
             Callable[[str, Dict[str, Any]], Awaitable[str]]
         ] = None,
+        prompt_surface_registry=None,
     ) -> None:
         self.root = Path(workspace_root)
         self.specs = list(specs)
         self._log = log
         self._redactor = redactor
         self._prompt_runner = prompt_runner
+        self._prompt_surface_registry = prompt_surface_registry
         self.executions: List[Dict[str, Any]] = (
             executions if executions is not None else []
         )
@@ -222,6 +229,7 @@ class HookRunner:
             executions=self.executions,
             redactor=self._redactor,
             prompt_runner=self._prompt_runner,
+            prompt_surface_registry=self._prompt_surface_registry,
         )
 
     def set_prompt_runner(
@@ -506,12 +514,42 @@ class HookRunner:
         prompt = (
             f"{probe.rstrip()}\n\n"
             "<hook_input>\n"
-            f"{json.dumps(payload, ensure_ascii=False, sort_keys=True)}\n"
+            "{hook_input_json}\n"
             "</hook_input>\n"
             "Return only the Hook decision as JSON, or the additional context text."
         )
-        response = await self._prompt_runner(prompt, payload)
-        return 0, str(response)[:MAX_HOOK_STDOUT], ""
+
+        async def run_surface(safe_input: object) -> str:
+            data = safe_input if isinstance(safe_input, dict) else {}
+            rendered_prompt = str(data.get("prompt", "")).replace(
+                "{hook_input_json}",
+                json.dumps(
+                    data.get("payload", {}), ensure_ascii=False, sort_keys=True),
+            )
+            safe_payload = data.get("payload", {})
+            return await self._prompt_runner(
+                rendered_prompt,
+                safe_payload if isinstance(safe_payload, dict) else {},
+            )
+
+        try:
+            index = self.specs.index(spec) + 1
+        except ValueError:
+            index = 1
+        surface_id = f"hook:{spec.on}:{index}"
+        result = await PromptSurfaceExecutor().execute(
+            surface_id,
+            contract_for_hook(spec.timeout),
+            {"prompt": prompt, "payload": payload},
+            run_surface,
+            redactor=self._redactor,
+            observer=lambda _surface_id, surface_result: observe_surface_result(
+                self._prompt_surface_registry, surface_result),
+        )
+        if not result.ok:
+            raise RuntimeError(
+                f"Prompt Hook Surface {result.status}: {result.error}")
+        return 0, result.text[:MAX_HOOK_STDOUT], ""
 
     def _render_prompt(self, prompt: str, variables: Dict[str, str]) -> str:
         def replace(match: re.Match[str]) -> str:
