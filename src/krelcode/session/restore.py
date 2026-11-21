@@ -8,6 +8,7 @@ from pathlib import Path
 from ..agent.fragments import refresh_registry_snapshot, skills_fragment
 from ..agent.loop import AgentLoop
 from ..agent.prompts import build_system_prompt
+from ..agent.cyber_risk import prepend_cyber_risk_prompt
 from ..core.messages import Message
 from .context_checkpoint import restore_context_checkpoint
 from .recorder import (
@@ -107,11 +108,12 @@ def restore_session(loop: AgentLoop, path: Path, log=print) -> bool:
         log(f"（会话 {path} 中没有历史快照）")
         return False
     if history[0].role != "system":
-        history.insert(0, Message.system(build_system_prompt(
-            profile=getattr(loop, "prompt_profile_config", "auto"),
-            provider=getattr(loop, "llm", ""),
-            model=getattr(getattr(loop, "llm", None), "model", ""),
-        )))
+        history.insert(0, Message.system(prepend_cyber_risk_prompt(
+            build_system_prompt(
+                profile=getattr(loop, "prompt_profile_config", "auto"),
+                provider=getattr(loop, "llm", ""),
+                model=getattr(getattr(loop, "llm", None), "model", ""),
+            ))))
     loop.history = history
     loop.rebuild_working_context()
     loop.pending_context_refresh = True

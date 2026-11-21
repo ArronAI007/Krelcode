@@ -40,6 +40,7 @@ from ..agent.compression import ContextManager
 from ..agent.context import ContextOptions, build_workspace_context_bundle
 from ..agent.context_assembler import ContextAssembler
 from ..agent.context_source import default_context_sources
+from ..agent.cyber_risk import cyber_risk_fragment
 from ..agent.attachments import ContextAttachmentKind, attachment_id
 from ..agent.fragments import (
     PromptFragmentRegistry,
@@ -540,6 +541,7 @@ class BehaviorSession:
         profile = resolve_prompt_profile(
             self.provider, getattr(self.provider, "model", ""))
         prompt_registry = PromptFragmentRegistry(base_fragments(profile))
+        prompt_registry.register(cyber_risk_fragment())
         sync_rule_fragments(prompt_registry, workspace_context)
         prompt_snapshot = prompt_registry.snapshot()
 

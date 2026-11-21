@@ -23,6 +23,7 @@ from ..agent.evidence import (
     instruction_source_for,
     render_evidence_set,
 )
+from ..agent.cyber_risk import cyber_risk_fragment
 from ..agent.fragments import (
     GROUP_RUNTIME,
     GROUP_SYSTEM,
@@ -97,8 +98,8 @@ class InstructionBundle:
         }
 
     def fragments(self) -> tuple[PromptFragment, ...]:
-        """Convert base, canonical rules and definition into L1-L4 fragments."""
-        fragments: list[PromptFragment] = []
+        """Convert policy, base, canonical rules and definition to fragments."""
+        fragments: list[PromptFragment] = [cyber_risk_fragment()]
         for layer in self.layers:
             if layer.kind == "base" and layer.content.strip():
                 fragments.append(PromptFragment(

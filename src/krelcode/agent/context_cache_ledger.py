@@ -15,7 +15,8 @@ from typing import Mapping, Sequence
 
 
 LEDGER_SCHEMA_VERSION = 1
-_RULE_FRAGMENT_IDS = frozenset({
+_POLICY_FRAGMENT_IDS = frozenset({
+    "managed:cyber-risk",
     "managed:rules",
     "user:rules",
     "project:rules",
@@ -80,7 +81,7 @@ def _policy_instruction_hash(fragments: Sequence[object]) -> str:
     for fragment in fragments:
         fragment_id = str(getattr(fragment, "id", "") or "")
         if (
-            fragment_id in _RULE_FRAGMENT_IDS
+            fragment_id in _POLICY_FRAGMENT_IDS
             or fragment_id.startswith("agent_definition:")
         ):
             records.append((

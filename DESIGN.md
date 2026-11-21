@@ -945,7 +945,8 @@ system prompt 不再由 App、Skill 热重载和 `/context refresh` 各自拼接
 
 ```
 Fragment sources
-├─ core       → core:base                 locked · cacheable
+├─ policy     → managed:cyber-risk        L0 · static · locked
+├─ core       → core:base                 L1 · locked · cacheable
 ├─ rules      → managed:rules              L0 · static
 │              user:rules                 L2 · session
 │              project:rules              L3 · session
@@ -1097,6 +1098,13 @@ History、L11 Current User Request、L12 Per-turn Reminder。
   capability，不能扩权。
 - 排序键固定为 layer → static/session/turn → priority → source/id；L0-L4 承载稳定权威，L5-L9 可按请求现场使用 turn fragment，L10-L12 的 turn 语义由装配器强制校验。
 - `turn`、`data`、`untrusted` fragment 不得 `cacheable`；稳定断点只允许覆盖连续 cacheable 前缀。
+- `managed:cyber-risk` 是独立的 L0 网络安全底线 Fragment，固定先于 L1 Base Prompt。
+  它按可观察行为区分防御性安全工作和有害操作能力：允许安全开发、漏洞修复、防御检测、
+  隔离样本分析、CTF 与有明确范围的授权测试；拒绝恶意软件、凭据窃取、未授权访问、
+  破坏性攻击、规避审计、供应链投毒等请求。该 Fragment 为 static/cacheable/Managed、
+  不可关闭、不可 compact，并进入主 Agent、全部子代理、Review、Benchmark 生产探针和
+  legacy 字符串 Prompt fallback。安全规则正文受硬性长度上限约束，Context Cache Ledger
+  将其纳入 policy instruction hash。
 - 运行中切换权限模式会同步当前 policy snapshot、丢弃旧 turn pool、刷新 L5 attachment；下一个
   provider step 使用新 ToolPool，stable hash 不变而 dynamic hash / contract hash 更新。
 - 当前 user 消息只出现一次，tool result 永远留在 history，不进入 system 或稳定前缀。

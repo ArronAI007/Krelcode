@@ -834,6 +834,12 @@ workspace 规则文件新增字段示例：
 
 ## 6. 安全策略速查（审批策略 + 运行时 Sandbox，默认开启）
 
+除运行时审批与 Sandbox 外，所有 Agent 请求都固定包含 L0 `managed:cyber-risk`
+安全底线 Prompt。它不能被配置关闭，也不替代权限系统：Prompt 负责区分防御性安全、
+授权测试与恶意操作，审批/Sandbox 继续在执行层 fail-closed。普通安全评审、漏洞修复、
+检测规则和隔离环境中的样本分析不应因关键词被误拒；恶意软件、凭据窃取、未授权利用、
+破坏性攻击、规避审计和供应链投毒等操作型请求必须停止并提供防御性替代方案。
+
 | 操作 | 处置 |
 |------|------|
 | 只读工具（get_time/read_file/grep/glob/find_refs/repo_map/check_syntax/memory_search/ask_user/update_plan，以及 list/load/read Skill） | 放行；显式 `deny/ask` 路径或工具规则优先；`ask_user` 无交互前台时工具结果 fail-closed |

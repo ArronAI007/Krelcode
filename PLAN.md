@@ -169,8 +169,9 @@
 | 121 | Claude Code 六内置 Agent 兼容 | 新增 canonical `subagent/builtin_agents.py`，实现 `Explore`、`Plan`、`general-purpose`、`claude`、`statusline-setup`、`claude-code-guide`，并保留 Krelcode `verifier`。`spawn_agent` 缺省选择 `general-purpose`；Explore/Plan 使用 read-only、无 MCP、跳过 user/project/directory 规则但保留 Managed；general-purpose/claude 继承全部子代理工具/MCP；statusline/guide 分别使用 sonnet/haiku 逻辑档位。新增 `[agent_models]` 显式覆盖与 Anthropic 默认档位映射，非 Anthropic 环境无覆盖时回退父模型；新增 `/statusline [要求]` 命令。用户/项目同名 Definition 可覆盖全部内置 Agent | 10 个 Step 121 专项测试覆盖六 Agent+verifier 发现、Explore/Plan 规则隔离与工具边界、默认 general-purpose、完整工具池、statusline/guide 作用域、用户覆盖、模型档位解析、非 Anthropic 回退和 `/statusline` 命令路径 | ✅ |
 | 122 | Memory 类型化、索引与按需主题 | JSONL 继续作为权威源，新增可重建 `MEMORY.md` 索引与 `topics/*.md` 视图。索引严格限制 200 主题、每行 150 字符、总长 24,000 字符；user 主题只写入用户目录。新增 `user/feedback/project/reference` 语义类型，feedback/project 强制 Why/How；Auto Memory 按触发来源结构化，缺结构 fail-closed。新增 L5 `memory:lifecycle-contract`，固定 What NOT to save 清单及 Memory/Task/Plan/Compact 边界。`memory_search` 支持 query 定位和 id/topic 按需读正文，不再把全部正文注入请求 | 9 个 Step 122 专项测试覆盖索引有界、user 正文隔离、Why/How 校验、索引-only Evidence、按需主题读取、Prompt 边界、候选类型、缺结构拒绝和路径穿越 | ✅ |
 | 123 | Claude Code 式 Output Styles 人格 | 在既有声明式样式上补齐内置 `default/explanatory/learning` 人格，始终作为 L4 `style:output` 注入；自定义样式支持 user/project/configured 覆盖、`keep-coding-instructions` 与 L1 冲突优先级。`default` 不注入额外 Prompt，built-in 使用 Managed trust，人格永不覆盖安全、权限、Sandbox、证据标准和当前请求 | 新增内置发现/注入、default 清理、keep-coding 冲突契约、项目覆盖 built-in 与 `/output-style` 切换测试 | ✅ |
+| 124 | Cyber Risk 安全底线 Prompt | 新增不可关闭的 L0 `managed:cyber-risk` 网络安全合约：允许安全开发、漏洞修复、防御检测、隔离样本分析、CTF 与有范围授权测试；拒绝恶意软件、凭据窃取、未授权利用、破坏性攻击、规避审计和供应链投毒等操作能力。规则按具体效果而非关键词分类，并提供安全替代路径。主 Agent、全部子代理、Review、Benchmark 与 legacy Prompt fallback 共用同一 L0 来源，计入 policy instruction hash | 6 个 Step 124 专项测试覆盖 L0 元数据/长度、防御与禁止边界、PromptAssembler 首部稳定块、子代理继承、legacy 幂等注入及主 Agent/Review 接线 | ✅ |
 
-| 测试总数：1573（1571 通过 + 2 个本地端口集成，沙箱内自动 skip） |
+| 测试总数：1579（1577 通过 + 2 个本地端口集成，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

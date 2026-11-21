@@ -9,6 +9,7 @@ import shlex
 
 from ....agent.context import build_workspace_context_bundle
 from ....agent.context_inspection import ContextInspectionService
+from ....agent.cyber_risk import prepend_cyber_risk_prompt
 from ....agent.fragments import (
     GROUP_WORKSPACE,
     refresh_registry_snapshot,
@@ -948,12 +949,12 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             return _ok(*lines)
 
         # 兼容没有 Registry 的嵌入式 AgentLoop。
-        base_prompt = build_system_prompt(
+        base_prompt = prepend_cyber_risk_prompt(build_system_prompt(
             bundle.text,
             profile=getattr(ctx.loop, "prompt_profile_config", "auto"),
             provider=getattr(ctx.loop, "llm", ""),
             model=getattr(getattr(ctx.loop, "llm", None), "model", ""),
-        )
+        ))
         ctx.loop.skill_base_prompt = base_prompt
         prompt = (
             manager.apply_to_prompt(base_prompt) if manager is not None

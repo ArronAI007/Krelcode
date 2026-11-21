@@ -20,6 +20,7 @@ from .agent.context import (
     ContextOptions,
     build_workspace_context_bundle,
 )
+from .agent.cyber_risk import cyber_risk_fragment
 from .agent.loop import AgentLoop
 from .agent.memory_contract import memory_contract_fragment
 from .agent.context_assembler import ContextAssembler
@@ -728,6 +729,7 @@ async def build_loop(
         workspace_root, config=output_style_config)
     prompt_registry = PromptFragmentRegistry(
         base_fragments(prompt_profile_resolution))
+    prompt_registry.register(cyber_risk_fragment())
     if memory_store is not None:
         prompt_registry.register(memory_contract_fragment())
     if workspace_context is not None:

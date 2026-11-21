@@ -35,6 +35,7 @@ from ..agent.context import (
 from ..agent.context_assembler import ContextAssembler
 from ..agent.context_cache_ledger import ContextCacheLedger
 from ..agent.context_source import default_context_sources
+from ..agent.cyber_risk import cyber_risk_fragment
 from ..agent.fragments import (
     LAYER_L7_EVIDENCE,
     PromptFragmentRegistry,
@@ -489,7 +490,8 @@ class _BenchmarkFixture:
             managed_paths=(self.root / ".krelcode" / "managed" / "AGENTS.md",),
         )
         self.workspace = self._workspace_context()
-        self.registry = PromptFragmentRegistry([base_fragment()])
+        self.registry = PromptFragmentRegistry([
+            cyber_risk_fragment(), base_fragment()])
         sync_rule_fragments(self.registry, self.workspace)
         self.loop = self.make_loop(
             context_manager=context_manager,

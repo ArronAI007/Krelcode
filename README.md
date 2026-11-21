@@ -229,6 +229,13 @@ Benchmark，避免单次失败导致 Prompt 过拟合或权限/安全约束被�
 
 ### 生产级 Base Prompt 与模型 profile
 
+所有生产入口还会在 L1 Base Prompt 之前固定装配 `managed:cyber-risk` L0 Managed
+Policy。它按具体行为和影响而不是安全关键词判断请求：允许漏洞修复、防御控制、
+安全评审、隔离环境中的恶意样本分析，以及有明确范围的 CTF/授权测试；拒绝恶意软件、
+凭据窃取、未授权利用、破坏性攻击、规避审计和供应链投毒等操作型能力。该 L0 规则
+不可手动关闭、不能 compact，也不能被用户/项目规则、Output Style、Memory、MCP、
+网页或工具结果覆盖。
+
 Base Prompt 固定拆为身份、执行循环、工具纪律、编码质量、安全权威、验证、沟通与
 任务闭环八个 L1 section，每个 section 都有独立 ID、来源、优先级、hash 和可观测
 元数据。`[prompt].profile` 默认 `auto`：按模型名最长匹配、再按 provider family

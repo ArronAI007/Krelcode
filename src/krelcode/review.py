@@ -21,6 +21,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from .agent.cyber_risk import prepend_cyber_risk_prompt
 from .agent.loop import AgentLoop
 from .agent.usage import UsageTracker
 from .core.events import EventBus, PermissionDenied, ToolCallCompleted
@@ -42,7 +43,7 @@ from .tools.registry import ToolRegistry
 
 MAX_DIFF_CHARS = 100_000
 
-REVIEW_SYSTEM_PROMPT = """\
+REVIEW_SYSTEM_PROMPT = prepend_cyber_risk_prompt("""\
 You are a meticulous code reviewer for a git repository.
 
 Review the provided diff and report, in the user's language:
@@ -57,7 +58,7 @@ Rules:
   surrounding context when the diff alone is ambiguous.
 - Do NOT invent issues to seem thorough; if the change looks good, say so.
 - End with a verdict line: 结论: 可合入 / 建议修改后合入 / 需要修改.
-"""
+""")
 
 
 def readonly_tools() -> List[Any]:
