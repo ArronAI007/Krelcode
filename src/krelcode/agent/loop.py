@@ -119,6 +119,11 @@ from .prompt_assembler import (
     PromptAssemblyRequest,
     PromptPlan,
 )
+from .prompt_surface import (
+    PromptSurfaceRegistry,
+    main_prompt_surface,
+    update_observation,
+)
 from .streaming_tools import StreamingToolExecutor
 from .tokens import estimate_history_tokens
 from .tool_pool import TurnToolPool
@@ -268,6 +273,11 @@ class AgentLoop:
             registry_provider=lambda: getattr(
                 self, "prompt_registry", None),
         )
+        # Observability-only catalogue. App assembly replaces this minimal
+        # entry with the full tool/workflow/subagent/extension directory.
+        self.prompt_surface_registry = PromptSurfaceRegistry({
+            "main": (main_prompt_surface(system_prompt),),
+        })
         self.last_prompt_plan: PromptPlan | None = None
         self.last_provider_messages = None
         self.last_context_assembly = None
@@ -987,6 +997,8 @@ class AgentLoop:
             previous=previous_prompt_plan,
         )
         self.last_prompt_plan = prompt_plan
+        self._observe_prompt_surfaces(
+            prompt_plan, tuple(prompt_specs or ()), step)
         working_snapshot = self.working_context_store.snapshot()
         self.last_context_plan = ContextPlanSnapshot.from_assembly(
             context_assembly,
@@ -1246,6 +1258,41 @@ class AgentLoop:
     def current_tool_pool(self) -> TurnToolPool:
         """Public, read-mostly view used by /tools and diagnostics."""
         return self._current_tool_pool()
+
+    def _observe_prompt_surfaces(
+        self,
+        prompt_plan: PromptPlan,
+        tool_specs: tuple[object, ...],
+        step: int,
+    ) -> None:
+        """Record content-light actual renders without changing the request."""
+        registry = getattr(self, "prompt_surface_registry", None)
+        if not isinstance(registry, PromptSurfaceRegistry):
+            return
+        system_tokens = sum(
+            int(getattr(fragment, "tokens", 0) or 0)
+            for fragment in prompt_plan.fragments
+        )
+        update_observation(
+            registry,
+            "main:agent",
+            content_hash=prompt_plan.full_hash,
+            tokens=system_tokens,
+            turn_id=self._current_turn_id,
+            step=step,
+        )
+        for spec in tool_specs:
+            name = str(getattr(spec, "name", "") or "")
+            if not name:
+                continue
+            update_observation(
+                registry,
+                f"tool:{name}",
+                content_hash=str(getattr(spec, "content_hash", "") or ""),
+                tokens=int(getattr(spec, "token_estimate", 0) or 0),
+                turn_id=self._current_turn_id,
+                step=step,
+            )
 
     def current_task_workflow(self) -> Optional[TaskWorkflowSelection]:
         """Return the workflow selected for the current turn, if any."""

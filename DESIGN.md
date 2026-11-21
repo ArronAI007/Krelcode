@@ -2095,6 +2095,30 @@ Fragment 计划和 omission/diff，`/context why <id>` 可定位 Fragment、Memo
 layer 或裁剪项，`/context cache` 展示工具目录 hash 与跨请求变化。所有观测记录只保留
 来源、计数和哈希，不包含 Prompt、工具 description/schema、history、Memory 或附件正文。
 
+## Prompt Surface Registry（Step 125）
+
+`PromptAssembler` 只拥有一次请求内部的 L0-L12 Fragment；Compact、Review、Tool、Workflow、
+Subagent、Hook、MCP Prompt、Skill、Plugin/Custom Command 与 Output Style 还构成更外层的
+模型可见 Prompt 面。Step 125 新增旁路 `PromptSurfaceRegistry`，首次把这些 surface 纳入
+同一份只读目录，但不成为第二个 Assembler，也不参与 Provider 消息、工具 Schema 或缓存边界
+的生成。
+
+每个 `PromptSurfaceDescriptor` 只保存：
+
+- stable ID、kind、source、owner、version、scope；
+- instruction/evidence role、authority、trust、stability；
+- content hash、Token 估算、可用能力、可用状态与有界 metadata。
+
+目录刷新先在临时映射中验证全部 descriptor 并拒绝重复 ID，然后一次性替换；已有 observation
+按相同 surface ID 保留。`PromptSurfaceSnapshot` 可往返序列化，catalogue hash 只由 schema 与
+surface 元数据决定，不受刷新 generation 影响。MCP Prompt 与 server instructions 固定为
+`evidence/untrusted`，Plugin、Skill、Hook 与 Command 的来源分别映射到对应 authority/trust。
+
+`AgentLoop` 在真实 `PromptPlan` 生成后记录 main Agent 与本次实际暴露工具的内容轻量
+observation；失败观测不会影响请求。`/prompts list|show|coverage|hash` 只显示来源、Hash、
+Token、权限与最近 render 计数，不显示 Prompt 正文。该层当前严格只读：不自动禁用、改写、
+发布或重排任何 Surface。
+
 ## Context / Cache Ledger（Step 104）
 
 每个最终 Provider 请求由唯一的 `ContextCacheLedger` 收口。它只在 microcompact/compact 后的

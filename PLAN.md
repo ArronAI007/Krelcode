@@ -170,8 +170,9 @@
 | 122 | Memory 类型化、索引与按需主题 | JSONL 继续作为权威源，新增可重建 `MEMORY.md` 索引与 `topics/*.md` 视图。索引严格限制 200 主题、每行 150 字符、总长 24,000 字符；user 主题只写入用户目录。新增 `user/feedback/project/reference` 语义类型，feedback/project 强制 Why/How；Auto Memory 按触发来源结构化，缺结构 fail-closed。新增 L5 `memory:lifecycle-contract`，固定 What NOT to save 清单及 Memory/Task/Plan/Compact 边界。`memory_search` 支持 query 定位和 id/topic 按需读正文，不再把全部正文注入请求 | 9 个 Step 122 专项测试覆盖索引有界、user 正文隔离、Why/How 校验、索引-only Evidence、按需主题读取、Prompt 边界、候选类型、缺结构拒绝和路径穿越 | ✅ |
 | 123 | Claude Code 式 Output Styles 人格 | 在既有声明式样式上补齐内置 `default/explanatory/learning` 人格，始终作为 L4 `style:output` 注入；自定义样式支持 user/project/configured 覆盖、`keep-coding-instructions` 与 L1 冲突优先级。`default` 不注入额外 Prompt，built-in 使用 Managed trust，人格永不覆盖安全、权限、Sandbox、证据标准和当前请求 | 新增内置发现/注入、default 清理、keep-coding 冲突契约、项目覆盖 built-in 与 `/output-style` 切换测试 | ✅ |
 | 124 | Cyber Risk 安全底线 Prompt | 新增不可关闭的 L0 `managed:cyber-risk` 网络安全合约：允许安全开发、漏洞修复、防御检测、隔离样本分析、CTF 与有范围授权测试；拒绝恶意软件、凭据窃取、未授权利用、破坏性攻击、规避审计和供应链投毒等操作能力。规则按具体效果而非关键词分类，并提供安全替代路径。主 Agent、全部子代理、Review、Benchmark 与 legacy Prompt fallback 共用同一 L0 来源，计入 policy instruction hash | 6 个 Step 124 专项测试覆盖 L0 元数据/长度、防御与禁止边界、PromptAssembler 首部稳定块、子代理继承、legacy 幂等注入及主 Agent/Review 接线 | ✅ |
+| 125 | Prompt Surface Registry 只读目录与观测（Step A） | 新增旁路 `PromptSurfaceRegistry/Snapshot`，统一登记 Main Agent、Tool、Workflow、Subagent、Compact、Review、Hook、MCP Prompt/instructions、Skill、Plugin/Custom Command 与 Output Style。Descriptor 仅含来源、权限、trust、stability、Hash、Token 与有界 metadata；目录原子刷新、保留 observation、拒绝重复 ID。AgentLoop 只在真实 PromptPlan 后记录 main 与已暴露工具的 content-light render 状态；`/prompts list|show|coverage|hash` 提供只读诊断。Provider messages、tools、system blocks、PromptAssembler 语义与 cache boundary 均未修改 | 7 个专项测试覆盖正文不落盘、Snapshot 往返与稳定 catalogue hash、重复 ID 原子失败、空目录清理、扩展来源分类、真实 Agent 渲染观测、MCP untrusted evidence 与命令零正文泄漏；Prompt/命令/会话回归 114 个测试通过 | ✅ |
 
-| 测试总数：1579（1577 通过 + 2 个本地端口集成，沙箱内自动 skip） |
+| 测试总数：1586（1584 通过 + 2 个本地端口集成，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

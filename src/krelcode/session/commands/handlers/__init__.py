@@ -7,6 +7,7 @@ from typing import Awaitable, Callable
 from ..context import CommandContext
 from ..types import CommandResult, CommandSource
 from .memory_ops import handle_memory
+from .prompt_surface_ops import handle_prompts
 from .runtime_ops import (
     handle_agents,
     handle_allow,
@@ -76,6 +77,7 @@ BUILTIN_HANDLERS: dict[str, CommandHandler] = {
     "allow": handle_allow,
     "permissions": handle_permissions,
     "context": handle_context,
+    "prompts": handle_prompts,
     "prompt-release": handle_prompt_release,
     "memory": handle_memory,
     "web": handle_web,

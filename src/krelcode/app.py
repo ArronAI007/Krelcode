@@ -50,6 +50,7 @@ from .agent.prompt_release_pipeline import (
     PromptReleasePipeline,
     PromptReleaseProposalStore,
 )
+from .agent.prompt_surface_catalog import refresh_prompt_surfaces
 from .agent.rules import RuleLoader
 from .agent.runtime import AgentRuntime
 from .agent.usage import UsageTracker
@@ -843,6 +844,7 @@ async def build_loop(
         context_coordinator.attach(bus)
         loop.context_checkpoint_coordinator = context_coordinator
     apply_prompt_snapshot(loop, prompt_snapshot)
+    refresh_prompt_surfaces(loop)
 
     suggest_threshold, auto_threshold = resolve_auto_memory_thresholds(
         args, config)
@@ -862,13 +864,15 @@ async def build_loop(
     loop.extension_registry = extension_registry
 
     def refresh_extensions_basic():
-        return replace_runtime_extensions(
+        result = replace_runtime_extensions(
             extension_registry,
             plugins=plugin_manager,
             skills=skill_manager,
             agents=agent_definitions,
             tools=registry,
         )
+        refresh_prompt_surfaces(loop)
+        return result
 
     refresh_extensions_basic()
 
@@ -1199,7 +1203,7 @@ async def async_main(args: argparse.Namespace) -> int:
     sync_mcp_prompt_commands(input_processor.command_registry, supervisor)
 
     def refresh_extensions():
-        return replace_runtime_extensions(
+        result = replace_runtime_extensions(
             loop.extension_registry,
             plugins=loop.plugin_manager,
             skills=loop.skill_manager,
@@ -1210,6 +1214,9 @@ async def async_main(args: argparse.Namespace) -> int:
             mcp_servers=merged_mcp_config(),
             mcp_supervisor=supervisor,
         )
+        refresh_prompt_surfaces(
+            loop, hooks=hooks, mcp_supervisor=supervisor)
+        return result
 
     loop.extension_refresh = refresh_extensions
     async def refresh_mcp_prompt_commands() -> None:

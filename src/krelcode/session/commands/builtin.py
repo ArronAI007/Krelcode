@@ -166,6 +166,12 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
                   "/context reset 清除启停设置；/context cache 查看缓存边界；\n"
                   "/context refresh 重新采集工作区上下文")),
         CommandSpec(
+            "prompts", "查看所有模型可见 Prompt 的只读目录",
+            argument_hint="[list [kind|source]|show <id>|coverage|hash]",
+            help=("查看主 Agent、Tool、Workflow、Subagent、Compact、Review、"
+                  "Hook、MCP、Skill、Plugin 和 Custom Command 的 Prompt Surface；"
+                  "仅显示来源、Hash、Token、权限与最近渲染状态，不显示 Prompt 正文。")),
+        CommandSpec(
             "prompt-release", "查看或人工审批 Prompt 发布提案",
             argument_hint=(
                 "[list|status [id]|approve <id> <candidate-hash> [reason]|"
