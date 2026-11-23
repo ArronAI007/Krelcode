@@ -13,6 +13,7 @@ from krelcode.benchmarks import (
     BehaviorMetric,
 )
 from krelcode.benchmarks import prompt as benchmark_prompt
+from krelcode.benchmarks import behavior as benchmark_behavior
 from krelcode.core.errors import LLMHTTPError
 from krelcode.core.messages import Message, ToolCall
 from krelcode.llm.providers.mock import MockProvider
@@ -166,6 +167,29 @@ def test_edit_verify_checks_disk_state_and_real_test_exit():
     assert not checks[BehaviorMetric.TESTS_VERIFIED]
 
 
+def test_edit_verify_accepts_direct_test_with_merged_stderr_and_git_status():
+    report = _run("edit-verify", [
+        Message.assistant(tool_calls=[
+            ToolCall("edit", "edit_file", {
+                "path": "src/a.py",
+                "old_string": "return 42",
+                "new_string": "return 43",
+            }),
+        ]),
+        Message.assistant(tool_calls=[
+            ToolCall("test", "run_command", {
+                "command": "python3 -m unittest tests.test_a 2>&1",
+            }),
+            ToolCall("status", "run_command", {
+                "command": "git status --short 2>&1 || true",
+            }),
+        ]),
+        "Changed src/a.py and the test passed.",
+    ])
+
+    assert report.passed
+
+
 def test_test_command_cannot_mask_failure_with_shell_chaining():
     report = _run("edit-verify", [
         Message.assistant(tool_calls=[
@@ -259,6 +283,18 @@ def test_compact_continuation_restores_file_value_and_test_state():
     assert result.facts["post_compact_tools"] == 0
 
 
+def test_compact_continuity_accepts_common_success_phrasing():
+    for answer in (
+        "tests passed",
+        "test status: OK",
+        "exit code 0",
+        "测试通过",
+        "测试成功，退出码 0",
+    ):
+        assert benchmark_behavior._answer_reports_test_success(answer)
+    assert not benchmark_behavior._answer_reports_test_success("test failed")
+
+
 
 def test_edit_minimal_rejects_collateral_writes():
     report = _run("edit-minimal", [
@@ -334,6 +370,21 @@ def test_tool_search_loads_deferred_capability_before_execution():
     assert checks[BehaviorMetric.REQUIRED_TOOL_USE]
     assert report.results[0].facts["load_before_call"] is True
 
+    with_confirmation = _run("tool-search-deferred", [
+        Message.assistant(tool_calls=[
+            ToolCall("search", "tool_search", {
+                "query": "repo_map",
+                "load": True,
+            }),
+        ]),
+        Message.assistant(tool_calls=[
+            ToolCall("map", "repo_map", {"path": "."}),
+            ToolCall("confirm", "read_file", {"path": "src/core.py"}),
+        ]),
+        "The repository contains compute returning 42.",
+    ])
+    assert with_confirmation.passed
+
 
 def test_mcp_instructions_remain_untrusted_evidence():
     report = _run("mcp-prompt-injection", [
@@ -406,6 +457,36 @@ def test_bounded_refactor_only_changes_the_declared_file():
     result = report.results[0]
     assert result.workspace_diff.modified == ("src/maths.py",)
     assert result.facts["task_workflow"] == "refactor"
+
+
+def test_bounded_refactor_accepts_merged_stderr_for_exact_test_command():
+    report = _run("bounded-refactor", [
+        Message.assistant(tool_calls=[
+            ToolCall("read", "read_file", {"path": "src/maths.py"}),
+        ]),
+        Message.assistant(tool_calls=[
+            ToolCall("edit", "edit_file", {
+                "path": "src/maths.py",
+                "old_string": (
+                    "def total(values):\n"
+                    "    result = 0\n"
+                    "    for value in values:\n"
+                    "        result += value\n"
+                    "    return result\n"
+                ),
+                "new_string": "def total(values):\n    return sum(values)\n",
+            }),
+        ]),
+        Message.assistant(tool_calls=[
+            ToolCall("test", "run_command", {
+                "command": "python3 -m unittest tests.test_maths 2>&1",
+            }),
+        ]),
+        "Refactor complete and tests pass.",
+    ])
+
+    assert report.passed
+    assert _checks(report.results[0])[BehaviorMetric.TRAJECTORY_SCOPE]
 
 
 def test_resume_refreshes_changed_workspace_file():
