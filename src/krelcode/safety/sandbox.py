@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import functools
 import glob as globlib
+import ntpath
 import os
 import re
 import shlex
@@ -22,14 +23,15 @@ import shutil
 import stat
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
 
 from .commands import (
-    FIND_ACTION_OPTIONS, REDIRECTS, SEPARATORS, _tokenize,
+    FIND_ACTION_OPTIONS, REDIRECTS, SEPARATORS, _tokenize, _tokenize_cmd,
 )
 from .environment import scrub_environment
+from ..tools.process import ProcessPlatform, current_process_platform
 from ..tools.secret_guard import classify_secret_path
 
 SYSTEM_READ_ROOTS = (
@@ -55,6 +57,10 @@ _SAFE_DEVICE_PATHS = {"/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr"}
 _DYNAMIC_PATH_VARIABLE = re.compile(
     r"\$(?:\{)?(?:HOME|PWD|OLDPWD)(?:\})?", re.IGNORECASE)
 _SHELL_VARIABLE = re.compile(r"\$(?:\{)?[A-Za-z_][A-Za-z0-9_]*")
+_CMD_VARIABLE = re.compile(r"%[A-Za-z_][A-Za-z0-9_]*%")
+_CMD_DELAYED_VARIABLE = re.compile(r"![A-Za-z_][A-Za-z0-9_]*!")
+_WINDOWS_ABSOLUTE_PATH = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
+_WINDOWS_OPTION = re.compile(r"^/[A-Za-z][A-Za-z0-9_-]*$")
 
 
 class SandboxError(ValueError):
@@ -66,6 +72,20 @@ class SandboxedCommand:
     argv: List[str]
     env: dict[str, str]
     backend: str
+    process_kwargs: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SandboxCapabilities:
+    """Content-free capability report shared by doctor, UI and tests."""
+
+    backend: str
+    platform: str
+    shell_dialect: str
+    filesystem_isolation: bool
+    network_isolation: bool
+    process_tree_isolation: bool = True
+    static_path_audit: bool = True
 
 
 class ExecutionSandbox:
@@ -77,9 +97,11 @@ class ExecutionSandbox:
         *,
         backend: str = "auto",
         network: bool = False,
+        process_platform: Optional[ProcessPlatform] = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).resolve()
         self.network = bool(network)
+        self.process_platform = process_platform or current_process_platform()
         requested = (backend or "auto").strip().lower()
         if requested not in {"auto", "static", "seatbelt", "bubblewrap"}:
             raise SandboxError(f"未知 sandbox backend: {backend!r}")
@@ -89,13 +111,31 @@ class ExecutionSandbox:
     def rebind(self, workspace_root: Path) -> "ExecutionSandbox":
         """子代理 worktree 使用新根目录，保留后端与网络策略。"""
         return ExecutionSandbox(
-            workspace_root, backend=self.requested_backend, network=self.network)
+            workspace_root,
+            backend=self.requested_backend,
+            network=self.network,
+            process_platform=self.process_platform,
+        )
+
+    @property
+    def capabilities(self) -> SandboxCapabilities:
+        isolated = self.backend in {"seatbelt", "bubblewrap"}
+        return SandboxCapabilities(
+            backend=self.backend,
+            platform=self.process_platform.system,
+            shell_dialect=self.process_platform.shell_dialect,
+            filesystem_isolation=isolated,
+            network_isolation=isolated and not self.network,
+            process_tree_isolation=True,
+            static_path_audit=True,
+        )
 
     def audit_command(self, command: str, cwd: Path) -> Optional[str]:
         """返回硬性违规原因；None 表示可交给隔离后端执行。"""
         return audit_command(
             command, Path(cwd), self.workspace_root,
             network_allowed=self.network,
+            shell_dialect=self.process_platform.shell_dialect,
         )
 
     def audit_exec(
@@ -107,11 +147,15 @@ class ExecutionSandbox:
         if not any(_inside(Path(cwd), root) for root in roots):
             return f"cwd 越出 Sandbox 允许范围: {Path(cwd).resolve()}"
         return audit_argv_paths(
-            argv, Path(cwd), roots, skip_program=True, network_allowed=self.network)
+            argv, Path(cwd), roots, skip_program=True,
+            network_allowed=self.network,
+            windows_paths=self.process_platform.windows,
+        )
 
     def prepare_shell(self, command: str, cwd: Path) -> SandboxedCommand:
         return self._prepare(
-            ["/bin/sh", "-c", command], Path(cwd), extra_read_roots=())
+            self.process_platform.shell_argv(command),
+            Path(cwd), extra_read_roots=())
 
     def prepare_exec(
         self, argv: Sequence[str], cwd: Path, *,
@@ -134,11 +178,17 @@ class ExecutionSandbox:
             profile = self._seatbelt_profile(extra_read_roots)
             wrapped = [shutil.which("sandbox-exec") or "/usr/bin/sandbox-exec",
                        "-p", profile, "--", *argv]
-            return SandboxedCommand(wrapped, env, self.backend)
+            return SandboxedCommand(
+                wrapped, env, self.backend,
+                self.process_platform.subprocess_kwargs())
         if self.backend == "bubblewrap":
             wrapped = self._bubblewrap_argv(argv, cwd, extra_read_roots)
-            return SandboxedCommand(wrapped, env, self.backend)
-        return SandboxedCommand(argv, env, self.backend)
+            return SandboxedCommand(
+                wrapped, env, self.backend,
+                self.process_platform.subprocess_kwargs())
+        return SandboxedCommand(
+            argv, env, self.backend,
+            self.process_platform.subprocess_kwargs())
 
     def _sandbox_env(self, cwd: Path) -> dict[str, str]:
         base = scrub_environment(os.environ)
@@ -146,13 +196,16 @@ class ExecutionSandbox:
         home = runtime / "home"
         tmp = runtime / "tmp"
         cache = runtime / "cache"
+        appdata = home / "AppData"
+        local_appdata = appdata / "Local"
+        roaming_appdata = appdata / "Roaming"
         try:
-            for path in (home, tmp, cache):
+            for path in (home, tmp, cache, local_appdata, roaming_appdata):
                 path.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             raise SandboxError(f"无法创建 Sandbox 运行目录: {e}") from e
         env = dict(base)
-        env.update({
+        updates = {
             "HOME": str(home),
             "PWD": str(cwd),
             "TMPDIR": str(tmp),
@@ -167,7 +220,17 @@ class ExecutionSandbox:
             "GOCACHE": str(cache / "go-build"),
             "CARGO_HOME": str(cache / "cargo"),
             "GRADLE_USER_HOME": str(cache / "gradle"),
-        })
+        }
+        if self.process_platform.windows:
+            updates.update({
+                "USERPROFILE": str(home),
+                "HOMEDRIVE": home.drive or "",
+                "HOMEPATH": str(home)[len(home.drive):] if home.drive else str(home),
+                "APPDATA": str(roaming_appdata),
+                "LOCALAPPDATA": str(local_appdata),
+                "COMSPEC": self.process_platform.shell,
+            })
+        env.update(updates)
         return env
 
     def _seatbelt_profile(self, extra_read_roots: Sequence[Path]) -> str:
@@ -262,6 +325,7 @@ def _probe_seatbelt(executable: str) -> bool:
             env=scrub_environment(os.environ),
             timeout=3,
             check=False,
+            **current_process_platform().subprocess_kwargs(),
         )
         return completed.returncode == 0
     except (OSError, subprocess.SubprocessError):
@@ -279,6 +343,7 @@ def _probe_bubblewrap(executable: str) -> bool:
             env=scrub_environment(os.environ),
             timeout=3,
             check=False,
+            **current_process_platform().subprocess_kwargs(),
         )
         return completed.returncode == 0
     except (OSError, subprocess.SubprocessError):
@@ -287,19 +352,24 @@ def _probe_bubblewrap(executable: str) -> bool:
 
 def audit_command(
     command: str, cwd: Path, workspace_root: Path,
-    *, network_allowed: bool = False,
+    *, network_allowed: bool = False, shell_dialect: str = "posix",
 ) -> Optional[str]:
     """静态命令审计；用于拦截明显越界、敏感路径和 shell 包装绕过。"""
     if "\x00" in command:
         return "命令包含 NUL 字符"
+    windows_paths = shell_dialect == "cmd"
+    if windows_paths:
+        preflight = _audit_cmd_preflight(command)
+        if preflight:
+            return preflight
     try:
-        tokens = _tokenize(command)
+        tokens = _tokenize_cmd(command) if windows_paths else _tokenize(command)
     except ValueError as e:
         return f"命令无法解析: {e}"
     roots = [Path(workspace_root).resolve()]
     violation = audit_argv_paths(
         tokens, cwd, roots, skip_program=False, network_allowed=network_allowed,
-        shell_context=True)
+        shell_context=True, windows_paths=windows_paths)
     if violation:
         return violation
 
@@ -312,19 +382,49 @@ def audit_command(
     for nested in _embedded_commands(tokens):
         nested_command = (
             nested[0] if len(nested) == 1
-            else shlex.join(nested)
+            else _join_tokens(nested, shell_dialect=shell_dialect)
         )
         nested_violation = audit_command(
-            nested_command, cwd, workspace_root, network_allowed=network_allowed)
+            nested_command, cwd, workspace_root,
+            network_allowed=network_allowed,
+            shell_dialect=shell_dialect,
+        )
         if nested_violation:
             return f"嵌套命令违规: {nested_violation}"
     return None
 
 
+def _audit_cmd_preflight(command: str) -> Optional[str]:
+    if _CMD_VARIABLE.search(command):
+        return "禁止使用 cmd 环境变量展开构造路径（可能绕过路径审计）"
+    if _CMD_DELAYED_VARIABLE.search(command):
+        return "禁止使用 cmd 延迟展开变量（可能绕过路径审计）"
+    if _powershell_encoded_command(command):
+        return "禁止执行编码后的 PowerShell 命令（无法静态审计）"
+    return None
+
+
+def _powershell_encoded_command(command: str) -> bool:
+    lowered = command.lower()
+    if "powershell" not in lowered and "pwsh" not in lowered:
+        return False
+    return bool(re.search(
+        r"(?:^|\s)-(?:e|ec|enc|enco|encod|encode|encoded|encodedcommand)"
+        r"(?:\s|:|$)",
+        lowered,
+    ))
+
+
+def _join_tokens(tokens: Sequence[str], *, shell_dialect: str) -> str:
+    if shell_dialect == "cmd":
+        return subprocess.list2cmdline(list(tokens))
+    return shlex.join(tokens)
+
+
 def audit_argv_paths(
     tokens: Sequence[str], cwd: Path, allowed_roots: Sequence[Path], *,
     skip_program: bool, network_allowed: bool = False,
-    shell_context: bool = False,
+    shell_context: bool = False, windows_paths: bool = False,
 ) -> Optional[str]:
     roots = [Path(root).resolve() for root in allowed_roots]
     cwd = Path(cwd).resolve()
@@ -335,12 +435,16 @@ def audit_argv_paths(
     for index, raw in enumerate(tokens):
         if not raw or raw in SEPARATORS or raw in REDIRECTS:
             continue
+        if skip_program and index == 0:
+            continue
         candidates = [raw]
         assigned = _PATH_ASSIGNMENT.match(raw)
         if assigned:
             candidates = [assigned.group(1)]
         for token in candidates:
             if _is_url(token) or token in _SAFE_DEVICE_PATHS:
+                continue
+            if windows_paths and _WINDOWS_OPTION.match(token):
                 continue
             if token.startswith("-") and "/" not in token and "=" not in token:
                 continue
@@ -351,14 +455,23 @@ def audit_argv_paths(
                     return "禁止使用 HOME/PWD/OLDPWD 变量构造访问路径"
                 if _SHELL_VARIABLE.search(token) and "/" in token:
                     return "禁止在路径参数中使用 shell 变量展开（可能绕过路径审计）"
-            glob_violation = _audit_expanded_globs(token, cwd, roots)
+                if windows_paths and _CMD_VARIABLE.search(token):
+                    return "禁止使用 cmd 环境变量展开构造路径（可能绕过路径审计）"
+                if windows_paths and _CMD_DELAYED_VARIABLE.search(token):
+                    return "禁止使用 cmd 延迟展开变量（可能绕过路径审计）"
+            if windows_paths and _WINDOWS_ABSOLUTE_PATH.match(token) and os.name != "nt":
+                return f"路径越出 Sandbox 允许范围: {token}"
+            glob_violation = _audit_expanded_globs(
+                token, cwd, roots, windows_paths=windows_paths)
             if glob_violation:
                 return glob_violation
             sensitive_token = _looks_like_sensitive_path_token(
-                token, cwd, roots)
-            if not sensitive_token and not _looks_like_path(token, cwd):
+                token, cwd, roots, windows_paths=windows_paths)
+            if not sensitive_token and not _looks_like_path(
+                    token, cwd, windows_paths=windows_paths):
                 continue
-            resolved = _resolve_token(token, cwd)
+            resolved = _resolve_token(
+                token, cwd, windows_paths=windows_paths)
             if resolved is None:
                 continue
             if _contains_sensitive_path(resolved, roots):
@@ -389,7 +502,7 @@ def _network_violation(tokens: Sequence[str]) -> Optional[str]:
     for args in segments:
         if not args:
             continue
-        original_program = Path(args[0]).name.lower()
+        original_program = _program_name(args[0])
         if original_program == "env":
             nested_env = _unwrap_env(args[1:])
             if nested_env:
@@ -397,7 +510,7 @@ def _network_violation(tokens: Sequence[str]) -> Optional[str]:
                 if nested:
                     return nested
         program_index = _effective_program_index(args)
-        program = Path(args[program_index]).name.lower()
+        program = _program_name(args[program_index])
         program_args = args[program_index + 1:]
         subcommand = program_args[0].lower() if program_args else ""
         if program in NETWORK_PROGRAMS:
@@ -422,7 +535,7 @@ def _effective_program_index(args: Sequence[str]) -> int:
     """跳过 env/command 包装和环境赋值，识别实际网络程序。"""
     index = 0
     while index < len(args):
-        program = Path(args[index]).name.lower()
+        program = _program_name(args[index])
         if program not in {"env", "command", "exec"}:
             return index
         index += 1
@@ -460,11 +573,15 @@ def _is_shell_command_flag(token: str) -> bool:
     return token.startswith("-") and not token.startswith("--") and "c" in token[1:]
 
 
-def _resolve_token(token: str, cwd: Path) -> Optional[Path]:
+def _resolve_token(
+    token: str, cwd: Path, *, windows_paths: bool = False,
+) -> Optional[Path]:
     if "\x00" in token:
         return None
     if token.startswith("~"):
         return Path(token).expanduser().resolve()
+    if windows_paths and not _WINDOWS_ABSOLUTE_PATH.match(token):
+        token = token.replace("\\", "/")
     path = Path(token)
     if not path.is_absolute():
         path = cwd / path
@@ -474,16 +591,21 @@ def _resolve_token(token: str, cwd: Path) -> Optional[Path]:
         return None
 
 
-def _looks_like_path(token: str, cwd: Path) -> bool:
-    if token in {".", ".."} or token.startswith(("/", "~", "./", "../")):
+def _looks_like_path(
+    token: str, cwd: Path, *, windows_paths: bool = False,
+) -> bool:
+    if token in {".", ".."} or token.startswith(
+            ("/", "~", "./", "../", ".\\", "..\\")):
         return True
-    if "/" not in token:
+    if windows_paths and _WINDOWS_ABSOLUTE_PATH.match(token):
+        return True
+    if "/" not in token and "\\" not in token:
         # 基名也可能指向工作区内的硬链接文件，存在时必须进入后续身份检查。
         try:
             return (cwd / token).exists()
         except OSError:
             return False
-    resolved = _resolve_token(token, cwd)
+    resolved = _resolve_token(token, cwd, windows_paths=windows_paths)
     if resolved is None:
         return False
     # 实际存在，或规范化后逃出当前目录，才按文件路径处理；避免把
@@ -492,10 +614,11 @@ def _looks_like_path(token: str, cwd: Path) -> bool:
 
 
 def _looks_like_sensitive_path_token(
-    token: str, cwd: Path, allowed_roots: Sequence[Path],
+    token: str, cwd: Path, allowed_roots: Sequence[Path], *,
+    windows_paths: bool = False,
 ) -> bool:
     """即使目标尚不存在，也使用统一凭据分类器拦截敏感路径。"""
-    resolved = _resolve_token(token, cwd)
+    resolved = _resolve_token(token, cwd, windows_paths=windows_paths)
     return resolved is not None and _contains_sensitive_path(
         resolved, allowed_roots)
 
@@ -517,10 +640,13 @@ def _is_hardlinked_file(path: Path) -> bool:
 
 def _audit_expanded_globs(
     token: str, cwd: Path, allowed_roots: Sequence[Path],
+    *, windows_paths: bool = False,
 ) -> Optional[str]:
     """审计 shell 在执行时才会展开的 glob，防止 `cat *` 绕过敏感路径规则。"""
     if not any(char in token for char in "*?["):
         return None
+    if windows_paths and not _WINDOWS_ABSOLUTE_PATH.match(token):
+        token = token.replace("\\", "/")
     pattern = Path(token).expanduser()
     if not pattern.is_absolute():
         pattern = cwd / pattern
@@ -681,13 +807,32 @@ def _embedded_commands(tokens: Sequence[str]) -> List[List[str]]:
     for args in _split_segments(tokens):
         if not args:
             continue
-        program = Path(args[0]).name.lower()
+        program = _program_name(args[0])
         program_args = args[1:]
         if program in {"sh", "bash", "zsh", "dash", "ksh"}:
             for index, arg in enumerate(program_args):
                 if _is_shell_command_flag(arg) and index + 1 < len(program_args):
                     embedded.append([program_args[index + 1]])
                     break
+        elif program == "cmd":
+            for index, arg in enumerate(program_args):
+                if arg.lower() in {"/c", "/k"} and index + 1 < len(program_args):
+                    try:
+                        embedded.append(_tokenize_cmd(program_args[index + 1]))
+                    except ValueError:
+                        embedded.append([program_args[index + 1]])
+                    break
+        elif program in {"powershell", "pwsh"}:
+            for index, arg in enumerate(program_args):
+                nested = _powershell_command_argument(program_args, index)
+                if nested is None:
+                    continue
+                try:
+                    embedded.append(_tokenize_cmd(
+                        nested, semicolon_as_separator=True))
+                except ValueError:
+                    embedded.append([nested])
+                break
         elif program == "eval" and program_args:
             embedded.append([program_args[0]])
         elif program == "env":
@@ -733,7 +878,35 @@ def _is_system_executable(path: Path) -> bool:
 
 
 def _has_path_separator(token: str) -> bool:
-    return "/" in token or token.startswith("~")
+    return "/" in token or "\\" in token or token.startswith("~")
+
+
+def _program_name(token: str) -> str:
+    """Normalize POSIX/Windows executable names and strip a Windows suffix."""
+    base = ntpath.basename(str(token).replace("/", "\\")).lower()
+    for suffix in (".exe", ".com", ".cmd", ".bat"):
+        if base.endswith(suffix):
+            return base[:-len(suffix)]
+    return base
+
+
+def _powershell_command_argument(
+    args: Sequence[str], index: int,
+) -> Optional[str]:
+    """Resolve -Command/-Command:<script> including safe parameter prefixes."""
+    raw = args[index]
+    lowered = raw.lower().strip('"')
+    for prefix in ("-command", "-c"):
+        if lowered.startswith(prefix + ":"):
+            return raw.split(":", 1)[1].strip('"') or None
+        exact = lowered == prefix
+        abbreviated = (
+            prefix == "-command" and len(lowered) >= 3
+            and prefix.startswith(lowered)
+        )
+        if (exact or abbreviated) and index + 1 < len(args):
+            return args[index + 1]
+    return None
 
 
 def _is_url(token: str) -> bool:

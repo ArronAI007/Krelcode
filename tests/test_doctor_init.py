@@ -123,6 +123,9 @@ def test_check_sandbox_reports_static_as_warning_and_invalid_as_failure():
     static = check_sandbox({"sandbox": {"backend": "static", "network": False}})
     assert static.status == STATUS_WARN
     assert "backend=static" in static.detail and "静态护栏" in static.detail
+    assert "platform=" in static.detail and "shell=" in static.detail
+    assert "进程树统一终止" in static.detail
+    assert "无 OS 文件/网络隔离" in static.detail
     invalid = check_sandbox({"sandbox": {"backend": "unknown"}})
     assert invalid.status == STATUS_FAIL
 

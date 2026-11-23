@@ -15,7 +15,6 @@ import asyncio
 import codecs
 import os
 import shutil
-import signal
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -32,7 +31,11 @@ from ..core.events import (
 from ..core.redact import SecretRedactor
 from ..safety.environment import scrub_environment
 from ..safety.sandbox import ExecutionSandbox, SandboxError
-from ..tools.process import terminate_process_tree
+from ..tools.process import (
+    process_isolation_kwargs,
+    shell_argv,
+    terminate_process_tree,
+)
 
 DEFAULT_MAX_ACTIVE = 16
 DEFAULT_MAX_OUTPUT_CHARS = 200_000
@@ -181,9 +184,11 @@ class ShellJobManager:
             except SandboxError as exc:
                 raise ShellJobError(f"Sandbox 准备失败: {exc}") from exc
             argv, env = prepared.argv, prepared.env
+            process_kwargs = prepared.process_kwargs
         else:
-            argv = ["/bin/sh", "-c", text]
+            argv = shell_argv(text)
             env = scrub_environment(os.environ)
+            process_kwargs = process_isolation_kwargs()
 
         # create_subprocess_exec 会 await；锁住容量检查与占位，避免并发 start
         # 同时越过 max_active。关闭操作也使用同一把锁，防止 shutdown 与
@@ -204,8 +209,8 @@ class ShellJobManager:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
                     cwd=str(resolved_cwd),
-                    start_new_session=True,
                     env=env,
+                    **process_kwargs,
                 )
             except OSError as exc:
                 raise ShellJobError(f"无法启动命令: {exc}") from exc
@@ -283,13 +288,13 @@ class ShellJobManager:
         if job.status is not ShellJobStatus.RUNNING:
             return self._snapshot(job)
         job.kill_requested = True
-        terminate_process_tree(job.proc, sig=signal.SIGTERM)
+        terminate_process_tree(job.proc, force=False)
         waiter = job.wait_task
         if waiter is not None:
             try:
                 await asyncio.wait_for(asyncio.shield(waiter), timeout=3.0)
             except asyncio.TimeoutError:
-                terminate_process_tree(job.proc, sig=signal.SIGKILL)
+                terminate_process_tree(job.proc, force=True)
                 try:
                     await asyncio.wait_for(asyncio.shield(waiter), timeout=2.0)
                 except asyncio.TimeoutError:
@@ -397,12 +402,12 @@ class ShellJobManager:
                 except asyncio.TimeoutError:
                     # 主进程已退出但后代仍持有 pipe：结束残留进程组，避免
                     # reaper 被一个孤儿子进程永久卡住。
-                    terminate_process_tree(job.proc, sig=signal.SIGTERM)
+                    terminate_process_tree(job.proc, force=False)
                     try:
                         await asyncio.wait_for(
                             asyncio.shield(reader), timeout=1.0)
                     except asyncio.TimeoutError:
-                        terminate_process_tree(job.proc, sig=signal.SIGKILL)
+                        terminate_process_tree(job.proc, force=True)
                         reader.cancel()
                         await asyncio.gather(reader, return_exceptions=True)
             job.exit_code = exit_code

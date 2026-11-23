@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from ..tools.fsutils import is_hidden_file, is_pruned_dir, truncate_middle
+from ..tools.process import process_isolation_kwargs, stop_process_tree
 from .rules import (
     DEFAULT_IMPORT_MAX_DEPTH,
     DEFAULT_IMPORT_MAX_FILES,
@@ -233,15 +234,21 @@ def read_agents_md(
 async def _git(root: Path, *args: str) -> Optional[str]:
     if shutil.which("git") is None:
         return None
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "git", *args,
             cwd=str(root),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            **process_isolation_kwargs(),
         )
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
-    except (OSError, asyncio.TimeoutError):
+    except asyncio.TimeoutError:
+        if proc is not None:
+            await stop_process_tree(proc, force=True, timeout=1)
+        return None
+    except OSError:
         return None
     if proc.returncode != 0:
         return None

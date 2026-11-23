@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
-import signal
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -15,6 +14,11 @@ from ..safety.environment import scrub_environment
 from ..safety.sandbox import SandboxError
 from ..tools.base import ToolContext, ToolResult
 from ..tools.builtin.run_command import MAX_OUTPUT_CHARS
+from ..tools.process import (
+    current_process_platform,
+    process_isolation_kwargs,
+    stop_process_tree,
+)
 from ..tools.prompt import ToolPromptExample
 from .manager import SkillManager
 from .models import SkillError
@@ -367,33 +371,37 @@ unreviewed skill scripts or use this tool to bypass command restrictions.
                 )
             exec_argv = prepared.argv
             env = prepared.env
+            process_kwargs = prepared.process_kwargs
         else:
             exec_argv = command
             env = scrub_environment(os.environ)
+            process_kwargs = process_isolation_kwargs()
         try:
             proc = await asyncio.create_subprocess_exec(
                 *exec_argv,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=str(skill.directory),
-                start_new_session=True,
                 env=env,
+                **process_kwargs,
             )
         except OSError as e:
             return ToolResult(content=f"无法启动 skill 脚本: {e}", is_error=True)
         try:
             raw, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            _terminate_process_tree(proc)
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                pass
+            await stop_process_tree(proc, force=True, timeout=5)
             return ToolResult(
                 content=f"skill 脚本超时（>{timeout:g}s），已终止: {script}",
                 is_error=True,
                 data={"timed_out": True, "exit_code": None},
             )
+        except asyncio.CancelledError:
+            await stop_process_tree(proc, force=True, timeout=5)
+            raise
+        except BaseException:
+            await stop_process_tree(proc, force=True, timeout=5)
+            raise
         output = truncate_middle(
             raw.decode("utf-8", "replace"), MAX_OUTPUT_CHARS)
         code = proc.returncode if proc.returncode is not None else -1
@@ -431,6 +439,16 @@ def _script_command(path: Path) -> List[str]:
         if not zsh:
             raise ValueError("找不到 zsh 解释器")
         return [zsh]
+    if suffix in {".bat", ".cmd"}:
+        platform = current_process_platform()
+        shell = platform.shell if platform.windows else (
+            shutil.which("cmd.exe") or "cmd.exe")
+        return [shell, "/d", "/s", "/c"]
+    if suffix == ".ps1":
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if not powershell:
+            raise ValueError("找不到 PowerShell 解释器")
+        return [powershell, "-NoProfile", "-NonInteractive", "-File"]
     if suffix in {".js", ".mjs"}:
         node = shutil.which("node")
         if not node:
@@ -457,16 +475,3 @@ def _clamp_timeout(value: Any) -> float:
     except (TypeError, ValueError):
         return DEFAULT_SCRIPT_TIMEOUT
     return max(1.0, min(t, MAX_SCRIPT_TIMEOUT))
-
-
-def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:
-    if os.name == "posix":
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            return
-        except (ProcessLookupError, PermissionError, OSError, AttributeError):
-            pass
-    try:
-        proc.kill()
-    except (ProcessLookupError, OSError):
-        pass

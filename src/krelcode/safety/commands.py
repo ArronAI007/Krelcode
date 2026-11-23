@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import ntpath
+import re
 import shlex
 from typing import List, Sequence, Tuple
 
@@ -30,6 +32,8 @@ SAFE_PROGRAMS = {
     "which", "whoami", "date", "env", "printenv", "tree", "file", "stat",
     "du", "df", "ps", "uname", "basename", "dirname", "sort", "uniq", "cut",
     "tr", "diff", "md5", "shasum", "true", "false", "id", "hostname",
+    # Windows cmd built-ins/read-only utilities
+    "dir", "type", "where", "ver", "cls", "cd", "chdir",
 }
 
 FIND_ACTION_OPTIONS = {
@@ -66,17 +70,22 @@ SAFE_GIT_SUBCOMMANDS = {
 DENY_PROGRAMS = {
     "sudo", "su", "doas",           # 提权
     "mkfs", "dd", "diskutil",       # 磁盘破坏
+    "diskpart", "format", "bcdedit",  # Windows 磁盘/启动配置破坏
     "shutdown", "reboot", "halt", "poweroff",
 }
 
 # 会执行任意代码的解释器/构建器 → ASK
 CODE_RUNNERS = {
     "python", "python3", "node", "ruby", "perl", "php", "sh", "bash", "zsh",
+    "cmd", "powershell", "pwsh",
     "pytest", "npm", "yarn", "pnpm", "pip", "pip3", "uv", "cargo", "make",
     "go", "java", "mvn", "gradle", "docker", "kubectl",
 }
 
-SHELL_INTERPRETERS = {"sh", "bash", "zsh", "python", "python3", "node", "ruby", "perl", "eval"}
+SHELL_INTERPRETERS = {
+    "sh", "bash", "zsh", "cmd", "powershell", "pwsh", "python", "python3",
+    "node", "ruby", "perl", "eval",
+}
 DOWNLOADERS = {"curl", "wget", "fetch"}
 
 # rm 的灾难性目标（含前缀形式）
@@ -87,7 +96,7 @@ CATASTROPHIC_TARGETS = {
 }
 
 
-def classify_command(raw: str) -> Tuple[str, str]:
+def classify_command(raw: str, *, shell_dialect: str = "posix") -> Tuple[str, str]:
     """返回 (risk, reason)。risk ∈ allow/ask/deny。"""
     if not raw or not raw.strip():
         return RISK_ASK, "空命令"
@@ -99,7 +108,7 @@ def classify_command(raw: str) -> Tuple[str, str]:
     # 2) 切 token（punctuation_chars 让 ';' '|' '&&' '>>' 等紧邻字符也独立成 token）；
     #    解析失败保守 ASK
     try:
-        tokens = _tokenize(raw)
+        tokens = _tokenize(raw, shell_dialect=shell_dialect)
     except ValueError as e:
         return RISK_ASK, f"命令无法解析（{e}），需人工确认"
     if not tokens:
@@ -160,7 +169,9 @@ def classify_command(raw: str) -> Tuple[str, str]:
     return worst, "；".join(reasons)
 
 
-def _tokenize(raw: str) -> List[str]:
+def _tokenize(raw: str, *, shell_dialect: str = "posix") -> List[str]:
+    if shell_dialect == "cmd":
+        return _tokenize_cmd(raw)
     # POSIX 模式与真实 /bin/sh 一致：去掉成对引号，否则 `sh -c '...'`
     # 的嵌套命令会带着字面引号进入安全审计，绕过路径检查。
     lex = shlex.shlex(raw, posix=True, punctuation_chars=True)
@@ -168,8 +179,69 @@ def _tokenize(raw: str) -> List[str]:
     return list(lex)
 
 
+def _tokenize_cmd(
+    raw: str, *, semicolon_as_separator: bool = False,
+) -> List[str]:
+    """Conservative cmd.exe tokenizer shared with the static Sandbox audit."""
+    raw = raw.replace("\r\n", "\n").replace("\r", "\n")
+    tokens: List[str] = []
+    current: List[str] = []
+    quoted = False
+    index = 0
+
+    def flush() -> None:
+        if current:
+            tokens.append("".join(current))
+            current.clear()
+
+    while index < len(raw):
+        char = raw[index]
+        if char == '"':
+            quoted = not quoted
+            index += 1
+            continue
+        if char == "^" and not quoted:
+            if index + 1 >= len(raw):
+                raise ValueError("cmd 命令以未完成的转义符结尾")
+            current.append(raw[index + 1])
+            index += 2
+            continue
+        if not quoted and char in "&|<>();" and (
+                char != ";" or semicolon_as_separator):
+            flush()
+            token = ";" if char == ";" else char
+            while (
+                char != ";" and index + 1 < len(raw)
+                and raw[index + 1] == char
+            ):
+                token += char
+                index += 1
+            tokens.append(token)
+            index += 1
+            continue
+        if not quoted and char == "\n":
+            flush()
+            tokens.append(";")
+            index += 1
+            continue
+        if not quoted and char in " \t":
+            flush()
+            index += 1
+            continue
+        current.append(char)
+        index += 1
+    if quoted:
+        raise ValueError("cmd 命令包含未闭合的双引号")
+    flush()
+    return tokens
+
+
 def _basename(prog: str) -> str:
-    return prog.rsplit("/", 1)[-1] if "/" in prog else prog
+    name = ntpath.basename(str(prog).replace("/", "\\")).lower()
+    for suffix in (".exe", ".com", ".cmd", ".bat"):
+        if name.endswith(suffix):
+            return name[:-len(suffix)]
+    return name
 
 
 def _is_denied_program(prog: str) -> bool:
@@ -187,6 +259,8 @@ def _classify_segment(seg: Sequence[str]) -> Tuple[str, str]:
         return RISK_DENY, f"禁止执行 {prog}"
     if prog == "rm":
         return _classify_rm(args)
+    if prog in {"del", "erase", "rmdir", "rd"}:
+        return _classify_windows_delete(prog, args)
     if prog == "env":
         return _classify_env(args)
     if prog == "find":
@@ -232,13 +306,40 @@ def _classify_rm(args: Sequence[str]) -> Tuple[str, str]:
 
     for t in targets:
         normalized = t.rstrip("/") or "/"
-        if t in CATASTROPHIC_TARGETS or normalized in CATASTROPHIC_TARGETS:
+        if (
+            t in CATASTROPHIC_TARGETS
+            or normalized in CATASTROPHIC_TARGETS
+            or _is_windows_catastrophic_target(t)
+        ):
             return RISK_DENY, f"rm 目标过于危险: {t}"
         if t.startswith("/") and normalized.count("/") <= 1:
             return RISK_DENY, f"rm 顶层绝对路径: {t}"
     if "r" in flag_chars and not targets:
         return RISK_DENY, "rm -r 未指定目标"
     return RISK_ASK, "rm 删除文件"
+
+
+def _classify_windows_delete(prog: str, args: Sequence[str]) -> Tuple[str, str]:
+    targets = [arg for arg in args if not arg.startswith("/")]
+    for target in targets:
+        if _is_windows_catastrophic_target(target):
+            return RISK_DENY, f"{prog} 目标过于危险: {target}"
+    return RISK_ASK, f"{prog} 删除文件"
+
+
+def _is_windows_catastrophic_target(value: str) -> bool:
+    raw = value.strip().strip('"').replace("/", "\\")
+    normalized = ntpath.normpath(raw).lower()
+    if re.fullmatch(r"[a-z]:\\?", normalized):
+        return True
+    protected = {
+        "c:\\windows", "c:\\program files", "c:\\program files (x86)",
+        "c:\\users", "c:\\programdata",
+    }
+    return any(
+        normalized == root or normalized.startswith(root + "\\")
+        for root in protected
+    )
 
 
 def _has_any_option(args: Sequence[str], names: set[str]) -> bool:

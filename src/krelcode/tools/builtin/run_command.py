@@ -16,7 +16,12 @@ import os
 from typing import Any, Dict
 
 from ..base import ToolContext, ToolResult
-from ..process import terminate_process_tree
+from ..process import (
+    process_isolation_kwargs,
+    shell_argv,
+    stop_process_tree,
+    terminate_process_tree,
+)
 from ..fsutils import truncate_middle
 from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
 from ..prompt import ToolPromptExample
@@ -141,9 +146,11 @@ Sandbox and safety:
                 )
             argv = prepared.argv
             env = prepared.env
+            process_kwargs = prepared.process_kwargs
         else:
-            argv = ["/bin/sh", "-c", command]
+            argv = shell_argv(command)
             env = scrub_environment(os.environ)
+            process_kwargs = process_isolation_kwargs()
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -151,8 +158,8 @@ Sandbox and safety:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=str(cwd),
-                start_new_session=True,  # 独立进程组，超时可整组击杀
                 env=env,
+                **process_kwargs,
             )
         except OSError as e:
             return ToolResult(content=f"无法启动命令: {e}", is_error=True)
@@ -200,11 +207,7 @@ Sandbox and safety:
             await asyncio.wait_for(reader_task, timeout=timeout)
             await proc.wait()
         except asyncio.TimeoutError:
-            _terminate_process_tree(proc)
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                pass
+            await stop_process_tree(proc, force=True, timeout=5)
             await ctx.emit_progress("命令超时，已终止整个进程组")
             return ToolResult(
                 content=f"命令超时（>{timeout:g}s），已终止进程组: {command}",
@@ -212,19 +215,11 @@ Sandbox and safety:
                 data={"exit_code": None, "timed_out": True},
             )
         except asyncio.CancelledError:
-            _terminate_process_tree(proc)
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=5)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                pass
+            await stop_process_tree(proc, force=True, timeout=5)
             raise
         except BaseException:
             # EventBus/注入回调异常同样不能留下孤儿进程。
-            _terminate_process_tree(proc)
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=5)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                pass
+            await stop_process_tree(proc, force=True, timeout=5)
             raise
 
         raw = b"".join(chunks)

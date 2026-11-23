@@ -8,6 +8,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from ..safety.environment import scrub_environment
+from ..tools.process import process_isolation_kwargs, stop_process_tree
 from .transport import MCPError
 
 
@@ -40,6 +41,7 @@ class StdioTransport:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
                 env=env,
+                **process_isolation_kwargs(),
             )
         except (OSError, FileNotFoundError) as e:
             raise MCPError(f"无法启动 MCP 服务器进程: {e}") from e
@@ -89,16 +91,11 @@ class StdioTransport:
             self._reader_task.cancel()
         proc = self._proc
         if proc is not None and proc.returncode is None:
-            try:
-                if proc.stdin and not proc.stdin.is_closing():
-                    proc.stdin.close()
-                proc.terminate()
-                await asyncio.wait_for(proc.wait(), timeout=3)
-            except (asyncio.TimeoutError, ProcessLookupError, OSError):
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
+            if proc.stdin and not proc.stdin.is_closing():
+                proc.stdin.close()
+            stopped = await stop_process_tree(proc, force=False, timeout=3)
+            if not stopped:
+                await stop_process_tree(proc, force=True, timeout=2)
 
     @property
     def alive(self) -> bool:

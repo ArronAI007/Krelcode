@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Deque, Mapping, MutableMapping, Optional, Sequence
 from urllib.parse import unquote, urlparse
 
+from ..tools.process import process_isolation_kwargs, stop_process_tree
+
 MAX_HEADER_BYTES = 64 * 1024
 DEFAULT_MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 _SENSITIVE_ENV = re.compile(
@@ -165,6 +167,7 @@ class LSPClient:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **process_isolation_kwargs(),
             )
         except (OSError, ValueError) as exc:
             raise LSPProcessError(
@@ -491,18 +494,10 @@ class LSPClient:
             try:
                 await asyncio.wait_for(process.wait(), timeout=1.0)
             except asyncio.TimeoutError:
-                try:
-                    process.terminate()
-                except (ProcessLookupError, OSError):
-                    pass
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=1.0)
-                except asyncio.TimeoutError:
-                    try:
-                        process.kill()
-                    except (ProcessLookupError, OSError):
-                        pass
-                    await process.wait()
+                stopped = await stop_process_tree(
+                    process, force=False, timeout=1.0)
+                if not stopped:
+                    await stop_process_tree(process, force=True, timeout=2.0)
         for task in (self._stdout_task, self._stderr_task):
             if task is not None and not task.done():
                 task.cancel()

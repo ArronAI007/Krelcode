@@ -28,6 +28,7 @@ from .agent.pricing import match_context_window
 from .config import DEFAULT_PATHS, ConfigBundle
 from .llm.registry import API_KEY_ENV, PROVIDERS, resolve_settings
 from .safety.sandbox import ExecutionSandbox, SandboxError
+from .tools.process import process_isolation_kwargs
 
 STATUS_OK = "ok"
 STATUS_WARN = "warn"
@@ -178,14 +179,16 @@ def check_git(workspace: Path) -> CheckResult:
     try:
         proc = subprocess.run(
             ["git", "-C", str(workspace), "rev-parse", "--is-inside-work-tree"],
-            capture_output=True, text=True, timeout=5)
+            capture_output=True, text=True, timeout=5,
+            **process_isolation_kwargs())
     except (OSError, subprocess.TimeoutExpired) as e:
         return CheckResult("git", STATUS_WARN, f"git 执行失败: {e}")
     if proc.returncode != 0:
         return CheckResult("git", STATUS_WARN, f"{workspace} 不是 git 仓库（上下文注入无 git 信息）")
     branch_proc = subprocess.run(
         ["git", "-C", str(workspace), "symbolic-ref", "--short", "HEAD"],
-        capture_output=True, text=True, timeout=5)
+        capture_output=True, text=True, timeout=5,
+        **process_isolation_kwargs())
     branch = branch_proc.stdout.strip() or "(无提交)"
     return CheckResult("git", STATUS_OK, f"仓库就绪，当前分支: {branch}")
 
@@ -215,14 +218,24 @@ def check_sandbox(config: Optional[Dict[str, Any]] = None) -> CheckResult:
             Path.cwd(), backend=backend, network=network)
     except SandboxError as e:
         return CheckResult("运行时 Sandbox", STATUS_FAIL, str(e))
+    capabilities = sandbox.capabilities
     state = "network=on" if sandbox.network else "network=off"
+    platform = (
+        f"platform={capabilities.platform} "
+        f"shell={capabilities.shell_dialect} backend={sandbox.backend} {state}"
+    )
     if sandbox.backend == "static":
         return CheckResult(
             "运行时 Sandbox", STATUS_WARN,
-            f"backend=static {state}（仅静态护栏；OS 隔离不可用或有意外显式配置）")
+            f"{platform}（仅静态护栏；无 OS 文件/网络隔离；进程树统一终止）")
+    isolation = (
+        "OS 文件/网络隔离"
+        if capabilities.filesystem_isolation and capabilities.network_isolation
+        else "OS 文件隔离；网络已显式允许"
+    )
     return CheckResult(
         "运行时 Sandbox", STATUS_OK,
-        f"backend={sandbox.backend} {state}（OS 文件/网络隔离）")
+        f"{platform}（{isolation}；进程树统一终止）")
 
 
 def check_mcp_servers(config: Dict[str, Any]) -> List[CheckResult]:

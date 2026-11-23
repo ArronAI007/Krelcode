@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from ..tools.process import process_isolation_kwargs
+
 DEFAULT_TEMPLATE = "{status} · {permission} · Shift-Tab 切换 · Ctrl-O 面板"
 ALLOWED_FIELDS = frozenset({
     "provider", "model", "permission", "session", "cwd",
@@ -123,6 +125,7 @@ def read_git_branch(workspace_root: str | Path) -> str:
             timeout=1.0,
             check=False,
             env=_safe_git_env(),
+            **process_isolation_kwargs(),
         )
     except (OSError, subprocess.SubprocessError):
         return ""

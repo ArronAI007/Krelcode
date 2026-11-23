@@ -176,7 +176,10 @@ class SandboxPolicy:
         if command_match is not None and command_match.decision is RuleDecision.DENY:
             return deny(f"权限规则拒绝: {command_match.reason}")
 
-        risk, reason = classify_command(command)
+        sandbox = getattr(ctx, "sandbox", None)
+        process_platform = getattr(sandbox, "process_platform", None)
+        shell_dialect = getattr(process_platform, "shell_dialect", "posix")
+        risk, reason = classify_command(command, shell_dialect=shell_dialect)
         if risk == RISK_DENY:
             return deny(reason)
         if command_match is not None:

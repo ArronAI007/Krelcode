@@ -44,6 +44,7 @@ from ..core.events import (
 )
 from ..core.messages import Message
 from ..core.redact import SecretRedactor
+from ..tools.process import process_isolation_kwargs
 from .codec import history_from_dicts, history_to_dicts
 
 CONTEXT_CHECKPOINT_DIRNAME = Path(".krelcode") / "context-checkpoints"
@@ -984,6 +985,7 @@ def _git(root: Path, *args: str) -> str:
             text=True,
             timeout=3,
             check=False,
+            **process_isolation_kwargs(),
         )
     except (OSError, subprocess.SubprocessError):
         return ""

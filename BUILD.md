@@ -105,6 +105,7 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 | v1.13 | 标准命令模板与 Reminder Catalog | 新增 `CommandTemplate` 统一 Builtin/Custom/Skill/Plugin/MCP Prompt Command 的 source/trust、参数模式、envelope、工具 allowlist、reminder 声明与 stable hash；REPL、headless、stream-json 将 command contract 传入真实 turn。新增 `ReminderCatalog`，以显式 ID/trigger 选择 l12 turn reminder，支持稳定排序、ID/content 去重、单条/turn 预算与 content-light exclusion；AgentLoop 每 turn 只选择一次，PromptAssembler 不将其放入 stable cache prefix。新增 `/commands [show <name>]` 与 `/context reminders`；全量 1633 通过 + 2 个本地端口集成 skip |
 | v1.14 | Prompt 可观测性与真实行为 Benchmark | `/prompts` 增加 health/observations/active 与 benchmark 状态查询；Reminder 也进入统一 Surface Registry 并在真实 L12 渲染时记录 content-light observation。新增 `krelcode benchmark` 一等入口与 `--save-report [path]`，默认原子写入 `.krelcode/prompts/benchmarks/latest.json`（0600）；报告强制排除 answer/工具参数，并提供 provider/model、case/trial、pass@k、token、成本、错误分类和 Prompt Surface 执行证据。`/prompts benchmark` 只读报告，不隐式产生 API 费用；全量 1639 通过 + 2 个本地端口集成 skip |
 | v1.15 | DeepSeek baseline 冻结与 Nightly 回归 | 新增 `benchmarks/deepseek-live.toml`，固定 OpenAI-compatible DeepSeek endpoint、model、temperature/usage 参数和 Prompt profile，密钥只从 `DEEPSEEK_API_KEY` 读取。Live report/baseline 增加 endpoint、generation、provider timeout/max tokens 的内容无关指纹，Parity Gate 校验 runner/provider 漂移；`--save-baseline` 默认拒绝覆盖，`--force-baseline` 需显式启用。新增每日 02:00 Asia/Shanghai GitHub Actions live gate、手动 freeze/regression 模式、content-light artifact、失败 tuning 与 bounded Step Summary；报告/工作流不保存 API key、endpoint 明文、Prompt/答案/工具参数 |
+| v1.16 | 跨平台进程与 Sandbox 统一 | 新增 `tools/process.py` 的 `ProcessPlatform`：POSIX 统一 `/bin/sh -c`、独立 session 与进程组 kill；Windows 统一 `COMSPEC /d /s /c`、`CREATE_NEW_PROCESS_GROUP` 与 `taskkill /T`，graceful timeout 自动升级 force。run_command、Shell Job、Hook、Skill、MCP stdio、LSP、Python SDK、ripgrep 和上下文 Git 快照全部走同一入口。Sandbox 增加平台能力报告、Windows profile/AppData/HOME 重定向和 cmd 静态审计，覆盖多行命令、`%VAR%`/`!VAR!`、编码 PowerShell、`cmd /c`/`-Command` 嵌套与 Windows 危险删除目标；doctor 显示 platform/shell/backend 并明确 Windows static 无内核文件/网络隔离 |
 
 ## 3. 文件导览（能力 → 位置）
 
@@ -226,7 +227,7 @@ report/tuning/candidate，不自动提交或替换 accepted baseline。
 ## 6. 已知边界与限制（诚实清单）
 
 - checkpoint 不追踪 run_command 造成的文件修改（命令内容不可静态分析）
-- Windows：进程终止退化为主进程 kill（无进程组）；未在真机验证
+- Windows：进程组创建与 `taskkill /T` 树终止已统一并有注入平台单测；当前开发环境未做 Windows 真机 CI 矩阵，`static` 模式也没有内核级文件/网络隔离
 - 后台 Job 是进程内管理器：进程重启后不会接管旧 OS 进程；已写日志仍保留，但 list/output/kill 只管理当前进程创建的任务
 - 子代理 sidechain 在进程重启后可审计，但不自动接管/复活旧 Task；Definition 的角色提示是用户可信配置，仍需遵守审批、Sandbox 和工具 allowlist
 - `grep` 有 `rg` 时走安全加速路径，否则回退纯 Python；Python-only regex（lookaround/backreference 等）始终由 Python 执行，避免 Rust regex 语义偏差

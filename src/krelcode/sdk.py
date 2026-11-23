@@ -23,6 +23,8 @@ from itertools import count
 from pathlib import Path
 from typing import Any, AsyncIterator, Mapping, Optional, Sequence
 
+from .tools.process import process_isolation_kwargs, stop_process_tree
+
 PROTOCOL_NAME = "krelcode.stream-json"
 PROTOCOL_VERSION = "1"
 _EOF = object()
@@ -325,6 +327,7 @@ class KrelcodeClient:
                 cwd=str(self.options.process_cwd),
                 env=self.options.environment(),
                 limit=self.options.max_line_bytes,
+                **process_isolation_kwargs(),
             )
         except (OSError, ValueError) as exc:
             raise SDKProcessError(
@@ -583,18 +586,9 @@ class KrelcodeClient:
     async def _terminate(self, process: asyncio.subprocess.Process) -> None:
         if process.returncode is not None:
             return
-        try:
-            process.terminate()
-        except (ProcessLookupError, OSError):
-            return
-        try:
-            await asyncio.wait_for(process.wait(), timeout=1.0)
-        except asyncio.TimeoutError:
-            try:
-                process.kill()
-            except (ProcessLookupError, OSError):
-                pass
-            await process.wait()
+        stopped = await stop_process_tree(process, force=False, timeout=1.0)
+        if not stopped:
+            await stop_process_tree(process, force=True, timeout=2.0)
 
     def _process_error(self, prefix: str) -> SDKProcessError:
         code = self._process.returncode if self._process is not None else None

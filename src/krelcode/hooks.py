@@ -5,7 +5,7 @@
   ``krelcode.toml`` 与 ``.krelcode/`` 已列入写保护路径，代理无法注入。
 - Hook 命令由用户显式信任，不进入工具审批；但继承的是净化后的环境，
   默认不把宿主的 API key/token/proxy 等秘密传给 Hook 子进程。
-- 模板变量值来自 LLM 工具参数或用户输入，替换前统一 ``shlex.quote``。
+- 模板变量值来自 LLM 工具参数或用户输入，替换前按平台 shell 规则引用。
 - Hook 失败、超时、输出过大都不会中断主循环；只有明确的 block 决策或
   Unix 退出码 2 才会阻断对应的工具调用。
 
@@ -21,7 +21,6 @@ import fnmatch
 import json
 import os
 import re
-import shlex
 import time
 import urllib.error
 import urllib.parse
@@ -42,6 +41,11 @@ from .core.events import (
 )
 from .core.hooks import HookResult
 from .core.messages import ToolCall
+from .tools.process import (
+    current_process_platform,
+    quote_shell_value,
+    stop_process_tree,
+)
 from .agent.prompt_surface_contract import (
     PromptSurfaceExecutor,
     contract_for_hook,
@@ -365,12 +369,12 @@ class HookRunner:
     # -- 执行与协议 ---------------------------------------------------------------------
 
     def render(self, command: str, variables: Dict[str, str]) -> str:
-        """单次 {var} 占位替换；值一律 shell-quote（值可能来自 LLM/用户）。"""
+        """单次 {var} 占位替换；值按当前平台 shell 规则引用。"""
         def replace(match: re.Match[str]) -> str:
             key = match.group(1)
             if key not in variables:
                 return match.group(0)
-            return shlex.quote(str(variables[key]))
+            return quote_shell_value(str(variables[key]))
 
         return _TEMPLATE_VARIABLE.sub(replace, command)
 
@@ -452,14 +456,15 @@ class HookRunner:
             env["KRELCODE_PLUGIN_ROOT"] = spec.plugin_root
         if tool_call is not None:
             env["KRELCODE_TOOL"] = tool_call.name
-        proc = await asyncio.create_subprocess_shell(
-            command,
+        process_platform = current_process_platform()
+        proc = await asyncio.create_subprocess_exec(
+            *process_platform.shell_argv(command),
             cwd=str(self.root),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
-            start_new_session=True,
+            **process_platform.subprocess_kwargs(),
         )
         try:
             raw_out, raw_err = await asyncio.wait_for(
@@ -473,9 +478,14 @@ class HookRunner:
                 raw_err.decode("utf-8", "replace")[:MAX_HOOK_STDERR],
             )
         except asyncio.TimeoutError:
-            _terminate(proc)
-            await proc.wait()
+            await stop_process_tree(proc, force=True, timeout=5)
             return None, "", f"超时（>{spec.timeout:g}s），已终止"
+        except asyncio.CancelledError:
+            await stop_process_tree(proc, force=True, timeout=5)
+            raise
+        except BaseException:
+            await stop_process_tree(proc, force=True, timeout=5)
+            raise
 
     async def _execute_http_hook(
         self, spec: HookSpec, payload: Dict[str, Any],
@@ -729,17 +739,3 @@ def _safe_http_target(url: str) -> str:
     netloc = f"{host}:{port}" if port is not None else host
     return urllib.parse.urlunsplit(
         (parsed.scheme, netloc, parsed.path or "/", "", ""))
-
-
-def _terminate(proc: asyncio.subprocess.Process) -> None:
-    if os.name == "posix":
-        import signal
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            return
-        except (ProcessLookupError, PermissionError, OSError, AttributeError):
-            pass
-    try:
-        proc.kill()
-    except (ProcessLookupError, OSError):
-        pass

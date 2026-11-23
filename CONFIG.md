@@ -303,7 +303,7 @@ haiku = "anthropic/claude-haiku-4-5"
 # DeepSeek 示例：haiku = "openai/deepseek-flash"
 
 [sandbox]
-backend = "auto"                     # auto / static / seatbelt / bubblewrap
+backend = "auto"                     # macOS seatbelt / Linux bubblewrap / 其他平台 static
 network = false                      # 默认禁止子进程联网；CLI --sandbox-network 可开启
 
 [permissions]
@@ -882,17 +882,21 @@ workspace 规则文件新增字段示例：
 | run_command 执行代码/装依赖/删文件/git 写操作/网络/未知命令/重定向 | ASK |
 | run_skill_script（Skill 内 bundled 脚本） | ASK；参数数组不经过 shell，子进程走运行时 Sandbox |
 | run_command：sudo/su、dd/mkfs/diskutil、shutdown/reboot、rm 灾难目标、curl\|sh、fork 炸弹 | **DENY（不可越过，--auto-approve 也拒）** |
+| Windows 命令风险 | `del/erase/rmdir/rd` 至少 ASK；根盘及 `Windows/Program Files/Users/ProgramData` 等高风险目标 DENY；`diskpart/format/bcdedit` DENY；`cmd/powershell/pwsh` 执行代码为 ASK |
 | 统一规则优先级 | `deny > ask > allow`；`deny` 不能靠 auto-approve 越过，显式 `ask` 也不会被 auto-approve 跳过 |
 | 规则作用域 | `session` 仅当前进程；`workspace` 持久化到 `.krelcode/allow_rules.json`；`path` 必须是工作区相对 glob 且拒绝 `..` |
 | ASK 处理链 | 统一规则 → 旧版 allow 规则 → --auto-approve/运行时模式 → 交互 [y/n/a] → 都没有则拒绝（fail-closed） |
 | 文件/命令路径约束 | resolve 后限定工作区（含 symlink 逃逸防护）；Skill 根目录仅额外只读 |
-| 子进程环境 | 剥离 API key/token/password/proxy/SSH agent/动态加载注入变量，HOME/TMP 重定向到 `.krelcode/sandbox/` |
+| 子进程环境 | 剥离 API key/token/password/proxy/SSH agent/动态加载注入变量；HOME/TMP/cache 重定向到 `.krelcode/sandbox/`，Windows 同步重定向 USERPROFILE/APPDATA/LOCALAPPDATA |
 | OS 隔离后端 | macOS `seatbelt` 或 Linux `bubblewrap`：工作区可写、系统运行时只读、Home 不可读、网络默认关闭 |
-| `static` 降级模式 | 跨平台硬性审计：越界/敏感路径、`sh -c`/`eval` 递归、命令替换、已知网络命令；**不能抵御解释器代码中的动态绕过** |
+| 进程树隔离 | POSIX 使用独立 session/process group + `SIGTERM`/`SIGKILL`；Windows 使用 `CREATE_NEW_PROCESS_GROUP` + `taskkill /T`，graceful 超时自动 force |
+| `static` 降级模式 | 跨平台硬性审计：越界/敏感路径、`sh -c`/`eval`/`cmd /c`/PowerShell `-Command` 递归、命令替换、`%VAR%`/`!VAR!`、编码 PowerShell、已知网络命令；**不能抵御解释器代码中的动态绕过** |
 
 `auto` 会实际探测 `sandbox-exec`/`bwrap` 是否可运行；探测失败自动降级为
-`static` 并在启动时告警。需要强隔离时应显式检查启动日志中的
-`[sandbox] backend=...`，Linux 可安装 bubblewrap，macOS 使用系统 Seatbelt。
+`static` 并在启动时告警。Windows 当前没有 OS 级文件/网络 Sandbox，使用
+`static` 审计和 taskkill 进程树隔离，不宣称内核级安全。需要强隔离时应显式检查
+启动日志/`krelcode doctor` 中的 `[sandbox] backend/platform/shell`；Linux 可安装
+bubblewrap，macOS 使用系统 Seatbelt。
 MCP stdio 子进程默认同样剥离宿主密钥，但 `[mcp_servers.*].env` 中显式配置的
 值视为用户信任输入而保留。
 

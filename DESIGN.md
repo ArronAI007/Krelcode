@@ -132,9 +132,17 @@ class ApprovalPolicy(Protocol):
 #   · 所有 shell/exec 都先 audit：越界/敏感路径、shell 包装递归、命令替换、已知网络命令
 #   · macOS Seatbelt：workspace rw；系统 runtime ro；user Home denied；network denied
 #   · Linux bubblewrap：unshare-all/cap-drop；workspace bind；runtime/extra roots ro
+#   · Windows static：cmd.exe 语法审计 + USERPROFILE/AppData 重定向；无内核 FS/网络隔离
 #   · auto 会真实 probe 后端，不可执行时退回 static 并在启动日志告警
 #   · static 只是兼容护栏，无法抵御解释器代码的动态绕过，不宣称内核级隔离
 #   · ToolContext 默认自动挂载；Subagent isolated worktree 用 rebind 切换根目录
+
+# tools/process.py —— 唯一跨平台进程语义
+# ProcessPlatform(family, system, shell, shell_args, shell_dialect)
+#   · POSIX: /bin/sh -c + start_new_session=True + killpg(SIGTERM/SIGKILL)
+#   · Windows: COMSPEC /d /s /c + CREATE_NEW_PROCESS_GROUP + taskkill /T [/F]
+#   · run_command/Job/Hook/Skill/MCP/LSP/SDK/ripgrep/context-git 共用同一入口
+#   · graceful stop 有界等待，超时自动升级 force；返回内容轻量 capabilities
 
 # core/events.py —— 事件总线
 class EventBus:
@@ -268,7 +276,7 @@ core 的 Message/ToolCall 是 **wire-free 规范格式**；任何 provider 专�
   `<workspace>/.krelcode/tool_outputs/`，历史只留 truncate_middle 版 + 文件引用；
   落盘失败退回纯截断
 - 压缩发生会 emit 内容无关的 `ContextCompressed`，携带策略、摘要来源/generation、高/低水位、来源节省量与 checkpoint ID；REPL `/compact` 经 `maybe_compress(force=True)` 手动触发（不必等预算超限）
-- 跨平台：run_command 超时终止在 POSIX 走进程组 killpg(SIGKILL)，Windows 退化为杀主进程（os.killpg/SIGKILL 不存在时不触碰）
+- 跨平台：POSIX 走独立 session/process group，Windows 走 new process group + `taskkill /T`；前台命令、后台 Job、Hook、Skill、MCP/LSP/SDK 与搜索子进程统一由 `ProcessPlatform` 启动和回收，graceful stop 超时自动升级 force
 
 ### 真实请求装配与预算（Step 88）
 
@@ -863,7 +871,8 @@ JSONL 分支并切换 recorder/runtime id；它明确不恢复工作区文件，
 job_start(command, cwd)
   └─ SandboxPolicy → ExecutionSandbox.audit/prepare
       └─ ShellJobManager.start()
-          ├─ create_subprocess_exec(start_new_session, stdin=DEVNULL,
+          ├─ ProcessPlatform(subprocess_kwargs, shell_argv, tree-kill)
+          ├─ create_subprocess_exec(stdin=DEVNULL,
           │                          stdout=PIPE, stderr=STDOUT, scrub env)
           ├─ reader task → SecretRedactor → EventBus ShellJobOutput
           │                 ├─ bounded in-memory chunks + sequence cursor

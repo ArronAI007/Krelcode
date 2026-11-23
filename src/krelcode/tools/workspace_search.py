@@ -29,6 +29,7 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 from .base import TurnAbortSignal
 from .fsutils import is_hidden_file, is_pruned_dir
 from .paths import safe_file_in_workspace
+from .process import process_isolation_kwargs, stop_process_tree
 from .secret_guard import classify_secret_path
 
 MAX_LINE_CHARS = 300
@@ -310,6 +311,7 @@ async def _ripgrep_batch(
             stderr=asyncio.subprocess.PIPE,
             env=env,
             limit=_RIPGREP_STREAM_LIMIT,
+            **process_isolation_kwargs(),
         )
     except (FileNotFoundError, OSError) as exc:
         raise RipgrepExecutionError(f"无法启动 ripgrep: {exc}") from exc
@@ -470,20 +472,7 @@ def _file_batches(files: Sequence[Path]) -> Iterable[Sequence[Path]]:
 
 
 async def _stop_process(process: asyncio.subprocess.Process) -> None:
-    if process.returncode is not None:
-        return
-    try:
-        process.terminate()
-    except ProcessLookupError:
-        return
-    try:
-        await asyncio.wait_for(process.wait(), timeout=1.0)
-    except asyncio.TimeoutError:
-        try:
-            process.kill()
-        except ProcessLookupError:
-            return
-        await process.wait()
+    await stop_process_tree(process, force=True, timeout=1.0)
 
 
 __all__ = [
