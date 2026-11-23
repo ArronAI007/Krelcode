@@ -84,6 +84,25 @@ test("interrupt is a control message and close is idempotent", async () => {
   assert.equal(await client.interrupt(), false);
 });
 
+test("editor interaction controls are validated and writable", async () => {
+  const client = await KrelcodeClient.start(options());
+  try {
+    assert.equal(await client.respondPermission("call-1", "allow"), true);
+    assert.equal(await client.respondUserInput("input-1", "A"), true);
+    assert.equal(await client.cancelUserInput("input-2"), true);
+    await assert.rejects(
+      async () => client.respondPermission("call-1", "maybe" as never),
+      /decision/,
+    );
+    await assert.rejects(
+      async () => client.respondUserInput("input-1", "   "),
+      /content/,
+    );
+  } finally {
+    await client.close();
+  }
+});
+
 test("result errors throw a typed error", async () => {
   const client = await KrelcodeClient.start(options());
   try {

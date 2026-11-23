@@ -17,7 +17,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from itertools import count
 from pathlib import Path
-from typing import Any, Optional, TextIO
+from typing import Any, Optional, Protocol, TextIO
 
 from ..agent.runtime import AgentRuntime
 from ..agent.usage import UsageTotals, UsageTracker
@@ -26,6 +26,7 @@ from ..core.redact import SecretRedactor
 from ..agent.query import QueryEvent
 from .controller import SessionController
 from .input import InputEnvelope, InputKind, InputProcessor
+from .interactions import UserInputBroker
 from .stream_json import (
     StreamControlMessage,
     StreamJsonEncoder,
@@ -35,6 +36,14 @@ from .stream_json import (
     dumps_message,
     parse_input_line,
 )
+
+
+class _ApprovalBrokerPort(Protocol):
+    """Session-layer interaction port; the UI broker is injected by the composition root."""
+
+    def expect(self, request_id: str) -> None: ...
+    def resolve_for(self, request_id: str, raw: str) -> Optional[str]: ...
+    def cancel_all(self) -> None: ...
 
 
 _INPUT_DONE = object()
@@ -69,6 +78,8 @@ async def run_stream_json_session(
     initial_prompt: Optional[str] = None,
     input_stream: Optional[TextIO] = None,
     output_stream: Optional[TextIO] = None,
+    approval_broker: Optional[_ApprovalBrokerPort] = None,
+    user_input_broker: Optional[UserInputBroker] = None,
     log=print,
 ) -> int:
     """运行 stream-json 输入输出；返回进程退出码。"""
@@ -123,8 +134,13 @@ async def run_stream_json_session(
                 break
             if isinstance(item, StreamControlMessage):
                 if item.subtype == "end":
+                    _cancel_interactions(approval_broker, user_input_broker)
                     reason = "control_end"
                     break
+                if item.subtype in {
+                        "permission_response", "user_input_response"}:
+                    _emit_idle_interaction_response(writer, encoder, item)
+                    continue
                 _emit_idle_interrupt(writer, encoder)
                 continue
             if isinstance(item, StreamJsonProtocolError):
@@ -144,6 +160,8 @@ async def run_stream_json_session(
                 encoder=encoder,
                 controller=controller,
                 command_counter=command_counter,
+                approval_broker=approval_broker,
+                user_input_broker=user_input_broker,
                 log=log,
             )
             pending.extend(outcome.deferred)
@@ -156,6 +174,7 @@ async def run_stream_json_session(
     except (BrokenPipeError, ConnectionResetError):
         exit_code = 1
     finally:
+        _cancel_interactions(approval_broker, user_input_broker)
         unsubscribe_jobs()
         reader_task.cancel()
         await asyncio.gather(reader_task, return_exceptions=True)
@@ -177,6 +196,8 @@ async def _run_turn(
     encoder: StreamJsonEncoder,
     controller: SessionController,
     command_counter,
+    approval_broker: Optional[_ApprovalBrokerPort],
+    user_input_broker: Optional[UserInputBroker],
     log,
 ) -> _TurnOutcome:
     """执行一个 turn；同时监听 interrupt/end，并保留后续 user 消息顺序。"""
@@ -249,7 +270,15 @@ async def _run_turn(
     last_sequence = -1
     extra_fields = _request_extra(message) or None
     monitor = asyncio.create_task(_monitor_during_turn(
-        runtime, query, input_queue, outcome))
+        runtime,
+        query,
+        input_queue,
+        outcome,
+        writer=writer,
+        encoder=encoder,
+        approval_broker=approval_broker,
+        user_input_broker=user_input_broker,
+    ))
 
     try:
         async for item in query.events:
@@ -264,6 +293,12 @@ async def _run_turn(
                     usage, duration_ms=_elapsed_ms(started)),
                 extra_fields=extra_fields,
             )
+            if (
+                approval_broker is not None
+                and encoded.get("type") == "permission"
+                and encoded.get("subtype") == "requested"
+            ):
+                approval_broker.expect(str(encoded.get("permission_id", "")))
             writer.emit(encoded)
             terminal_seen = encoded.get("type") == "result"
         await query.wait()
@@ -302,6 +337,7 @@ async def _run_turn(
                 },
             ))
     finally:
+        _cancel_interactions(approval_broker, user_input_broker)
         monitor.cancel()
         await asyncio.gather(monitor, return_exceptions=True)
         # monitor 可能在取消边界刚取走一条消息；把它排到尚未读取的消息之前。
@@ -318,28 +354,118 @@ async def _monitor_during_turn(
     query,
     input_queue: asyncio.Queue,
     outcome: _TurnOutcome,
+    *,
+    writer: _JsonlWriter,
+    encoder: StreamJsonEncoder,
+    approval_broker: Optional[_ApprovalBrokerPort],
+    user_input_broker: Optional[UserInputBroker],
 ) -> None:
     """在 turn 运行期间消费控制消息，user 消息延后但保持顺序。"""
     while not query.task.done():
         item = await input_queue.get()
         if isinstance(item, StreamUserMessage) or item is _INPUT_DONE:
+            if item is _INPUT_DONE:
+                _cancel_interactions(approval_broker, user_input_broker)
             outcome.deferred.append(item)
             if item is _INPUT_DONE:
                 return
             continue
         if isinstance(item, StreamJsonProtocolError):
+            _cancel_interactions(approval_broker, user_input_broker)
             outcome.deferred.append(item)
             await runtime.stop()
             return
         if isinstance(item, StreamControlMessage):
+            if item.subtype == "permission_response":
+                accepted = _resolve_permission(
+                    approval_broker, item.request_id, item.decision)
+                _emit_interaction_ack(
+                    writer, encoder, item, accepted=accepted,
+                    detail=(
+                        "" if accepted else
+                        "没有匹配的待审批请求或审批已结束"))
+                continue
+            if item.subtype == "user_input_response":
+                accepted = _resolve_user_input(user_input_broker, item)
+                _emit_interaction_ack(
+                    writer, encoder, item, accepted=accepted,
+                    detail=(
+                        "" if accepted else
+                        "没有匹配的待输入请求或输入已结束"))
+                continue
             if item.subtype == "interrupt":
+                _cancel_interactions(approval_broker, user_input_broker)
                 await runtime.stop()
                 return
             if item.subtype == "end":
                 # 优雅关闭：当前 turn 及 end 之前已到达的 user 消息都完成，
                 # 外层读到这个 end 后退出。立即中止应先发送 interrupt。
+                _cancel_interactions(approval_broker, user_input_broker)
                 outcome.deferred.append(item)
                 return
+
+
+def _resolve_permission(
+    broker: Optional[_ApprovalBrokerPort], request_id: str, decision: str,
+) -> bool:
+    if broker is None:
+        return False
+    mapped = {"allow": "yes", "deny": "no", "always": "always"}[decision]
+    return broker.resolve_for(request_id, mapped) is not None
+
+
+def _resolve_user_input(
+    broker: Optional[UserInputBroker], item: StreamControlMessage,
+) -> bool:
+    if broker is None:
+        return False
+    if item.action == "cancel":
+        return broker.cancel_request(item.request_id)
+    result = broker.resolve(item.content, request_id=item.request_id)
+    return result.accepted
+
+
+def _cancel_interactions(
+    approval_broker: Optional[_ApprovalBrokerPort],
+    user_input_broker: Optional[UserInputBroker],
+) -> None:
+    if approval_broker is not None:
+        approval_broker.cancel_all()
+    if user_input_broker is not None:
+        user_input_broker.cancel_all()
+
+
+def _emit_interaction_ack(
+    writer: _JsonlWriter,
+    encoder: StreamJsonEncoder,
+    item: StreamControlMessage,
+    *,
+    accepted: bool,
+    detail: str = "",
+) -> None:
+    writer.emit({
+        "type": "control",
+        "subtype": f"{item.subtype}_ack",
+        "request_id": item.request_id,
+        "accepted": accepted,
+        "detail": detail,
+        "session_id": encoder.metadata.session_id,
+    })
+
+
+def _emit_idle_interaction_response(
+    writer: _JsonlWriter,
+    encoder: StreamJsonEncoder,
+    item: StreamControlMessage,
+) -> None:
+    writer.emit({
+        "type": "error",
+        "subtype": "control",
+        "error": "当前没有运行中的查询可处理交互响应",
+        "interaction_subtype": item.subtype,
+        "request_id": item.request_id,
+        "session_id": encoder.metadata.session_id,
+    })
 
 
 async def _read_inputs(stream: TextIO, queue: asyncio.Queue) -> None:

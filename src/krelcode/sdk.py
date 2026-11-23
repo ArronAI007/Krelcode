@@ -442,6 +442,51 @@ class KrelcodeClient:
         await self._write_json({"type": "control", "subtype": "interrupt"})
         return True
 
+    async def respond_permission(
+        self, permission_id: str, decision: str,
+    ) -> bool:
+        """响应 ``permission/requested``；decision 为 allow/deny/always。"""
+        if not self._is_running() or not permission_id.strip():
+            return False
+        if decision not in {"allow", "deny", "always"}:
+            raise ValueError("decision 必须为 allow/deny/always")
+        await self._write_json({
+            "type": "control",
+            "subtype": "permission_response",
+            "request_id": permission_id,
+            "decision": decision,
+        })
+        return True
+
+    async def respond_user_input(self, input_id: str, content: str) -> bool:
+        """响应 ``input/requested`` 并提交一次文本答案。"""
+        if not self._is_running() or not input_id.strip():
+            return False
+        if not content.strip():
+            raise ValueError("content 不能为空")
+        if len(content) > 32_000:
+            raise ValueError("content 超过 32000 字符限制")
+        await self._write_json({
+            "type": "control",
+            "subtype": "user_input_response",
+            "request_id": input_id,
+            "action": "accept",
+            "content": content,
+        })
+        return True
+
+    async def cancel_user_input(self, input_id: str) -> bool:
+        """取消 ``input/requested``；Agent 将按无输入 fail-closed 继续。"""
+        if not self._is_running() or not input_id.strip():
+            return False
+        await self._write_json({
+            "type": "control",
+            "subtype": "user_input_response",
+            "request_id": input_id,
+            "action": "cancel",
+        })
+        return True
+
     async def close(self) -> None:
         """优雅结束会话，必要时 terminate/kill 子进程；可重复调用。"""
         if self._closed:

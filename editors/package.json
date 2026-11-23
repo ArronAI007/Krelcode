@@ -1,0 +1,12 @@
+{
+  "name": "@krelcode/editors",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["shared", "vscode"],
+  "scripts": {
+    "test": "npm run test --workspace @krelcode/editor-bridge && npm run test --workspace krelcode-vscode",
+    "build": "npm run build --workspace @krelcode/editor-bridge && npm run build --workspace krelcode-vscode",
+    "typecheck": "npm run typecheck --workspace @krelcode/editor-bridge && npm run typecheck --workspace krelcode-vscode"
+  },
+  "engines": {"node": ">=22.6"}
+}

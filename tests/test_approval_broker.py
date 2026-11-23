@@ -51,6 +51,25 @@ def test_broker_close_rejects_late_requests():
     assert asyncio.run(broker.request(ToolCall("c1", "x", {}), "late")) == NO
 
 
+def test_broker_accepts_request_id_response_before_approver_registers():
+    broker = ApprovalBroker()
+    call = ToolCall("call-early", "unknown_tool", {})
+
+    async def scenario():
+        broker.expect("call-early")
+        assert broker.resolve_for("call-early", "yes") == YES
+        assert await asyncio.wait_for(
+            broker.request(call, "需要批准"), timeout=1) == YES
+        assert broker.resolve_for("call-early", "no") is None
+
+    asyncio.run(scenario())
+
+
+def test_broker_rejects_unexpected_permission_id():
+    broker = ApprovalBroker()
+    assert broker.resolve_for("forged", "yes") is None
+
+
 def test_sandbox_policy_uses_broker_without_stdin(tmp_path: Path):
     broker = ApprovalBroker()
     policy = SandboxPolicy(approver=broker.request)
@@ -81,5 +100,32 @@ def test_broker_cancelled_policy_wait_does_not_leave_live_future():
         with pytest.raises(asyncio.CancelledError):
             await task
         broker.cancel_all()
+
+    asyncio.run(scenario())
+
+
+def test_broker_rejects_late_approver_after_cancel_all():
+    broker = ApprovalBroker()
+    call = ToolCall("call-late", "danger", {})
+
+    async def scenario():
+        broker.expect("call-late")
+        broker.cancel_all()
+        assert await asyncio.wait_for(
+            broker.request(call, "取消后到达"), timeout=1) == NO
+
+    asyncio.run(scenario())
+
+
+def test_broker_discards_early_response_after_cancel_all():
+    broker = ApprovalBroker()
+    call = ToolCall("call-early-cancel", "danger", {})
+
+    async def scenario():
+        broker.expect("call-early-cancel")
+        assert broker.resolve_for("call-early-cancel", "yes") == YES
+        broker.cancel_all()
+        assert await asyncio.wait_for(
+            broker.request(call, "竞态取消"), timeout=1) == NO
 
     asyncio.run(scenario())

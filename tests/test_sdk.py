@@ -271,3 +271,47 @@ def test_sdk_interrupt_emits_control_message_when_process_is_running(tmp_path):
         assert await client.interrupt() is False
 
     asyncio.run(go())
+
+
+def test_sdk_editor_interaction_controls_are_validated(tmp_path):
+    from types import SimpleNamespace
+
+    async def go():
+        client = KrelcodeClient(options=sdk_options(tmp_path))
+        sent = []
+
+        async def fake_write(payload):
+            sent.append(payload)
+
+        client._process = SimpleNamespace(returncode=None, stdin=object())
+        client._write_json = fake_write
+        assert await client.respond_permission("call-1", "allow") is True
+        assert await client.respond_user_input("input-1", "A") is True
+        assert await client.cancel_user_input("input-2") is True
+        with pytest.raises(ValueError, match="decision"):
+            await client.respond_permission("call-1", "maybe")
+        with pytest.raises(ValueError, match="content"):
+            await client.respond_user_input("input-1", "   ")
+        assert sent == [
+            {
+                "type": "control",
+                "subtype": "permission_response",
+                "request_id": "call-1",
+                "decision": "allow",
+            },
+            {
+                "type": "control",
+                "subtype": "user_input_response",
+                "request_id": "input-1",
+                "action": "accept",
+                "content": "A",
+            },
+            {
+                "type": "control",
+                "subtype": "user_input_response",
+                "request_id": "input-2",
+                "action": "cancel",
+            },
+        ]
+
+    asyncio.run(go())

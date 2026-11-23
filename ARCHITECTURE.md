@@ -101,3 +101,22 @@ while steps < max_steps:
 | 4. 分发并执行工具 | 连续只读工具并发；mutating/未知工具作为 barrier 串行；执行顺序为工具池边界→JSON→Schema→审批→execute |
 | 5. 封装 tool_result 回填 | `ToolResult`/富 blocks 按原 tool index 保序转成 provider wire 格式；先提交 assistant(tool_calls)，再追加全部 result |
 | 6. REPL 消费事件并继续循环 | 有界 `QueryEvent` 背压、renderer drain/flush、ApprovalBroker 前台审批、Esc/Ctrl-C 中止、Enter steering、Alt+Enter 排队下一条 |
+
+## 13. IDE 扩展层（P1-3）
+
+```text
+VS Code Extension ───────────────┐
+                                 ├── Editor Bridge / SDK ── stream-json v1
+JetBrains Tool Window/Actions ───┘                              │
+                                                         Krelcode CLI
+                                                   ┌───────────┴───────────┐
+                                                   │ AgentRuntime + Tools   │
+                                                   │ MCP / Sandbox / Memory │
+                                                   │ Prompt / Compact       │
+                                                   └───────────────────────┘
+```
+
+VS Code 与 JetBrains 只实现宿主职责：命令/Action、输入 UI、Output/Tool Window、当前
+选区与诊断采集、权限确认。二者共享协议和行为契约，不共享 Provider 代码；JetBrains
+不依赖 Node，而是直接管理 `krelcode --input-format stream-json` 子进程。这样 IDE
+离线、Daemon、REPL、SDK 与 headless 仍走同一条权限和工具执行链。

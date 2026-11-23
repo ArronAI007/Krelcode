@@ -145,6 +145,8 @@ export interface QueryOptions {
   signal?: AbortSignal;
 }
 
+export type PermissionDecision = "allow" | "deny" | "always";
+
 export class KrelcodeMessage {
   readonly data: Record<string, unknown>;
 
@@ -436,17 +438,20 @@ export class KrelcodeClient {
       throw new KrelcodeProcessError("Krelcode 子进程已经退出，客户端不能重新启动");
     }
     const command = commandFor(this.options);
-    this.process = spawn(command[0], command.slice(1), {
+    const executable = command[0];
+    if (!executable) throw new KrelcodeProcessError("Krelcode 启动命令为空");
+    const child = spawn(executable, command.slice(1), {
       cwd: this.options.cwd,
       env: environmentFor(this.options),
       stdio: ["pipe", "pipe", "pipe"],
     });
+    this.process = child;
     this.started = true;
     // EPIPE can arrive asynchronously after a fast child exit.
-    this.process.stdin.on("error", () => undefined);
-    this.process.stdout.on("error", () => undefined);
-    this.process.stderr.on("error", () => undefined);
-    this.process.once("error", (error) => {
+    child.stdin.on("error", () => undefined);
+    child.stdout.on("error", () => undefined);
+    child.stderr.on("error", () => undefined);
+    child.once("error", (error) => {
       this.spawnError = error;
       this.fatalError = new KrelcodeProcessError(
         `无法启动 Krelcode 子进程: ${error.name}: ${error.message}`,
@@ -564,6 +569,48 @@ export class KrelcodeClient {
   async interrupt(): Promise<boolean> {
     if (!this.isRunning()) return false;
     this.writeJson({type: "control", subtype: "interrupt"});
+    return true;
+  }
+
+  async respondPermission(
+    permissionId: string,
+    decision: PermissionDecision,
+  ): Promise<boolean> {
+    if (!this.isRunning() || !permissionId.trim()) return false;
+    if (!["allow", "deny", "always"].includes(decision)) {
+      throw new TypeError("decision 必须为 allow/deny/always");
+    }
+    this.writeJson({
+      type: "control",
+      subtype: "permission_response",
+      request_id: permissionId,
+      decision,
+    });
+    return true;
+  }
+
+  async respondUserInput(inputId: string, content: string): Promise<boolean> {
+    if (!this.isRunning() || !inputId.trim()) return false;
+    if (!content.trim()) throw new TypeError("content 不能为空");
+    if (content.length > 32_000) throw new TypeError("content 超过 32000 字符限制");
+    this.writeJson({
+      type: "control",
+      subtype: "user_input_response",
+      request_id: inputId,
+      action: "accept",
+      content,
+    });
+    return true;
+  }
+
+  async cancelUserInput(inputId: string): Promise<boolean> {
+    if (!this.isRunning() || !inputId.trim()) return false;
+    this.writeJson({
+      type: "control",
+      subtype: "user_input_response",
+      request_id: inputId,
+      action: "cancel",
+    });
     return true;
   }
 

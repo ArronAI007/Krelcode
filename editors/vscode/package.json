@@ -1,0 +1,98 @@
+{
+  "name": "krelcode-vscode",
+  "displayName": "Krelcode",
+  "description": "Use the Krelcode coding agent from Visual Studio Code",
+  "version": "0.1.0",
+  "publisher": "krelcode",
+  "license": "MIT",
+  "engines": {"vscode": "^1.92.0"},
+  "categories": ["AI", "Programming Languages", "Other"],
+  "activationEvents": [
+    "onCommand:krelcode.ask",
+    "onCommand:krelcode.explainSelection",
+    "onCommand:krelcode.reviewFile",
+    "onCommand:krelcode.stop",
+    "onCommand:krelcode.newSession",
+    "onCommand:krelcode.showStatus"
+  ],
+  "main": "./dist/extension.js",
+  "files": ["dist", "README.md", "package.json"],
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "node build.mjs",
+    "package": "npm run build && vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "@krelcode/editor-bridge": "file:../shared",
+    "@krelcode/sdk": "file:../../typescript-sdk"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.2.0",
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  },
+  "contributes": {
+    "commands": [
+      {"command": "krelcode.ask", "title": "Krelcode: Ask in Workspace"},
+      {"command": "krelcode.explainSelection", "title": "Krelcode: Explain Selection"},
+      {"command": "krelcode.reviewFile", "title": "Krelcode: Review Current File"},
+      {"command": "krelcode.stop", "title": "Krelcode: Stop"},
+      {"command": "krelcode.newSession", "title": "Krelcode: New Session"},
+      {"command": "krelcode.showStatus", "title": "Krelcode: Show Status"}
+    ],
+    "configuration": {
+      "title": "Krelcode",
+      "properties": {
+        "krelcode.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python executable that can import Krelcode. Leave empty to use the SDK default."
+        },
+        "krelcode.provider": {
+          "type": "string",
+          "default": "",
+          "description": "Optional provider override, for example deepseek."
+        },
+        "krelcode.model": {
+          "type": "string",
+          "default": "",
+          "description": "Optional model override."
+        },
+        "krelcode.permissionMode": {
+          "type": "string",
+          "enum": ["default", "read-only", "auto-approve", "plan"],
+          "default": "default",
+          "description": "Runtime permission mode. Default requires approval for risky commands."
+        },
+        "krelcode.autoApprove": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically approve policy prompts. Prefer explicit approvals."
+        },
+        "krelcode.noSandbox": {
+          "type": "boolean",
+          "default": false,
+          "description": "Disable the Krelcode execution sandbox. This is unsafe."
+        },
+        "krelcode.configPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional explicit Krelcode TOML configuration path."
+        },
+        "krelcode.includeDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "description": "Attach current-file diagnostics to selection and review requests."
+        },
+        "krelcode.permissionTimeoutSeconds": {
+          "type": "number",
+          "default": 120,
+          "minimum": 5,
+          "description": "Automatically deny an unanswered permission request."
+        }
+      }
+    }
+  }
+}

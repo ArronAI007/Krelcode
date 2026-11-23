@@ -545,6 +545,10 @@ Workflow 是 turn 级 `managed` instruction，不进入稳定缓存前缀，也�
 - **TypeScript SDK**：`typescript-sdk/` 提供零运行时依赖的 Node/TypeScript 客户端，
   复用 `stream-json` v1；支持并发 `requestId` 路由、流式 `query()`、`run()`、
   `interrupt()`、环境变量密钥与有界 stderr 脱敏。见 `typescript-sdk/README.md`。
+- **VS Code / JetBrains**：`editors/` 提供共享 Editor Bridge、VS Code 扩展和
+  JetBrains Tool Window。两者只消费 `stream-json` / TypeScript SDK，不复制
+  Provider、工具、MCP、Sandbox、Memory 或上下文装配；选区作为有界、脱敏、
+  明确标记为待验证的 Evidence 注入。见 `editors/README.md`。
 
 ### Agent Skills
 
@@ -716,6 +720,18 @@ printf '%s\n' \
 运行形态不会等待 stdin：`ask_user` 采用 fail-closed，立即把“未提供输入”作为工具结果
 交还模型。
 
+编辑器持久会话还可回传一次性交互响应：
+
+```json
+{"type":"control","subtype":"permission_response","request_id":"call-1","decision":"allow"}
+{"type":"control","subtype":"user_input_response","request_id":"input-1","action":"accept","content":"A"}
+{"type":"control","subtype":"user_input_response","request_id":"input-1","action":"cancel"}
+```
+
+`decision` 仅允许 `allow` / `deny` / `always`。outbound `permission_id` 与
+`input_id` 不占用 SDK 的顶层 `request_id`，避免并发 turn 路由冲突；超时、中断或
+编辑器关闭时由适配层自动拒绝/取消。
+
 Python SDK 零第三方依赖，通过独立子进程复用完整 CLI，不复制 Provider/MCP/Sandbox 组装：
 
 ```python
@@ -733,9 +749,32 @@ async def main():
 asyncio.run(main())
 ```
 
-SDK 支持并发查询请求路由、`client.interrupt()`、带 base64 图片的 `ImageInput`、完整
+SDK 支持并发查询请求路由、`client.interrupt()`、`respond_permission()`、
+`respond_user_input()` / `cancel_user_input()`、带 base64 图片的 `ImageInput`、完整
 CLI 选项、超时/异常子进程清理。API key 不放进命令行或协议消息；SDK 子进程继承
 Krelcode 原有的 `api_key_env` 环境变量机制。
+
+### VS Code / JetBrains
+
+VS Code 扩展提供 Ask、Explain Selection、Review Current File、Stop、New Session 与
+Status 命令，通过独立 Output Channel 实时展示结果。JetBrains 插件提供 Tool Window、
+编辑器右键 Explain/Review Action、Stop Action 和 Settings 页面；它直接启动已安装的
+`krelcode` CLI 并说同一套 JSONL 协议。
+
+```bash
+# VS Code 开发与打包
+cd editors && npm install && npm run test && npm run typecheck && npm run build
+cd vscode && npm run package
+
+# JetBrains（需要 JDK 17；首次构建会下载 IntelliJ Platform）
+cd editors/jetbrains && gradle test && gradle buildPlugin
+```
+
+安全边界：编辑器上下文只包含宿主显式提供的工作区路径/选区和诊断，不递归读取其他
+文件；`.env*`、凭据、私钥、`.git/`、`.krelcode/` 等不会进入 Prompt。选区作为
+`[Evidence: EditorSelection]` 且标记 `requires_validation: true`。权限 UI 默认
+fail-closed，挂起请求超过 timeout 后自动拒绝；API key 仍只通过 CLI 的配置/环境变量
+机制进入 Provider。
 
 ### Hooks（事件钩子）
 

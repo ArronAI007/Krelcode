@@ -156,6 +156,8 @@ core 只有 1065 行——内核保持极小、能力在边缘，正是当初对
 | Output Styles / Status Line | `output_styles.py` `ui/status_line.py` |
 | WebFetch / WebSearch | `web/http.py` `web/tools.py` |
 | TypeScript SDK | `typescript-sdk/src/index.ts` |
+| Editor Bridge / VS Code | `editors/shared/src/` `editors/vscode/src/` |
+| JetBrains 插件 | `editors/jetbrains/src/main/java/` `plugin.xml` |
 | 全局安装/升级/卸载 | `install.sh` |
 | 最终 fail-closed 验收 | `benchmarks/acceptance.py` |
 
@@ -267,6 +269,38 @@ PYTHONPATH=src node --experimental-strip-types --test typescript-sdk/tests/sdk.t
 
 TypeScript SDK 的 `npm run typecheck` 需要本机已有 `typescript` 与 `@types/node`；
 没有网络依赖时仍可运行上面的 Node type-stripping 测试。
+
+## P1-3 VS Code / JetBrains 验证
+
+```bash
+# Shared editor bridge + VS Code controller（离线 fake transport）
+cd editors/shared && node --experimental-strip-types --test tests/*.test.ts
+cd ../vscode && node --experimental-strip-types --test tests/*.test.ts
+
+# stream-json 双向权限/AskUser 与静态 IDE manifest
+PYTHONPATH=src pytest -q tests/test_stream_json.py tests/test_approval_broker.py \
+  tests/test_sdk.py tests/test_p1_3_ide_integration.py
+
+# TypeScript SDK 回归
+PYTHONPATH=src node --experimental-strip-types --test typescript-sdk/tests/sdk.test.ts
+
+# JetBrains 纯逻辑（无 IntelliJ 下载）
+javac -encoding UTF-8 -d /tmp/krelcode-jb \
+  editors/jetbrains/src/main/java/com/krelcode/ide/SecretGuard.java \
+  editors/jetbrains/src/main/java/com/krelcode/ide/EditorPromptBuilder.java
+```
+
+完整 JetBrains 插件需要 JDK 17 并首次下载 IntelliJ Platform：
+
+```bash
+cd editors/jetbrains
+gradle test
+gradle buildPlugin
+```
+
+VS Code 使用 esbuild 打包为单个 CJS extension，`vscode` 为 external；其余共享桥接与
+TypeScript SDK 均进入 bundle。编辑器侧没有真实模型/API key 依赖，权限测试使用
+scripted transport 和 `permission_response` 控制消息。
 
 ## Step 122 Memory 索引与按需主题验收
 

@@ -2800,3 +2800,28 @@ Prompt Surface 数量、observed/stale/contract-failure 计数与 catalogue hash
 case/trial 稳定性、pass@k、token、成本、错误分类、profile 与时间等有界元数据。这样一次昂贵的
 真实模型评测可以在后续会话中由 `/prompts benchmark status` 审计，而不会复制模型输出、仓库文本
 或凭据进入会话记录。
+
+## IDE Adapter Contract（P1-3）
+
+IDE 集成是 `stream-json` 的宿主适配层，不是第二套 Agent 运行时。VS Code 通过
+`@krelcode/sdk`，JetBrains 通过持久 JSONL 子进程消费同一套事件；Provider、工具池、
+权限策略、Sandbox、MCP、Memory、Compact 与上下文装配全部保留在 CLI。
+
+双向交互使用严格、一次性控制：
+
+```text
+permission/requested(permission_id)
+  -> permission_response(request_id=permission_id, decision=allow|deny|always)
+
+input/requested(input_id)
+  -> user_input_response(request_id=input_id, action=accept|cancel, content?)
+```
+
+`permission_id` / `input_id` 与 SDK 顶层 `request_id` 分离，防止并发 turn 路由把交互
+请求误送到另一个消费者。未知、重复或已结束响应返回拒绝 ack；中断、EOF、编辑器关闭
+会自动 deny/cancel 所有挂起项。
+
+编辑器文本只作为显式 Evidence：路径必须位于当前 workspace；敏感目录/文件在进入
+Prompt 前阻断；内容做密钥模式脱敏和长度上限；Prompt 标记
+`requires_validation: true` / `trust: untrusted-editor-data`。编辑器不应递归加载其他
+文件，也不应把 IDE 品牌、建议或诊断文本提升为 instruction。

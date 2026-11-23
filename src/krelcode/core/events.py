@@ -116,6 +116,8 @@ class ApprovalRequested(AgentEvent):
     """策略层需要人工审批（UI 订阅后弹确认；非交互场景由策略 fail-closed）。"""
     tool_call: ToolCall
     reason: str
+    # Broker/transport 层的一次性关联键；空值时兼容旧订阅者并退回 tool_call.id。
+    request_id: str = ""
 
 
 @dataclass(frozen=True)

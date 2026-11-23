@@ -1123,14 +1123,17 @@ async def async_main(args: argparse.Namespace) -> int:
         return 2
     config = config_bundle.data
     current_config = config
+    run_mode = resolve_run_mode(args)
+    editor_stream = getattr(args, "input_format", "text") == "stream-json"
     approval_broker = (
         ApprovalBroker()
-        if resolve_run_mode(args) is RunMode.REPL and not getattr(args, "no_sandbox", False)
+        if (run_mode is RunMode.REPL or editor_stream)
+        and not getattr(args, "no_sandbox", False)
         else None
     )
     input_broker = (
         UserInputBroker()
-        if resolve_run_mode(args) is RunMode.REPL
+        if run_mode is RunMode.REPL or editor_stream
         else None
     )
     try:

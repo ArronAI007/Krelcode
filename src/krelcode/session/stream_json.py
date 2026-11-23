@@ -69,6 +69,10 @@ class StreamUserMessage:
 @dataclass(frozen=True)
 class StreamControlMessage:
     subtype: str
+    request_id: str = ""
+    decision: str = ""
+    action: str = ""
+    content: str = ""
 
 
 @dataclass(frozen=True)
@@ -197,6 +201,7 @@ class StreamJsonEncoder:
                 "subtype": "requested",
                 "tool_call": _tool_call_payload(event.tool_call),
                 "reason": event.reason,
+                "permission_id": event.request_id or event.tool_call.id,
             }
         elif isinstance(event, PermissionDenied):
             payload = {
@@ -363,7 +368,7 @@ class StreamJsonEncoder:
             payload = {
                 "type": "input",
                 "subtype": "requested",
-                "request_id": event.request_id,
+                "input_id": event.request_id,
                 "prompt": event.prompt,
                 "options": list(event.options),
                 "allow_free_text": event.allow_free_text,
@@ -372,7 +377,7 @@ class StreamJsonEncoder:
             payload = {
                 "type": "input",
                 "subtype": "resolved",
-                "request_id": event.request_id,
+                "input_id": event.request_id,
                 "answered": event.answered,
             }
         elif isinstance(event, RunFinished):
@@ -511,9 +516,49 @@ def parse_input_line(line: str) -> StreamUserMessage | StreamControlMessage:
     message_type = value.get("type")
     if message_type == "control":
         subtype = str(value.get("subtype", "")).strip()
-        if subtype not in {"end", "interrupt"}:
+        if subtype in {"end", "interrupt"}:
+            return StreamControlMessage(subtype)
+        if subtype == "permission_response":
+            request_id = _control_request_id(value, subtype)
+            decision = str(value.get("decision", "")).strip().lower()
+            if decision not in {"allow", "deny", "always"}:
+                raise StreamJsonProtocolError(
+                    "permission_response.decision 必须为 allow/deny/always")
+            return StreamControlMessage(
+                subtype=subtype,
+                request_id=request_id,
+                decision=decision,
+            )
+        if subtype == "user_input_response":
+            request_id = _control_request_id(value, subtype)
+            action = str(value.get("action", "")).strip().lower()
+            if action not in {"accept", "cancel"}:
+                raise StreamJsonProtocolError(
+                    "user_input_response.action 必须为 accept/cancel")
+            content = value.get("content", "")
+            if content is None:
+                content = ""
+            if not isinstance(content, str):
+                raise StreamJsonProtocolError(
+                    "user_input_response.content 必须是字符串")
+            content = content.strip()
+            if len(content) > 32_000:
+                raise StreamJsonProtocolError(
+                    "user_input_response.content 超过 32000 字符限制")
+            if action == "accept" and not content:
+                raise StreamJsonProtocolError(
+                    "user_input_response.accept 需要非空 content")
+            if action == "cancel" and content:
+                raise StreamJsonProtocolError(
+                    "user_input_response.cancel 不能携带 content")
+            return StreamControlMessage(
+                subtype=subtype,
+                request_id=request_id,
+                action=action,
+                content=content,
+            )
+        else:
             raise StreamJsonProtocolError(f"未知 control.subtype: {subtype!r}")
-        return StreamControlMessage(subtype)
     if message_type != "user":
         raise StreamJsonProtocolError("type 必须为 user 或 control")
 
@@ -538,6 +583,15 @@ def parse_input_line(line: str) -> StreamUserMessage | StreamControlMessage:
         request_id=request_id,
         images=tuple(images),
     )
+
+
+def _control_request_id(value: Mapping[str, Any], subtype: str) -> str:
+    request_id = str(value.get("request_id", "")).strip()
+    if not request_id:
+        raise StreamJsonProtocolError(f"{subtype}.request_id 不能为空")
+    if len(request_id) > 512:
+        raise StreamJsonProtocolError(f"{subtype}.request_id 超过长度限制")
+    return request_id
 
 
 def _parse_content(raw_content: Any) -> tuple[str, list[ImageRef]]:

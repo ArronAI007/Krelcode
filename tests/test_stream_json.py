@@ -44,7 +44,7 @@ from krelcode.core.messages import ImageRef, Message, ToolCall
 from krelcode.core.redact import SecretRedactor
 from krelcode.llm.base import StreamFinished, TextDelta
 from krelcode.llm.providers.mock import MockProvider
-from krelcode.safety.policy import AllowAllPolicy
+from krelcode.safety.policy import AllowAllPolicy, SandboxPolicy
 from krelcode.session.stream_json import (
     PROTOCOL_NAME,
     PROTOCOL_VERSION,
@@ -57,8 +57,12 @@ from krelcode.session.stream_json import (
     parse_input_line,
 )
 from krelcode.session.stream_json_runner import run_stream_json_session
+from krelcode.session.interactions import UserInputBroker
 from krelcode.tools.base import ToolContext
+from krelcode.tools.extension.ask_user import AskUserTool
+from krelcode.tools.builtin.run_command import RunCommandTool
 from krelcode.tools.registry import ToolRegistry
+from krelcode.ui.approval import ApprovalBroker
 
 
 def metadata() -> StreamJsonMetadata:
@@ -279,11 +283,54 @@ def test_parse_image_blocks_and_control_messages():
         StreamControlMessage("interrupt")
 
 
+def test_parse_editor_interaction_responses():
+    permission = parse_input_line(json.dumps({
+        "type": "control",
+        "subtype": "permission_response",
+        "request_id": "call-1",
+        "decision": "allow",
+    }))
+    assert permission == StreamControlMessage(
+        "permission_response", request_id="call-1", decision="allow")
+
+    answer = parse_input_line(json.dumps({
+        "type": "control",
+        "subtype": "user_input_response",
+        "request_id": "input-1",
+        "action": "accept",
+        "content": "方案 A",
+    }))
+    assert answer == StreamControlMessage(
+        "user_input_response",
+        request_id="input-1",
+        action="accept",
+        content="方案 A",
+    )
+
+    cancel = parse_input_line(json.dumps({
+        "type": "control",
+        "subtype": "user_input_response",
+        "request_id": "input-1",
+        "action": "cancel",
+    }))
+    assert cancel.action == "cancel" and cancel.content == ""
+
+
 @pytest.mark.parametrize("line, message", [
     ("not-json", "JSON 解析失败"),
     ("[]", "输入必须是 JSON 对象"),
     ('{"type":"assistant","content":"x"}', "type 必须"),
     ('{"type":"control","subtype":"pause"}', "未知 control"),
+    ('{"type":"control","subtype":"permission_response","decision":"allow"}',
+     "request_id 不能为空"),
+    ('{"type":"control","subtype":"permission_response","request_id":"x",'
+     '"decision":"maybe"}', "decision 必须"),
+    ('{"type":"control","subtype":"user_input_response","request_id":"x",'
+     '"action":"other"}', "action 必须"),
+    ('{"type":"control","subtype":"user_input_response","request_id":"x",'
+     '"action":"accept"}', "需要非空 content"),
+    ('{"type":"control","subtype":"user_input_response","request_id":"x",'
+     '"action":"cancel","content":"unexpected"}', "不能携带 content"),
     ('{"type":"user","content":" "}', "不能为空"),
     ('{"type":"user","content":[{"type":"audio"}]}', "不支持"),
     ('{"type":"user","content":{"text":"x"}}', "必须是字符串或"),
@@ -303,14 +350,24 @@ def test_dumps_message_is_compact_utf8_json():
     assert json.loads(text)["text"] == "中文"
 
 
-def make_runtime(tmp_path: Path, provider=None) -> tuple[AgentRuntime, UsageTracker]:
+def make_runtime(
+    tmp_path: Path,
+    provider=None,
+    *,
+    registry=None,
+    policy=None,
+    user_input_port=None,
+) -> tuple[AgentRuntime, UsageTracker]:
     loop = AgentLoop(
         llm=provider or MockProvider(scripted=["reply"]),
-        registry=ToolRegistry(),
+        registry=registry or ToolRegistry(),
         tool_context=ToolContext(workspace_root=tmp_path, sandbox_enabled=False),
-        policy=AllowAllPolicy(),
+        policy=policy or AllowAllPolicy(),
         system_prompt="SYS",
+        user_input_port=user_input_port,
     )
+    if policy is not None and hasattr(policy, "bus") and policy.bus is None:
+        policy.bus = loop.bus
     loop.skill_manager = None
     runtime = AgentRuntime(loop)
     usage = UsageTracker(model=getattr(loop.llm, "model", None))
@@ -325,8 +382,18 @@ def run_jsonl(
     prompt=None,
     stdin="",
     redactor=None,
+    registry=None,
+    policy=None,
+    approval_broker=None,
+    user_input_broker=None,
 ):
-    runtime, usage = make_runtime(tmp_path, provider)
+    runtime, usage = make_runtime(
+        tmp_path,
+        provider,
+        registry=registry,
+        policy=policy,
+        user_input_port=user_input_broker,
+    )
     output = io.StringIO()
     rc = asyncio.run(run_stream_json_session(
         runtime,
@@ -337,6 +404,8 @@ def run_jsonl(
         initial_prompt=prompt,
         input_stream=io.StringIO(stdin),
         output_stream=output,
+        approval_broker=approval_broker,
+        user_input_broker=user_input_broker,
     ))
     rows = [json.loads(line) for line in output.getvalue().splitlines()]
     return rc, rows
@@ -427,6 +496,75 @@ def test_runner_interrupt_cancels_turn_and_keeps_protocol_terminal(tmp_path):
     assert results[0]["subtype"] == "cancelled"
     assert results[0]["request_id"] == "r1"
     assert rows[-1]["subtype"] == "session_end"
+
+
+def test_runner_accepts_editor_permission_response(tmp_path):
+    call = ToolCall(
+        "call-approval",
+        "run_command",
+        {"command": "python3 -c 'print(\"approved\")'"},
+    )
+    provider = MockProvider(scripted=[
+        Message.assistant(tool_calls=[call]),
+        "approved reply",
+    ])
+    broker = ApprovalBroker()
+    broker.expect("call-approval")
+    policy = SandboxPolicy(
+        approver=broker.request,
+        workspace_root=tmp_path,
+    )
+    stdin = "\n".join([
+        json.dumps({"type": "user", "content": "run", "request_id": "r1"}),
+        json.dumps({
+            "type": "control",
+            "subtype": "permission_response",
+            "request_id": "call-approval",
+            "decision": "allow",
+        }),
+        json.dumps({"type": "control", "subtype": "end"}),
+    ]) + "\n"
+    rc, rows = run_jsonl(
+        tmp_path,
+        provider=provider,
+        stdin=stdin,
+        registry=ToolRegistry([RunCommandTool()]),
+        policy=policy,
+        approval_broker=broker,
+    )
+    assert rc == 0
+    requested = next(
+        item for item in rows
+        if item["type"] == "permission" and item["subtype"] == "requested")
+    assert requested["permission_id"] == "call-approval"
+    assert any(
+        item.get("subtype") == "permission_response_ack"
+        and item.get("accepted") is True
+        for item in rows
+    )
+    result = next(item for item in rows if item["type"] == "result")
+    assert result["subtype"] == "success"
+    assert result["result"] == "approved reply"
+
+
+def test_runner_routes_editor_user_input_response(tmp_path):
+    from krelcode.session.stream_json_runner import _resolve_user_input
+
+    broker = UserInputBroker()
+
+    async def scenario():
+        exchange = broker.submit(
+            "选择方案", ("A", "B"), request_id="turn-1:input:1")
+        control = StreamControlMessage(
+            "user_input_response",
+            request_id="turn-1:input:1",
+            action="accept",
+            content="B",
+        )
+        assert _resolve_user_input(broker, control) is True
+        assert await exchange.wait() == "B"
+
+    asyncio.run(scenario())
 
 
 def test_cli_stream_json_parameter_validation():

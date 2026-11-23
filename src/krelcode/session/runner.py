@@ -78,6 +78,8 @@ async def run_session(
                 initial_prompt=args.message,
                 input_stream=input_stream or sys.stdin,
                 output_stream=output_stream or sys.stdout,
+                approval_broker=approval_broker,
+                user_input_broker=user_input_broker,
                 log=log,
             )
 

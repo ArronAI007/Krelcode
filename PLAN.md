@@ -184,7 +184,9 @@
 
 | 135 | 插件签名、依赖解析与可信 registry（P1-2） | 新增零依赖 SemVer/依赖图、内容 Hash、RFC 8032 Ed25519 验签、trust store 与本地可信 registry。`plugin.sig.json` 覆盖 manifest+排序文件树；验签先于 import 且 staging 后再次校验。依赖支持必需/可选/冲突与 `^ ~ >= < x * ||`，Kahn 拓扑解析缺失/禁用/循环/冲突并只阻断受影响子图；registry index 与包双重签名、递归依赖版本交集求解。`prefer` 保持未签名本地开发兼容，`strict` 要求全部可信签名；更新拒绝降级、撤销后更新和签名者/registry 切换，移除仍被依赖的插件 fail-closed。`/plugins verify|deps|registry|trust` 与 `/extensions` 暴露 content-light 来源 | 12 个 P1-2 专项测试覆盖 RFC 向量/篡改、SemVer 与依赖拓扑、缺失/禁用/循环/冲突/可选、签名/撤销/严格策略、Hash/symlink/path traversal、降级/signer switch、registry 双重签名/依赖 bundle/版本交集与 Slash 命令；Plugin/P0/命令回归通过 | ✅ |
 
-| 测试总数：1728（1725 通过 + 3 个本地端口集成，沙箱内自动 skip） |
+| 136 | VS Code / JetBrains 集成（P1-3） | 新增 `editors/shared` Editor Bridge、VS Code 扩展与 JetBrains Tool Window/Plugin。编辑器只通过 TypeScript SDK 或 `stream-json` 消费 Agent，不复制 Provider/Tool/MCP/Sandbox/Context。`stream-json` 新增一次性 `permission_response` 与 `user_input_response`；outbound `permission_id`/`input_id` 与顶层 `request_id` 隔离。选区/诊断经 workspace、敏感路径、大小与脱敏过滤，作为 `requires_validation` Evidence 注入；权限/AskUser 超时、中断、关闭均 fail-closed | Shared/VS Code 使用 fake transport 覆盖安全上下文、权限/输入路由、并发阻止、停止/关闭与 manifest；Python 覆盖 parser、early response race、权限 ack、AskUser broker 与 Python/TypeScript SDK 控制方法；JetBrains 纯逻辑覆盖敏感路径与 Evidence 脱敏 | ✅ |
+
+| 测试总数：1746（1743 通过 + 3 个本地端口集成，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

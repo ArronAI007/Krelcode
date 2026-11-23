@@ -1,0 +1,50 @@
+<idea-plugin>
+    <id>com.krelcode.ide</id>
+    <name>Krelcode</name>
+    <vendor url="https://github.com/ArronAI007/Krelcode">Krelcode</vendor>
+    <description><![CDATA[
+        Run the Krelcode coding agent from a JetBrains IDE. The plugin speaks the
+        shared stream-json protocol and keeps provider, tools, permissions, MCP,
+        sandbox and context assembly inside the Krelcode CLI.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Krelcode"
+                    anchor="right"
+                    factoryClass="com.krelcode.ide.KrelcodeToolWindowFactory"/>
+        <applicationService serviceImplementation="com.krelcode.ide.KrelcodeSettings"/>
+        <projectService serviceImplementation="com.krelcode.ide.KrelcodeProjectService"/>
+        <applicationConfigurable id="com.krelcode.ide.settings"
+                                 displayName="Krelcode"
+                                 instance="com.krelcode.ide.KrelcodeConfigurable"/>
+    </extensions>
+
+    <actions>
+        <action id="Krelcode.Ask"
+                class="com.krelcode.ide.AskKrelcodeAction"
+                text="Ask Krelcode"
+                description="Ask Krelcode about the current project">
+            <add-to-group group-id="ToolsMenu" anchor="first"/>
+        </action>
+        <action id="Krelcode.ExplainSelection"
+                class="com.krelcode.ide.ExplainSelectionAction"
+                text="Explain Selection with Krelcode"
+                description="Explain the selected code with Krelcode">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+        <action id="Krelcode.ReviewFile"
+                class="com.krelcode.ide.ReviewFileAction"
+                text="Review Current File with Krelcode"
+                description="Review the current file with Krelcode">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+        <action id="Krelcode.Stop"
+                class="com.krelcode.ide.StopKrelcodeAction"
+                text="Stop Krelcode"
+                description="Interrupt the running Krelcode turn">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
