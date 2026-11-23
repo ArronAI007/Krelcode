@@ -602,7 +602,22 @@ async def build_loop(
             disabled_tools=_disabled_tools(config),
         ),
     )
-    shell_jobs = ShellJobManager(bus, workspace_root=workspace_root)
+    from .daemon.options import resolve_daemon_options
+
+    daemon_options = resolve_daemon_options(args, config)
+    daemon_owned = daemon_options.enabled and not bool(
+        getattr(args, "daemon_worker", False))
+    if daemon_owned:
+        from .daemon.client import DaemonJobManager
+
+        shell_jobs = DaemonJobManager(
+            workspace_root,
+            config_path=daemon_options.config_path,
+            idle_timeout=daemon_options.idle_timeout,
+            bus=bus,
+        )
+    else:
+        shell_jobs = ShellJobManager(bus, workspace_root=workspace_root)
     tool_context.shell_jobs = shell_jobs
     policy = build_policy(args, workspace_root, bus, approver=approver)
     lsp_manager = LSPManager(
@@ -687,32 +702,46 @@ async def build_loop(
             fragments.append(prompt_authoring_fragment())
         return tuple(fragments)
 
-    manager = SubagentManager(
-        llm=llm,
-        tool_factory=child_tool_factory,
-        tool_context=tool_context,
-        policy=policy,
-        bus=bus,
-        max_steps=args.max_steps,
-        context_budget=context_budget,   # 子代理长任务同样受压缩保护
-        # Keep the legacy composite view; new assembly splits base (L1) and
-        # the skill catalog (L6) into independent source-attributed fragments.
-        system_prompt_provider=(
-            lambda: skill_manager.apply_to_prompt(
-                subagent_base_prompt(manager.llm))),
-        base_prompt_for_llm=subagent_base_prompt,
-        prompt_profile=prompt_profile_setting,
-        prompt_release_id=prompt_release_setting,
-        prompt_calibrations=prompt_calibrations,
-        catalog_fragments_provider=subagent_catalog_fragments,
-        definitions=agent_definitions,
-        memory_store=memory_store,
-        llm_resolver=build_subagent_llm_resolver(
-            args, config, lambda: manager.llm, redactor),
-        mcp_servers_provider=lambda: tuple(
-            compose_mcp_config(config, dict(plugin_manager.mcp_servers))
-        ),
-    )
+    if daemon_owned:
+        from .daemon.client import DaemonSubagentManager
+
+        manager = DaemonSubagentManager(
+            workspace_root,
+            config_path=daemon_options.config_path,
+            redactor=redactor,
+            idle_timeout=daemon_options.idle_timeout,
+        )
+        manager.llm = llm
+        manager.prompt_profile = prompt_profile_setting
+        manager.prompt_release_id = prompt_release_setting
+        manager.prompt_calibrations = tuple(prompt_calibrations)
+    else:
+        manager = SubagentManager(
+            llm=llm,
+            tool_factory=child_tool_factory,
+            tool_context=tool_context,
+            policy=policy,
+            bus=bus,
+            max_steps=args.max_steps,
+            context_budget=context_budget,   # 子代理长任务同样受压缩保护
+            # Keep the legacy composite view; new assembly splits base (L1) and
+            # the skill catalog (L6) into independent source-attributed fragments.
+            system_prompt_provider=(
+                lambda: skill_manager.apply_to_prompt(
+                    subagent_base_prompt(manager.llm))),
+            base_prompt_for_llm=subagent_base_prompt,
+            prompt_profile=prompt_profile_setting,
+            prompt_release_id=prompt_release_setting,
+            prompt_calibrations=prompt_calibrations,
+            catalog_fragments_provider=subagent_catalog_fragments,
+            definitions=agent_definitions,
+            memory_store=memory_store,
+            llm_resolver=build_subagent_llm_resolver(
+                args, config, lambda: manager.llm, redactor),
+            mcp_servers_provider=lambda: tuple(
+                compose_mcp_config(config, dict(plugin_manager.mcp_servers))
+            ),
+        )
     for tool in manager.build_tools():
         registry.register(
             tool, ToolDescriptor.from_tool(tool, source=ToolSource.SUBAGENT))

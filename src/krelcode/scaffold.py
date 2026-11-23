@@ -60,6 +60,12 @@ api_key_env = "GEMINI_API_KEY"
 # backend = "auto"        # auto / static / seatbelt(macOS) / bubblewrap(Linux)
 # network = false         # 默认断网；需要依赖下载时临时启用 --sandbox-network
 
+# ---- 持久化 daemon（后台 Job / 子代理）----
+# [daemon]
+# enabled = "auto"        # off / auto / on；auto 在首次 job_start/spawn_agent 时启动
+# idle_timeout = 1800     # 无活动任务后退出秒数；0 表示常驻。运行中任务不会因 idle 被杀
+# daemon 状态位于 .krelcode/daemon/；token 文件权限 0600，客户端断连不影响任务。
+
 # ---- Auto Memory（稳定、可复用、经过验证的项目知识）----
 # [memory]
 # mode = "suggest"        # off / suggest / auto；默认只生成候选供审核

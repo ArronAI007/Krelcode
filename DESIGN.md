@@ -894,9 +894,72 @@ job_start(command, cwd)
   不逐块膨胀会话；REPL 在空闲时也能显示完成通知；stream-json 输出跨 turn 的
   `job/started`、`job/output_delta`、`job/finished`。模型历史不会被自动注入输出，模型需
   主动调用 `job_output`，避免日志污染上下文。
-- 兼容边界：manager 是进程内的，重启后不接管旧 OS 进程；旧日志可人工查看，但新进程
-  不再 list/output/kill 它们。命令通过 `&` 自行派生的后台子进程若仍持有 pipe，主进程退出后
-  manager 会结束残留进程组，因此正确用法是让目标命令在前台运行并由 `job_start` 托管。
+- 默认兼容边界：`[daemon] enabled=off` 时 manager 仍是进程内的；命令通过 `&` 自行派生的
+  后台子进程若仍持有 pipe，主进程退出后会结束残留进程组，因此正确用法是让目标命令在前台
+  运行并由 `job_start` 托管。启用 daemon 后使用下述持久化生命周期。
+
+## 持久化 daemon（P0-4）
+
+daemon 是 workspace 级、单实例的基础设施层，不进入 Agent Prompt/tool schema。它拥有
+Job 与 Subagent 的真实生命周期，REPL/headless/SDK 只持有窄 RPC client：
+
+```
+DaemonClient ── authenticated JSON request ── DaemonServer
+                                                ├─ ShellJobManager (live pipes/tasks)
+                                                ├─ SubagentManager (lazy Agent runtime)
+                                                ├─ JobRecordStore (metadata + seq JSONL)
+                                                └─ AgentRecordStore (content-light state)
+
+.krelcode/daemon/
+├── daemon.json        instance/pid/endpoint；绝不包含 token
+├── auth.token         随机 bearer token；POSIX 0600
+├── daemon.lock        pid + instance + created_at，带 stale/PID-reuse 校验
+├── jobs/<id>.json     durable metadata
+├── jobs/<id>.events.jsonl  跨 client 的 sequence 输出
+├── agents/<id>.json   status/task/definition/model/result/sidechain 引用
+├── requests/          file-RPC fallback 请求
+├── responses/         file-RPC fallback 响应
+└── logs/daemon.log
+```
+
+**传输协商**：POSIX 优先 Unix domain socket（路径过长时使用 hash 后的 per-user temp 路径）；
+Windows 使用 loopback TCP 随机端口；托管沙箱若禁止 bind，则回退 file RPC。三种 transport
+都走相同的 `RPCRequest/RPCResponse`、协议版本、request id、4 MiB 上限和 bearer auth。
+file RPC 使用原子替换传递单条消息，目录 0700；它不是网络服务，也不需要第三方依赖。
+
+**所有权与退出语义**：
+
+```
+client start job/spawn agent
+  └─ daemon owns process/task
+      ├─ client disconnect → no effect
+      ├─ AgentRuntime.close() → RPC adapter shutdown only
+      ├─ explicit kill → process tree / agent Task 终止
+      ├─ daemon stop → active work 终止并写 terminal record
+      └─ daemon crash → next start reconcile running → lost
+```
+
+daemon 的 `idle_timeout` 只在没有运行中 Job/Subagent 时生效；运行中任务不会因客户端闲置
+被杀。单实例锁记录 `pid + instance_id + created_at`，不能只凭“PID 存在”判断所有权；
+PID 被复用时会回收 stale lock。daemon.json 写入不包含 token，客户端不能从状态/日志恢复
+bearer 权限。
+
+**Job durable 语义**：live `ShellJobManager` 继续负责 pipe、条件等待、进程树终止和内存
+tail；`ShellJobStarted/Output/Finished` 旁路写入 metadata 与 append-only JSONL。重启后：
+completed/failed/killed 可由 list/output 读取；running 记录标记 `lost`，保留最后 sequence 与
+日志路径，并明确拒绝按旧 PID kill。这样既不丢失审计事实，也不把 PID 复用变成安全漏洞。
+
+**Subagent durable 语义**：daemon 按需构造与生产 REPL 相同的 `SubagentManager`（同一
+Tool/Sandbox/Permission/MCP/PromptAssembler 路径），保留 pause/resume/kill/feed/definition
+与完整 sidechain。`agents/<id>.json` 只保存 content-light 状态与 sidechain 引用，不复制
+Prompt/工具正文。客户端断开后 Task 继续；daemon 正常停止会终止运行 Task；daemon 崩溃时
+旧 coroutine 不可能原地恢复，下一次启动标记 `lost`，completed Agent 的 result/feed 仍可从
+metadata + sidechain 重放审计。父 Agent history 仍不自动进入子代理，sidechain 仍不自动回注主上下文。
+
+**REPL 事件桥**：daemon Job 的实时输出按 sequence 轮询到 client 后重新发布为本地
+`ShellJobStarted/Output/Finished`，因此既有 REPL 完成通知、recorder、hooks 与 stream-json
+不需要知道 transport 是 socket 还是 file。模型上下文仍不会自动吸收 Job 日志，必须显式调用
+`job_output` 保持游标。
 
 ## 交互式子代理（Step 81）
 
@@ -1967,8 +2030,9 @@ argv
 ```
 
 这里不做两套参数定义：fast-path 只识别无歧义的版本请求，所有正式参数语义仍由
-完整 parser 负责；未识别参数原样转发。未来 bridge/daemon/background/template
-runner 可在 cli 层增加独立动态导入项，而无需把对应实现拉进默认启动路径。
+完整 parser 负责；未识别参数原样转发。`daemon/jobs/agents` 已在完整 parser 下拥有独立
+延迟加载路由；未来 bridge/background/template runner 可沿用同一边界，而无需把实现拉进
+默认启动路径。
 
 ## CLI 子命令（Step 28）
 

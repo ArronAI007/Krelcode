@@ -25,11 +25,17 @@ def build_parser() -> argparse.ArgumentParser:
         prog="krelcode", description="Krelcode coding agent (统一 Provider + tool-calling 循环 + MCP)"
     )
     p.add_argument("command", nargs="?",
-                   choices=("doctor", "init", "review", "security-review", "benchmark"),
+                   choices=("doctor", "init", "review", "security-review", "benchmark",
+                            "daemon", "jobs", "agents"),
                    default=None,
                    help="子命令：doctor=环境自检；init=生成配置/规则模板；"
                         "review=评审当前 git 变更；security-review=只读安全审查；"
-                        "benchmark=真实模型 Prompt 行为评测；缺省进入对话")
+                        "benchmark=真实模型 Prompt 行为评测；daemon/jobs/agents="
+                        "持久化后台任务与子代理；缺省进入对话")
+    p.add_argument("action", nargs="?", default=None,
+                   help="daemon/jobs/agents 子操作（start/status/stop/list/output/...）")
+    p.add_argument("target", nargs="?", default=None,
+                   help="子操作目标（job id、agent id、sidechain 等）")
     p.add_argument("--force", action="store_true",
                    help="init 子命令：覆盖已存在的模板文件")
     p.add_argument("--staged", action="store_true",
@@ -78,6 +84,31 @@ def build_parser() -> argparse.ArgumentParser:
                    help="额外插件根目录（可重复；优先级高于项目/全局目录）")
     p.add_argument("--auto-approve", action="store_true",
                    help="ASK 级操作自动批准（信任模式；DENY 级仍然拒绝）")
+    daemon_group = p.add_mutually_exclusive_group()
+    daemon_group.add_argument(
+        "--daemon", dest="daemon_enabled", action="store_true", default=None,
+        help="启用持久化 daemon：后台 Job/子代理在 REPL 退出后继续运行")
+    daemon_group.add_argument(
+        "--no-daemon", dest="daemon_enabled", action="store_false",
+        help="禁用 daemon，使用兼容的进程内 Job/SubagentManager")
+    p.add_argument("--daemon-idle-timeout", type=float, default=None,
+                   help="daemon 无活动任务后的退出秒数（0 表示不自动退出）")
+    p.add_argument("--foreground", action="store_true",
+                   help="daemon start：前台运行（默认后台启动）")
+    p.add_argument("--command", dest="job_command", default=None,
+                   help="jobs start：要执行的后台 shell 命令")
+    p.add_argument("--task", default=None,
+                   help="agents spawn：子代理任务描述")
+    p.add_argument("--definition", default=None,
+                   help="agents spawn：Agent Definition 名称")
+    p.add_argument("--after", type=int, default=0,
+                   help="jobs output/agents feed：起始 sequence")
+    p.add_argument("--wait", type=float, default=0.0,
+                   help="jobs output：等待新输出的秒数")
+    p.add_argument("--isolated", action="store_true",
+                   help="agents spawn：在独立 git worktree 中运行")
+    p.add_argument("--fork-context", action="store_true",
+                   help="agents spawn：继承指令与筛选 Memory（不继承完整历史）")
     p.add_argument("--permission-mode",
                    choices=("default", "read-only", "auto-approve", "plan"),
                    default=None,
@@ -161,6 +192,231 @@ def _run_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _daemon_client(args: argparse.Namespace):
+    from krelcode.daemon.client import DaemonClient
+
+    config_path = Path(args.config).expanduser() if args.config else None
+    return DaemonClient(
+        Path(args.workspace).expanduser().resolve(),
+        config_path=config_path,
+        sandbox_backend=args.sandbox_backend,
+        sandbox_network=args.sandbox_network,
+        no_sandbox=args.no_sandbox,
+        auto_approve=args.auto_approve,
+        permission_mode=args.permission_mode,
+    )
+
+
+def _daemon_idle_timeout(args: argparse.Namespace) -> float:
+    from krelcode.config import load_config_layers
+    from krelcode.daemon.options import resolve_daemon_options
+
+    config_path = Path(args.config).expanduser() if args.config else None
+    bundle = load_config_layers(
+        workspace=Path(args.workspace), explicit_path=config_path)
+    return resolve_daemon_options(args, bundle.data).idle_timeout
+
+
+def _run_daemon(args: argparse.Namespace) -> int:
+    from krelcode.daemon.client import DaemonUnavailable
+
+    action = (args.action or "status").lower()
+    client = _daemon_client(args)
+    try:
+        if action == "start":
+            idle = _daemon_idle_timeout(args)
+            if args.foreground:
+                from krelcode.daemon.server import run_daemon
+
+                config_path = Path(args.config).expanduser() if args.config else None
+                asyncio.run(run_daemon(
+                    Path(args.workspace).expanduser().resolve(),
+                    config_path=config_path,
+                    idle_timeout=idle,
+                    sandbox_backend=args.sandbox_backend,
+                    sandbox_network=args.sandbox_network,
+                    no_sandbox=args.no_sandbox,
+                    auto_approve=args.auto_approve,
+                    permission_mode=args.permission_mode,
+                ))
+                return 0
+            status = asyncio.run(client.start(idle_timeout=idle))
+            print(
+                f"daemon running instance={status.instance_id} pid={status.pid} "
+                f"workspace={status.workspace_root}")
+            return 0
+        if action == "stop":
+            stopped = asyncio.run(client.stop())
+            print("daemon stopped" if stopped else "daemon 未运行或停止超时")
+            return 0 if stopped else 1
+        if action == "restart":
+            asyncio.run(client.stop())
+            status = asyncio.run(client.start(idle_timeout=_daemon_idle_timeout(args)))
+            print(f"daemon restarted instance={status.instance_id} pid={status.pid}")
+            return 0
+        if action in {"status", "list"}:
+            status = asyncio.run(client.status())
+            if not status.running:
+                print("daemon stopped")
+                return 1
+            data = status.data
+            print(
+                f"daemon running instance={status.instance_id} pid={status.pid} "
+                f"workspace={status.workspace_root}")
+            print(
+                f"active_jobs={data.get('active_jobs', 0)} "
+                f"durable_jobs={data.get('durable_jobs', 0)} "
+                f"agents={data.get('agents', 0)} idle_timeout={data.get('idle_timeout')}")
+            if data.get("issues"):
+                for issue in data["issues"]:
+                    print(f"warning: {issue}")
+            return 0
+        print("用法: krelcode daemon start|status|stop|restart [--foreground]")
+        return 2
+    except (DaemonUnavailable, RuntimeError, ValueError, OSError) as exc:
+        print(f"daemon 错误: {exc}", file=sys.stderr)
+        return 1
+
+
+def _run_jobs(args: argparse.Namespace) -> int:
+    from krelcode.daemon.client import DaemonJobManager, DaemonUnavailable
+    from krelcode.jobs import ShellJobError
+
+    action = (args.action or "list").lower()
+    manager = DaemonJobManager(
+        Path(args.workspace).expanduser().resolve(),
+        client=_daemon_client(args),
+        idle_timeout=_daemon_idle_timeout(args),
+    )
+    try:
+        if action in {"list", "ls"}:
+            jobs = manager.list_jobs()
+            if not jobs:
+                print("（暂无后台 Job）")
+                return 0
+            for job in jobs:
+                exit_code = "-" if job.exit_code is None else str(job.exit_code)
+                command = " ".join(job.command.split())
+                if len(command) > 100:
+                    command = command[:99] + "…"
+                print(
+                    f"{job.job_id} {job.status.value:<9} exit={exit_code:<4} "
+                    f"pid={job.pid} seq={job.latest_sequence} {command}")
+            return 0
+        if action == "start":
+            command = str(args.job_command or "").strip()
+            if not command:
+                print("jobs start 需要 --command 或命令文本", file=sys.stderr)
+                return 2
+            job = asyncio.run(manager.start(
+                command, cwd=Path(args.workspace).expanduser().resolve()))
+            print(
+                f"{job.job_id} {job.status.value} pid={job.pid}\n"
+                f"log: {job.log_path}\n"
+                f"读取: krelcode jobs output {job.job_id} --wait 5")
+            return 0
+        if action == "output":
+            if not args.target:
+                print("用法: krelcode jobs output <job-id> [--after N] [--wait 秒]",
+                      file=sys.stderr)
+                return 2
+            page = asyncio.run(manager.output(
+                args.target,
+                after_sequence=max(0, int(args.after or 0)),
+                wait_seconds=max(0.0, float(args.wait or 0.0)),
+            ))
+            print(page.render())
+            return 0
+        if action == "kill":
+            if not args.target:
+                print("用法: krelcode jobs kill <job-id>", file=sys.stderr)
+                return 2
+            job = asyncio.run(manager.kill(args.target))
+            print(f"{job.job_id} {job.status.value} exit={job.exit_code}")
+            return 0
+        print("用法: krelcode jobs list|start|output|kill", file=sys.stderr)
+        return 2
+    except (DaemonUnavailable, ShellJobError, RuntimeError, ValueError, OSError) as exc:
+        print(f"jobs 错误: {exc}", file=sys.stderr)
+        return 1
+
+
+def _run_agents(args: argparse.Namespace) -> int:
+    from krelcode.daemon.client import DaemonSubagentManager, DaemonUnavailable
+
+    action = (args.action or "list").lower()
+    manager = DaemonSubagentManager(
+        Path(args.workspace).expanduser().resolve(),
+        client=_daemon_client(args),
+        idle_timeout=_daemon_idle_timeout(args),
+    )
+    try:
+        if action in {"list", "ls"}:
+            lines = manager.status_lines()
+            print("\n".join(lines) if lines else "（暂无子代理）")
+            return 0
+        if action == "definitions":
+            lines = manager.definition_lines()
+            print("\n".join(lines) if lines else "（未发现 Agent Definition）")
+            return 0
+        if action == "sidechains":
+            lines = manager.sidechain_lines(limit=100)
+            print("\n".join(lines) if lines else "（暂无 sidechain）")
+            return 0
+        if action == "sidechain":
+            if not args.target:
+                print("用法: krelcode agents sidechain <agent-id>", file=sys.stderr)
+                return 2
+            path, records = manager.read_sidechain(args.target)
+            print(f"sidechain: {path}\nrecords: {len(records)}")
+            return 0
+        if action == "feed":
+            if not args.target:
+                print("用法: krelcode agents feed <agent-id> [--after N]", file=sys.stderr)
+                return 2
+            page = manager.feed(
+                args.target, after_sequence=max(0, int(args.after or 0)), limit=500)
+            print(page.render())
+            return 0
+        if action == "spawn":
+            task = str(args.task or "").strip()
+            if not task:
+                print("agents spawn 需要 --task 或任务文本", file=sys.stderr)
+                return 2
+            handle = asyncio.run(manager.spawn(
+                task,
+                isolated=(True if args.isolated else None),
+                fork_context=(True if args.fork_context else None),
+                definition=args.definition,
+            ))
+            print(
+                f"{handle.id} {handle.status}"
+                + (f" branch={handle.branch}" if handle.branch else "")
+                + f"\nsidechain: {handle.sidechain_path or '-'}")
+            return 0
+        if action == "wait":
+            if not args.target:
+                print("用法: krelcode agents wait <agent-id> [--wait 秒]", file=sys.stderr)
+                return 2
+            timeout = float(args.wait or 60.0)
+            handle = asyncio.run(manager.wait(args.target, timeout=timeout))
+            print(f"{handle.id} [{handle.status}] turns={handle.turns}\n{handle.preview()}")
+            return 0
+        if action in {"pause", "resume", "kill"}:
+            if not args.target:
+                print(f"用法: krelcode agents {action} <agent-id>", file=sys.stderr)
+                return 2
+            handle = asyncio.run(getattr(manager, action)(args.target))
+            print(f"{handle.id} [{handle.status}]")
+            return 0
+        print("用法: krelcode agents list|spawn|wait|feed|pause|resume|kill|definitions|sidechains",
+              file=sys.stderr)
+        return 2
+    except (DaemonUnavailable, RuntimeError, ValueError, KeyError, OSError) as exc:
+        print(f"agents 错误: {exc}", file=sys.stderr)
+        return 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     raw_args = list(argv) if argv is not None else None
     effective = raw_args if raw_args is not None else list(sys.argv[1:])
@@ -177,6 +433,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_doctor(args)
     if args.command == "init":
         return _run_init(args)
+    if args.command == "daemon":
+        return _run_daemon(args)
+    if args.command == "jobs":
+        return _run_jobs(args)
+    if args.command == "agents":
+        return _run_agents(args)
 
     try:
         if args.command == "review":

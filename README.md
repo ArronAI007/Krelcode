@@ -67,6 +67,35 @@ krelcode doctor        # 环境自检：Python/key/配置/git/工作区/Sandbox/
 krelcode               # 进入 REPL
 ```
 
+### 持久化后台 Job 与子代理
+
+默认仍使用兼容的进程内 manager。需要让 dev server、长测试或子代理在 REPL 退出后继续运行：
+
+```toml
+[daemon]
+enabled = "auto"      # off / auto / on；auto 在首次 job_start/spawn_agent 时启动
+idle_timeout = 1800   # 无活动任务后退出；0 常驻
+```
+
+```bash
+krelcode --daemon                       # 本次 REPL 使用 daemon
+krelcode daemon start|status|stop       # 管理当前 workspace 的单实例 daemon
+krelcode jobs list
+krelcode jobs start --command 'npm run dev'
+krelcode jobs output job-1 --after 0 --wait 5
+krelcode jobs kill job-1
+krelcode agents list
+krelcode agents spawn --task '审查当前 git diff' --definition general-purpose
+krelcode agents feed a1 --after 0
+krelcode agents wait a1 --wait 60
+krelcode agents pause|resume|kill a1
+```
+
+Job/Agent metadata 原子写入 `.krelcode/daemon/`；输出使用带 sequence 的脱敏 JSONL，客户端
+断开不会杀死任务。传输优先 Unix socket，Windows 使用 loopback TCP + bearer token；受限环境
+自动回退权限隔离的 file RPC。daemon 崩溃后旧 running 状态标记 `lost`，保留日志/sidechain
+供审计，不会按可能复用的 PID 盲目终止进程。
+
 零第三方运行时依赖，Python ≥ 3.11（开发测试仅需 pytest）。
 
 ## 快速开始（源码方式）
@@ -754,7 +783,7 @@ fork-context: true
 
 运行时 Sandbox 为命令和 Skill 脚本增加第二道边界。所有 shell、Job、Hook、Skill、MCP/LSP/SDK 子进程共享 `ProcessPlatform`：POSIX 使用独立 session/process group 并发送 `SIGTERM`/`SIGKILL`，Windows 使用 `CREATE_NEW_PROCESS_GROUP` 与 `taskkill /PID <pid> /T [/F]`；graceful stop 超时会自动升级为强制终止整棵进程树。macOS 可自动使用 Seatbelt，Linux 检测到 bubblewrap 时使用 bwrap；工作区可写、系统运行时只读、用户 Home 不可读，网络默认关闭。Windows 当前没有 OS 级文件/网络沙箱，会诚实降级为 `static`：统一审计 `cmd`/PowerShell 嵌套命令、多行/分隔命令、`%VAR%`/`!VAR!` 动态展开、编码 PowerShell、越界/敏感路径、硬链接、命令替换与已知网络命令，并与文件工具共用凭据路径分类；静态模式不能抵御任意解释器代码中的动态绕过，doctor/启动日志会明确告警。命令环境中的 API key/token/proxy/SSH agent 会被剥离，HOME/TMP/cache（Windows 另含 USERPROFILE/APPDATA/LOCALAPPDATA）重定向到 `.krelcode/sandbox/`；`grep/glob/repo_map/find_refs/check_syntax` 统一拒绝 symlink 越界。可用 `[sandbox]` 或 `--sandbox-backend/--sandbox-network` 调整。
 
-上下文管理（两道防线）：CJK 感知 token 估算；超过 `--context-tokens`（默认按模型上下文窗口×75% 自适应，未知模型 10 万）先**驱逐旧工具输出**（免费、保配对结构，只留最近 6 条），仍超限再把中段交给 LLM 摘要压缩（`--no-compress` 关闭，`/compact` 手动触发）；超长工具输出全文落盘 `.krelcode/tool_outputs/` 并只在上下文留引用。后台命令通过 `job_start` 启动在独立进程组中，不随单轮 turn 中止；`job_output` 用单调 sequence 游标读取实时增量，`job_kill` 终止整个进程组，任务结束会向 REPL 推送完成通知，完整脱敏日志保存在 `.krelcode/jobs/`（默认 10 MiB 上限）。
+上下文管理（两道防线）：CJK 感知 token 估算；超过 `--context-tokens`（默认按模型上下文窗口×75% 自适应，未知模型 10 万）先**驱逐旧工具输出**（免费、保配对结构，只留最近 6 条），仍超限再把中段交给 LLM 摘要压缩（`--no-compress` 关闭，`/compact` 手动触发）；超长工具输出全文落盘 `.krelcode/tool_outputs/` 并只在上下文留引用。后台命令通过 `job_start` 启动在独立进程组中，不随单轮 turn 中止；`job_output` 用单调 sequence 游标读取实时增量，`job_kill` 终止整个进程组，任务结束会向 REPL 推送完成通知，完整脱敏日志保存在 `.krelcode/jobs/`（默认 10 MiB 上限）。启用 daemon 后 Job/Subagent 归 daemon 所有，客户端退出不触发 shutdown；`krelcode jobs/agents` 可在新终端重连并继续按 cursor 读取。
 
 体验：启动显示 provider/模型/工作区/工具/会话信息卡片；输入区用横跨终端的上下两条 `─` 边界包住 `❯` 提示符，输入 `/` 时实时弹出并过滤匹配的 slash commands（Tab 可补全唯一命令），候选菜单在固定区域原地覆盖，撤销 `/` 后不会残留搜索内容；字符级编辑器支持左右/Home/End/Delete、Ctrl-A/E/B/F、按词移动删除、多行编辑、Bracketed paste（多行代码一次粘贴且不执行终端转义）和 `Ctrl-R` 增量历史搜索；`↑/↓` 调取持久化历史，越过最新一条会恢复未提交草稿。历史默认写入 `~/.krelcode/history.jsonl`（权限 `0600`、提交前脱敏，可用 `KRELCODE_HISTORY_FILE` 覆盖）；`Alt+Enter` 入队的内容可通过 `/queue` 查看、删除、移动或清空。回答结束后立即回到新的双边界输入区；LLM 回复以 `⏺` 流式展示，reasoning 模型（DeepSeek-R1/Qwen 思考模式/Claude thinking）的思考正文默认折叠为单行暗色 `✻ Thinking…（正文已折叠；下方为工具活动，/thinking 展开）`，并用空行与后续工具活动明确分隔，执行 `/thinking` 才展开（任务运行中也可用）原始 Markdown（标题/列表/空行/fenced code 均保留），工具调用/结果使用 `⏺` / `⎿` 树形标记（统一 ThinkingDelta 事件，思考不进对话历史）；文件读取对 `.env*` 与 `krelcode.toml` 保留结构但脱敏，`credentials*`、`token.json`、云凭据、私钥和 state 文件直接拒读，glob/grep/repo-map 同样跳过；工具结果默认只显示编号与行数/字符数摘要，运行中或空闲时可用 `/tool-output` 查看列表、`/tool-output <编号|last>` 在灰色背景面板中单独展开，超宽行自动折行；高置信度识别到“只解释明确文件”时，会在模型调用前注入结构化意图并只暴露 `read_file`，避免先 glob 目录或读取 README/同级文件，模糊请求和修复/运行等动作请求保持完整工具集；edit_file 展开后的 diff 保留红绿高亮（尊重 `NO_COLOR`）；会话自动录制为 JSONL（`<workspace>/.krelcode/sessions/`，审计事件流 + 历史快照），`--resume` 恢复最近会话继续聊（`--resume <path>` 指定文件，`--no-session` 关闭）。
 

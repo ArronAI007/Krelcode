@@ -57,6 +57,10 @@ class ShellJobStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     KILLED = "killed"
+    # Durable daemon records can outlive the pipe-owning process.  ``lost`` is
+    # deliberately not considered terminal success/failure: the OS process may
+    # still exist, but Krelcode cannot safely attach to or kill it by PID alone.
+    LOST = "lost"
 
 
 @dataclass(frozen=True)

@@ -121,6 +121,7 @@ class AgentHandle:
     id: str
     task: str
     loop: AgentLoop
+    started_at: float = field(default_factory=time.time)
     status: str = STATUS_RUNNING
     result: Optional[str] = None
     error: Optional[str] = None
@@ -532,6 +533,7 @@ class SubagentManager:
             id=agent_id,
             task=task,
             loop=loop,
+            started_at=time.time(),
             worktree=worktree_path,
             branch=branch,
             forked=forked,

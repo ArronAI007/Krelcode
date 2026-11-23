@@ -81,6 +81,7 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 | v0.90+ | Base Prompt 生产级拆分与模型 profile | `core:base*` 拆为身份、执行循环、工具纪律、编码质量、安全权威、验证、沟通与完成度八个独立 L1 Fragment；`[prompt].profile=auto` 按最长模型模式 → provider family → default 解析 Claude/DeepSeek/OpenAI/Gemini profile。Profile 仅可追加 optional section，安全 required section 不可覆盖；主 Agent、`/model` 热切换和按实际子模型运行的后台子代理复用同一解析与 PromptAssembler 路径，`/context why` 暴露 profile/match/hash 但不记录正文 |
 | v0.91 | L5 Mode/Permission Contract | `ModePermissionContract` 由实际 RuntimeSnapshot、过滤后的 ToolPool、ApprovalPolicy 与 ExecutionSandbox 单一生成；主 Agent、子代理、REPL/print/JSON/SDK/review 共用 L5 attachment。运行时 AUTO_APPROVE 与显式 ASK 例外进入 approval 摘要；子代理的 permission/tool/MCP scope 只能相对父级收窄。模式切换会重建工具池并刷新 contract hash，但不改变 stable prefix；contract/exposure hash 贯通 PromptPlan、ContextCacheLedger、`/context why` 与 `/context ledger` |
 | v0.92 | 工具级 Prompt Playbook | 新增独立 `ToolPlaybookCatalog`：由 Provider 实际 advertised tools 选择读取、搜索、编辑、命令验证、计划、ToolSearch、后台 Job、Subagent、LSP、Web 与 Memory 的 L5 操作规则。Playbook 只渲染本轮可用工具，按工具族稳定排序、session cacheable、不可 compact/toggle，并携带 active tools/version/content hash 进入 PromptPlan、ProviderMessages、token accounting 与 `/context why`；禁用、过滤或未加载工具的指令不会泄漏 |
+| v0.93 | 持久化 Job/Subagent daemon | workspace-scoped 单实例 daemon 拥有后台 Job 与子代理生命周期；durable metadata 原子落盘、输出为带 sequence 的脱敏 JSONL、客户端断连不杀任务、daemon 正常退出回收运行任务。传输优先 Unix socket，受限平台回退 loopback TCP 与权限隔离 file RPC；重启只接管 completed/terminal 记录，旧 running 状态标记 `lost`，绝不按 PID 盲目 kill。按需子代理运行时接入与 REPL 相同的 MCP supervisor，daemon 停止时关闭 MCP/LSP 资源。新增 `daemon/jobs/agents` CLI 与 `[daemon] enabled=off/auto/on` |
 | v0.93 | 任务类型 Workflow Fragment | 新增确定性 `TaskWorkflowClassifier + TaskWorkflowCatalog`：每轮从 general、bug-fix、feature、refactor、explanation、review、test-verification、repository-exploration 中选择一个 L9 Workflow。分类忽略附件正文与 fenced code，显式文件解释 Intent 优先；Workflow 作为 turn/managed instruction 注入，不改变稳定缓存前缀、不可 compact，并通过 PromptPlan provenance 暴露 task type/confidence/signals/version/content hash |
 | v0.94 | Live Model Behavior Benchmark v2 | `--live` 使用真实 Provider、生产 `AgentLoop`、隔离 HOME/workspace、真实工具与 Sandbox 执行六个客观行为场景；新增 `review-no-edit` Workflow 验收。每个 trial 有独立超时与 timeout/provider/sandbox/configuration/internal 错误分类，报告加入 stability/pass@k、工具/token/cache/成本、失败分布、Krelcode/Python/平台/Sandbox 配置和 suite hash，默认不保存答案与工具参数正文 |
 | v0.95 | Failure-trajectory Prompt tuning | 新增确定性失败轨迹归因器：从 failed checks、真实工具轨迹、Workflow、runtime error 和实际 active Fragment 映射到 core/tool_playbook/workflow/rule 来源，生成带风险、证据、受影响 case 与回归步骤的 Prompt 调优候选；`--tune/--tune-output` 输出内容轻量报告，固定 `auto_apply=false`，provider/runtime 故障不会伪造 Prompt 修复建议 |
@@ -228,8 +229,9 @@ report/tuning/candidate，不自动提交或替换 accepted baseline。
 
 - checkpoint 不追踪 run_command 造成的文件修改（命令内容不可静态分析）
 - Windows：进程组创建与 `taskkill /T` 树终止已统一并有注入平台单测；当前开发环境未做 Windows 真机 CI 矩阵，`static` 模式也没有内核级文件/网络隔离
-- 后台 Job 是进程内管理器：进程重启后不会接管旧 OS 进程；已写日志仍保留，但 list/output/kill 只管理当前进程创建的任务
-- 子代理 sidechain 在进程重启后可审计，但不自动接管/复活旧 Task；Definition 的角色提示是用户可信配置，仍需遵守审批、Sandbox 和工具 allowlist
+- 默认 `[daemon] enabled=off` 仍使用进程内 manager；显式 auto/on 后，Job/Subagent 归 daemon 所有，客户端断开不影响运行，`run_command` 等前台命令仍属于当前 turn
+- daemon 崩溃后，旧 running Job 标记 `lost` 并保留日志/序列；不会按 PID 盲目终止，也无法恢复旧 stdout pipe。旧 running Subagent 标记 `lost`，sidechain/history 可审计，但不能原地恢复 Python coroutine
+- Subagent Definition 的角色提示是用户可信配置，仍需遵守审批、Sandbox 和工具 allowlist；daemon 重建使用当前 workspace 配置，不复制 REPL 内未持久化的临时 Prompt toggle
 - `grep` 有 `rg` 时走安全加速路径，否则回退纯 Python；Python-only regex（lookaround/backreference 等）始终由 Python 执行，避免 Rust regex 语义偏差
 - `repo_map` 的增量缓存是进程内缓存，重启后首次调用会重新解析；JS/TS 的精确语法树依赖 optional `krelcode[syntax]`，未安装时自动使用保守正则
 - 价目表/上下文窗口是内置近似值，会过时（`agent/pricing.py` 一处可改）

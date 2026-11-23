@@ -53,6 +53,17 @@ krelcode [子命令] [选项]
 | `--sandbox-backend auto\|static\|seatbelt\|bubblewrap` | auto | 运行时隔离后端；显式后端不可用则启动失败 |
 | `--sandbox-network` | — | 允许 Sandbox 子进程访问网络（默认关闭） |
 | `--no-sandbox` | — | 同时关闭审批策略与运行时 Sandbox（AllowAll，自担风险） |
+| `--daemon` | — | 启用持久化 daemon；后台 Job/子代理在 REPL 退出后继续运行 |
+| `--no-daemon` | — | 禁用 daemon，使用兼容的进程内 Job/SubagentManager |
+| `--daemon-idle-timeout <秒>` | 配置/`1800` | daemon 无活动任务时的退出秒数；`0` 表示常驻 |
+| `--foreground` | — | `daemon start` 在前台运行，默认后台启动 |
+| `--command <shell>` | — | `jobs start` 要执行的后台 shell 命令 |
+| `--task <task>` | — | `agents spawn` 子代理任务描述 |
+| `--definition <name>` | 内置默认 | `agents spawn` 使用的 Agent Definition 名称 |
+| `--after <sequence>` | `0` | `jobs output` / `agents feed` 的起始 sequence |
+| `--wait <秒>` | `0` | `jobs output` 等待新输出的秒数；`agents wait` 最长等待秒数 |
+| `--isolated` | — | 在独立 git worktree 中运行子代理 |
+| `--fork-context` | — | 子代理继承指令与筛选 Memory，但不继承完整父历史 |
 | `--memory-mode off\|suggest\|auto` | 配置/`suggest` | Auto Memory：关闭；候选等待审核；高置信无冲突候选自动写入 |
 | `--memory-suggest-threshold` | `0.55` | 候选进入项目本地审核队列的最低置信度 |
 | `--memory-auto-threshold` | `0.80` | `auto` 模式自动晋级为结构化长期记忆的最低置信度（仍需无冲突且 Why/How 完整） |
@@ -159,9 +170,12 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/agents kill <id>` | 终止整个子代理（区别于 interrupt） |
 | `/agents definitions` | 列出内置与用户/项目 Agent Definition、权限/模型策略与加载问题 |
 | `/agents sidechains` · `/agents sidechain <id>` | 列出或读取持久化 sidechain JSONL |
-| `/jobs` · `/jobs list` | 列出当前进程管理的后台 Shell 任务、PID、状态、exit code、sequence 与日志 |
+| `/jobs` · `/jobs list` | 列出当前 manager/daemon 管理的后台 Shell 任务、PID、状态、exit code、sequence 与日志；启用 daemon 后包含跨重启 terminal 记录 |
 | `/jobs output <id> [after] [--wait 秒]` | 按游标读取任务增量输出；wait 最多 30 秒 |
 | `/jobs kill <id>` | 终止任务及其整个进程组 |
+| `krelcode daemon start\|status\|stop\|restart` | 管理当前 workspace 的持久化 daemon；durable Job/Subagent 在 REPL 客户端退出后继续运行 |
+| `krelcode jobs list\|start\|output\|kill` | 不进入 REPL 直接操作 daemon/durable Job；`start --command '<cmd>'`，`output <id> --after N --wait 秒` |
+| `krelcode agents list\|spawn\|wait\|feed\|pause\|resume\|kill\|definitions\|sidechains` | 不进入 REPL 启动/控制/审计 daemon 子代理；`spawn --task '<task>' --definition <name>` |
 | `/skills [关键词]` | 列出或搜索 Skill |
 | `/skills reload` | 重读全部 Skill 目录并刷新 system prompt 索引 |
 | `/skills show <name>` | 查看元数据、资源与完整 `SKILL.md` |
@@ -305,6 +319,10 @@ haiku = "anthropic/claude-haiku-4-5"
 [sandbox]
 backend = "auto"                     # macOS seatbelt / Linux bubblewrap / 其他平台 static
 network = false                      # 默认禁止子进程联网；CLI --sandbox-network 可开启
+
+[daemon]                             # 持久化后台 Job / 子代理
+enabled = "auto"                     # off / auto / on；默认不存在时 off
+idle_timeout = 1800                  # 无运行中任务时的退出秒数；0 常驻
 
 [permissions]
 mode = "default"                     # default / read-only / auto-approve / plan
@@ -705,6 +723,13 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 ├── tool_outputs/      超长工具输出全文（历史里留截断+路径引用）
 ├── memory/            # entries.jsonl + candidates.jsonl + MEMORY.md + topics/ + sessions/
 ├── jobs/              后台 Shell 任务脱敏日志（每任务 output.log，默认 10 MiB 上限）
+├── daemon/            workspace 单实例状态（见 [daemon]）
+│   ├── daemon.json    pid/instance/endpoint，不含 token
+│   ├── auth.token     本机客户端 bearer token（POSIX 0600）
+│   ├── jobs/          Job metadata + sequence JSONL；terminal 状态跨重启可读
+│   ├── agents/        子代理 content-light 状态投影
+│   ├── requests/      file RPC fallback 请求（受限主机）
+│   └── responses/     file RPC fallback 响应
 ├── sidechains/        子代理 JSONL（按 manager run-id 分目录；定义/feed/状态/history/结果）
 ├── exports/           /export 缺省输出目录
 ├── sandbox/            隔离 HOME/TMP/cache（命令与 Skill 脚本使用）
@@ -929,10 +954,37 @@ JSONL 审计记录类型：`user_input` `tool_call` `tool_result` `permission_de
 `job_output`/`job_list` 是本地只读工具；`job_kill` 只能操作当前 manager 持有的 job id。
 read-only/plan 模式禁止 start/kill，但仍允许读取已有任务输出。命令、实时输出、日志和完成
 preview 全部经过 SecretRedactor；跨 read 边界的 secret 也会通过前缀尾巴暂存后统一脱敏。
-Job 不随 turn abort，进程退出时由 manager 回收进程组；应用退出由 `AgentRuntime.close()`
-统一 `shutdown()`。重启 Krelcode 不会接管旧 OS 进程，也不会静默恢复工作区文件。
+Job 不随 turn abort。daemon 未启用时，应用退出由 `AgentRuntime.close()` 统一回收进程组；
+daemon 启用后，客户端退出只结束 RPC 适配器，Job 由 daemon 继续拥有，直到显式 kill、
+daemon 正常停止或 idle timeout。daemon 崩溃后的旧 running 记录会标记 `lost`，保留已写日志
+与 sequence，但不会按 PID 自动终止或假装恢复 stdout pipe。
 
-## 7.2 交互式子代理安全边界
+## 7.2 持久化 daemon 安全边界
+
+```toml
+[daemon]
+enabled = "auto"      # off / auto / on；auto 在首次 job_start/spawn_agent 时启动
+idle_timeout = 1800   # 无活动任务后退出；0 常驻
+```
+
+CLI 覆盖：`--daemon` / `--no-daemon` / `--daemon-idle-timeout`。每个 workspace 只有一个
+daemon；锁、daemon.json、请求/响应目录和 token 都位于 `.krelcode/daemon/`。`daemon.json`
+从不包含 bearer token；POSIX 下 token 与状态文件为 `0600`，目录为 `0700`。Windows 使用
+当前用户目录边界，但不声称等价于 NTFS ACL 审计。
+
+传输优先 Unix domain socket；Windows 使用 loopback TCP + 随机 bearer token。若托管环境、
+沙箱或安全软件禁止 bind，则回退到原子的 file RPC（0700 目录、0600 消息文件）。所有入口都
+验证 token，不受信任的请求会在执行任何 Job/Subagent 操作前拒绝。
+
+daemon 自己加载当前 user/project/local/managed 配置，因此 Sandbox、权限模式、MCP 与
+Provider key 不会通过 RPC 以明文传递。`krelcode daemon start` 的 CLI Sandbox/权限参数
+在 daemon 首次启动时生效；已在运行的 daemon 不接受客户端静默降低其安全配置。
+
+正常 `daemon stop` 会终止运行中 Job/Subagent 并写 terminal metadata。异常崩溃时下一次
+启动只 reconcile metadata：旧 Job 为 `lost`，旧 Agent 为 `lost`；不会信任可能被复用的 PID。
+completed Job 的 list/output 与 completed Agent 的 list/feed 可在多次 daemon 重启后读取。
+
+## 7.3 交互式子代理安全边界
 
 Pause 不取消 Task，而是在 `AgentLoop` 每个 step 开始前等待 gate；当前模型调用或
 工具执行完成到安全点后才真正停住。Kill 是独立语义：取消整个 Task、状态进入
@@ -946,7 +998,7 @@ feed 有界（默认 2,000 条 / 单条 24,000 字符），sidechain 保存 star
 history，可重启后审计，但当前进程不会自动接管或复活旧子代理 Task。Sidechain 不自动加入
 父 Agent 上下文，父代理必须通过 `wait_agent` / `get_agent_feed` 主动读取。
 
-## 7.3 工作区检索与语法解析后端
+## 7.4 工作区检索与语法解析后端
 
 `grep`、`repo_map` 不需要新增 TOML 开关，启动时自动探测本机能力：
 
