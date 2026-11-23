@@ -5,13 +5,13 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（Step 121）
+## 1. 项目统计（Step 134）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 73,009 行（Python，**零第三方运行时依赖**） |
-| 测试 | 35,998 行 / 148 个 `test_*.py` 模块 / 1,557 个通过用例 + 2 个本地端口集成 skip |
-| 提交 | 167 个增量提交，每个功能阶段均包含测试与语义化 commit |
+| 源码 | 87,878 行（Python，**零第三方运行时依赖**） |
+| 测试 | 40,858 行 / 165 个 `test_*.py` 模块 / 1,713 个通过用例 + 3 个本地端口集成 skip |
+| 提交 | 187 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 默认内置 17 + 只读 `memory_search`（装配 MemoryStore 时）+ `prompt_lab`（Prompt Authoring 开启时；生产只读，proposal 仅写 `.krelcode/`）+ 子代理 9 + Skill 5 + LSP 4 + Web 2 + MCP/Plugin 动态注册；39 个已知工具均有自有 Prompt 契约 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
 | CLI 入口 | REPL 对话 · -m 单次（text/json/stream-json）· stream-json 持久会话 · Python SDK · doctor · init · review |
@@ -20,13 +20,14 @@
 源码按层分布：
 
 ```
-agent 22161 · session 11916 · benchmarks 7456 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4415
-ui 3965 · llm 3797 · tools 4424 · safety 2861 · mcp 2679 · subagent 3085
-lsp 1352 · plugins 1105 · core 1023 · skills 1039 · web 923 · jobs 582 · entrypoints 226
+agent 25462 · session 14019 · benchmarks 7990 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4680
+tools 6181 · mcp 4538 · ui 3971 · llm 3797 · subagent 3184 · safety 3138 · daemon 3057
+lsp 1401 · plugins 1134 · skills 1112 · security_review 1097 · core 1065 · web 950
+jobs 591 · entrypoints 511
 ```
 
-core 只有 1023 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
-测试代码量约为源码的 50%，覆盖协议、安全边界与端到端行为。
+core 只有 1065 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
+测试代码量约为源码的 46%，覆盖协议、安全边界与端到端行为。
 
 ## 2. 关键架构决策时间线
 
@@ -238,7 +239,7 @@ report/tuning/candidate，不自动提交或替换 accepted baseline。
 - 思考流的展示文本不进对话历史（设计如此）；但 Anthropic 扩展思考的
   thinking 块（含签名/redacted）经 Message.provider_meta 完整回传（Step 34），
   其他 provider 无此要求
-- MCP 反向请求支持 sampling/roots/ping（Step 35）；elicitation 等更新的能力未实现
+- MCP 反向请求支持 sampling/roots/ping 与 2025-06-18 elicitation；completion、logging、progress 与 resource subscribe 仍未实现，`/mcp conformance` 会明确报告这些缺口
 - MCP 交互式 OAuth 使用本机回调端口（默认 `8765`，可配置）；端口被占用时需改用可用端口，token endpoint/client 必须接受对应 redirect URI
 - Structured Compact 的模型摘要仍依赖模型能力；失败或 schema 非法时使用 Working Context/history 降级，宁可保留结构化事实也不阻断主循环
 - Fragment 手动启停是当前会话运行时状态，重启恢复默认；需要长期策略时应修改来源本身或后续增加持久化 overrides

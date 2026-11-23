@@ -1,4 +1,4 @@
-"""StreamableHTTPTransport：MCP 2025-03-26 Streamable HTTP 传输。
+"""StreamableHTTPTransport：MCP Streamable HTTP 传输（2025-06-18 默认）。
 
 协议要点（全部在本文件消化，MCPClient 只管 JSON-RPC）：
 - 单一端点：所有客户端消息 POST 到同一 url，`Accept: application/json, text/event-stream`
@@ -42,7 +42,7 @@ class StreamableHTTPTransport:
         headers: Optional[Dict[str, str]] = None,
         timeout: float = 30.0,
         connector: Optional[HTTPConnector] = None,
-        protocol_version: str = "2025-03-26",
+        protocol_version: str = "2025-06-18",
         listener_retries: int = 3,
         listener_retry_delay: float = 1.0,
     ) -> None:

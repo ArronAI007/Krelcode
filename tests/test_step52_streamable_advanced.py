@@ -125,7 +125,7 @@ def test_protocol_version_header_negotiated():
         client = make_client(fake)
         await client.start()
         # initialize 前用客户端默认版本
-        assert fake.posts[0][0]["MCP-Protocol-Version"] == "2025-03-26"
+        assert fake.posts[0][0]["MCP-Protocol-Version"] == "2025-06-18"
         assert client.server_protocol_version == "2025-06-18"
         # 协商后后续请求使用服务器返回版本
         await client.list_tools()

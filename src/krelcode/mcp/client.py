@@ -1,7 +1,7 @@
 """MCP 客户端：JSON-RPC 2.0 协议层（传输无关）。
 
 传输经 MCPTransport 端口注入：command → StdioTransport；
-url → StreamableHTTPTransport（默认，2025-03-26）或 SSETransport（旧规范）。
+url → StreamableHTTPTransport（默认，2025-06-18）或 SSETransport（旧规范）。
 生命周期：start()（connect + initialize 握手）→ 各 API → close()。
 失败安全：传输断开时所有 pending 请求立即以 MCPError 失败，后续调用直接报错。
 """
@@ -9,6 +9,8 @@ url → StreamableHTTPTransport（默认，2025-03-26）或 SSETransport（旧�
 from __future__ import annotations
 
 import asyncio
+import time
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -24,6 +26,12 @@ from ..core.redact import SecretRedactor
 from .stdio_transport import StdioTransport
 from .sse_transport import SSETransport
 from .streamable import StreamableHTTPTransport
+from .elicitation import (
+    ElicitationValidationError,
+    Elicitor,
+    normalize_elicitation_result,
+    parse_elicitation_request,
+)
 from .oauth import MCPOAuthRequired, OAuthTokenManager
 from .transport import MCPAuthRequired, MCPError, MCPTransport
 from .security import sanitize_mcp_prompt_result
@@ -32,8 +40,11 @@ from .security import sanitize_mcp_prompt_result
 TRANSPORT_STREAMABLE = "streamable-http"
 TRANSPORT_SSE = "sse"
 
-PROTOCOL_VERSION = "2025-03-26"
+PROTOCOL_VERSION = "2025-06-18"
+SUPPORTED_PROTOCOL_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18")
+ELICITATION_MIN_PROTOCOL_VERSION = "2025-06-18"
 MAX_LIST_PAGES = 100
+MAX_ELICITATION_REQUESTS_PER_MINUTE = 10
 
 
 @dataclass(frozen=True)
@@ -47,7 +58,7 @@ class MCPServerConfig:
     url: Optional[str] = None
     headers: Dict[str, str] = field(default_factory=dict, repr=False)
     oauth: Dict[str, Any] = field(default_factory=dict, repr=False)
-    # "streamable-http"（默认，2025-03-26 规范）或 "sse"（旧 2024-11-05 规范）
+    # "streamable-http"（默认，2025-06-18 规范）或 "sse"（旧 2024-11-05 规范）
     transport: Optional[str] = None
     # streamable-http GET 监听流重连（0 = 不重连）
     listener_retries: int = 3
@@ -81,6 +92,7 @@ class MCPClient:
         transport: Optional[MCPTransport] = None,
         sampler: Optional[Any] = None,
         roots: Optional[List[Dict[str, Any]]] = None,
+        elicitor: Optional[Elicitor] = None,
         on_notification: Optional[
             Callable[[str, Dict[str, Any]], Any]
         ] = None,
@@ -91,12 +103,17 @@ class MCPClient:
     ) -> None:
         """sampler: async (messages, params) -> {"text": str, "model": str}，
         服务器发起 sampling/createMessage 时回调（通常由共享 LLM 实现）；
-        roots: roots/list 应答的工作区根列表 [{"uri","name"}]。"""
+        roots: roots/list 应答的工作区根列表 [{"uri","name"}]；
+        elicitor: 服务器发起 elicitation/create 时的前台回调；缺省时客户端
+        不声明 elicitation，并对违规调用 fail-closed。"""
         self.config = config
         self.name = config.name
         self._transport: MCPTransport = transport or config.create_transport()
         self._sampler = sampler
         self._roots = list(roots or [])
+        self._elicitor = elicitor
+        self._elicitation_lock = asyncio.Lock()
+        self._elicitation_recent: deque[float] = deque()
         self._on_notification = on_notification
         self._log = log or (lambda _message: None)
         self._redactor = redactor
@@ -114,6 +131,8 @@ class MCPClient:
         self.capabilities: Dict[str, Any] = {}
         self.instructions: str = ""
         self.server_protocol_version: Optional[str] = None
+        self.requested_protocol_version = PROTOCOL_VERSION
+        self.client_capabilities: Dict[str, Any] = {}
         self.oauth: Optional[OAuthTokenManager] = None
         if self.config.url and self.config.oauth:
             candidate = OAuthTokenManager(
@@ -137,6 +156,9 @@ class MCPClient:
             client_caps["sampling"] = {}
         if self._roots:
             client_caps["roots"] = {"listChanged": False}
+        if self._elicitor is not None:
+            client_caps["elicitation"] = {}
+        self.client_capabilities = dict(client_caps)
         result = await self._request("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": client_caps,
@@ -295,6 +317,8 @@ class MCPClient:
             await self._handle_sampling(mid, params)
         elif method == "roots/list":
             await self._send_response(mid, result={"roots": list(self._roots)})
+        elif method == "elicitation/create":
+            await self._handle_elicitation(mid, params)
         elif method == "ping":
             await self._send_response(mid, result={})
         else:
@@ -320,6 +344,73 @@ class MCPClient:
             "content": {"type": "text", "text": text},
             "model": model,
         })
+
+    async def _handle_elicitation(
+        self,
+        mid: Any,
+        params: Dict[str, Any],
+    ) -> None:
+        version = self.server_protocol_version or ""
+        if _protocol_less_than(version, ELICITATION_MIN_PROTOCOL_VERSION):
+            await self._send_response(mid, error={
+                "code": -32601,
+                "message": (
+                    "elicitation requires MCP protocol 2025-06-18; "
+                    f"negotiated {version or 'unknown'}"),
+            })
+            return
+        if self._elicitor is None:
+            # 不声明 capability 的 headless/daemon 路径仍以规范动作拒绝，
+            # 而不是挂起等待一个不存在的前台。
+            await self._send_response(mid, result={"action": "decline"})
+            return
+        if not self._take_elicitation_budget():
+            self._log(
+                f"[mcp] {self.name} elicitation 频率超限，已自动拒绝")
+            await self._send_response(mid, result={"action": "decline"})
+            return
+        try:
+            request = parse_elicitation_request(
+                params, server=self.name)
+        except ElicitationValidationError as exc:
+            self._log(
+                f"[mcp] {self.name} elicitation Schema 被拒绝: {exc}")
+            await self._send_response(mid, error={
+                "code": -32602,
+                "message": f"invalid elicitation request: {exc}",
+            })
+            return
+        async with self._elicitation_lock:
+            try:
+                raw_result = await self._elicitor(request)
+                result = normalize_elicitation_result(
+                    raw_result, request=request)
+            except asyncio.CancelledError:
+                result = normalize_elicitation_result({"action": "cancel"})
+            except ElicitationValidationError as exc:
+                self._log(
+                    f"[mcp] {self.name} elicitation 应答被拒绝: {exc}")
+                result = normalize_elicitation_result({"action": "cancel"})
+            except Exception as exc:
+                self._log(
+                    f"[mcp] {self.name} elicitation 前台失败: "
+                    f"{type(exc).__name__}")
+                await self._send_response(mid, error={
+                    "code": -32603,
+                    "message": "elicitation handler failed",
+                })
+                return
+        await self._send_response(mid, result=result.to_wire())
+
+    def _take_elicitation_budget(self) -> bool:
+        now = time.monotonic()
+        cutoff = now - 60.0
+        while self._elicitation_recent and self._elicitation_recent[0] < cutoff:
+            self._elicitation_recent.popleft()
+        if len(self._elicitation_recent) >= MAX_ELICITATION_REQUESTS_PER_MINUTE:
+            return False
+        self._elicitation_recent.append(now)
+        return True
 
     async def _send_response(self, mid: Any, result: Any = None,
                              error: Optional[Dict[str, Any]] = None) -> None:
@@ -425,6 +516,15 @@ class MCPClient:
         # field without changing the prompts/get wire shape.
         return sanitize_mcp_prompt_result(
             surface.value, redactor=self._redactor)
+
+
+def _protocol_less_than(version: str, minimum: str) -> bool:
+    try:
+        current = tuple(int(part) for part in version.split("-"))
+        floor = tuple(int(part) for part in minimum.split("-"))
+    except (TypeError, ValueError):
+        return True
+    return current < floor
 
 
 def _as_list(value: Any, server: str, what: str) -> List[Dict[str, Any]]:

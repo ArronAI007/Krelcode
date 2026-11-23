@@ -457,7 +457,7 @@ version、commands、errors、handoff notes 或其他扩展字段。缺少字段
     loop.call_soon_threadsafe 回投；connector 可注入（单测零 socket）
   共享 SSEEventParser（sseparse.py）；HTTP 传输的线程模型统一为
   「线程做阻塞 IO，call_soon_threadsafe 回投消息」（Future 不能在外部线程 set_result）
-  · StreamableHTTPTransport（2025-03-26 规范，url 默认）：单端点 POST，
+  · StreamableHTTPTransport（2025-06-18 规范，url 默认）：单端点 POST，
     响应按 Content-Type 二态处理（application/json 单条 / text/event-stream 流），
     Mcp-Session-Id 会话头自动捕获携带，404=会话过期→fail-closed 断连，
     通知回 202，流内服务器请求自动应答 -32601；JSON-RPC batch 数组逐条分发
@@ -471,11 +471,21 @@ version、commands、errors、handoff notes 或其他扩展字段。缺少字段
 - **capabilities 门控**：initialize 握手的 capabilities 决定注册哪些工具——
   tools → 每远程工具一个 MCPTool；resources → list_resources/read_resource；
   prompts → list_prompts/get_prompt；全部 `<server>__<tool>` 命名进同一注册表
-- **反向请求**（Step 35）：服务器→客户端的 sampling/createMessage（回调
+- **反向请求**（Step 35/P1-1）：服务器→客户端的 sampling/createMessage（回调
   app 注入的 sampler 闭包，用共享 LLM 完成补全）、roots/list（工作区根）、
   ping 由 MCPClient 统一应答，未知方法回 -32601；initialize 时按配置声明
   sampling/roots 能力。协议时序教训：notifications/initialized 必须 await
-  实发（fire-and-forget 的调度延迟会让它晚于后续请求到达，违反规范）
+  实发（fire-and-forget 的调度延迟会让它晚于后续请求到达，违反规范）。
+  MCP 2025-06-18 elicitation 通过 `session/elicitation_bridge.py` 接入
+  UserInputBroker；协议层只暴露扁平 primitive Schema，拒绝嵌套/引用/组合、
+  default 与敏感字段，并限制 16 KiB Schema、12 字段、2,000 字符 message/
+  answer、50 enum 与每分钟 10 次请求。无前台运行时不声明 capability，违规调用
+  自动 decline；正常应答按 accept/decline/cancel 三态二次校验后才回传。
+- **Conformance matrix**：`mcp/conformance.py` 从握手结果和已加载目录生成
+  content-light 报告，覆盖 2024-11-05/2025-03-26/2025-06-18、stdio/SSE/
+  Streamable HTTP、生命周期、tools/resources/prompts、sampling/roots/
+  elicitation、分页/list_changed、异常与尚未实现的 completion/logging/progress/
+  resource subscribe。`/mcp conformance [server]` 不执行远端读取或工具调用。
 - **热重载**（MCPSupervisor）：sync() 配置 diff（dataclass 相等判断：
   未变保持连接、变更先停后启、移除即注销）；check_and_restart() 复活崩溃
   服务器并重注册工具；工具注销走 registry.unregister_prefix("<server>__")；

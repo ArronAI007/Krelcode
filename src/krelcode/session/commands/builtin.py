@@ -71,8 +71,9 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             help="删除前要求二次确认；文件移入 sessions/.archive 可手动恢复"),
         CommandSpec(
             "mcp", "查看、授权或重载 MCP",
-            argument_hint="[reload|auth <server>]",
+            argument_hint="[reload|conformance [server]|auth <server>]",
             help=("查看 MCP 状态与 Resource/Template 统计；/mcp reload 重读配置并热重启；"
+                  "/mcp conformance [server] 输出安全的一致性矩阵；"
                   "/mcp auth <server> 执行 OAuth + PKCE 授权")),
         CommandSpec(
             "agents", "查看和控制子代理",

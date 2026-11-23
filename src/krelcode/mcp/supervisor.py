@@ -22,6 +22,11 @@ from ..agent.prompt_surface_contract import MCP_INSTRUCTIONS_SURFACE_CONTRACT
 from ..tools.base import ToolDescriptor, ToolSource
 from ..tools.registry import ToolRegistry
 from .client import MCPClient, MCPServerConfig
+from .conformance import (
+    MCPConformanceReport,
+    build_conformance_report,
+    format_conformance_report,
+)
 from .security import harden_untrusted_text, safe_label
 from .tools import discover_tools, sanitize, server_prefix
 
@@ -72,6 +77,7 @@ class MCPSupervisor:
         log: Callable[[str], None] = print,
         sampler: Optional[Any] = None,
         roots: Optional[List[Dict[str, Any]]] = None,
+        elicitor: Optional[Any] = None,
         redactor: Optional[Any] = None,
         prompt_surface_registry: Optional[Any] = None,
     ) -> None:
@@ -79,6 +85,7 @@ class MCPSupervisor:
         self._log = log
         self._sampler = sampler      # 服务器 sampling 请求的回调（app 注入）
         self._roots = list(roots or [])
+        self._elicitor = elicitor
         self._redactor = redactor
         self._prompt_surface_registry = prompt_surface_registry
         self.clients: Dict[str, MCPClient] = {}
@@ -121,6 +128,7 @@ class MCPSupervisor:
             cfg,
             sampler=self._sampler,
             roots=self._roots,
+            elicitor=self._elicitor,
             on_notification=(
                 lambda method, params, server=name:
                 self._handle_notification(server, method, params)),
@@ -273,6 +281,7 @@ class MCPSupervisor:
             cfg,
             sampler=self._sampler,
             roots=self._roots,
+            elicitor=self._elicitor,
             log=self._log,
             redactor=self._redactor,
             prompt_surface_registry=self._prompt_surface_registry,
@@ -399,6 +408,40 @@ class MCPSupervisor:
                     client is not None and client.instructions.strip()),
             })
         return out
+
+    def conformance_reports(
+        self,
+        server: str = "",
+    ) -> List[MCPConformanceReport]:
+        """Return safe, content-light protocol reports for connected servers."""
+        if server and server not in self.clients:
+            raise KeyError(f"未知 MCP 服务器: {server}")
+        names = [server] if server else sorted(self.clients)
+        reports: list[MCPConformanceReport] = []
+        for name in names:
+            client = self.clients[name]
+            prefix = server_prefix(name)
+            reports.append(build_conformance_report(
+                client,
+                loaded_tools=len([
+                    item for item in self.registry.names()
+                    if item.startswith(prefix)
+                ]),
+                loaded_prompts=len(self.prompts.get(name, ())),
+                loaded_resources=len(self.resources.get(name, ())),
+                loaded_resource_templates=len(
+                    self.resource_templates.get(name, ())),
+                redactor=self._redactor,
+            ))
+        return reports
+
+    def conformance_lines(self, server: str = "") -> List[str]:
+        lines: list[str] = []
+        for report in self.conformance_reports(server):
+            if lines:
+                lines.append("")
+            lines.extend(format_conformance_report(report))
+        return lines
 
     def server_instructions(self) -> tuple[tuple[str, str], ...]:
         """Return connected server guidance without exposing it in status logs."""

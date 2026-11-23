@@ -188,6 +188,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/web` | 查看 WebFetch/WebSearch 网络边界、搜索后端与密钥环境变量是否就绪（不发起请求） |
 | `/output-style [list\|show <name>\|reload\|off\|<name>]` | 查看、切换或重载声明式 Output Style |
 | `/mcp` · `/mcp reload` | MCP 状态（含 Resource/Template/OAuth 统计）· 重读配置热重载 |
+| `/mcp conformance [server]` | 输出 content-light 协议/传输/能力/反向请求/健壮性矩阵；不执行远端工具或读取 Resource |
 | `/mcp auth <server>` | 对 HTTP MCP 服务器执行 authorization code + PKCE OAuth 授权并重连 |
 | `/allow [add\|remove <程序名>]` | 旧版程序白名单兼容入口（持久化） |
 | `/stop` | 中止运行中任务（历史自动修复） |
@@ -406,7 +407,7 @@ env = { KEY = "value" }
 timeout = 30
 
 [mcp_servers.remote]                 # HTTP 传输
-url = "http://localhost:3000/mcp"    # 默认 streamable-http（2025-03-26）
+url = "http://localhost:3000/mcp"    # 默认 streamable-http（2025-06-18）
 transport = "sse"                    # 显式回退旧 HTTP+SSE（2024-11-05）
 headers = { Authorization = "Bearer ${MCP_TOKEN}" }
 
@@ -584,6 +585,14 @@ MCP 远程能力：
   `tools/call` 前 fail-closed；合法 Schema 仍保留参数语义，注解会单独安全化。
 - resources capability 自动注册 `list_resources`、`read_resource` 和
   `list_resource_templates`；Prompt 继续映射到 `/mcp__<server>__<prompt>`。
+- MCP `2025-06-18` elicitation 只向交互 REPL 暴露 capability。`requestedSchema`
+  仅允许扁平 string/number/integer/boolean 字段（最多 12 个）及有限 enum/格式/范围；
+  嵌套 object/array、`$ref`/composition、default 和疑似凭据字段会在展示前拒绝。
+  headless、daemon 与无前台子代理自动返回 `{"action":"decline"}`；用户应答不会进入
+  对话历史或 recorder，非法 JSON/类型/枚举会保留输入框等待重试。
+- `/mcp conformance [server]` 读取当前握手和已加载计数，明确标注
+  supported/partial/unsupported/not_applicable；不会主动执行 tools/call、
+  resources/read、OAuth 或 elicitation，也不会输出 instructions/Schema 正文。
 - `notifications/tools/list_changed`、`notifications/resources/list_changed`、
   `notifications/prompts/list_changed` 会按服务器串行刷新。工具替换先验证重复/命名
   冲突再原子替换；刷新失败保留旧目录，不影响主 Agent 和其他服务器。

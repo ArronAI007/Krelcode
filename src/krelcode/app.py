@@ -91,6 +91,7 @@ from .session.commands import (
 )
 from .session.commands.custom import CustomCommandManager
 from .session.input import InputProcessor
+from .session.elicitation_bridge import MCPElicitationBridge
 from .session.interactions import UserInputBroker
 from .session.memory import MemoryStore, sync_memory_fragment
 from .session.memory_candidates import (
@@ -1142,10 +1143,15 @@ async def async_main(args: argparse.Namespace) -> int:
         loop.context_checkpoint_coordinator.redactor = redactor
     if getattr(loop.tool_context, "shell_jobs", None) is not None:
         loop.tool_context.shell_jobs.redactor = redactor
+    elicitor = (
+        MCPElicitationBridge(input_broker, loop.bus.emit, redactor=redactor)
+        if input_broker is not None else None
+    )
     supervisor = MCPSupervisor(
         loop.registry, log=note,
         sampler=build_mcp_sampler(loop.llm),
         roots=build_mcp_roots(loop.tool_context.workspace_root),
+        elicitor=elicitor,
         redactor=redactor,
         prompt_surface_registry=loop.prompt_surface_registry)
     loop.mcp_supervisor = supervisor

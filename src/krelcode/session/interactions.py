@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 from ..core.interactions import UserInputExchangePort
 
@@ -23,6 +23,9 @@ class InputResolution:
     reason: str = ""
 
 
+InputValidator = Callable[[str], Tuple[bool, str]]
+
+
 @dataclass
 class UserInputRequest:
     request_id: str
@@ -30,6 +33,7 @@ class UserInputRequest:
     options: Tuple[str, ...]
     allow_free_text: bool
     future: asyncio.Future[Optional[str]]
+    validator: Optional[InputValidator] = None
 
 
 class UserInputExchange(UserInputExchangePort):
@@ -81,6 +85,7 @@ class UserInputBroker:
         *,
         allow_free_text: bool = True,
         request_id: str = "",
+        validator: Optional[InputValidator] = None,
     ) -> UserInputExchange:
         """同步登记请求，让调用方可在 await 前安全发布事件。"""
         normalized_options = tuple(
@@ -94,6 +99,7 @@ class UserInputBroker:
                 options=normalized_options,
                 allow_free_text=bool(allow_free_text),
                 future=future,
+                validator=validator,
             )
             return UserInputExchange(request, self)
 
@@ -107,6 +113,7 @@ class UserInputBroker:
             options=normalized_options,
             allow_free_text=bool(allow_free_text),
             future=future,
+            validator=validator,
         )
         self._requests[resolved_id] = request
         self._queue.put_nowait(request)
@@ -119,6 +126,7 @@ class UserInputBroker:
         *,
         allow_free_text: bool = True,
         request_id: str = "",
+        validator: Optional[InputValidator] = None,
     ) -> Optional[str]:
         """便捷入口；AgentLoop 使用 ``submit`` 以便先发布事件再等待。"""
         exchange = self.submit(
@@ -126,6 +134,7 @@ class UserInputBroker:
             options,
             allow_free_text=allow_free_text,
             request_id=request_id,
+            validator=validator,
         )
         return await exchange.wait()
 
@@ -162,6 +171,13 @@ class UserInputBroker:
         accepted, value, reason = _normalize_answer(request, raw)
         if not accepted:
             return InputResolution(False, reason=reason)
+        if request.validator is not None:
+            try:
+                valid, reason = request.validator(value or "")
+            except Exception:
+                valid, reason = False, "输入校验失败，请重试"
+            if not valid:
+                return InputResolution(False, reason=reason or "输入无效，请重试")
         request.future.set_result(value)
         self._requests.pop(request.request_id, None)
         if self._pending is request:

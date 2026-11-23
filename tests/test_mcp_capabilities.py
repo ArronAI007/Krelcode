@@ -73,10 +73,11 @@ def test_supervisor_registers_capability_tools():
         try:
             names = registry.names()
             assert names == [
-                "stub__add", "stub__boom", "stub__echo", "stub__get_prompt",
-                "stub__list_prompts", "stub__list_resource_templates",
-                "stub__list_resources", "stub__list_roots", "stub__probe_ping",
-                "stub__probe_unknown", "stub__read_resource", "stub__sample_me",
+                "stub__add", "stub__boom", "stub__echo", "stub__elicit",
+                "stub__get_prompt", "stub__list_prompts",
+                "stub__list_resource_templates", "stub__list_resources",
+                "stub__list_roots", "stub__probe_ping", "stub__probe_unknown",
+                "stub__read_resource", "stub__sample_me",
             ]
         finally:
             await sup.close_all()

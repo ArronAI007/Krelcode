@@ -160,6 +160,21 @@ async def handle_mcp(ctx: CommandContext) -> CommandResult:
         note = f"，重启: {', '.join(restarted)}" if restarted else ""
         output.append(f"  [mcp] 配置已同步{note}")
         sync_mcp_prompt_commands(ctx.command_registry, ctx.mcp_supervisor)
+    elif arguments == "conformance" or arguments.startswith("conformance "):
+        try:
+            parts = shlex.split(arguments)
+        except ValueError as exc:
+            return _ok(f"  [mcp:conformance] 参数解析失败: {exc}")
+        if len(parts) > 2:
+            return _ok("  用法: /mcp conformance [server]")
+        target = parts[1] if len(parts) == 2 else ""
+        try:
+            lines = ctx.mcp_supervisor.conformance_lines(target)
+        except KeyError as exc:
+            return _ok(f"  [mcp:conformance] {exc}")
+        if not lines:
+            return _ok("  （没有在线 MCP 服务器可供一致性检查）")
+        return _ok(*lines)
     elif arguments.startswith("auth "):
         name = arguments.partition(" ")[2].strip()
         if not name:
@@ -173,7 +188,9 @@ async def handle_mcp(ctx: CommandContext) -> CommandResult:
         sync_mcp_prompt_commands(ctx.command_registry, ctx.mcp_supervisor)
         output.append(f"  [mcp:oauth] {name} 授权成功，服务器已刷新")
     elif arguments and arguments not in {"status", "list"}:
-        return _ok("  用法: /mcp [reload|auth <server>]")
+        return _ok(
+            "  用法: /mcp [status|list|reload|conformance [server]|"
+            "auth <server>]")
     status = ctx.mcp_supervisor.status()
     for item in status:
         state = "在线" if item["alive"] else "已断开"

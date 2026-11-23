@@ -120,7 +120,7 @@ def test_initialize_json_mode_and_session_capture():
         url0, headers0, payload0 = fake.posts[0]
         assert headers0["Accept"] == "application/json, text/event-stream"
         assert "Mcp-Session-Id" not in headers0
-        assert payload0["params"]["protocolVersion"] == "2025-03-26"
+        assert payload0["params"]["protocolVersion"] == "2025-06-18"
         # 会话 id 被捕获，后续请求携带
         assert client._transport.session_id == "sess-abc"
 

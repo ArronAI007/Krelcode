@@ -7,6 +7,7 @@ prompts/list、prompts/get（review 模板）。
 """
 
 import json
+import os
 import sys
 
 
@@ -59,13 +60,91 @@ TOOLS = [
         "description": "向客户端发起未知方法请求",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "elicit",
+        "description": "向客户端发起 elicitation/create 反向请求",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["simple", "enum", "sensitive", "nested", "empty"],
+                },
+            },
+        },
+    },
 ]
 
 
 REVERSE_ID = 99000
 
 
-def handle_reverse_probe(name, stdin):
+def elicitation_request(kind):
+    if kind == "enum":
+        return {
+            "message": "请选择喜欢的颜色",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "color": {
+                        "type": "string",
+                        "title": "颜色",
+                        "enum": ["red", "green", "blue"],
+                    },
+                },
+                "required": ["color"],
+            },
+        }
+    if kind == "sensitive":
+        return {
+            "message": "请输入 API Key",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "api_key": {"type": "string", "title": "API Key"},
+                },
+                "required": ["api_key"],
+            },
+        }
+    if kind == "nested":
+        return {
+            "message": "请输入嵌套资料",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "profile": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                    },
+                },
+            },
+        }
+    if kind == "empty":
+        return {
+            "message": "是否继续执行？",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {},
+            },
+        }
+    return {
+        "message": "请输入 GitHub 用户名",
+        "requestedSchema": {
+            "type": "object",
+            "properties": {
+                "username": {
+                    "type": "string",
+                    "title": "Username",
+                    "minLength": 1,
+                    "maxLength": 64,
+                },
+            },
+            "required": ["username"],
+        },
+    }
+
+
+def handle_reverse_probe(name, stdin, arguments=None):
     """向客户端发起反向请求并同步等待应答（stub 场景受控，直接 readline）。"""
     global REVERSE_ID
     REVERSE_ID += 1
@@ -78,6 +157,14 @@ def handle_reverse_probe(name, stdin):
         request = {"jsonrpc": "2.0", "id": rid, "method": "roots/list", "params": {}}
     elif name == "probe_ping":
         request = {"jsonrpc": "2.0", "id": rid, "method": "ping", "params": {}}
+    elif name == "elicit":
+        kind = str((arguments or {}).get("kind") or "simple")
+        request = {
+            "jsonrpc": "2.0",
+            "id": rid,
+            "method": "elicitation/create",
+            "params": elicitation_request(kind),
+        }
     else:
         request = {"jsonrpc": "2.0", "id": rid, "method": "custom/unsupported",
                    "params": {}}
@@ -118,8 +205,13 @@ def main():
         mid = msg.get("id")
 
         if method == "initialize":
+            requested = (msg.get("params") or {}).get("protocolVersion")
+            protocol = os.environ.get(
+                "KRELCODE_STUB_PROTOCOL_VERSION",
+                str(requested or "2025-06-18"),
+            )
             send({"jsonrpc": "2.0", "id": mid, "result": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": protocol,
                 "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
                 "serverInfo": {"name": "stub-server", "version": "0.1.0"},
             }})
@@ -143,8 +235,10 @@ def main():
                 send({"jsonrpc": "2.0", "id": mid, "result": {
                     "content": [{"type": "text", "text": "boom 工具内部错误"}],
                     "isError": True}})
-            elif name in ("sample_me", "list_roots", "probe_ping", "probe_unknown"):
-                text = handle_reverse_probe(name, sys.stdin)
+            elif name in (
+                "sample_me", "list_roots", "probe_ping", "probe_unknown", "elicit",
+            ):
+                text = handle_reverse_probe(name, sys.stdin, args)
                 send({"jsonrpc": "2.0", "id": mid, "result": {
                     "content": [{"type": "text", "text": text}]}})
             else:
