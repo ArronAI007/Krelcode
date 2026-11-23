@@ -194,3 +194,5 @@
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·
 pi 式分层包 + 轻量事件总线（不做插件微内核） · TOML 配置 + JSONL 会话 · uv/私有 venv 全局安装
+
+| 129 | P2-2 企业策略、审计与 SSO | 新增独立 `enterprise/` 层：managed-only `EnterprisePolicy` 在动态工具池、审批和启动边界统一执行，支持权限上限、provider/tool/path/command 限制；独立 `ComplianceAuditor` 写入脱敏 JSONL hash-chain/HMAC，提供 sequence/断链/HMAC 校验与导出，required 审计 fail-closed；OIDC Authorization Code + PKCE、discovery、JWKS RS256、state/nonce、私有 token store 与 `auth login/status/logout`。CLI 增加 `enterprise status`、`audit verify/export`，doctor 增加企业策略/审计/SSO 检查 | P2-2 专项测试覆盖 managed 覆盖隔离、CLI/toolpool/auto-approve/no-sandbox 越权阻断、审计篡改/脱敏/续写/HMAC、OIDC PKCE/RS256/state/token store、required SSO/audit fail-closed；全量回归通过 | ✅ |

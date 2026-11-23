@@ -75,6 +75,53 @@ def _managed_config_path(environ: Mapping[str, str]) -> Path:
     return Path("/etc/krelcode/config.toml")
 
 
+def managed_config_layer(
+    workspace: Path,
+    *,
+    home: Optional[Path] = None,
+    environ: Optional[Mapping[str, str]] = None,
+) -> ConfigLayer:
+    """Return the managed layer only, without trusting user/project files.
+
+    The explicit ``KRELCODE_MANAGED_CONFIG`` path is fail-closed: if it is
+    configured but missing or malformed, callers receive an error rather than
+    silently falling back to a weaker layer.
+    """
+
+    workspace = Path(workspace).expanduser().resolve()
+    home_path = Path(home).expanduser() if home is not None else Path.home()
+    env = os.environ if environ is None else environ
+    path = _managed_config_path(env)
+    exists = path.is_file()
+    if not exists:
+        if str(env.get("KRELCODE_MANAGED_CONFIG") or "").strip():
+            raise ConfigError(f"managed 配置不存在: {path}")
+        return ConfigLayer("managed", path, False)
+    try:
+        data = _read_toml(path)
+    except (OSError, tomllib.TOMLDecodeError, ValueError) as exc:
+        raise ConfigError(
+            f"managed 配置解析失败: {path}: {type(exc).__name__}: {exc}") from exc
+    return ConfigLayer("managed", path, True, data)
+
+
+def load_managed_config(
+    workspace: Optional[Path] = None,
+    *,
+    home: Optional[Path] = None,
+    environ: Optional[Mapping[str, str]] = None,
+) -> Dict[str, Any]:
+    """Load only the organization-managed TOML table.
+
+    This is used for enterprise controls even when ``--config`` selects an
+    exclusive user/project configuration.  It intentionally does not merge
+    user, project or local values.
+    """
+
+    return dict(managed_config_layer(
+        Path(workspace or Path.cwd()), home=home, environ=environ).data)
+
+
 def default_config_layers(
     workspace: Path,
     *,

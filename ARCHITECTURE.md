@@ -68,6 +68,9 @@ while steps < max_steps:
 ## 5. 安全与权限
 
 - 沙箱：macOS Seatbelt (sandbox-exec)、Linux Landlock/seccomp、Docker/microVM
+- 企业策略：managed `EnterprisePolicy` 在动态工具池与审批策略前执行，不能由用户配置/CLI 放宽
+- 合规审计：独立 `ComplianceAuditor` 订阅 EventBus，JSONL hash-chain/HMAC，不复用 session 恢复文件
+- 身份：OIDC Authorization Code + PKCE + discovery/JWKS RS256；token 仅入私有 store，审计只记录 Principal metadata
 - 权限模式：只读 / workspace-write（可写工作区+tmp，默认禁网）/ 全权限
 - 审批流：越权操作弹确认，可持久化为规则（如命令前缀白名单）
 

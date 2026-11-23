@@ -58,10 +58,24 @@ from .agent.usage import UsageTracker
 from .agent.working_context import WorkingContextStore
 from .benchmarks.parity import load_prompt_baseline
 from .browser import BrowserOptions, BrowserRuntime
-from .config import load_config_layers
+from .config import load_config_layers, load_managed_config
 from .core.events import EventBus
 from .core.errors import ConfigError
 from .core.redact import SecretRedactor
+from .enterprise.auth import (
+    AuthError,
+    OIDCClient,
+    SSOConfig,
+    load_sso_config,
+)
+from .enterprise.audit import AuditError, ComplianceAuditor
+from .enterprise.policy import (
+    EnterprisePolicy,
+    EnterprisePolicyError,
+    PolicyViolation,
+    effective_permission_mode,
+    load_enterprise_policy,
+)
 from .extensions import ExtensionRegistry, replace_runtime_extensions
 from .hooks import HookRunner, parse_hooks
 from .lsp.manager import LSPManager, LSPOptions
@@ -78,7 +92,11 @@ from .mcp.supervisor import MCPSupervisor
 from .plugins import PluginManager
 from .plugins.signing import PluginSignatureError
 from .plugins.trust import PluginTrustError, PluginTrustPolicy, PluginTrustStore
-from .safety.policy import AllowAllPolicy, SandboxPolicy
+from .safety.policy import (
+    AllowAllPolicy,
+    EnterpriseGuardPolicy,
+    SandboxPolicy,
+)
 from .safety.sandbox import ExecutionSandbox, SandboxError
 from .session.autocommit import AutoCommitter
 from .session.checkpoint import CheckpointManager
@@ -306,10 +324,20 @@ def build_policy(
     *,
     approver=None,
     config: Optional[Dict[str, Any]] = None,
+    enterprise_policy: Optional[EnterprisePolicy] = None,
 ):
-    """--no-sandbox 回退全放行；否则 SandboxPolicy（规则分级+持久化+交互审批）。"""
+    """Build approval policy while preserving the managed security ceiling."""
+    if enterprise_policy is None:
+        # A direct embedder must not be able to convert project/user TOML
+        # into enterprise authority.  The managed layer is the only source.
+        managed = load_enterprise_policy(
+            load_managed_config(workspace=workspace_root))
+    else:
+        managed = enterprise_policy
+    managed.validate_cli(args)
     if args.no_sandbox:
-        return AllowAllPolicy()
+        base = AllowAllPolicy()
+        return EnterpriseGuardPolicy(base, managed) if managed.enabled else base
     ui_section = (config or {}).get("ui") or {}
     configured_review = (
         bool(ui_section.get("diff_review", True))
@@ -318,35 +346,44 @@ def build_policy(
     review_writes = bool(
         configured_review
         and not getattr(args, "no_diff_review", False)
-        and not args.auto_approve
+        and not getattr(args, "auto_approve", False)
         and approver is not None
         and resolve_run_mode(args) is RunMode.REPL
     )
-    return SandboxPolicy(
+    base = SandboxPolicy(
         approver=approver,
         rules_path=workspace_root / ".krelcode" / "allow_rules.json",
         bus=bus,
-        auto_approve=args.auto_approve,
+        auto_approve=bool(
+            getattr(args, "auto_approve", False)
+            and (not managed.enabled or managed.allow_auto_approve)),
         workspace_root=workspace_root,
         review_writes=review_writes,
+        managed_policy=managed if managed.enabled else None,
     )
+    return EnterpriseGuardPolicy(base, managed) if managed.enabled else base
 
 
 def resolve_permission_mode(
-    args: argparse.Namespace, config: Dict[str, Any],
+    args: argparse.Namespace,
+    config: Dict[str, Any],
+    enterprise_policy: Optional[EnterprisePolicy] = None,
 ) -> PermissionMode:
-    """CLI > [permissions].mode > --auto-approve > default。"""
+    """Resolve CLI/config mode and clamp it to the managed ceiling."""
     explicit = getattr(args, "permission_mode", None)
     if explicit:
-        return PermissionMode(explicit)
-    section = config.get("permissions") or {}
-    configured = section.get("mode") if isinstance(section, dict) else None
-    if configured:
-        return PermissionMode(str(configured))
-    if getattr(args, "auto_approve", False):
-        return PermissionMode.AUTO_APPROVE
-    return PermissionMode.DEFAULT
-
+        selected = PermissionMode(explicit)
+    else:
+        section = config.get("permissions") or {}
+        configured = section.get("mode") if isinstance(section, dict) else None
+        if configured:
+            selected = PermissionMode(str(configured))
+        elif getattr(args, "auto_approve", False):
+            selected = PermissionMode.AUTO_APPROVE
+        else:
+            selected = PermissionMode.DEFAULT
+    managed = enterprise_policy or load_enterprise_policy(config)
+    return effective_permission_mode(selected, managed)
 
 def resolve_run_mode(args: argparse.Namespace) -> RunMode:
     if getattr(args, "input_format", "text") == "stream-json":
@@ -429,6 +466,8 @@ def build_plugin_manager(
     args: argparse.Namespace,
     config: Dict[str, Any],
     workspace_root: Path,
+    *,
+    enterprise_policy: Optional[EnterprisePolicy] = None,
 ) -> PluginManager:
     """按配置/CLI 构建目录插件管理器；插件代码仅从显式目录加载。"""
     section = config.get("plugins") or {}
@@ -441,6 +480,7 @@ def build_plugin_manager(
     enabled = (
         not getattr(args, "no_plugins", False)
         and bool(section.get("enabled", True))
+        and not (enterprise_policy and enterprise_policy.disable_plugins)
     )
     trust_section = section.get("trust")
     if trust_section is not None and not isinstance(trust_section, dict):
@@ -505,6 +545,7 @@ def build_subagent_llm_resolver(
     config: Dict[str, Any],
     parent: LLMProvider | Callable[[], LLMProvider],
     redactor: Optional[SecretRedactor] = None,
+    enterprise_policy: Optional[EnterprisePolicy] = None,
 ) -> Callable[[str], LLMProvider]:
     """Resolve Definition.model without changing the parent's provider.
 
@@ -523,6 +564,8 @@ def build_subagent_llm_resolver(
         if resolved is None:
             return parent_provider
         provider_name, model_name = resolved
+        if enterprise_policy is not None:
+            enterprise_policy.validate_provider(provider_name)
         if provider_name == "mock":
             raise ValueError("mock provider 不支持 Agent Definition 独立模型")
         settings = resolve_settings(
@@ -559,6 +602,8 @@ async def build_loop(
     log=print,
     approver=None,
     user_input_port=None,
+    enterprise_policy: Optional[EnterprisePolicy] = None,
+    principal=None,
 ):
     """返回 (AgentLoop, SubagentManager)。
 
@@ -566,6 +611,14 @@ async def build_loop(
     （不含 spawn 系工具 → 防递归），历史与总线各自独立。
     """
     workspace_root = Path(args.workspace).resolve()
+    if enterprise_policy is None:
+        policy = load_enterprise_policy(
+            load_managed_config(workspace=workspace_root))
+    else:
+        policy = enterprise_policy
+    policy.validate_cli(args)
+    if policy.require_sso and principal is None:
+        raise PolicyViolation("企业策略要求 SSO，但当前没有有效身份")
     context_options = ContextOptions.from_config(config.get("context"))
     rule_loader = RuleLoader(
         workspace_root,
@@ -590,6 +643,7 @@ async def build_loop(
     bus = EventBus()
     prompt_authoring_enabled = prompt_authoring_enabled_from_config(config)
     llm = build_llm(args, config, log=log)
+    policy.validate_provider(str(getattr(llm, "name", "") or ""))
     prompt_profile_setting = prompt_profile_from_config(config)
     prompt_release_setting = prompt_release_id_from_config(config)
     prompt_calibrations = _load_prompt_calibrations(config, workspace_root)
@@ -604,7 +658,8 @@ async def build_loop(
     base_skill_paths = configured_skill_paths(args, config)
     custom_commands = build_custom_command_manager(config, workspace_root)
     try:
-        plugin_manager = build_plugin_manager(args, config, workspace_root)
+        plugin_manager = build_plugin_manager(
+            args, config, workspace_root, enterprise_policy=policy)
         await plugin_manager.load()
     except (PluginTrustError, PluginSignatureError) as exc:
         # Trust metadata is security-sensitive: a malformed store disables the
@@ -657,9 +712,15 @@ async def build_loop(
         sandbox_enabled=sandbox is not None,
         runtime=RuntimeSnapshot(
             run_mode=resolve_run_mode(args),
-            permission_mode=resolve_permission_mode(args, config),
+            permission_mode=resolve_permission_mode(args, config, policy),
             features=_configured_features(config),
             disabled_tools=_disabled_tools(config),
+            managed_tool_allowlist=(
+                frozenset(policy.allowed_tools)
+                if policy.allowed_tools else None),
+            managed_tool_denylist=(
+                frozenset(policy.disabled_tools)
+                if policy.disabled_tools else None),
         ),
     )
     from .daemon.options import resolve_daemon_options
@@ -679,8 +740,9 @@ async def build_loop(
     else:
         shell_jobs = ShellJobManager(bus, workspace_root=workspace_root)
     tool_context.shell_jobs = shell_jobs
-    policy = build_policy(
-        args, workspace_root, bus, approver=approver, config=config)
+    approval_policy = build_policy(
+        args, workspace_root, bus, approver=approver, config=config,
+        enterprise_policy=policy)
     lsp_manager = LSPManager(
         workspace_root, options=LSPOptions.from_config(config.get("lsp")))
     web_options = WebOptions.from_config(
@@ -804,7 +866,7 @@ async def build_loop(
             llm=llm,
             tool_factory=child_tool_factory,
             tool_context=tool_context,
-            policy=policy,
+            policy=approval_policy,
             bus=bus,
             max_steps=args.max_steps,
             context_budget=context_budget,   # 子代理长任务同样受压缩保护
@@ -821,7 +883,8 @@ async def build_loop(
             definitions=agent_definitions,
             memory_store=memory_store,
             llm_resolver=build_subagent_llm_resolver(
-                args, config, lambda: manager.llm, redactor),
+                args, config, lambda: manager.llm, redactor,
+                enterprise_policy=policy),
             mcp_servers_provider=lambda: tuple(
                 compose_mcp_config(config, dict(plugin_manager.mcp_servers))
             ),
@@ -901,7 +964,7 @@ async def build_loop(
         llm=llm,
         registry=registry,
         tool_context=tool_context,
-        policy=policy,
+        policy=approval_policy,
         bus=bus,
         system_prompt=prompt_snapshot.text,
         max_steps=args.max_steps,
@@ -913,6 +976,10 @@ async def build_loop(
         working_context_store=working_context_store,
         compact_checkpoint_store=compact_checkpoint_store,
     )
+    loop.enterprise_policy = policy
+    loop.principal = principal
+    loop.tool_context.enterprise_policy = policy
+    loop.tool_context.principal = principal
     if getattr(loop, "context_manager", None) is not None:
         loop.context_manager.prompt_surface_registry = (
             loop.prompt_surface_registry)
@@ -1026,7 +1093,8 @@ async def build_loop(
 
 def build_model_switcher(args: argparse.Namespace, config: Dict[str, Any],
                          loop: AgentLoop, usage: UsageTracker, subagents=None,
-                         redactor: Optional[SecretRedactor] = None):
+                         redactor: Optional[SecretRedactor] = None,
+                         enterprise_policy: Optional[EnterprisePolicy] = None):
     """/model 热切换：返回 callable(new_spec|None) -> 结果描述文本。
 
     new_spec 支持 "model"（沿用当前 provider）或 "provider/model"。
@@ -1051,6 +1119,8 @@ def build_model_switcher(args: argparse.Namespace, config: Dict[str, Any],
         if provider_name == "mock":
             return ("mock 模式请显式指定目标 provider，如: /model openai/gpt-4o-mini")
         try:
+            if enterprise_policy is not None:
+                enterprise_policy.validate_provider(provider_name)
             settings = resolve_settings(
                 provider=provider_name, model=model_name,
                 base_url=args.base_url, config=config)
@@ -1182,6 +1252,31 @@ async def async_main(args: argparse.Namespace) -> int:
         return 2
     config = config_bundle.data
     current_config = config
+    try:
+        # ``--config`` is intentionally an exclusive user configuration.  It
+        # must not become an enterprise-policy bypass, so managed policy is
+        # loaded independently in that case.
+        if config_path is not None:
+            managed_config = load_managed_config(
+                workspace=Path(args.workspace))
+            enterprise_policy = load_enterprise_policy(managed_config)
+        else:
+            enterprise_policy = load_enterprise_policy(
+                config, config_bundle=config_bundle)
+        enterprise_policy.validate_cli(args)
+        sso_client = None
+        principal = None
+        sso_config = load_sso_config(enterprise_policy)
+        if sso_config.enabled:
+            sso_client = OIDCClient(sso_config)
+            status = sso_client.status()
+            if enterprise_policy.require_sso:
+                principal = await sso_client.require_authenticated()
+            elif status.authenticated:
+                principal = status.principal
+    except (ConfigError, EnterprisePolicyError, PolicyViolation, AuthError) as exc:
+        print(f"企业策略/SSO 错误: {exc}", file=sys.stderr)
+        return 2
     run_mode = resolve_run_mode(args)
     editor_stream = getattr(args, "input_format", "text") == "stream-json"
     approval_broker = (
@@ -1202,9 +1297,14 @@ async def async_main(args: argparse.Namespace) -> int:
             log=note,
             approver=approval_broker.request if approval_broker is not None else None,
             user_input_port=input_broker,
+            enterprise_policy=enterprise_policy,
+            principal=principal,
         )
     except SandboxError as e:
         print(f"Sandbox 配置错误: {e}", file=sys.stderr)
+        return 2
+    except (EnterprisePolicyError, PolicyViolation, AuthError) as e:
+        print(f"企业策略/SSO 错误: {e}", file=sys.stderr)
         return 2
     except ConfigError as e:
         print(f"配置错误: {e}", file=sys.stderr)
@@ -1232,6 +1332,25 @@ async def async_main(args: argparse.Namespace) -> int:
         loop.context_checkpoint_coordinator.redactor = redactor
     if getattr(loop.tool_context, "shell_jobs", None) is not None:
         loop.tool_context.shell_jobs.redactor = redactor
+    if sso_client is not None:
+        for secret in sso_client.redaction_secrets():
+            redactor.add(secret)
+    auditor = None
+    if enterprise_policy.audit and bool(enterprise_policy.audit.get("enabled", False)):
+        try:
+            auditor = ComplianceAuditor.from_config(
+                enterprise_policy.audit,
+                workspace=loop.tool_context.workspace_root,
+                organization=enterprise_policy.organization,
+                principal=(principal.subject if principal is not None else ""),
+                policy_version=enterprise_policy.policy_version,
+                redactor=redactor,
+            )
+            auditor.attach(loop.bus)
+            loop.auditor = auditor
+        except AuditError as exc:
+            print(f"企业审计错误: {exc}", file=sys.stderr)
+            return 2
     elicitor = (
         MCPElicitationBridge(input_broker, loop.bus.emit, redactor=redactor)
         if input_broker is not None else None
@@ -1283,7 +1402,8 @@ async def async_main(args: argparse.Namespace) -> int:
     usage = UsageTracker(model=getattr(loop.llm, "model", None))
     usage.attach(loop.bus)
     model_switch = build_model_switcher(
-        args, config, loop, usage, subagents=subagents, redactor=redactor)
+        args, config, loop, usage, subagents=subagents, redactor=redactor,
+        enterprise_policy=enterprise_policy)
 
     def merged_hook_specs(source: Optional[Dict[str, Any]] = None) -> list[Any]:
         active = current_config if source is None else source
@@ -1411,6 +1531,8 @@ async def async_main(args: argparse.Namespace) -> int:
             hooks=hooks,
         )
     finally:
+        if auditor is not None:
+            auditor.detach()
         if approval_broker is not None:
             approval_broker.close()
         if input_broker is not None:

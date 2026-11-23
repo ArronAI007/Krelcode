@@ -346,3 +346,14 @@ PYTHONPATH=src pytest -q tests/test_step122_memory_index.py \
 - feedback/project 缺少 Why/How 时写入失败，候选保持不可接受；
 - user 主题文件只出现在 `~/.krelcode/memory/topics/`；
 - 专用 L5 Prompt 同时存在 What NOT to save 与 Task/Plan/Memory/Compact 边界。
+
+## P2-2 企业策略、审计与 SSO 验证
+
+```bash
+PYTHONPATH=src python -m pytest -q tests/test_p2_2_enterprise.py \
+  tests/test_safety_policy.py tests/test_tool_pool.py tests/test_doctor_init.py \
+  tests/test_config_reference.py
+```
+
+覆盖 managed 不可覆盖、CLI 放宽拒绝、动态工具池/tool deny、审计 hash-chain 篡改检测与
+脱敏、审计续写/导出、SSO PKCE/JWKS RS256/state/token store 状态及 required-SSO fail-closed。

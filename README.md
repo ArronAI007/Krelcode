@@ -955,3 +955,37 @@ entrypoints/ 进程入口：cli 轻量 fast-path → main 完整参数路由 →
 ui/      终端 I/O、Markdown 渲染和展示型命令（不承担会话业务状态）
 app.py   组装根：只创建对象并选择运行策略，不实现会话/执行流程
 ```
+
+## P2-2 企业策略、审计与 SSO
+
+Krelcode 的企业控制位于独立 `enterprise/` 基础设施层，不依赖 REPL：
+
+```text
+managed TOML
+  -> EnterprisePolicy (权限上限/tool/path/command/provider 限制)
+  -> 主 Agent / 子代理共用 ToolContext
+  -> SandboxPolicy + EnterpriseGuardPolicy
+
+Agent EventBus
+  -> SessionRecorder (可恢复会话)
+  -> ComplianceAuditor (append-only JSONL hash-chain/HMAC)
+
+OIDC discovery -> Authorization Code + PKCE -> JWKS RS256
+                          -> private token store (0700/0600)
+                          -> Principal metadata (never token in prompt/audit)
+```
+
+企业策略只从 managed 层读取；`--config`、项目配置、Skill allowlist、
+`--auto-approve` 和 `--no-sandbox` 都不能解除 managed deny 或权限上限。
+Provider allowlist 同时覆盖启动、`/model` 热切换和子代理独立模型。
+`require_sso=true` 时，未认证/过期身份在 Agent 启动前 fail-closed；
+`audit.required=true` 时，审计链无法写入会中止运行。
+
+```bash
+krelcode enterprise status
+krelcode auth login
+krelcode auth status
+krelcode audit verify /var/log/krelcode/audit.jsonl
+```
+
+完整 TOML 示例、CLI 旗标、token store 和审计验证语义见 [CONFIG.md](CONFIG.md) 的“企业策略、审计与 SSO”。

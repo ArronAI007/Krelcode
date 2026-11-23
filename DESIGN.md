@@ -2920,3 +2920,17 @@ Git 审阅支持工作区、暂存区、新增/删除/rename 和 binary 状态�
 可配置关闭。headless、stream-json/SDK、`--auto-approve` 与无 approver 场景保持原有
 失败关闭/审批语义，不额外弹出交互式 pager。显式 allow 规则、只读/plan 模式和受保护路径
 仍由既有权限链决定，diff review 不能替代 Sandbox 或 DENY。
+
+## P2-2 Enterprise Controls
+
+Enterprise policy is a value object, not a REPL feature.  The composition root loads it from
+`managed` TOML even when `--config` selects an exclusive user file.  The policy clamps
+permission modes and is checked before user allow rules, persistent allow rules, auto approval,
+and `--no-sandbox`.  The dynamic tool pool applies the same managed allow/deny patterns before
+advertising schemas, while `EnterpriseGuardPolicy` enforces the final execution boundary.
+
+Compliance audit is intentionally separate from resumable session history.  It records typed,
+redacted event summaries in an append-only JSONL chain (`seq`, `prev_hash`, SHA-256; optional
+HMAC).  Required audit failures are fail-closed.  OIDC identity is reduced to a `Principal`
+(subject/issuer/display metadata); access, ID and refresh tokens never enter prompt assembly,
+session recording or compliance records.

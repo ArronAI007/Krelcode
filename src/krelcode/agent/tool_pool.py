@@ -9,6 +9,7 @@ Registry 是进程内能力目录；ToolRegistry 的快照先经过权限模式�
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from html import escape
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -30,6 +31,10 @@ from ..safety.contract import (
 from .intent import TurnIntent
 
 _TOOL_SEARCH_NAME = "tool_search"
+
+
+def _glob_match(value: str, pattern: str) -> bool:
+    return fnmatchcase(str(value), str(pattern))
 
 
 @dataclass(frozen=True)
@@ -97,6 +102,16 @@ class TurnToolPool:
             return None
         if name in runtime.disabled_tools:
             return ToolExclusion("disabled", "用户在配置中禁用了该工具")
+        managed_denylist = runtime.managed_tool_denylist
+        if managed_denylist and any(
+                _glob_match(name, pattern) for pattern in managed_denylist):
+            return ToolExclusion(
+                "managed_deny", "企业策略禁用了该工具")
+        managed_allowlist = runtime.managed_tool_allowlist
+        if managed_allowlist and not any(
+                _glob_match(name, pattern) for pattern in managed_allowlist):
+            return ToolExclusion(
+                "managed_allow", "企业策略的允许工具清单不包含该工具")
         if (
             runtime.tool_allowlist is not None
             and name != _TOOL_SEARCH_NAME

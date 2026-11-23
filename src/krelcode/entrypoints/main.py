@@ -26,12 +26,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("command", nargs="?",
                    choices=("doctor", "init", "review", "security-review", "benchmark",
-                            "daemon", "jobs", "agents"),
+                            "daemon", "jobs", "agents", "enterprise", "audit", "auth"),
                    default=None,
                    help="子命令：doctor=环境自检；init=生成配置/规则模板；"
                         "review=评审当前 git 变更；security-review=只读安全审查；"
                         "benchmark=真实模型 Prompt 行为评测；daemon/jobs/agents="
-                        "持久化后台任务与子代理；缺省进入对话")
+                        "持久化后台任务与子代理；enterprise/audit/auth=企业策略、审计与 SSO；"
+                        "缺省进入对话")
     p.add_argument("action", nargs="?", default=None,
                    help="daemon/jobs/agents 子操作（start/status/stop/list/output/...）")
     p.add_argument("target", nargs="?", default=None,
@@ -53,6 +54,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--base-url", default=None, help="覆盖 provider 的 base_url（任意兼容端点）")
     p.add_argument("--config", default=None, help="TOML 配置文件路径（默认 krelcode.toml 或 ~/.krelcode/config.toml）")
     p.add_argument("--workspace", default=".", help="工作区根目录（默认当前目录）")
+    p.add_argument("--audit-output", default=None,
+                   help="audit export：导出目标文件路径")
+    p.add_argument("--issuer", default=None,
+                   help="auth：临时覆盖 OIDC issuer（默认使用 managed SSO 配置）")
+    p.add_argument("--client-id", default=None,
+                   help="auth：临时覆盖 OIDC client_id")
+    p.add_argument("--redirect-uri", default=None,
+                   help="auth：覆盖 OIDC redirect_uri（默认本机随机 loopback）")
+    p.add_argument("--token-dir", default=None,
+                   help="auth：覆盖私有 token store 目录")
+    p.add_argument("--no-open-browser", action="store_true",
+                   help="auth login：只打印授权 URL，不自动打开浏览器")
+    p.add_argument("--allow-http-issuer", action="store_true",
+                   help="auth：允许 HTTP issuer（仅限本地测试）")
     p.add_argument(
         "--max-steps", type=int, default=DEFAULT_MAX_STEPS,
         help=f"单轮任务的最大 LLM 迭代步数（默认 {DEFAULT_MAX_STEPS}）",
@@ -164,7 +179,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run_doctor(args: argparse.Namespace) -> int:
-    from krelcode.config import load_config_layers
+    from krelcode.config import (
+        ConfigBundle,
+        load_config_layers,
+        managed_config_layer,
+    )
     from krelcode.core.errors import ConfigError
     from krelcode.doctor import exit_code, format_report, run_all_checks
 
@@ -174,6 +193,13 @@ def _run_doctor(args: argparse.Namespace) -> int:
             workspace=Path(args.workspace),
             explicit_path=config_path,
         )
+        if config_path is not None:
+            # Doctor must not let --config hide a malformed or restrictive
+            # organization policy.  Keep the explicit data for provider
+            # checks while adding managed provenance for enterprise checks.
+            managed = managed_config_layer(Path(args.workspace))
+            bundle = ConfigBundle(
+                bundle.data, tuple(bundle.layers) + (managed,))
     except ConfigError as exc:
         print(f"配置错误: {exc}")
         return 1
@@ -425,6 +451,177 @@ def _run_agents(args: argparse.Namespace) -> int:
         return 1
 
 
+def _load_enterprise_config(args: argparse.Namespace):
+    from krelcode.config import load_config_layers, load_managed_config
+    from krelcode.enterprise.policy import load_enterprise_policy
+
+    config_path = Path(args.config).expanduser() if args.config else None
+    bundle = load_config_layers(
+        workspace=Path(args.workspace),
+        explicit_path=config_path,
+    )
+    if config_path is not None and not bundle.sources:
+        raise ConfigError(f"指定的配置文件不存在: {config_path}")
+    if config_path is not None:
+        managed = load_managed_config(workspace=Path(args.workspace))
+        policy = load_enterprise_policy(managed)
+    else:
+        policy = load_enterprise_policy(
+            bundle.data, config_bundle=bundle)
+    return bundle, policy
+
+
+def _sso_config_for_args(args: argparse.Namespace, policy):
+    from krelcode.enterprise.auth import SSOConfig
+
+    raw = dict(getattr(policy, "raw_sso", {}) or {})
+    if args.issuer:
+        raw["issuer"] = args.issuer
+        raw["enabled"] = True
+    if args.client_id:
+        raw["client_id"] = args.client_id
+    if args.redirect_uri:
+        raw["redirect_uri"] = args.redirect_uri
+    if args.token_dir:
+        raw["token_dir"] = args.token_dir
+    if args.allow_http_issuer:
+        raw["allow_http_issuer"] = True
+    return SSOConfig.from_mapping(
+        raw, required=bool(getattr(policy, "require_sso", False)))
+
+
+def _run_enterprise(args: argparse.Namespace) -> int:
+    from krelcode.enterprise.audit import AuditConfig, verify_audit_file
+    from krelcode.enterprise.auth import OIDCClient
+    from krelcode.enterprise.policy import EnterprisePolicyError
+
+    action = (args.action or "status").lower()
+    if action != "status":
+        print("用法: krelcode enterprise status", file=sys.stderr)
+        return 2
+    try:
+        _bundle, policy = _load_enterprise_config(args)
+        print(f"organization: {policy.organization or '-'}")
+        print(f"enabled: {'yes' if policy.enabled else 'no'}")
+        print(f"policy_version: {policy.policy_version or '-'}")
+        print(f"max_permission_mode: {policy.max_permission_mode.value}")
+        print(f"allow_auto_approve: {str(policy.allow_auto_approve).lower()}")
+        print(f"allow_no_sandbox: {str(policy.allow_no_sandbox).lower()}")
+        print(f"disabled_tools: {', '.join(policy.disabled_tools) or '-'}")
+        if policy.require_sso:
+            sso = OIDCClient(_sso_config_for_args(args, policy))
+            status = sso.status()
+            print(f"sso: {'authenticated' if status.authenticated else 'not-authenticated'}")
+            if status.principal:
+                print(f"principal: {status.principal.subject}")
+        else:
+            print("sso: not-required")
+        audit = AuditConfig.from_mapping(
+            policy.audit, workspace=Path(args.workspace))
+        print(f"audit: {'enabled' if audit.enabled else 'disabled'}")
+        print(f"audit_path: {audit.path}")
+        if audit.enabled and audit.path.is_file():
+            verification = verify_audit_file(audit.path)
+            print(f"audit_chain: {'valid' if verification.valid else 'invalid'}"
+                  f" records={verification.records}")
+        return 0
+    except (EnterprisePolicyError, ConfigError, OSError, ValueError) as exc:
+        print(f"enterprise status 错误: {exc}", file=sys.stderr)
+        return 2
+
+
+def _run_audit(args: argparse.Namespace) -> int:
+    from krelcode.enterprise.audit import AuditConfig, AuditError, verify_audit_file
+
+    action = (args.action or "verify").lower()
+    try:
+        _bundle, policy = _load_enterprise_config(args)
+        audit = AuditConfig.from_mapping(
+            policy.audit, workspace=Path(args.workspace))
+        path = Path(args.target).expanduser() if args.target else audit.path
+        hmac_key = None
+        if audit.mode == "hmac" and audit.hmac_key_env:
+            value = __import__("os").environ.get(audit.hmac_key_env, "")
+            if value:
+                hmac_key = value.encode("utf-8")
+        if action == "verify":
+            result = verify_audit_file(path, hmac_key=hmac_key)
+            print(f"path: {result.path}")
+            print(f"valid: {'yes' if result.valid else 'no'}")
+            print(f"records: {result.records}")
+            print(f"last_sequence: {result.last_sequence}")
+            if result.first_error:
+                print(f"error: {result.first_error}", file=sys.stderr)
+            return 0 if result.valid else 1
+        if action == "export":
+            if not args.audit_output:
+                print("audit export 需要 --audit-output <路径>", file=sys.stderr)
+                return 2
+            source = path
+            if not source.is_file():
+                raise AuditError(f"审计文件不存在: {source}")
+            destination = Path(args.audit_output).expanduser()
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(source.read_bytes())
+            try:
+                destination.chmod(0o600)
+            except OSError:
+                pass
+            print(destination)
+            return 0
+        print("用法: krelcode audit verify|export [路径]", file=sys.stderr)
+        return 2
+    except (AuditError, ConfigError, OSError, ValueError) as exc:
+        print(f"audit 错误: {exc}", file=sys.stderr)
+        return 1
+
+
+def _run_auth(args: argparse.Namespace) -> int:
+    from krelcode.enterprise.auth import AuthError, OIDCClient
+    from krelcode.enterprise.policy import EnterprisePolicyError
+
+    action = (args.action or "status").lower()
+    try:
+        _bundle, policy = _load_enterprise_config(args)
+        config = _sso_config_for_args(args, policy)
+        if not config.enabled and not config.issuer:
+            print("SSO 未配置；请在 managed [enterprise.sso] 中设置 issuer/client_id",
+                  file=sys.stderr)
+            return 2
+        client = OIDCClient(config)
+        if action == "status":
+            status = client.status()
+            print(f"authenticated: {'yes' if status.authenticated else 'no'}")
+            print(f"source: {status.source}")
+            if status.principal:
+                print(f"subject: {status.principal.subject}")
+                print(f"issuer: {status.principal.issuer}")
+                print(f"method: {status.principal.auth_method}")
+            if status.reason:
+                print(f"reason: {status.reason}")
+            return 0 if status.authenticated or not policy.require_sso else 1
+        if action == "logout":
+            print("SSO 已退出" if client.logout() else "没有 SSO 会话")
+            return 0
+        if action == "login":
+            def show_url(url: str) -> None:
+                print(f"authorization_url: {url}")
+
+            tokens = asyncio.run(client.login(
+                open_browser=not args.no_open_browser,
+                authorization_url_callback=show_url,
+            ))
+            print(f"authenticated: yes")
+            print(f"subject: {tokens.subject}")
+            print(f"issuer: {tokens.issuer}")
+            return 0
+        print("用法: krelcode auth login|status|logout", file=sys.stderr)
+        return 2
+    except (AuthError, ConfigError, EnterprisePolicyError, OSError) as exc:
+        print(f"auth 错误: {exc}", file=sys.stderr)
+        return 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     raw_args = list(argv) if argv is not None else None
     effective = raw_args if raw_args is not None else list(sys.argv[1:])
@@ -447,6 +644,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_jobs(args)
     if args.command == "agents":
         return _run_agents(args)
+    if args.command == "enterprise":
+        return _run_enterprise(args)
+    if args.command == "audit":
+        return _run_audit(args)
+    if args.command == "auth":
+        return _run_auth(args)
 
     try:
         if args.command == "review":

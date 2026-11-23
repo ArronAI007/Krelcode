@@ -80,6 +80,7 @@ class SandboxPolicy:
         auto_approve: bool = False,
         workspace_root: Optional[Path] = None,
         review_writes: bool = False,
+        managed_policy=None,
     ) -> None:
         self.approver = approver
         self.rules = AllowRules(
@@ -89,9 +90,17 @@ class SandboxPolicy:
         self.bus = bus
         self.auto_approve = auto_approve
         self.review_writes = bool(review_writes)
+        # An optional EnterprisePolicy-like object.  It is checked before
+        # user allow rules and before every auto-approval path.
+        self.managed_policy = managed_policy
 
     async def check(self, tool_call: ToolCall, ctx: ToolContext) -> Decision:
         name = tool_call.name
+        if self.managed_policy is not None:
+            reason = self.managed_policy.deny_tool_reason(
+                tool_call, ctx.workspace_root)
+            if reason:
+                return deny(reason)
         descriptor = ctx.tool_descriptor
         local_read_only = bool(
             descriptor is not None
@@ -224,7 +233,10 @@ class SandboxPolicy:
             ctx is not None
             and ctx.runtime.permission_mode is PermissionMode.AUTO_APPROVE
         )
-        if not force_approval and (self.auto_approve or runtime_auto):
+        managed_auto = getattr(self.managed_policy, "allow_auto_approve", None)
+        auto_disabled = managed_auto is False
+        if not force_approval and not auto_disabled and (
+                self.auto_approve or runtime_auto):
             source = "运行时权限模式" if runtime_auto else "--auto-approve"
             return Decision(True, f"{source}自动批准: {reason}")
         # 3) 交互审批
@@ -242,6 +254,30 @@ class SandboxPolicy:
         if answer == "yes":
             return Decision(True, f"用户批准: {reason}")
         return deny(f"用户拒绝（{reason}）")
+
+
+class EnterpriseGuardPolicy:
+    """Delegate normal approval while enforcing managed policy first.
+
+    This wrapper is used for ``--no-sandbox`` too: disabling the local
+    Sandbox must never disable organization-level restrictions.
+    """
+
+    def __init__(self, inner: ApprovalPolicy, managed_policy) -> None:
+        self.inner = inner
+        self.managed_policy = managed_policy
+
+    def __getattr__(self, name: str):
+        # Keep diagnostics and legacy policy attributes (review_writes,
+        # auto_approve, rules) observable without weakening the guard.
+        return getattr(self.inner, name)
+
+    async def check(self, tool_call: ToolCall, ctx: ToolContext) -> Decision:
+        reason = self.managed_policy.deny_tool_reason(
+            tool_call, ctx.workspace_root)
+        if reason:
+            return deny(reason)
+        return await self.inner.check(tool_call, ctx)
 
 
 def _tool_paths(arguments) -> tuple[str, ...]:

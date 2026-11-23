@@ -164,6 +164,11 @@ class RuntimeSnapshot:
     mcp_health_known: bool = False
     tool_allowlist: Optional[FrozenSet[str]] = None
     mcp_allowlist: Optional[FrozenSet[str]] = None
+    # Organization-level allow/deny patterns are separate from a Skill's
+    # temporary allowlist.  The tool pool applies them before advertising a
+    # schema, so hiding a tool and denying its execution cannot drift apart.
+    managed_tool_allowlist: Optional[FrozenSet[str]] = None
+    managed_tool_denylist: Optional[FrozenSet[str]] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "run_mode", RunMode(self.run_mode))
@@ -181,6 +186,14 @@ class RuntimeSnapshot:
         if self.mcp_allowlist is not None:
             object.__setattr__(
                 self, "mcp_allowlist", frozenset(self.mcp_allowlist))
+        if self.managed_tool_allowlist is not None:
+            object.__setattr__(
+                self, "managed_tool_allowlist",
+                frozenset(self.managed_tool_allowlist))
+        if self.managed_tool_denylist is not None:
+            object.__setattr__(
+                self, "managed_tool_denylist",
+                frozenset(self.managed_tool_denylist))
 
 
 @dataclass
@@ -247,6 +260,10 @@ class ToolContext:
     # per-agent registry snapshot for main agents and subagents.
     prompt_registry: Any = field(default=None, repr=False)
     prompt_release_pipeline: Any = field(default=None, repr=False)
+    # Organization policy and non-token identity metadata.  These are intentionally
+    # opaque ports so tools/base does not depend on the enterprise package.
+    enterprise_policy: Any = field(default=None, repr=False)
+    principal: Any = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not self.sandbox_enabled:

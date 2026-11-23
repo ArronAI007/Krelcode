@@ -18,6 +18,9 @@ krelcode [子命令] [选项]
 | `review` | 评审当前 git 变更（只读工具集，天然安全） | `--staged`（只评审暂存区）、`--focus "重点"` |
 | `security-review` | 防御性安全审查：security-review Workflow、本地只读工具池、JSON Schema 报告与 CI 风险门禁 | `--staged`、`--focus "重点"`、`--fail-on <严重度>`、`--output-format json` |
 | `benchmark` | 真实模型 Prompt/Context 行为 Benchmark 一等入口；输出离线结构报告或 opt-in live report | `--live`、`--trials`、`--save-report [path]`、`--gate <baseline>`、`--final-acceptance` |
+| `enterprise status` | 显示 managed 企业策略、SSO 主体与审计链状态（不输出 token） | — |
+| `audit verify|export` | 校验 JSONL 审计链；导出到显式目标文件 | `--audit-output <路径>` |
+| `auth login|status|logout` | OIDC Authorization Code + PKCE 登录、状态和退出 | `--issuer`、`--client-id`、`--redirect-uri`、`--token-dir`、`--no-open-browser`、`--allow-http-issuer` |
 
 ### 通用旗标
 
@@ -29,6 +32,13 @@ krelcode [子命令] [选项]
 | `--base-url` | provider 默认 | 任意兼容端点（DeepSeek/Kimi/Ollama 等） |
 | `--config` | 自动探测 | 独占 TOML 配置路径；不参与默认层合并 |
 | `--workspace` | `.` | 工作区根（所有路径约束与状态目录的锚点） |
+| `--audit-output <路径>` | — | `audit export` 的显式导出目标；普通对话不会自动导出审计文件 |
+| `--issuer <URL>` | managed `[enterprise.sso].issuer` | `auth login` 临时覆盖 OIDC issuer |
+| `--client-id <id>` | managed `[enterprise.sso].client_id` | `auth login` 临时覆盖 OIDC client_id |
+| `--redirect-uri <URL>` | 随机 localhost callback | OIDC callback；HTTP 仅允许 loopback |
+| `--token-dir <路径>` | `~/.krelcode/auth` | 私有 token store 目录（权限 0700/0600） |
+| `--no-open-browser` | — | `auth login` 不自动打开浏览器，只打印授权 URL |
+| `--allow-http-issuer` | — | 仅本地测试允许 HTTP OIDC issuer；生产必须 HTTPS |
 | `-m`, `--message` | — | 单次提问模式，执行完退出 |
 | `--output-format` | text | `text` 普通输出；`json` 单行结果（配合 `-m`）；`stream-json` JSONL 事件流（配合 `-m` 或 stream-json stdin） |
 | `--input-format` | text | `text` 普通 REPL/`-m`；`stream-json` 从 stdin 逐行读取 user/control 消息（SDK/管道） |
@@ -345,6 +355,38 @@ idle_timeout = 1800                  # 无运行中任务时的退出秒数；0 
 
 [permissions]
 mode = "default"                     # default / read-only / auto-approve / plan
+
+# 企业策略只能来自 managed TOML（KRELCODE_MANAGED_CONFIG 或平台 managed 路径）。
+# user/project/local 配置即使写入 [enterprise] 也不会覆盖此层。
+[enterprise]
+enabled = true
+organization = "example"
+policy_version = "2026.11.1"
+max_permission_mode = "read-only"    # default / read-only / plan / auto-approve
+allow_auto_approve = false           # false 时 --auto-approve 直接拒绝
+allow_no_sandbox = false             # false 时 --no-sandbox 直接拒绝
+disable_plugins = false
+allowed_providers = ["openai", "anthropic"] # 空数组表示不限制
+disabled_tools = ["run_command", "job_start"]
+# allowed_tools = ["read_file", "grep", "tool_search"] # 非空时只能使用清单内工具
+# denied_paths = ["secrets/**", "*.pem"]
+# denied_commands = ["curl *", "wget *"]
+
+[enterprise.audit]
+enabled = true
+required = true                      # 写入失败则 fail-closed
+path = "/var/log/krelcode/audit.jsonl"
+mode = "hash-chain"                  # off / hash-chain / hmac
+# hmac_key_env = "KRELCODE_AUDIT_HMAC_KEY"
+
+[enterprise.sso]
+issuer = "https://id.example.com"
+client_id = "krelcode"
+scopes = ["openid", "profile", "email"]
+# token_dir = "~/.krelcode/auth"
+# redirect_uri = "http://127.0.0.1:8765/callback"
+# client_secret_env = "KRELCODE_SSO_CLIENT_SECRET"
+# allow_http_issuer = false
 
 [memory]                             # Auto Memory（typed Feedback/Project 必须有 Why/How）
 mode = "suggest"                     # off / suggest / auto；默认只入队，不自动写
@@ -777,6 +819,9 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | Anthropic |
 | `GEMINI_API_KEY`（`GOOGLE_API_KEY` 兜底）/ `GEMINI_BASE_URL` | Gemini |
 | `KRELCODE_HISTORY_FILE` | REPL 输入历史 JSONL 路径（默认 `~/.krelcode/history.jsonl`） |
+| `KRELCODE_MANAGED_CONFIG` | 显式 managed 企业策略 TOML 路径；缺失或损坏时 fail-closed |
+| `KRELCODE_AUDIT_HMAC_KEY` | `[enterprise.audit].mode="hmac"` 时的审计 HMAC 密钥；不写入配置、日志或会话 |
+| `KRELCODE_SSO_ACCESS_TOKEN` | CI/非交互 SSO 入口；仅作为身份门禁，不替代 provider API key，且不会进入 chat/audit |
 | `NO_COLOR` | 设置后禁用全部 ANSI 颜色 |
 
 ## 5. 工作区状态目录（`.krelcode/`，对 LLM 写保护）
@@ -784,6 +829,7 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 ```
 .krelcode/
 ├── sessions/          会话 JSONL（session_start/session_meta + 审计事件流 + history）
+├── audit/             企业合规审计 JSONL（独立于 sessions，hash-chain/HMAC，0600）
 │   └── .archive/      /delete 的可恢复归档
 ├── checkpoints/       文件快照（/undo、/rewind 数据源；meta 带 session/turn 身份）
 ├── compact-checkpoints/  compact 前完整脱敏 history + Structured Compact 摘要（/rewind 数据源）
@@ -1028,6 +1074,49 @@ workspace 规则文件新增字段示例：
 
 规则文件本身位于受保护目录 `.krelcode/`，Agent 写它仍需用户审批；模型没有
 修改权限规则的专用工具，规则管理入口只属于用户命令。
+
+## 5.1 企业策略、审计与 SSO
+
+### 企业策略边界
+
+`[enterprise]` 仅从 managed 层读取；`--config` 选择独占用户配置时，Krelcode 仍会独立读取
+managed 层。managed 层的 `max_permission_mode` 是上限：`default/read-only/plan/auto-approve`
+不能通过 CLI、项目配置、`--auto-approve` 或 `--no-sandbox` 越过。企业策略会在工具进入动态工具池
+前、执行审批前和启动参数解析时检查；用户 allow 规则、持久化 allow rules、Skill allowlist
+和 `--no-sandbox` 都不能覆盖 managed deny。
+
+`disabled_tools`/`allowed_tools` 支持 shell-style glob；`denied_paths` 按工作区相对路径匹配；
+`denied_commands` 匹配完整命令或首个程序名。被 managed 策略拒绝时会产生
+`permission_denied` 事件；若审计开启，该事件也会进入独立审计链。
+`allowed_providers` 同时约束启动 Provider、`/model` 热切换和子代理 Agent Definition
+声明的独立模型；任何一条路径都不能切换到未获准的 Provider。
+
+### 合规审计
+
+```bash
+krelcode enterprise status
+krelcode audit verify /var/log/krelcode/audit.jsonl
+krelcode audit export /var/log/krelcode/audit.jsonl --audit-output ./audit-export.jsonl
+```
+
+审计记录包含 `schema/seq/event_id/ts/org/policy_version/principal/session_id/type/data/prev_hash/hash`
+（HMAC 模式另有 `hmac`）。验证会检查 JSON、连续 sequence、`prev_hash`、SHA-256 与可选 HMAC；
+断链、重排、重复、损坏和非法 hash 均 fail-closed。写入前按敏感字段/常见 key pattern 脱敏，
+工具参数与结果有长度上限。`required=true` 时审计无法初始化或追加会中止 Agent，而不是继续无证据执行。
+审计文件默认使用父目录 `0700`、文件 `0600`，不能用会话删除/归档代替企业保留策略。
+
+### OIDC / SSO
+
+```bash
+krelcode auth login
+krelcode auth status
+krelcode auth logout
+```
+
+登录采用 OIDC Authorization Code + PKCE、`state`、`nonce`、discovery 和 JWKS RS256 验签；
+issuer、audience、expiry 与 nonce 都必须匹配。token 只保存在私有 token store，CLI 只显示
+subject/issuer/授权方式。`KRELCODE_SSO_ACCESS_TOKEN` 仅用于无法交互的 CI 身份门禁；普通生产
+应使用浏览器登录。`[enterprise].require_sso=true` 时未认证或 token 过期会在 Agent 启动前 fail-closed。
 
 ## 6. 安全策略速查（审批策略 + 运行时 Sandbox，默认开启）
 

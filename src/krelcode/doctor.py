@@ -9,6 +9,7 @@
 - 工作区可写性（.krelcode 状态目录可创建）
 - 运行时 Sandbox 后端（OS 隔离可用性；static 降级明确警告）
 - MCP 服务器：stdio → 命令存在性（which/路径）；url → 仅提示（不联网）
+- 企业策略：managed 层解析、权限 ceiling、企业 SSO 与独立审计链状态
 
 状态：ok(✓) / warn(⚠ 不阻断) / fail(✗ 影响使用)。exit code：有 fail → 1。
 """
@@ -173,6 +174,101 @@ def check_config_layers(bundle: ConfigBundle) -> CheckResult:
     return CheckResult("配置文件", STATUS_OK, f"解析成功（{detail}）")
 
 
+def check_enterprise_policy(
+    config: Dict[str, Any],
+    config_bundle: Optional[ConfigBundle] = None,
+) -> CheckResult:
+    """Validate managed policy without trusting project/user overrides."""
+    from .enterprise.policy import load_enterprise_policy
+
+    try:
+        policy = load_enterprise_policy(config, config_bundle=config_bundle)
+    except Exception as exc:
+        return CheckResult("企业策略", STATUS_FAIL, f"{type(exc).__name__}: {exc}")
+    if not policy.enabled:
+        return CheckResult("企业策略", STATUS_OK, "未启用（向后兼容）")
+    detail = (
+        f"organization={policy.organization or '-'} "
+        f"policy={policy.policy_version or '-'} "
+        f"max_mode={policy.max_permission_mode.value} "
+        f"auto_approve={'on' if policy.allow_auto_approve else 'off'} "
+        f"no_sandbox={'on' if policy.allow_no_sandbox else 'off'}"
+    )
+    return CheckResult("企业策略", STATUS_OK, detail)
+
+
+def check_audit(
+    config: Dict[str, Any],
+    workspace: Path,
+    config_bundle: Optional[ConfigBundle] = None,
+) -> CheckResult:
+    from .enterprise.audit import AuditConfig, AuditError, verify_audit_file
+    from .enterprise.policy import load_enterprise_policy
+
+    try:
+        policy = load_enterprise_policy(config, config_bundle=config_bundle)
+        audit = AuditConfig.from_mapping(policy.audit, workspace=workspace)
+    except Exception as exc:
+        return CheckResult("企业审计", STATUS_FAIL, f"{type(exc).__name__}: {exc}")
+    if not audit.enabled:
+        return CheckResult("企业审计", STATUS_OK, "未启用")
+    if audit.mode == "hmac":
+        if not audit.hmac_key_env or not os.environ.get(audit.hmac_key_env):
+            return CheckResult(
+                "企业审计", STATUS_FAIL,
+                f"HMAC 模式缺少环境变量 {audit.hmac_key_env or '(未配置)'}")
+    parent = audit.path.parent
+    try:
+        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError as exc:
+        return CheckResult("企业审计", STATUS_FAIL, f"目录不可创建: {parent}: {exc}")
+    if not os.access(parent, os.W_OK):
+        return CheckResult("企业审计", STATUS_FAIL, f"目录不可写: {parent}")
+    if audit.path.is_file():
+        key = None
+        if audit.mode == "hmac" and audit.hmac_key_env:
+            key = os.environ.get(audit.hmac_key_env, "").encode("utf-8") or None
+        result = verify_audit_file(audit.path, hmac_key=key)
+        if not result.valid:
+            return CheckResult(
+                "企业审计", STATUS_FAIL,
+                f"{audit.path}: {result.first_error}")
+        return CheckResult(
+            "企业审计", STATUS_OK,
+            f"{audit.path}（{audit.mode}，{result.records} records，链完整）")
+    state = "required" if audit.required else "optional"
+    return CheckResult(
+        "企业审计", STATUS_OK if audit.required else STATUS_WARN,
+        f"{audit.path}（{audit.mode}，{state}，尚未创建）")
+
+
+def check_sso(
+    config: Dict[str, Any],
+    config_bundle: Optional[ConfigBundle] = None,
+) -> CheckResult:
+    from .enterprise.auth import AuthError, OIDCClient, load_sso_config
+    from .enterprise.policy import load_enterprise_policy
+
+    try:
+        policy = load_enterprise_policy(config, config_bundle=config_bundle)
+        sso = load_sso_config(policy)
+        if not sso.enabled:
+            if policy.require_sso:
+                return CheckResult("企业 SSO", STATUS_FAIL, "策略要求 SSO 但未配置")
+            return CheckResult("企业 SSO", STATUS_OK, "未启用")
+        status = OIDCClient(sso).status()
+    except Exception as exc:
+        return CheckResult("企业 SSO", STATUS_FAIL, f"{type(exc).__name__}: {exc}")
+    if status.authenticated:
+        subject = status.principal.subject if status.principal else "-"
+        return CheckResult(
+            "企业 SSO", STATUS_OK,
+            f"已认证 subject={subject} source={status.source}")
+    if policy.require_sso:
+        return CheckResult("企业 SSO", STATUS_FAIL, status.reason or "未认证")
+    return CheckResult("企业 SSO", STATUS_WARN, status.reason or "未认证")
+
+
 def check_git(workspace: Path) -> CheckResult:
     if shutil.which("git") is None:
         return CheckResult("git", STATUS_WARN, "git 不可用（git 快照与 --auto-commit 将失效）")
@@ -281,6 +377,9 @@ def run_all_checks(
         check_git(workspace),
         check_workspace_writable(workspace),
         check_sandbox(config),
+        check_enterprise_policy(config, config_bundle),
+        check_audit(config, workspace, config_bundle),
+        check_sso(config, config_bundle),
     ]
     results.extend(check_mcp_servers(config))
     return results
