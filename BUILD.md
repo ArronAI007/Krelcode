@@ -131,6 +131,8 @@ core 只有 1023 行——内核保持极小、能力在边缘，正是当初对
 | Plugin v2 六类组件/生命周期 | `plugins/{manifest,components,manager,loader}.py` |
 | 工作区上下文注入 | `agent/context.py`（目录树/git/分层 AGENTS.md） |
 | 工具端口、PromptSpec 与注册表 | `tools/base.py` `tools/prompt.py` `tools/registry.py`；具体工具 `tools/builtin/`，交互工具 `tools/extension/` |
+| 安全 ripgrep/Python 搜索后端 | `tools/workspace_search.py` `tools/builtin/grep.py`（先 Python 过滤，再交给 rg） |
+| 增量 repo-map 与符号解析 | `tools/repo_index.py` `tools/symbols.py` `tools/builtin/repo_map.py`（AST + 可选 tree-sitter + regex fallback） |
 | 动态工具池 / ToolSearch | `agent/tool_pool.py` `tools/builtin/tool_search.py` |
 | 命令风险分级/审批/写保护 | `safety/commands.py` `safety/policy.py` `safety/rules.py` |
 | 运行时权限/Plan 审批状态机 | `safety/runtime.py` |
@@ -227,7 +229,8 @@ report/tuning/candidate，不自动提交或替换 accepted baseline。
 - Windows：进程终止退化为主进程 kill（无进程组）；未在真机验证
 - 后台 Job 是进程内管理器：进程重启后不会接管旧 OS 进程；已写日志仍保留，但 list/output/kill 只管理当前进程创建的任务
 - 子代理 sidechain 在进程重启后可审计，但不自动接管/复活旧 Task；Definition 的角色提示是用户可信配置，仍需遵守审批、Sandbox 和工具 allowlist
-- grep/repo_map 为纯 Python 实现，超大仓库性能弱于 ripgrep/tree-sitter
+- `grep` 有 `rg` 时走安全加速路径，否则回退纯 Python；Python-only regex（lookaround/backreference 等）始终由 Python 执行，避免 Rust regex 语义偏差
+- `repo_map` 的增量缓存是进程内缓存，重启后首次调用会重新解析；JS/TS 的精确语法树依赖 optional `krelcode[syntax]`，未安装时自动使用保守正则
 - 价目表/上下文窗口是内置近似值，会过时（`agent/pricing.py` 一处可改）
 - 思考流的展示文本不进对话历史（设计如此）；但 Anthropic 扩展思考的
   thinking 块（含签名/redacted）经 Message.provider_meta 完整回传（Step 34），

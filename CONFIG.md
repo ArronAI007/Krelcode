@@ -942,6 +942,16 @@ feed 有界（默认 2,000 条 / 单条 24,000 字符），sidechain 保存 star
 history，可重启后审计，但当前进程不会自动接管或复活旧子代理 Task。Sidechain 不自动加入
 父 Agent 上下文，父代理必须通过 `wait_agent` / `get_agent_feed` 主动读取。
 
+## 7.3 工作区检索与语法解析后端
+
+`grep`、`repo_map` 不需要新增 TOML 开关，启动时自动探测本机能力：
+
+- `grep` 优先调用 PATH 中的 `ripgrep`。候选文件始终先经过 Python 的 workspace/symlink/hardlink/敏感路径/二进制过滤，`rg` 只接收已过滤的普通文件；它的输出还会二次校验。`rg` 不存在、进程失败、JSON 异常或表达式含 lookaround/backreference 等 Python-only 语法时，回退到内置 Python 搜索。
+- `repo_map` 的 Python 文件使用标准库 AST。JS/JSX/MJS/CJS/TS/TSX/MTS/CTS 在安装 optional `syntax` extra 时使用 tree-sitter，否则自动使用正则 fallback。
+- 基础包仍为零第三方运行时依赖。启用语法树解析：`pip install -e ".[syntax]"`（发行包为 `pip install "krelcode[syntax]"`）。
+- repo-map 索引只保存在当前进程内，按文件身份和元数据做增量失效；重启不会读取磁盘持久索引。删除、修改或新增文件会在下次调用时增量同步。
+- `grep` 结果通过 `data.backend=ripgrep|python` 暴露实际后端。`repo_map` 通过 `data.incremental.parsed_files/reused_files/removed_files` 和 `data.parser_backends` 暴露增量与解析器覆盖情况；这些字段不包含文件正文。
+
 ## 8. JSON 输出模式（`-m --output-format json`）
 
 ```json

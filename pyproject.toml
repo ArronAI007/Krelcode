@@ -18,6 +18,13 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+[project.optional-dependencies]
+syntax = [
+    "tree-sitter>=0.22",
+    "tree-sitter-javascript>=0.21",
+    "tree-sitter-typescript>=0.21",
+]
+
 [project.scripts]
 krelcode = "krelcode.entrypoints.cli:main"
 

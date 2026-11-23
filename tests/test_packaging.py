@@ -20,6 +20,10 @@ def test_pyproject_metadata():
     assert project["name"] == "krelcode"
     assert project["dependencies"] == []           # 零第三方运行时依赖的承诺
     assert project["requires-python"] == ">=3.11"  # tomllib 需要 3.11+
+    syntax_extra = project["optional-dependencies"]["syntax"]
+    assert any(item.startswith("tree-sitter>=") for item in syntax_extra)
+    assert any(item.startswith("tree-sitter-javascript>=") for item in syntax_extra)
+    assert any(item.startswith("tree-sitter-typescript>=") for item in syntax_extra)
     # 控制台入口
     assert project["scripts"]["krelcode"] == "krelcode.entrypoints.cli:main"
     # 版本与包内 __version__ 一致

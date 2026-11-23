@@ -72,8 +72,8 @@ krelcode               # 进入 REPL
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（沙箱内 1626 通过，2 个本地端口测试自动跳过）
-# *两个真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
+# 运行全部测试（当前离线基线下 1674 通过；可选端口/grammar 测试自动跳过）
+# *真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
 /opt/anaconda3/bin/pytest tests/ -v
 
 # 离线体验 mock 模式：第一轮会演示完整 tool-call 循环（LLM→审批→执行get_time→回填→总结）
@@ -446,9 +446,18 @@ transport = "sse"
 - 热重载：REPL 内 `/mcp` 查看状态，`/mcp reload` 重读配置（增/删/改 diff 同步）；崩溃的服务器自动重启并重注册工具；配置中的 `${ENV_VAR}` 会在 HTTP Header/OAuth 字段中按环境变量展开，建议凭据只放环境变量或权限受限的本机配置
 - `--no-mcp` 跳过启动；单服务器失败只警告不阻断
 
-### repo_map
+### ripgrep、tree-sitter 与增量 repo_map
 
-内置 `repo_map` 工具：Python 用 ast 精确提取类/函数/方法+行号（零依赖，不引 tree-sitter），JS/TS 用正则，20K 字符预算，LLM 可按行号接 `read_file` 精读。
+`grep` 自动优先使用系统 `ripgrep`，但不会把原始目录直接交给 `rg`：先由 Python 枚举并过滤 symlink、硬链接、隐藏/依赖目录、敏感文件和二进制文件，只把已确认安全的工作区文件列表交给 `rg`；输出再次校验路径与敏感策略。`rg` 缺失、执行失败或表达式超出 Rust regex 子集时，自动回退到语义相同的 Python 搜索。结果中的 `data.backend` 会标明本次实际使用的 `ripgrep` / `python`。
+
+`repo_map` 使用进程内增量索引：按 workspace + 相对路径缓存符号元数据，以 inode/device/size/mtime/ctime/mode 判断失效，重复调用只重新解析变化文件，删除文件自动驱逐；`data.incremental` 暴露 `parsed_files`、`reused_files`、`removed_files`，`data.parser_backends` 暴露各解析器覆盖文件数。Python 始终使用标准库 AST；JS/TS/TSX 在安装可选语法包时使用 tree-sitter，否则自动使用保守正则。地图保持 20K 字符预算，LLM 可按行号接 `read_file` 精读。
+
+基础安装仍为零第三方运行时依赖。需要 tree-sitter 时，在源码/虚拟环境安装 `syntax` extra：
+
+```bash
+pip install -e ".[syntax]"
+# 或安装已打包 wheel：pip install "krelcode[syntax]"
+```
 
 默认工具 17 个：文件/检索与执行工具（`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`、`repo_map`、`find_refs`、`check_syntax` 等）、`get_time`、`ask_user`、`update_plan`、`tool_search`，以及 `job_start/job_output/job_list/job_kill`；显式启用 `[prompt.authoring].enabled=true` 时再注册 `prompt_lab`（仅生成 content-light proposal，不写生产 Prompt）。另注册 9 个子代理工具：`spawn_agent`、`wait_agent`、`send_to_agent`、`list_agents`、`get_agent_feed`、`pause_agent`、`resume_agent`、`kill_agent`、`list_agent_definitions`。启用 Skills 时另加 5 个 Skill 工具，并叠加 MCP 远程工具和插件工具。
 
