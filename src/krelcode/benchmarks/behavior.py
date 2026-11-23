@@ -107,7 +107,17 @@ from .parity import (
     load_prompt_baseline,
     save_prompt_baseline,
 )
-from .report_store import DEFAULT_BEHAVIOR_REPORT_PATH, save_behavior_report
+from .report_store import (
+    DEFAULT_BEHAVIOR_REPORT_PATH,
+    aggregate_behavior_report_files,
+    save_behavior_report,
+)
+from .suite import (
+    BENCHMARK_SUITES,
+    BenchmarkSuiteError,
+    resolve_suite,
+    shard_cases,
+)
 
 
 BEHAVIOR_BENCHMARK_SCHEMA_VERSION = 4
@@ -368,15 +378,27 @@ class BehaviorReport:
                 float(item.cost_usd) for item in trials
                 if item.cost_usd is not None
             ]
+            durations = [max(0, int(item.duration_ms)) for item in trials]
+            pass_rate = (passed / len(trials)) if trials else 0.0
+            confidence_low, confidence_high = _wilson_interval(
+                passed, len(trials))
             summary[case_id] = {
                 "trials": len(trials),
                 "passed": passed,
                 "failed": len(trials) - passed,
-                "pass_rate": (passed / len(trials)) if trials else 0.0,
+                "pass_rate": pass_rate,
+                "pass_rate_ci_95": [confidence_low, confidence_high],
                 "pass_at_k": passed > 0,
+                "pass_hat_k": bool(trials) and passed == len(trials),
                 "stable": bool(trials) and passed == len(trials),
+                "flaky": 0 < passed < len(trials),
                 "tools": sum(len(item.tools) for item in trials),
+                "tool_errors": sum(
+                    1 for item in trials for tool in item.tools
+                    if not tool.success),
                 "duration_ms": sum(item.duration_ms for item in trials),
+                "p50_duration_ms": _percentile(durations, 50),
+                "p95_duration_ms": _percentile(durations, 95),
                 "input_tokens": sum(
                     int(item.usage.get("input_tokens", 0) or 0)
                     for item in trials),
@@ -420,12 +442,25 @@ class BehaviorReport:
             summary[result.error_kind] = summary.get(result.error_kind, 0) + 1
         return summary
 
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> "BehaviorReport":
+        """Restore a strict content-light report for shard aggregation."""
+        return _behavior_report_from_mapping(payload)
+
     def as_dict(self, *, include_content: bool = False) -> dict[str, object]:
         cases = self.case_summary()
         costs = [
             float(item.cost_usd) for item in self.results
             if item.cost_usd is not None
         ]
+        durations = [max(0, int(item.duration_ms)) for item in self.results]
+        passed_trials = sum(1 for item in self.results if item.passed)
+        failed_trials = len(self.results) - passed_trials
+        tool_calls = sum(len(item.tools) for item in self.results)
+        tool_failures = sum(
+            1 for item in self.results for tool in item.tools
+            if not tool.success)
+        ci_low, ci_high = _wilson_interval(passed_trials, len(self.results))
         return {
             "schema_version": self.schema_version,
             "kind": "live_model_behavior",
@@ -441,17 +476,26 @@ class BehaviorReport:
                 "stable_cases": sum(
                     1 for item in cases.values() if item["stable"]),
                 "trials": len(self.results),
-                "passed_trials": sum(
-                    1 for item in self.results if item.passed),
-                "failed_trials": sum(
-                    1 for item in self.results if not item.passed),
+                "passed_trials": passed_trials,
+                "failed_trials": failed_trials,
+                "trial_success_rate": (
+                    passed_trials / len(self.results) if self.results else 0.0),
+                "trial_success_rate_ci_95": [ci_low, ci_high],
                 "pass_at_k": sum(
                     1 for item in cases.values() if item["pass_at_k"]),
+                "pass_hat_k": sum(
+                    1 for item in cases.values() if item["pass_hat_k"]),
+                "flaky_cases": sum(
+                    1 for item in cases.values() if item["flaky"]),
                 "pass_rate": (
-                    sum(1 for item in self.results if item.passed)
-                    / len(self.results) if self.results else 0.0
+                    passed_trials / len(self.results) if self.results else 0.0
                 ),
-                "tool_calls": sum(len(item.tools) for item in self.results),
+                "tool_calls": tool_calls,
+                "tool_failures": tool_failures,
+                "tool_error_rate": (
+                    tool_failures / tool_calls if tool_calls else 0.0),
+                "p50_trial_duration_ms": _percentile(durations, 50),
+                "p95_trial_duration_ms": _percentile(durations, 95),
                 "input_tokens": sum(
                     int(item.usage.get("input_tokens", 0) or 0)
                     for item in self.results),
@@ -723,10 +767,12 @@ class BehaviorBenchmarkRunner:
         model_name: str = "",
         prompt_resolution: PromptProfileResolution | None = None,
         provider_profile: Mapping[str, object] | None = None,
+        suite_name: str = "custom",
+        shard: str = "",
     ) -> None:
         self.provider_factory = provider_factory
         self.cases = tuple(cases or BEHAVIOR_CASES)
-        self.trials = max(1, min(int(trials), 20))
+        self.trials = max(1, min(int(trials), 50))
         self.max_steps = max(1, int(max_steps))
         self.context_max_tokens = max(4_000, int(context_max_tokens))
         self.sandbox_backend = sandbox_backend
@@ -735,6 +781,8 @@ class BehaviorBenchmarkRunner:
         self.model_name = model_name
         self.prompt_resolution = prompt_resolution
         self.provider_profile = dict(provider_profile or {})
+        self.suite_name = str(suite_name or "custom")
+        self.shard = str(shard or "")
 
     @property
     def case_ids(self) -> tuple[str, ...]:
@@ -792,6 +840,14 @@ class BehaviorBenchmarkRunner:
             self.provider_name,
             self.model_name,
         )
+        suite = BENCHMARK_SUITES.get(self.suite_name)
+        suite_ids = set(
+            suite.select(item.id for item in BEHAVIOR_CASES)
+        ) if suite is not None else {item.id for item in selected}
+        suite_cases = tuple(
+            case for case in BEHAVIOR_CASES if case.id in suite_ids)
+        if suite is None:
+            suite_cases = tuple(selected)
         profile = {
             "krelcode_version": __version__,
             "python_version": platform.python_version(),
@@ -800,6 +856,10 @@ class BehaviorBenchmarkRunner:
             "parity_contract_version": PROMPT_PARITY_CONTRACT.version,
             "parity_contract_hash": PROMPT_PARITY_CONTRACT.hash,
             "cases": [case.id for case in selected],
+            "suite_name": self.suite_name,
+            "suite_size": len(suite_cases),
+            "selected_cases": len(selected),
+            "shard": self.shard,
             "trials": self.trials,
             "max_steps": self.max_steps,
             "context_max_tokens": self.context_max_tokens,
@@ -2453,6 +2513,261 @@ def _elapsed_ms(started: float) -> int:
     return max(0, int((time.monotonic() - started) * 1000))
 
 
+def _percentile(values: Sequence[int], percentile: int) -> int:
+    if not values:
+        return 0
+    ordered = sorted(max(0, int(value)) for value in values)
+    rank = max(0, min(len(ordered) - 1,
+                      int(round((percentile / 100.0) * (len(ordered) - 1)))))
+    return ordered[rank]
+
+
+def _wilson_interval(successes: int, total: int) -> tuple[float, float]:
+    """95% Wilson score interval for a bounded pass-rate estimate."""
+    if total <= 0:
+        return 0.0, 0.0
+    z = 1.96
+    ratio = max(0.0, min(1.0, successes / total))
+    denominator = 1.0 + z * z / total
+    center = (ratio + z * z / (2.0 * total)) / denominator
+    margin = z * (
+        (ratio * (1.0 - ratio) / total + z * z / (4.0 * total * total)) ** 0.5
+    ) / denominator
+    return round(max(0.0, center - margin), 6), round(
+        min(1.0, center + margin), 6)
+
+
+def _report_mapping(value: object, label: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} 必须是 object")
+    return value
+
+
+def _report_int(value: object, label: str) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} 必须是整数") from exc
+
+
+def _report_sequence(value: object, label: str) -> Sequence[object]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{label} 必须是数组")
+    return value
+
+
+def _behavior_report_from_mapping(payload: Mapping[str, object]) -> BehaviorReport:
+    """Strictly restore a saved content-light report.
+
+    Saved shards are enough to reconstruct every aggregate metric because the
+    content-light contract retains checks, tool outcomes and trial durations.
+    Free-form answers and tool arguments are rejected rather than ignored.
+    """
+    if payload.get("kind") != "live_model_behavior":
+        raise ValueError("不是 live_model_behavior 报告")
+    if int(payload.get("schema_version", 0) or 0) != BEHAVIOR_BENCHMARK_SCHEMA_VERSION:
+        raise ValueError("live benchmark report schema 不兼容")
+    profile = dict(_report_mapping(payload.get("profile", {}), "profile"))
+    results: list[BehaviorTrialResult] = []
+    for index, raw_result in enumerate(
+        _report_sequence(payload.get("results"), "results")
+    ):
+        item = _report_mapping(raw_result, f"results[{index}]")
+        if "answer" in item:
+            raise ValueError("分片聚合只接受 content-light report（禁止 answer）")
+        checks: list[BehaviorCheck] = []
+        for raw_check in _report_sequence(item.get("checks"), "checks"):
+            check = _report_mapping(raw_check, "check")
+            try:
+                metric = BehaviorMetric(str(check.get("metric", "")))
+            except ValueError as exc:
+                raise ValueError(
+                    f"未知 benchmark metric: {check.get('metric')}") from exc
+            checks.append(BehaviorCheck(
+                metric=metric,
+                passed=bool(check.get("passed", False)),
+                detail=str(check.get("detail", "") or ""),
+            ))
+        tools: list[ToolObservation] = []
+        for raw_tool in _report_sequence(item.get("tools"), "tools"):
+            tool = _report_mapping(raw_tool, "tool")
+            if "arguments" in tool:
+                raise ValueError(
+                    "分片聚合只接受 content-light report（禁止工具 arguments）")
+            arguments: dict[str, object] = {}
+            if tool.get("path") is not None:
+                arguments["path"] = str(tool["path"])
+            data: dict[str, object] = {}
+            if tool.get("exit_code") is not None:
+                data["exit_code"] = tool["exit_code"]
+            tools.append(ToolObservation(
+                call_id=str(tool.get("call_id", "") or ""),
+                name=str(tool.get("name", "") or ""),
+                arguments=arguments,
+                completed=bool(tool.get("completed", False)),
+                is_error=bool(tool.get("is_error", False)),
+                data=data,
+                duration_ms=max(0, _report_int(
+                    tool.get("duration_ms"), "tool.duration_ms")),
+            ))
+        diff = _report_mapping(
+            item.get("workspace_diff", {}), "workspace_diff")
+        usage_raw = _report_mapping(item.get("usage", {}), "usage")
+        facts = dict(_report_mapping(item.get("facts", {}), "facts"))
+        cost = item.get("cost_usd")
+        results.append(BehaviorTrialResult(
+            case_id=str(item.get("case_id", "") or ""),
+            trial=max(1, _report_int(item.get("trial"), "trial")),
+            passed=bool(item.get("passed", False)),
+            checks=tuple(checks),
+            tools=tuple(tools),
+            usage={
+                str(key): _report_int(value, f"usage.{key}")
+                for key, value in usage_raw.items()
+            },
+            cost_usd=None if cost is None else float(cost),
+            duration_ms=max(0, _report_int(
+                item.get("duration_ms"), "duration_ms")),
+            error=str(item.get("error", "") or ""),
+            error_kind=str(item.get("error_kind", "") or ""),
+            workspace_diff=WorkspaceDiff(
+                created=tuple(str(value) for value in _report_sequence(
+                    diff.get("created"), "workspace_diff.created")),
+                modified=tuple(str(value) for value in _report_sequence(
+                    diff.get("modified"), "workspace_diff.modified")),
+                deleted=tuple(str(value) for value in _report_sequence(
+                    diff.get("deleted"), "workspace_diff.deleted")),
+            ),
+            facts=facts,
+        ))
+    if any(not result.case_id for result in results):
+        raise ValueError("benchmark result 缺少 case_id")
+    if len({(item.case_id, item.trial) for item in results}) != len(results):
+        raise ValueError("benchmark report 包含重复 case/trial")
+    return BehaviorReport(
+        schema_version=BEHAVIOR_BENCHMARK_SCHEMA_VERSION,
+        generated_at=str(payload.get("generated_at", "") or ""),
+        provider=str(payload.get("provider", "") or ""),
+        model=str(payload.get("model", "") or ""),
+        passed=bool(payload.get("passed", False)),
+        results=tuple(results),
+        duration_ms=max(0, _report_int(
+            payload.get("duration_ms"), "duration_ms")),
+        profile=profile,
+    )
+
+
+def aggregate_behavior_reports(
+    reports: Sequence[BehaviorReport],
+    *,
+    require_complete: bool = True,
+) -> BehaviorReport:
+    """Merge disjoint deterministic shards into one behavior report."""
+    if not reports:
+        raise ValueError("至少需要一个 benchmark shard report")
+    first = reports[0]
+    comparable_keys = {
+        "krelcode_version", "python_version", "platform",
+        "parity_contract_version", "parity_contract_hash",
+        "suite_name", "trials", "max_steps", "context_max_tokens",
+        "sandbox_backend", "trial_timeout_seconds", "prompt_release_id",
+        "prompt_release_hash", "prompt_profile", "prompt_profile_hash",
+        "profile_calibration_id", "profile_calibration_hash",
+        "profile_calibration_status", "profile_calibration_reason",
+        "provider_base_url_hash", "provider_generation_hash",
+        "provider_timeout_seconds", "provider_max_tokens",
+    }
+    for report in reports:
+        if report.schema_version != first.schema_version:
+            raise ValueError("benchmark shard schema 不一致")
+        if (report.provider, report.model) != (first.provider, first.model):
+            raise ValueError("benchmark shard provider/model 不一致")
+        for key in comparable_keys:
+            if report.profile.get(key) != first.profile.get(key):
+                raise ValueError(f"benchmark shard profile 不一致: {key}")
+
+    expected_trials = _report_int(first.profile.get("trials", 0), "profile.trials")
+    expected_suite_size = _report_int(
+        first.profile.get("suite_size", 0), "profile.suite_size")
+    by_key: dict[tuple[str, int], BehaviorTrialResult] = {}
+    shard_labels: list[str] = []
+    for report in reports:
+        shard = str(report.profile.get("shard", "") or "")
+        if shard:
+            shard_labels.append(shard)
+        for result in report.results:
+            key = (result.case_id, result.trial)
+            if key in by_key:
+                raise ValueError(
+                    f"benchmark shard 重叠: {result.case_id} trial {result.trial}")
+            by_key[key] = result
+    if not by_key:
+        raise ValueError("benchmark shard 不包含结果")
+
+    case_ids = tuple(dict.fromkeys(result.case_id for result in by_key.values()))
+    known_order = {
+        case.id: index for index, case in enumerate(BEHAVIOR_CASES)
+    }
+    case_ids = tuple(sorted(
+        case_ids,
+        key=lambda item: (known_order.get(item, len(known_order)), item),
+    ))
+    for case_id in case_ids:
+        trials = sorted(
+            result.trial for result in by_key.values()
+            if result.case_id == case_id)
+        if expected_trials and trials != list(range(1, expected_trials + 1)):
+            raise ValueError(
+                f"benchmark shard 缺少 {case_id} 的 trial 1..{expected_trials}")
+    if require_complete and expected_suite_size and len(case_ids) != expected_suite_size:
+        raise ValueError(
+            f"benchmark shard 覆盖不完整: {len(case_ids)}/{expected_suite_size}")
+
+    ordered_results = tuple(
+        by_key[(case_id, trial)]
+        for case_id in case_ids
+        for trial in range(1, (expected_trials or max(
+            result.trial for result in by_key.values()
+            if result.case_id == case_id)) + 1)
+    )
+    profile = dict(first.profile)
+    profile["cases"] = list(case_ids)
+    profile["selected_cases"] = len(case_ids)
+    if expected_suite_size:
+        profile["suite_size"] = expected_suite_size
+    profile["trials"] = expected_trials or max(
+        result.trial for result in ordered_results)
+    profile["shard"] = "aggregate"
+    profile["shards"] = sorted(dict.fromkeys(shard_labels))
+    case_by_id = {case.id: case for case in BEHAVIOR_CASES}
+    if all(case_id in case_by_id for case_id in case_ids):
+        suite_payload = json.dumps(
+            [case_by_id[case_id].as_dict() for case_id in case_ids],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        profile["suite_hash"] = hashlib.sha256(suite_payload).hexdigest()
+
+    generated_at = datetime.now(timezone.utc).isoformat()
+    duration_ms = sum(max(0, report.duration_ms) for report in reports)
+    provisional = BehaviorReport(
+        schema_version=first.schema_version,
+        generated_at=generated_at,
+        provider=first.provider,
+        model=first.model,
+        passed=False,
+        results=ordered_results,
+        duration_ms=duration_ms,
+        profile=profile,
+    )
+    passed = bool(ordered_results) and all(
+        bool(item.get("stable")) for item in provisional.case_summary().values())
+    return replace(provisional, passed=passed)
+
+
 def _safe_error(
     error: BaseException,
     redactor: SecretRedactor | None = None,
@@ -2569,8 +2884,17 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> None:
         "--live", action="store_true",
         help="运行真实模型行为 Benchmark（需要 provider/API key）")
     parser.add_argument(
-        "--trials", type=int, default=1,
-        help="每个 live case 的独立 trial 数（1-20；gate/save 至少 3）")
+        "--trials", type=int, default=0,
+        help="每个 live case 的独立 trial 数（1-50；0=使用 suite 默认值）")
+    parser.add_argument(
+        "--suite", default="standard", choices=tuple(BENCHMARK_SUITES),
+        help="live suite：smoke/standard/nightly/extended")
+    parser.add_argument(
+        "--shard", default=None, metavar="INDEX/COUNT",
+        help="确定性分片运行，例如 --shard 2/4；适合 CI 并行扩展规模")
+    parser.add_argument(
+        "--aggregate-shards", nargs="+", default=None, metavar="REPORT",
+        help="合并多个完整分片的 content-light report，不接受重叠或缺失 trial")
     parser.add_argument("--provider", default=None, help="覆盖 live provider")
     parser.add_argument("--model", default=None, help="覆盖 live model")
     parser.add_argument("--base-url", default=None, help="覆盖 live base URL")
@@ -2656,6 +2980,11 @@ def _parity_payload(
 
 def run_live_command(args: argparse.Namespace) -> int:
     """CLI adapter used by ``python -m krelcode.benchmarks.prompt --live``."""
+    try:
+        suite = resolve_suite(getattr(args, "suite", "standard"))
+    except BenchmarkSuiteError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     if getattr(args, "final_acceptance", False) and any((
         getattr(args, "contract", False),
         getattr(args, "release", False),
@@ -2664,6 +2993,52 @@ def run_live_command(args: argparse.Namespace) -> int:
         print("--final-acceptance 不能与 contract/release/list 混用",
               file=sys.stderr)
         return 2
+
+    aggregate_paths = tuple(getattr(args, "aggregate_shards", None) or ())
+    if aggregate_paths:
+        incompatible = any((
+            getattr(args, "contract", False),
+            getattr(args, "release", False),
+            getattr(args, "list", False),
+            getattr(args, "gate", None),
+            getattr(args, "save_baseline", None),
+            getattr(args, "final_acceptance", False),
+            getattr(args, "include_content", False),
+            getattr(args, "tune", False),
+            getattr(args, "tune_output", None),
+        ))
+        if incompatible:
+            print("--aggregate-shards 不能与 contract/release/list/gate/"
+                  "baseline/final-acceptance/content/tune 混用", file=sys.stderr)
+            return 2
+        try:
+            report = aggregate_behavior_report_files(aggregate_paths)
+        except (OSError, TypeError, ValueError) as exc:
+            print(f"benchmark shard 聚合失败: {_safe_error(exc)}", file=sys.stderr)
+            return 2
+        saved_path = ""
+        save_report_path = getattr(args, "save_report", None)
+        if save_report_path:
+            destination = Path(str(save_report_path)).expanduser()
+            if not destination.is_absolute():
+                destination = Path.cwd() / destination
+            try:
+                saved_path = str(save_behavior_report(report, destination))
+            except (OSError, TypeError, ValueError) as exc:
+                print(f"live report 保存失败: {_safe_error(exc)}", file=sys.stderr)
+                return 2
+        if getattr(args, "json", False):
+            print(json.dumps(
+                report.as_dict(include_content=False),
+                ensure_ascii=False,
+                indent=2,
+            ))
+        else:
+            print(_text_report(report))
+            if saved_path:
+                print()
+                print(f"Live behavior report: {saved_path}")
+        return 0 if report.passed else 1
 
     if getattr(args, "contract", False):
         payload = contract_summary(PROMPT_PARITY_CONTRACT)
@@ -2710,16 +3085,22 @@ def run_live_command(args: argparse.Namespace) -> int:
         return 0
 
     if getattr(args, "list", False):
-        requested = set(getattr(args, "case", []) or ())
-        cases = [
-            case for case in BEHAVIOR_CASES
-            if not requested or case.id in requested
-        ]
-        unknown = sorted(requested - {case.id for case in BEHAVIOR_CASES})
+        requested = tuple(getattr(args, "case", []) or ())
+        available = suite.select(case.id for case in BEHAVIOR_CASES)
+        unknown = sorted(set(requested) - set(available))
         if unknown:
-            print("未知 live benchmark case: " + ", ".join(unknown),
+            print("suite 中不存在 benchmark case: " + ", ".join(unknown),
                   file=sys.stderr)
             return 2
+        selected_ids = requested or available
+        try:
+            selected_ids = shard_cases(
+                selected_ids, getattr(args, "shard", None))
+        except BenchmarkSuiteError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        selected = set(selected_ids)
+        cases = [case for case in BEHAVIOR_CASES if case.id in selected]
         if getattr(args, "json", False):
             print(json.dumps(
                 [case.as_dict() for case in cases],
@@ -2769,6 +3150,27 @@ def run_live_command(args: argparse.Namespace) -> int:
     if (gate_path or save_path or final_acceptance) and requested_cases:
         print("gate/baseline/final acceptance 必须运行完整 case manifest，"
               "不能同时指定 --case", file=sys.stderr)
+        return 2
+    available_ids = suite.select(case.id for case in BEHAVIOR_CASES)
+    outside_suite = sorted(set(requested_cases) - set(available_ids))
+    if outside_suite:
+        print("suite 中不存在 benchmark case: " + ", ".join(outside_suite),
+              file=sys.stderr)
+        return 2
+    try:
+        selected_case_ids = shard_cases(
+            requested_cases or available_ids,
+            getattr(args, "shard", None),
+        )
+    except BenchmarkSuiteError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if (gate_path or save_path or final_acceptance) and (
+            suite.name == "smoke"
+            or len(selected_case_ids) != len(BEHAVIOR_CASES)
+            or bool(getattr(args, "shard", None))):
+        print("gate/baseline/final acceptance 必须使用完整未分片 suite",
+              file=sys.stderr)
         return 2
 
     baseline = None
@@ -2825,7 +3227,8 @@ def run_live_command(args: argparse.Namespace) -> int:
     def factory() -> LLMProvider:
         return create_provider(settings)
 
-    trials = int(getattr(args, "trials", 1) or 1)
+    requested_trials = int(getattr(args, "trials", 0) or 0)
+    trials = requested_trials or suite.default_trials
     if gate_path or save_path:
         trials = max(trials, PROMPT_PARITY_MINIMUM_TRIALS)
     runner = BehaviorBenchmarkRunner(
@@ -2838,9 +3241,23 @@ def run_live_command(args: argparse.Namespace) -> int:
         model_name=settings.model or "provider-default",
         prompt_resolution=prompt_resolution,
         provider_profile=_provider_execution_profile(settings),
+        suite_name=suite.name,
+        shard=str(getattr(args, "shard", "") or ""),
+    )
+    # Preserve the historical full-run call shape for the complete standard
+    # suite (and its nightly/extended trial variants). Runner case filtering is
+    # only needed for smoke, explicit --case or deterministic shards.
+    runner_case_ids = (
+        None
+        if (
+            suite.name in {"standard", "nightly", "extended"}
+            and not requested_cases
+            and not getattr(args, "shard", None)
+        )
+        else selected_case_ids
     )
     try:
-        report = runner.run(requested_cases or None)
+        report = runner.run(runner_case_ids)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -2965,6 +3382,7 @@ def run_live_command(args: argparse.Namespace) -> int:
 
 __all__ = [
     "BEHAVIOR_BENCHMARK_SCHEMA_VERSION",
+    "aggregate_behavior_reports",
     "BEHAVIOR_CASES",
     "BehaviorBenchmarkRunner",
     "BehaviorCase",

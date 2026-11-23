@@ -6,6 +6,9 @@ __all__ = [
     "BEHAVIOR_BENCHMARK_SCHEMA_VERSION",
     "BEHAVIOR_CASES",
     "BENCHMARK_CASES",
+    "BENCHMARK_SUITES",
+    "BenchmarkSuite",
+    "BenchmarkSuiteError",
     "FROZEN_PROMPT_PARITY_CONTRACT_HASH",
     "FROZEN_PROMPT_PARITY_SUITE_HASH",
     "PROMPT_BASELINE_SCHEMA_VERSION",
@@ -38,6 +41,8 @@ __all__ = [
     "BehaviorReportSummary",
     "BehaviorTrialResult",
     "DEFAULT_BEHAVIOR_REPORT_PATH",
+    "aggregate_behavior_report_files",
+    "aggregate_behavior_reports",
     "FailureAttribution",
     "FailureCause",
     "FailureTrajectoryAnalyzer",
@@ -62,12 +67,16 @@ __all__ = [
     "analyze_failure_trajectories",
     "contract_summary",
     "evaluate_prompt_parity",
+    "load_behavior_report",
     "load_prompt_baseline",
     "load_behavior_report_summary",
+    "parse_shard",
+    "resolve_suite",
     "run_offline_acceptance",
     "main",
     "save_prompt_baseline",
     "save_behavior_report",
+    "shard_cases",
 ]
 
 
@@ -86,15 +95,24 @@ def __getattr__(name: str):
         from . import acceptance
 
         return getattr(acceptance, name)
-    if name in {"BehaviorReportSummary", "DEFAULT_BEHAVIOR_REPORT_PATH",
-                "load_behavior_report_summary", "save_behavior_report"}:
+    if name in {
+        "BehaviorReportSummary", "DEFAULT_BEHAVIOR_REPORT_PATH",
+        "aggregate_behavior_report_files", "load_behavior_report",
+        "load_behavior_report_summary", "save_behavior_report",
+    }:
         from . import report_store
 
         return getattr(report_store, name)
+    if name.startswith("BenchmarkSuite") or name in {
+        "BENCHMARK_SUITES", "parse_shard", "resolve_suite", "shard_cases",
+    }:
+        from . import suite
+
+        return getattr(suite, name)
     if (
         name.startswith("Behavior")
         or name.startswith("BEHAVIOR_")
-        or name in {"ToolObservation"}
+        or name in {"ToolObservation", "aggregate_behavior_reports"}
     ):
         from . import behavior
 

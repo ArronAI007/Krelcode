@@ -21,6 +21,7 @@ krelcode [子命令] [选项]
 | `enterprise status` | 显示 managed 企业策略、SSO 主体与审计链状态（不输出 token） | — |
 | `audit verify|export` | 校验 JSONL 审计链；导出到显式目标文件 | `--audit-output <路径>` |
 | `auth login|status|logout` | OIDC Authorization Code + PKCE 登录、状态和退出 | `--issuer`、`--client-id`、`--redirect-uri`、`--token-dir`、`--no-open-browser`、`--allow-http-issuer` |
+| `telemetry status|enable [local\|remote]|disable|summary|export|clear|send` | 隐私优先的显式 opt-in 遥测；默认 off，项目配置不能静默开启 | `--telemetry-output`、`--telemetry-endpoint`、`--telemetry-sample-rate` |
 
 ### 通用旗标
 
@@ -33,6 +34,9 @@ krelcode [子命令] [选项]
 | `--config` | 自动探测 | 独占 TOML 配置路径；不参与默认层合并 |
 | `--workspace` | `.` | 工作区根（所有路径约束与状态目录的锚点） |
 | `--audit-output <路径>` | — | `audit export` 的显式导出目标；普通对话不会自动导出审计文件 |
+| `--telemetry-output <路径>` | — | `telemetry export` 的显式 JSONL 导出目标；文件以 0600 原子写入并拒绝 symlink |
+| `--telemetry-endpoint <URL>` | 配置 | `telemetry enable remote` 的 HTTPS 批量接收端点；仅 localhost 测试允许 HTTP |
+| `--telemetry-sample-rate <0..1>` | `1.0` | 显式启用时的会话采样率；0 表示不采集 |
 | `--issuer <URL>` | managed `[enterprise.sso].issuer` | `auth login` 临时覆盖 OIDC issuer |
 | `--client-id <id>` | managed `[enterprise.sso].client_id` | `auth login` 临时覆盖 OIDC client_id |
 | `--redirect-uri <URL>` | 随机 localhost callback | OIDC callback；HTTP 仅允许 loopback |
@@ -93,8 +97,11 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--live` | — | 启用真实模型行为层；provider/model 来自用户 → project → local → managed 配置 |
-| `--live --list` | — | 列出 16 个行为场景，不读取 API key |
-| `--trials` | `1` | 每个场景独立 trial 数，限制 1-20 |
+| `--live --list` | — | 列出 suite 的行为场景，不读取 API key |
+| `--suite` | `standard` | `smoke`（5 case）/`standard`（16 case×1）/`nightly`（16 case×3）/`extended`（16 case×5） |
+| `--shard INDEX/COUNT` | `1/1` | 确定性 round-robin 分片；适合 CI matrix 扩大 trial/case 规模 |
+| `--aggregate-shards REPORT...` | — | 合并多个完整、不重叠的 content-light 分片报告；缺失 trial、重叠 case 或 profile 漂移 fail-closed |
+| `--trials` | suite 默认 | 每个场景独立 trial 数，限制 1-50；`0` 使用 suite 默认值 |
 | `--trial-timeout` | `300` | 单个 trial 总超时秒数；超时只失败当前 trial |
 | `--live-max-steps` | `14` | 每个 Agent turn 的最大模型/工具步数 |
 | `--sandbox-backend` | `auto` | `auto/static/seatbelt/bubblewrap` |
@@ -121,6 +128,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/permissions add <decision> <scope> <kind> <pattern>` | 添加 `allow/ask/deny` × `session/workspace` 规则 |
 | `/permissions remove <rule-id>` | 按 ID 删除规则 |
 | `/tool-output [编号\|last]` | 列出工具输出（默认折叠）；按编号或 `last` 在灰色背景面板中展开 |
+| `/telemetry [status\|enable [local\|remote]\|disable\|summary\|export <path>\|clear\|send]` | 查看或管理显式 opt-in 匿名遥测；永不采集 Prompt、代码、路径、工具参数/输出、用户名、hostname 或凭据 |
 | `/diff [staged/refresh/next/prev/file <n>/top/end/numbers/close]` | 打开高级 diff 审阅器：审批中显示待写入 unified diff，普通状态显示工作区或 staged Git diff；支持文件切换、滚动、翻页和行号 |
 | `/queue [delete <n>\|move <n> <m>\|clear]` | 查看或管理 `Alt+Enter` 排队的下一条消息 |
 | `/tools` | 当前动态工具池：core/discoverable/deferred、ToolSearch 已加载状态、来源与排除原因 |
@@ -353,6 +361,17 @@ network = false                      # 默认禁止子进程联网；CLI --sandb
 enabled = "auto"                     # off / auto / on；默认不存在时 off
 idle_timeout = 1800                  # 无运行中任务时的退出秒数；0 常驻
 
+[telemetry]                          # 默认关闭；此处 mode 不授予 consent
+# mode = "local"                     # 仅保留供说明；项目配置不能开启遥测
+endpoint = "https://telemetry.example.com/v1/events"  # enable remote 时使用；必须 HTTPS
+sample_rate = 1.0                    # 会话级采样率 0..1
+flush_interval = 60.0                # remote 后台批量上传间隔秒数
+request_timeout = 10.0
+batch_size = 50
+max_events = 10000                   # 本地队列上限
+max_bytes = 10000000
+retention_days = 30
+
 [permissions]
 mode = "default"                     # default / read-only / auto-approve / plan
 
@@ -365,6 +384,7 @@ policy_version = "2026.11.1"
 max_permission_mode = "read-only"    # default / read-only / plan / auto-approve
 allow_auto_approve = false           # false 时 --auto-approve 直接拒绝
 allow_no_sandbox = false             # false 时 --no-sandbox 直接拒绝
+allow_telemetry = false              # false 时 /telemetry 与 CLI 均不能开启遥测
 disable_plugins = false
 allowed_providers = ["openai", "anthropic"] # 空数组表示不限制
 disabled_tools = ["run_command", "job_start"]
@@ -822,6 +842,7 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 | `KRELCODE_MANAGED_CONFIG` | 显式 managed 企业策略 TOML 路径；缺失或损坏时 fail-closed |
 | `KRELCODE_AUDIT_HMAC_KEY` | `[enterprise.audit].mode="hmac"` 时的审计 HMAC 密钥；不写入配置、日志或会话 |
 | `KRELCODE_SSO_ACCESS_TOKEN` | CI/非交互 SSO 入口；仅作为身份门禁，不替代 provider API key，且不会进入 chat/audit |
+| `KRELCODE_TELEMETRY` | `off/local/remote` 的显式进程级覆盖；managed `allow_telemetry=false` 始终优先 |
 | `NO_COLOR` | 设置后禁用全部 ANSI 颜色 |
 
 ## 5. 工作区状态目录（`.krelcode/`，对 LLM 写保护）
@@ -851,6 +872,8 @@ fail-open，不中断主循环。`pre_compact`/`post_compact` 注入的上下文
 
 全局插件启停状态：`~/.krelcode/plugin-state.json`（按 `scope:name` 隔离）。
 全局 MCP OAuth token cache：`~/.krelcode/mcp-oauth.json`（`0600`，含 token，属于敏感文件）。
+全局遥测状态：`~/.krelcode/telemetry/consent.json`（显式 consent，0600）、
+`install_id`（伪匿名随机 ID，0600）与 `queue.jsonl`（有界 content-free JSONL，0600）。
 
 全局：`~/.krelcode/config.toml`（配置）、`~/.krelcode/AGENTS.md`（全局规则，
 与项目级 `AGENTS.md`/`KRELCODE.md` 分层注入，项目规则在后=更具体者优先）、
@@ -1090,6 +1113,19 @@ managed 层。managed 层的 `max_permission_mode` 是上限：`default/read-onl
 `permission_denied` 事件；若审计开启，该事件也会进入独立审计链。
 `allowed_providers` 同时约束启动 Provider、`/model` 热切换和子代理 Agent Definition
 声明的独立模型；任何一条路径都不能切换到未获准的 Provider。
+
+### 匿名遥测与 consent
+
+遥测默认 `off`。项目内 `krelcode.toml` 即使写入 `[telemetry].mode` 也不能静默开启；
+首次启用必须由当前用户执行 `krelcode telemetry enable local`，或在隔离 CI 中显式设置
+`KRELCODE_TELEMETRY`。`remote` 只向 HTTPS endpoint 发送固定 schema 的批量事件；
+localhost HTTP 仅用于测试。managed `allow_telemetry=false` 对所有入口 fail-closed。
+
+采集仅包含事件类型、provider/model 安全标识、运行模式、OS/CPU/Python 小版本、
+工具类别、成功率、时长/Token/答案长度分桶、压缩与审批/拒绝类别、错误类别，以及随机
+`install_id/session_id`。永不采集 Prompt、代码、文件路径、工具 arguments/output、用户名、
+hostname、endpoint 明文或 API key/token。本地队列限制 10,000 事件、10 MB、30 天；
+上传失败保留事件，成功后才按 `event_id` ack。遥测故障 fail-open，不影响 Agent 主任务。
 
 ### 合规审计
 

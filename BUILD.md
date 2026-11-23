@@ -357,3 +357,35 @@ PYTHONPATH=src python -m pytest -q tests/test_p2_2_enterprise.py \
 
 覆盖 managed 不可覆盖、CLI 放宽拒绝、动态工具池/tool deny、审计 hash-chain 篡改检测与
 脱敏、审计续写/导出、SSO PKCE/JWKS RS256/state/token store 状态及 required-SSO fail-closed。
+
+## P2-3 规模化 Benchmark 与遥测验证
+
+```bash
+PYTHONPATH=src python -m pytest -q \
+  tests/test_p2_3_telemetry_benchmark.py \
+  tests/test_live_behavior_benchmark.py \
+  tests/test_prompt_benchmark.py \
+  tests/test_nightly_deepseek_regression.py \
+  tests/test_doctor_init.py \
+  tests/test_config_reference.py \
+  tests/test_command_handlers.py
+```
+
+覆盖命名 suite/确定性分片、报告重建与聚合、Wilson CI/flaky/p50-p95/tool error、显式
+consent、项目配置不可静默开启、严格事件白名单、Prompt/答案/工具参数/错误原文不落盘、
+队列上限与 0600/0700、symlink 拒绝、remote 成功 ack/失败保留、managed 禁优、
+doctor 可见性以及 CLI/REPL 不泄漏环境密钥。
+
+```bash
+# 分片规模运行与聚合
+krelcode benchmark --live --suite extended --shard 1/4 --save-report shard-1.json
+krelcode benchmark --live --suite extended --shard 2/4 --save-report shard-2.json
+krelcode benchmark --aggregate-shards shard-1.json shard-2.json \
+  shard-3.json shard-4.json --save-report latest.json --json
+
+# 遥测默认关闭；显式用户级同意
+krelcode telemetry status
+krelcode telemetry enable local
+krelcode telemetry summary
+krelcode telemetry disable
+```

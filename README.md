@@ -173,6 +173,17 @@ PYTHONPATH=src python -m krelcode.benchmarks.prompt --live --trials 3
 PYTHONPATH=src python -m krelcode.benchmarks.prompt --live \
   --trials 3 --save-report
 
+# 命名 suite：smoke / standard / nightly / extended
+krelcode benchmark --live --suite smoke
+krelcode benchmark --live --suite nightly
+krelcode benchmark --live --suite extended --trials 5
+
+# CI 确定性分片（建议 4 个 matrix job），随后合并 content-light 报告
+krelcode benchmark --live --suite extended --shard 1/4 --save-report shard-1.json
+krelcode benchmark --live --suite extended --shard 2/4 --save-report shard-2.json
+krelcode benchmark --aggregate-shards shard-1.json shard-2.json \
+  shard-3.json shard-4.json --save-report latest.json --json
+
 # 一等 CLI 入口（等价）：保存 `.krelcode/prompts/benchmarks/latest.json`
 krelcode benchmark --live --trials 3 --save-report
 
@@ -269,6 +280,35 @@ configuration/internal）、Krelcode/Python 版本、Sandbox 配置与 suite has
 受影响 case、证据和回归验证步骤；`--tune-output` 可将候选写入 JSON。
 调优器不会自动修改生产 Prompt，必须人工审核后修改对应来源并重跑相同场景与全量
 Benchmark，避免单次失败导致 Prompt 过拟合或权限/安全约束被意外削弱。
+
+### P2-3：规模化 Benchmark 与真实用户遥测
+
+Live Benchmark 提供四档 suite：`smoke`（5 个核心 case）、`standard`（16 case×1）、
+`nightly`（16 case×3）和 `extended`（16 case×5）。`--shard INDEX/COUNT` 使用稳定的
+round-robin 分片，适合 CI matrix；`--aggregate-shards` 从各分片的 content-light report
+重新计算所有指标，并拒绝重复 case/trial、缺失 trial、覆盖不完整或 provider/Prompt/runner
+profile 漂移。报告新增 Wilson 95% 置信区间、`pass@k`、`pass^k`、flaky case、p50/p95
+延迟与工具错误率，而不是只信任单个 `passed=true`。
+
+真实用户遥测默认关闭，且项目配置不能替用户同意。显式入口：
+
+```bash
+krelcode telemetry status
+krelcode telemetry enable local
+krelcode telemetry enable remote --telemetry-endpoint https://telemetry.example.com/v1/events
+krelcode telemetry summary
+krelcode telemetry export ./telemetry.jsonl
+krelcode telemetry send
+krelcode telemetry disable
+```
+
+REPL 对等入口为 `/telemetry ...`。consent、伪匿名 `install_id` 与有界 JSONL 队列保存在
+`~/.krelcode/telemetry/`（目录 0700、文件 0600）。采集 schema 是严格白名单：只记录
+事件类别、安全 provider/model 标识、分桶 token/时长/长度、工具类别与成功/错误类别，
+永不记录 Prompt、代码、路径、工具参数/输出、用户名、hostname、endpoint 明文或 API key。
+`remote` 只允许 HTTPS（localhost 测试例外），失败时事件保留且成功后才 ack；企业
+managed `allow_telemetry=false` 始终优先。`krelcode doctor` 会检查 consent、queue
+完整性/权限与远端配置，不联网。
 
 ### DeepSeek baseline 冻结与 nightly 回归
 
@@ -955,6 +995,19 @@ entrypoints/ 进程入口：cli 轻量 fast-path → main 完整参数路由 →
 ui/      终端 I/O、Markdown 渲染和展示型命令（不承担会话业务状态）
 app.py   组装根：只创建对象并选择运行策略，不实现会话/执行流程
 ```
+
+## P2-3 规模化 Benchmark 与隐私遥测
+
+Benchmark runner 继续复用生产 AgentLoop、PromptAssembler、动态工具池、权限与 Sandbox，
+并通过命名 suite 和确定性分片扩大真实行为样本。分片报告只保存 checks、工具结果元数据、
+token/时长等 content-light 字段；聚合器从原始 trial 重新计算汇总指标，避免摘要计数漂移。
+
+Telemetry 是 EventBus 的旁路订阅者，不进入 Agent 控制流。默认 off；consent 只来自用户级
+`~/.krelcode/telemetry/consent.json`，项目配置只能调 batch、retention 与 endpoint，不能
+授予 consent。事件在写入前经过固定顶层字段/事件类型/data 字段白名单校验，ID 使用随机
+`install_id`/`session_id`。队列有事件数、字节数和时间三重上限，文件/父目录分别使用
+0600/0700；consent、queue、install ID 与 export 路径拒绝 symlink。remote 批量上传失败
+不删除事件，全部故障 fail-open，不阻塞编码任务。
 
 ## P2-2 企业策略、审计与 SSO
 

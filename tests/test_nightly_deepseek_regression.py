@@ -176,5 +176,6 @@ def test_deepseek_nightly_config_and_workflow_pin_safe_execution():
     assert "secrets.DEEPSEEK_API_KEY" in workflow
     assert "benchmarks/baselines/deepseek-flash.json" in workflow
     assert "tests/test_nightly_deepseek_regression.py" in workflow
+    assert "--suite nightly" in workflow
     assert "--save-baseline" in workflow
     assert "--gate" in workflow

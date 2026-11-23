@@ -196,6 +196,12 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
                   "前台人类命令执行，Agent tool 无审批动作。批准只生成本地审核"
                   "产物与 calibration artifact，不修改生产 Prompt、Registry 或配置。")),
         CommandSpec(
+            "telemetry", "查看或管理匿名遥测",
+            argument_hint="[status|enable [local|remote]|disable|summary|export <path>|clear|send]",
+            help=("匿名遥测默认关闭；/telemetry enable local 仅写本地队列，"
+                  "enable remote 需要配置 HTTPS endpoint。永不采集 Prompt、代码、"
+                  "路径、工具参数/输出或凭据。")),
+        CommandSpec(
             "export", "导出当前会话", argument_hint="[路径]",
             help="导出 Markdown；路径以 .json 结尾时输出可 /resume 的 native 快照"),
         CommandSpec(

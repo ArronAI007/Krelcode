@@ -130,6 +130,7 @@ from .session.restore import (
 from .session.runner import run_session
 from .skills import BUILTIN_SKILL_ROOT, SkillManager, build_skill_tools
 from .subagent.definition import AgentDefinitionManager
+from .telemetry import build_telemetry_runtime
 from .subagent.manager import (
     SubagentManager,
     build_subagent_system_prompt,
@@ -1178,6 +1179,12 @@ def build_model_switcher(args: argparse.Namespace, config: Dict[str, Any],
                 loop.context_manager.max_tokens = new_budget
                 budget_note = f"，压缩预算 {new_budget}"
         usage.model = getattr(inner, "model", None)
+        telemetry_runtime = getattr(loop, "telemetry", None)
+        if telemetry_runtime is not None:
+            telemetry_runtime.set_identity(
+                str(provider.name or ""),
+                str(getattr(inner, "model", "") or ""),
+            )
         # 新 provider 的 key 也纳入脱敏集合（旧 key 保留，避免历史旧内容漏网）
         if redactor is not None:
             redactor.add(getattr(inner, "api_key", None))
@@ -1513,6 +1520,15 @@ async def async_main(args: argparse.Namespace) -> int:
             note("[git] 自动提交已开启（每轮有变更时 commit；.krelcode/ 已本地排除）")
         else:
             note("[git] 工作区不是 git 仓库，--auto-commit 未生效")
+    telemetry_runtime = build_telemetry_runtime(
+        config.get("telemetry"),
+        provider=str(getattr(loop.llm, "name", "") or ""),
+        model=str(getattr(loop.llm, "model", "") or ""),
+        run_mode=resolve_run_mode(args).value,
+        policy_allowed=enterprise_policy.allow_telemetry,
+    )
+    loop.telemetry = telemetry_runtime
+    telemetry_runtime.attach(loop.bus)
     try:
         return await run_session(
             args,
@@ -1531,6 +1547,7 @@ async def async_main(args: argparse.Namespace) -> int:
             hooks=hooks,
         )
     finally:
+        await telemetry_runtime.close()
         if auditor is not None:
             auditor.detach()
         if approval_broker is not None:

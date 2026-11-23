@@ -83,6 +83,7 @@ jobs:
           trials="$LIVE_TRIALS"
           common=(
             --live
+            --suite nightly
             --config benchmarks/deepseek-live.toml
             --model "$model"
             --trials "$trials"

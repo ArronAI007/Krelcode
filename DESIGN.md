@@ -2934,3 +2934,30 @@ redacted event summaries in an append-only JSONL chain (`seq`, `prev_hash`, SHA-
 HMAC).  Required audit failures are fail-closed.  OIDC identity is reduced to a `Principal`
 (subject/issuer/display metadata); access, ID and refresh tokens never enter prompt assembly,
 session recording or compliance records.
+
+## P2-3 Scalable Benchmarks and Privacy-Preserving Telemetry
+
+Named suites add workload tiers without adding another benchmark implementation: `smoke` is
+the five-case fast gate, `standard` is the frozen sixteen-case contract, and `nightly` /
+`extended` raise the default trial count to three and five. Sharding is deterministic
+round-robin over the frozen case order. A shard is an execution unit, not a new report schema:
+all shards must share provider, Prompt Release/Profile, runner, sandbox, timeout and generation
+fingerprints. Aggregation rejects overlap, duplicate case/trial pairs, missing trial numbers and
+incomplete suite coverage, then recomputes every aggregate from trial results. Wilson intervals,
+pass@k/pass^k, flaky counts, p50/p95 latency and tool error rates therefore cannot drift from the
+summaries they claim to describe.
+
+Telemetry is a strict, privacy-first EventBus subscriber. Consent belongs to the user, never to
+the repository: `~/.krelcode/telemetry/consent.json` is the only grant source, while project TOML
+may tune batching, retention and an endpoint. `KRELCODE_TELEMETRY` is an explicit process override
+for isolated CI, and managed `allow_telemetry=false` is checked before every effective state.
+The schema is deny-by-default at three levels: envelope keys, event types and per-event data keys.
+Prompt text, answers, code, paths, tool arguments/output, usernames, hostnames, endpoints and
+credentials have no representable field.
+
+The local queue is bounded by event count, bytes and retention. Consent, queue, install ID and
+export writes are private (0700 directory / 0600 files), atomic and symlink-rejecting. Remote mode
+is HTTPS-only except explicit loopback tests. Delivery acknowledgement is per `event_id` after a
+2xx response; transport, storage and schema failures are fail-open for the coding task and preserve
+undelivered events. Doctor reports consent mode, endpoint presence, queue validity and permissions
+without performing a network request.

@@ -12,7 +12,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 DEFAULT_BEHAVIOR_REPORT_PATH = ".krelcode/prompts/benchmarks/latest.json"
 BEHAVIOR_REPORT_KIND = "live_model_behavior"
@@ -181,11 +181,46 @@ def load_behavior_report_summary(path: Path | str) -> BehaviorReportSummary:
     )
 
 
+def load_behavior_report(path: Path | str) -> object:
+    """Load one strict, content-light live report for aggregation."""
+    source = Path(path).expanduser()
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ValueError(f"无法读取 benchmark report: {source}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"benchmark report 不是合法 JSON: {source}") from exc
+    raw = _mapping(payload)
+    if raw.get("kind") != BEHAVIOR_REPORT_KIND:
+        raise ValueError(f"不是 live_model_behavior 报告: {source}")
+    from .behavior import BehaviorReport
+
+    try:
+        return BehaviorReport.from_dict(raw)
+    except ValueError as exc:
+        raise ValueError(f"{source}: {exc}") from exc
+
+
+def aggregate_behavior_report_files(
+    paths: Sequence[Path | str],
+    *,
+    require_complete: bool = True,
+) -> object:
+    """Merge deterministic shard reports without trusting summary counters."""
+    from .behavior import aggregate_behavior_reports
+
+    reports = [load_behavior_report(path) for path in paths]
+    return aggregate_behavior_reports(
+        reports, require_complete=require_complete)
+
+
 __all__ = [
     "BEHAVIOR_REPORT_KIND",
     "BEHAVIOR_REPORT_STORE_VERSION",
     "BehaviorReportSummary",
     "DEFAULT_BEHAVIOR_REPORT_PATH",
+    "aggregate_behavior_report_files",
+    "load_behavior_report",
     "load_behavior_report_summary",
     "save_behavior_report",
 ]

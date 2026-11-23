@@ -1825,3 +1825,65 @@ async def handle_prompt_release(ctx: CommandContext) -> CommandResult:
         "reject <id> <candidate-hash> <reason>]",
         "  Proposal 由 prompt_lab action=propose 生成；approve/reject 只能由前台人类命令执行。",
     )
+
+
+async def handle_telemetry(ctx: CommandContext) -> CommandResult:
+    runtime = getattr(ctx.loop, "telemetry", None)
+    if runtime is None:
+        return _ok("  [telemetry] 当前运行未初始化遥测运行时")
+    parts = shlex.split(ctx.request.arguments)
+    operation = parts[0].lower() if parts else "status"
+    try:
+        if operation == "status":
+            status = runtime.status()
+            queue = status["queue"]
+            lines = [
+                f"  [telemetry] mode={status['mode']} · "
+                f"enabled={'yes' if status['effective_enabled'] else 'no'} · "
+                f"policy_allowed={'yes' if status['policy_allowed'] else 'no'}",
+                f"  sample_rate={status['sample_rate']} · "
+                f"retention={status['retention_days']}d · "
+                f"queue={queue['events']} events/{queue['bytes']} bytes",
+                f"  queue_path={queue['path']}",
+                "  content_collection=never",
+            ]
+            if status["last_error"]:
+                lines.append(f"  last_error={status['last_error']}")
+            return _ok(*lines)
+        if operation == "enable":
+            mode = parts[1].lower() if len(parts) > 1 else "local"
+            preferences = runtime.enable(mode)
+            lines = [
+                f"  [telemetry] enabled · mode={preferences.mode}",
+                "  content_collection=never",
+            ]
+            if preferences.mode == "remote" and not preferences.endpoint:
+                lines.append("  remote endpoint 未配置")
+            return _ok(*lines)
+        if operation == "disable":
+            runtime.disable()
+            return _ok("  [telemetry] disabled")
+        if operation == "summary":
+            return _ok(
+                "  [telemetry] local content-free summary",
+                json.dumps(runtime.summary(), ensure_ascii=False, indent=2),
+            )
+        if operation == "export" and len(parts) >= 2:
+            destination = os.path.expanduser(parts[1])
+            path = ctx.workspace_root / destination if not os.path.isabs(destination) else destination
+            exported = runtime.export(path)
+            return _ok(f"  [telemetry] exported: {exported}")
+        if operation == "clear":
+            runtime.clear()
+            return _ok("  [telemetry] local queue cleared")
+        if operation == "send":
+            sent = await runtime.flush()
+            lines = [f"  [telemetry] sent={sent}"]
+            if runtime.config.mode != "remote":
+                lines.append("  remote endpoint 未启用；事件保留在本地队列")
+            return _ok(*lines)
+    except (OSError, ValueError) as exc:
+        return _ok(f"  [telemetry] 操作失败: {exc}")
+    return _ok(
+        "  用法: /telemetry [status|enable [local|remote]|disable|"
+        "summary|export <path>|clear|send]")

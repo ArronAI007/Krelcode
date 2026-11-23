@@ -26,12 +26,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("command", nargs="?",
                    choices=("doctor", "init", "review", "security-review", "benchmark",
-                            "daemon", "jobs", "agents", "enterprise", "audit", "auth"),
+                            "daemon", "jobs", "agents", "enterprise", "audit", "auth",
+                            "telemetry"),
                    default=None,
                    help="子命令：doctor=环境自检；init=生成配置/规则模板；"
                         "review=评审当前 git 变更；security-review=只读安全审查；"
                         "benchmark=真实模型 Prompt 行为评测；daemon/jobs/agents="
                         "持久化后台任务与子代理；enterprise/audit/auth=企业策略、审计与 SSO；"
+                        "telemetry=匿名遥测状态与显式启停；"
                         "缺省进入对话")
     p.add_argument("action", nargs="?", default=None,
                    help="daemon/jobs/agents 子操作（start/status/stop/list/output/...）")
@@ -56,6 +58,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--workspace", default=".", help="工作区根目录（默认当前目录）")
     p.add_argument("--audit-output", default=None,
                    help="audit export：导出目标文件路径")
+    p.add_argument("--telemetry-output", default=None,
+                   help="telemetry export：导出目标文件路径")
+    p.add_argument("--telemetry-endpoint", default=None,
+                   help="telemetry enable remote：HTTPS 接收端点")
+    p.add_argument("--telemetry-sample-rate", type=float, default=None,
+                   help="telemetry enable：会话级采样率 0..1")
     p.add_argument("--issuer", default=None,
                    help="auth：临时覆盖 OIDC issuer（默认使用 managed SSO 配置）")
     p.add_argument("--client-id", default=None,
@@ -622,6 +630,86 @@ def _run_auth(args: argparse.Namespace) -> int:
         return 1
 
 
+def _run_telemetry(args: argparse.Namespace) -> int:
+    from krelcode.telemetry import (
+        TelemetryConfigError,
+        TelemetryStoreError,
+        build_telemetry_runtime,
+    )
+
+    action = (args.action or "status").strip().lower()
+    try:
+        bundle, policy = _load_enterprise_config(args)
+        runtime = build_telemetry_runtime(
+            bundle.data.get("telemetry"),
+            provider="cli",
+            model="cli",
+            run_mode="cli",
+            policy_allowed=policy.allow_telemetry,
+        )
+        if action == "status":
+            status = runtime.status()
+            print(f"mode: {status['mode']}")
+            print(f"enabled: {'yes' if status['effective_enabled'] else 'no'}")
+            print(f"policy_allowed: {'yes' if status['policy_allowed'] else 'no'}")
+            print(f"sample_rate: {status['sample_rate']}")
+            print(f"content_collection: never")
+            print(f"endpoint_configured: {'yes' if status['endpoint_configured'] else 'no'}")
+            if status["last_error"]:
+                print(f"last_error: {status['last_error']}")
+            queue = status["queue"]
+            print(f"queue: {queue['events']} events / {queue['bytes']} bytes")
+            print(f"queue_path: {queue['path']}")
+            print(f"retention_days: {status['retention_days']}")
+            return 0
+        if action == "enable":
+            mode = str(args.target or "local").strip().lower()
+            runtime.enable(
+                mode,
+                endpoint=str(args.telemetry_endpoint or ""),
+                sample_rate=args.telemetry_sample_rate,
+            )
+            print(f"telemetry: {runtime.config.mode}")
+            print("content_collection: never")
+            return 0
+        if action == "disable":
+            runtime.disable()
+            print("telemetry: off")
+            return 0
+        if action == "summary":
+            import json
+
+            print(json.dumps(runtime.summary(), ensure_ascii=False, indent=2))
+            return 0
+        if action == "export":
+            destination = args.telemetry_output or args.target
+            if not destination:
+                print("用法: krelcode telemetry export <path>", file=sys.stderr)
+                return 2
+            print(runtime.export(Path(destination).expanduser()))
+            return 0
+        if action == "clear":
+            runtime.clear()
+            print("telemetry queue cleared")
+            return 0
+        if action == "send":
+            sent = asyncio.run(runtime.flush())
+            if runtime.config.mode != "remote":
+                print("telemetry mode 不是 remote；事件仅保留在本地队列")
+                return 0
+            print(f"sent: {sent} events")
+            return 0 if not runtime.last_error else 1
+        print(
+            "用法: krelcode telemetry [status|enable [local|remote]|disable|"
+            "summary|export <path>|clear|send]",
+            file=sys.stderr,
+        )
+        return 2
+    except (TelemetryConfigError, TelemetryStoreError, ConfigError, OSError) as exc:
+        print(f"telemetry 错误: {exc}", file=sys.stderr)
+        return 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     raw_args = list(argv) if argv is not None else None
     effective = raw_args if raw_args is not None else list(sys.argv[1:])
@@ -650,6 +738,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_audit(args)
     if args.command == "auth":
         return _run_auth(args)
+    if args.command == "telemetry":
+        return _run_telemetry(args)
 
     try:
         if args.command == "review":

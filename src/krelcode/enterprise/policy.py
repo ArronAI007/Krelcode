@@ -117,6 +117,7 @@ class EnterprisePolicy:
     max_permission_mode: PermissionMode = PermissionMode.DEFAULT
     allow_auto_approve: bool = False
     allow_no_sandbox: bool = False
+    allow_telemetry: bool = True
     disable_plugins: bool = False
     allowed_providers: tuple[str, ...] = ()
     allowed_tools: tuple[str, ...] = ()
@@ -156,6 +157,7 @@ class EnterprisePolicy:
             max_permission_mode=max_mode,
             allow_auto_approve=allow_auto,
             allow_no_sandbox=_as_bool(raw.get("allow_no_sandbox"), False),
+            allow_telemetry=_as_bool(raw.get("allow_telemetry"), True),
             disable_plugins=_as_bool(raw.get("disable_plugins"), False),
             allowed_providers=tuple(_as_strings(
                 raw.get("allowed_providers"), field_name="allowed_providers")),
@@ -301,6 +303,7 @@ class EnterprisePolicy:
             "max_permission_mode": self.max_permission_mode.value,
             "allow_auto_approve": self.allow_auto_approve,
             "allow_no_sandbox": self.allow_no_sandbox,
+            "allow_telemetry": self.allow_telemetry,
             "source": self.source,
         }
 

@@ -163,3 +163,26 @@ Tool approval / /diff
 稳定布局与缓存快照。写前审阅只读取目标文件和工具参数，不先执行写入；普通 `/diff` 只
 采集 Git tracked/staged/安全 untracked 文本。diff 引擎和 Git 采集在 UI 层之外保持纯数据、
 可测试、零第三方依赖，实际执行仍完全经过现有权限、审批、Hook 与 Sandbox 链。
+
+## 16. 规模化 Benchmark 与隐私遥测（P2-3）
+
+Live Benchmark 仍以生产 `AgentLoop → PromptAssembler → Provider → Tool/Sandbox` 为唯一
+执行路径。`benchmarks/suite.py` 只提供命名 suite 与确定性 round-robin 分片，不复制 case
+实现；`report_store.py` 严格加载 content-light JSON 后再由 `BehaviorReport` 重建 trial，
+重新计算 Wilson CI、pass@k/pass^k、flaky、p50/p95、token 与 tool error rate。分片聚合要求
+provider/Prompt/runner profile 一致、case/trial 不重叠、trial 连续且 coverage 完整。
+
+```text
+EventBus（旁路只读）
+  → TelemetryRuntime（enabled? policy? sampled?）
+  → bounded normalizer / event whitelist
+  → TelemetryStore（0600 JSONL, 10k events/10 MB/30d）
+  → HttpTelemetryTransport（remote HTTPS only）
+  → 2xx 后 ack；失败保留
+```
+
+`TelemetryRuntime` 永不读取 Prompt、代码、路径、工具 arguments/output 或异常原文；只消费
+typed event 中的稳定类别和计数，再转换为分桶值。consent 位于用户目录，项目配置只能调
+endpoint、采样率与队列参数，不能把项目自动变成采集源。managed `allow_telemetry=false`
+在 runtime 与 CLI 两个边界执行。队列、consent、install ID 与 export 均使用原子私有写入并
+拒绝 symlink；遥测故障 fail-open，不影响 Agent 主任务。

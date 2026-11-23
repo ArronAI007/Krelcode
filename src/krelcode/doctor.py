@@ -18,12 +18,13 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from .agent.pricing import match_context_window
 from .config import DEFAULT_PATHS, ConfigBundle
@@ -192,9 +193,95 @@ def check_enterprise_policy(
         f"policy={policy.policy_version or '-'} "
         f"max_mode={policy.max_permission_mode.value} "
         f"auto_approve={'on' if policy.allow_auto_approve else 'off'} "
-        f"no_sandbox={'on' if policy.allow_no_sandbox else 'off'}"
+        f"no_sandbox={'on' if policy.allow_no_sandbox else 'off'} "
+        f"telemetry={'on' if policy.allow_telemetry else 'off'}"
     )
     return CheckResult("企业策略", STATUS_OK, detail)
+
+
+def _private_mode_warning(path: Path) -> str:
+    try:
+        if not path.exists():
+            return ""
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError as exc:
+        return f"{path.name} 权限读取失败: {type(exc).__name__}"
+    if mode & 0o077:
+        return f"{path.name} 权限过宽({oct(mode)})"
+    return ""
+
+
+def check_telemetry(
+    config: Dict[str, Any],
+    config_bundle: Optional[ConfigBundle] = None,
+) -> CheckResult:
+    """Check consent, queue bounds and managed policy without network access."""
+    from .enterprise.policy import load_enterprise_policy
+    from .telemetry import (
+        TelemetryConfig,
+        TelemetryConfigError,
+        TelemetryPreferenceStore,
+        TelemetryRuntime,
+        TelemetryStoreError,
+    )
+
+    section = config.get("telemetry") or {}
+    if not isinstance(section, Mapping):
+        return CheckResult(
+            "匿名遥测", STATUS_FAIL, "[telemetry] 必须是 TOML table")
+    try:
+        policy = load_enterprise_policy(config, config_bundle=config_bundle)
+        telemetry_config = TelemetryConfig.from_mapping(section)
+        # from_mapping deliberately fails closed. Doctor performs a second,
+        # explicit consent read so malformed/symlinked consent is observable.
+        TelemetryPreferenceStore(telemetry_config.preferences_path).load()
+        runtime = TelemetryRuntime(
+            telemetry_config,
+            provider="cli",
+            model="doctor",
+            run_mode="doctor",
+            policy_allowed=policy.allow_telemetry,
+        )
+        status = runtime.status()
+    except (TelemetryConfigError, TelemetryStoreError, OSError, ValueError) as exc:
+        return CheckResult("匿名遥测", STATUS_FAIL, str(exc))
+    if not policy.allow_telemetry:
+        return CheckResult(
+            "匿名遥测", STATUS_OK,
+            "managed 策略禁止（off；content_collection=never）")
+    if status["last_error"]:
+        return CheckResult("匿名遥测", STATUS_FAIL, status["last_error"])
+    if not status["effective_enabled"]:
+        reason = (
+            "sample_rate=0" if status["sample_rate"] <= 0
+            else "默认关闭，需显式 krelcode telemetry enable"
+        )
+        return CheckResult(
+            "匿名遥测", STATUS_OK,
+            f"off（{reason}；content_collection=never）")
+    if status["mode"] == "remote" and not status["endpoint_configured"]:
+        return CheckResult("匿名遥测", STATUS_FAIL, "remote 模式缺少 HTTPS endpoint")
+    queue = status["queue"]
+    if not queue["valid"] or queue["error"]:
+        return CheckResult(
+            "匿名遥测", STATUS_FAIL,
+            f"queue 不可用: {queue['error'] or 'invalid'}")
+    permission_warnings = [
+        warning
+        for warning in (
+            _private_mode_warning(Path(queue["path"])),
+            _private_mode_warning(Path(status["queue"]["path"]).parent),
+        )
+        if warning
+    ]
+    if permission_warnings:
+        return CheckResult(
+            "匿名遥测", STATUS_WARN, "；".join(dict.fromkeys(permission_warnings)))
+    return CheckResult(
+        "匿名遥测", STATUS_OK,
+        f"mode={status['mode']} · queue={queue['events']} events/"
+        f"{queue['bytes']} bytes · retention={status['retention_days']}d · "
+        "content_collection=never")
 
 
 def check_audit(
@@ -378,6 +465,7 @@ def run_all_checks(
         check_workspace_writable(workspace),
         check_sandbox(config),
         check_enterprise_policy(config, config_bundle),
+        check_telemetry(config, config_bundle),
         check_audit(config, workspace, config_bundle),
         check_sso(config, config_bundle),
     ]

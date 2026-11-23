@@ -169,6 +169,16 @@ api_key_env = "GEMINI_API_KEY"
 # endpoint = "https://api.search.brave.com/res/v1/web/search"
 # max_results = 5
 
+# ---- 匿名遥测（默认关闭；必须用 krelcode telemetry enable 显式同意）----
+# [telemetry]
+# flush_interval = 60               # remote 模式的后台批量间隔秒数
+# batch_size = 50
+# max_events = 10000               # 本地队列有界保留上限
+# max_bytes = 10000000
+# retention_days = 30
+# sample_rate = 1.0                 # 0..1；按用户会话采样
+# 遥测从不采集 Prompt、代码、路径、工具参数/输出、用户名、hostname 或 API key。
+
 # ---- 事件钩子 ----
 # [[hooks]]
 # on = "file_edited"    # 生命周期触发器，完整列表见 CONFIG.md
