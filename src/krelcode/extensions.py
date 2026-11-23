@@ -306,6 +306,11 @@ def collect_extension_records(
             metadata={
                 "status": package.status,
                 "manifest_version": package.manifest_version,
+                "trust_status": package.trust_status,
+                "registry": package.registry,
+                "signer": package.key_id,
+                "dependencies": list(package.dependencies),
+                "dependents": list(package.dependents),
             },
         ))
 

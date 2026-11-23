@@ -244,6 +244,19 @@ report/tuning/candidate，不自动提交或替换 accepted baseline。
 - Structured Compact 的模型摘要仍依赖模型能力；失败或 schema 非法时使用 Working Context/history 降级，宁可保留结构化事实也不阻断主循环
 - Fragment 手动启停是当前会话运行时状态，重启恢复默认；需要长期策略时应修改来源本身或后续增加持久化 overrides
 
+## P1-2 插件签名与 registry 验证
+
+```bash
+PYTHONPATH=src pytest -q tests/test_p1_2_plugin_trust_registry.py \
+  tests/test_plugins.py tests/test_step95_extension_p0.py \
+  tests/test_command_handlers.py
+```
+
+专项覆盖 RFC 8032 Ed25519 向量与篡改拒绝、manifest/组件 Hash、未知/撤销 key、
+strict/prefer 策略、SemVer 约束、依赖拓扑/缺失/禁用/循环/冲突、registry index 与包双重
+签名、传递版本交集求解、降级与 signer switch 拒绝、symlink/path traversal 和 Slash
+命令输出。发布端私钥不属于 Krelcode 运行时；客户端 trust store 只保存公钥。
+
 ## P2 验证命令
 
 ```bash

@@ -182,7 +182,9 @@
 
 | 134 | MCP conformance matrix + elicitation（P1-1） | 新增 content-light `mcp/conformance.py` 与 `/mcp conformance [server]`，覆盖 3 个协议版本、stdio/SSE/Streamable HTTP、生命周期、tools/resources/prompts、sampling/roots/elicitation、分页/list_changed 以及诚实标注的 completion/logging/progress/subscribe 缺口；不执行远端工具/Resource/OAuth。默认协议升至 2025-06-18。新增 elicitation 受限 Schema（扁平 primitive、16 KiB/12 字段/字符串/enum 边界、拒绝嵌套/引用/组合/default/敏感字段）、每分钟限流、accept/decline/cancel 校验；REPL 经 UserInputBroker 前台桥接并发射输入事件，headless/daemon 不声明 capability 且自动 decline，应答正文不进入 history/recorder | 15 个专项测试覆盖 capability/accept/decline/cancel、无前台 fail-closed、旧协议降级、敏感/嵌套 Schema、限流、非法前端结果、输入框重试与脱敏、空 Schema、conformance 不误报及 Slash Command；MCP/Streamable/daemon/command 定向回归通过；全量 1713 通过 + 3 个端口集成 skip | ✅ |
 
-| 测试总数：1716（1713 通过 + 3 个本地端口集成，沙箱内自动 skip） |
+| 135 | 插件签名、依赖解析与可信 registry（P1-2） | 新增零依赖 SemVer/依赖图、内容 Hash、RFC 8032 Ed25519 验签、trust store 与本地可信 registry。`plugin.sig.json` 覆盖 manifest+排序文件树；验签先于 import 且 staging 后再次校验。依赖支持必需/可选/冲突与 `^ ~ >= < x * ||`，Kahn 拓扑解析缺失/禁用/循环/冲突并只阻断受影响子图；registry index 与包双重签名、递归依赖版本交集求解。`prefer` 保持未签名本地开发兼容，`strict` 要求全部可信签名；更新拒绝降级、撤销后更新和签名者/registry 切换，移除仍被依赖的插件 fail-closed。`/plugins verify|deps|registry|trust` 与 `/extensions` 暴露 content-light 来源 | 12 个 P1-2 专项测试覆盖 RFC 向量/篡改、SemVer 与依赖拓扑、缺失/禁用/循环/冲突/可选、签名/撤销/严格策略、Hash/symlink/path traversal、降级/signer switch、registry 双重签名/依赖 bundle/版本交集与 Slash 命令；Plugin/P0/命令回归通过 | ✅ |
+
+| 测试总数：1728（1725 通过 + 3 个本地端口集成，沙箱内自动 skip） |
 
 ## 已确认的技术栈（详见 DESIGN.md）
 Python 3.12 · **asyncio 全面异步** · 零第三方运行时依赖 · OpenAI tool-calling 内部规范 ·

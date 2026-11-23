@@ -29,6 +29,14 @@ Version 2 is a component manifest::
     [mcp]
     paths = ["mcp.toml"]
 
+Dependency metadata can be declared either as a table or compact strings::
+
+    [dependencies]
+    core-utils = "^1.2.0"
+    optional-docs = { version = "~2.1", optional = true }
+
+    conflicts = ["legacy-tools@<1.0"]
+
 All component paths are relative to the plugin root and are validated before any
 file is loaded. Component loading remains fail-isolated per plugin.
 """
@@ -41,12 +49,17 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Optional, Tuple
 
+from .dependencies import PluginDependency
+from .semver import Version, VersionError, parse_constraint
+
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _ENTRYPOINT_RE = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*"
     r":[A-Za-z_][A-Za-z0-9_]*$"
 )
 _COMPONENT_KEYS = ("skills", "agents", "commands", "hooks", "mcp")
+MAX_MANIFEST_BYTES = 1024 * 1024
+MAX_PLUGIN_DEPENDENCIES = 128
 
 
 class PluginManifestError(ValueError):
@@ -67,6 +80,9 @@ class PluginManifest:
     command_paths: Tuple[str, ...] = ()
     hook_paths: Tuple[str, ...] = ()
     mcp_paths: Tuple[str, ...] = ()
+    dependencies: Tuple[PluginDependency, ...] = ()
+    optional_dependencies: Tuple[PluginDependency, ...] = ()
+    conflicts: Tuple[PluginDependency, ...] = ()
 
     @property
     def plugin_dir(self) -> Path:
@@ -133,8 +149,76 @@ def _entrypoint_from_component(raw: Any, key: str) -> str:
     return entrypoint
 
 
+def _dependency_from_text(text: str, *, optional: bool) -> PluginDependency:
+    value = str(text).strip()
+    if not value:
+        raise PluginManifestError("依赖声明不能为空")
+    if "@" in value:
+        name, constraint = value.split("@", 1)
+    else:
+        name, constraint = value, "*"
+    name = name.strip()
+    constraint = constraint.strip() or "*"
+    if not _NAME_RE.fullmatch(name):
+        raise PluginManifestError(f"非法依赖名称: {name!r}")
+    try:
+        parse_constraint(constraint)
+    except VersionError as exc:
+        raise PluginManifestError(f"依赖 {name!r} 的版本约束无效: {exc}") from exc
+    return PluginDependency(name, constraint, optional=optional)
+
+
+def _parse_dependencies(raw: Any, field_name: str) -> Tuple[PluginDependency, ...]:
+    if raw is None:
+        return ()
+    result: list[PluginDependency] = []
+    if isinstance(raw, str):
+        result.append(_dependency_from_text(raw, optional=False))
+    elif isinstance(raw, (list, tuple)):
+        result.extend(_dependency_from_text(str(value), optional=False) for value in raw)
+    elif isinstance(raw, dict):
+        for name, value in raw.items():
+            dependency_name = str(name).strip()
+            if not _NAME_RE.fullmatch(dependency_name):
+                raise PluginManifestError(f"非法依赖名称: {dependency_name!r}")
+            optional = False
+            if isinstance(value, dict):
+                constraint = str(value.get("version") or "*").strip() or "*"
+                optional_value = value.get("optional", False)
+                if not isinstance(optional_value, bool):
+                    raise PluginManifestError(
+                        f"{field_name}.{dependency_name}.optional 必须是布尔值")
+                optional = optional_value
+            else:
+                constraint = str(value).strip() or "*"
+            try:
+                parse_constraint(constraint)
+            except VersionError as exc:
+                raise PluginManifestError(
+                    f"依赖 {dependency_name!r} 的版本约束无效: {exc}") from exc
+            result.append(PluginDependency(dependency_name, constraint, optional=optional))
+    else:
+        raise PluginManifestError(f"{field_name} 必须是字符串数组或 table")
+    if len(result) > MAX_PLUGIN_DEPENDENCIES:
+        raise PluginManifestError(
+            f"{field_name} 依赖过多（>{MAX_PLUGIN_DEPENDENCIES}）")
+    seen: set[str] = set()
+    for dependency in result:
+        if dependency.name in seen:
+            raise PluginManifestError(f"依赖重复声明: {dependency.name}")
+        seen.add(dependency.name)
+    return tuple(result)
+
+
 def parse_manifest(path: Path) -> PluginManifest:
     path = Path(path)
+    if path.is_symlink():
+        raise PluginManifestError("plugin.toml 不能是符号链接")
+    try:
+        if path.stat().st_size > MAX_MANIFEST_BYTES:
+            raise PluginManifestError("plugin.toml 过大")
+    except OSError as exc:
+        raise PluginManifestError(f"无法读取清单: {exc}") from exc
     try:
         with open(path, "rb") as handle:
             raw: Any = tomllib.load(handle)
@@ -148,6 +232,10 @@ def parse_manifest(path: Path) -> PluginManifest:
         raise PluginManifestError(
             "name 必须为 1-64 位字母、数字、点、下划线或连字符")
     version = str(raw.get("version") or "0.0.0").strip() or "0.0.0"
+    try:
+        Version.parse(version)
+    except VersionError as exc:
+        raise PluginManifestError(f"version 不是合法 SemVer: {exc}") from exc
     description = " ".join(str(raw.get("description") or "").split())
     enabled = raw.get("enabled", True)
     if not isinstance(enabled, bool):
@@ -177,6 +265,28 @@ def parse_manifest(path: Path) -> PluginManifest:
         raise PluginManifestError(
             "插件至少需要 entrypoint 或一个 v2 组件路径")
 
+    required_dependencies = list(_parse_dependencies(raw.get("dependencies"), "dependencies"))
+    optional_dependencies = list(
+        _parse_dependencies(raw.get("optional_dependencies"), "optional_dependencies"))
+    if not optional_dependencies:
+        optional_dependencies = [
+            PluginDependency(item.name, item.constraint, optional=True)
+            for item in required_dependencies if item.optional
+        ]
+        required_dependencies = [
+            item for item in required_dependencies if not item.optional
+        ]
+    else:
+        optional_dependencies = [
+            PluginDependency(item.name, item.constraint, optional=True)
+            for item in optional_dependencies
+        ]
+    required_names = {item.name for item in required_dependencies}
+    for item in optional_dependencies:
+        if item.name in required_names:
+            raise PluginManifestError(f"依赖同时声明为必需和可选: {item.name}")
+    conflicts = _parse_dependencies(raw.get("conflicts"), "conflicts")
+
     return PluginManifest(
         name=name,
         version=version,
@@ -190,6 +300,9 @@ def parse_manifest(path: Path) -> PluginManifest:
         command_paths=paths["commands"],
         hook_paths=paths["hooks"],
         mcp_paths=paths["mcp"],
+        dependencies=tuple(required_dependencies),
+        optional_dependencies=tuple(optional_dependencies),
+        conflicts=conflicts,
     )
 
 
@@ -203,5 +316,7 @@ def discover_manifest_dirs(root: Path) -> list[Optional[Path]]:
     return [
         child / "plugin.toml"
         for child in sorted(root.iterdir(), key=lambda path: path.name)
-        if child.is_dir() and (child / "plugin.toml").is_file()
+        if child.is_dir() and not child.is_symlink()
+        and (child / "plugin.toml").is_file()
+        and not (child / "plugin.toml").is_symlink()
     ]

@@ -415,7 +415,7 @@ stability、cacheability 与 Instruction authority 从 Registry 继承；新目�
 project/L6/session 默认值。`PromptCandidate.candidate_hash` 对完整候选内容确定且敏感，而
 `evaluate` 只返回 candidate metadata hash、issue、计数和报告，不返回 Prompt/rollback/metric 正文。
 
-REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`（当前工具池的 core/discoverable/deferred/loaded/excluded 状态）、`/commands [show <name>]`（命令来源、trust、参数策略、工具 allowlist、reminder 声明与模板 Hash）、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp [reload|conformance [server]|auth <server>]`（状态、热重载、一致性矩阵、OAuth + PKCE 授权）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show <name>|install|update|enable|disable|remove ...]`（插件生命周期）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/lsp`（语言服务器状态）、`/web`（网页工具安全配置）、`/output-style [list|show <name>|reload|off|<name>]`（声明式输出样式）、`/statusline [要求]`（启动 `statusline-setup` 子代理）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|conflicts|authoring|fragments|enable|disable|toggle|reset|cache|ledger|reminders|refresh]`（请求 token 分项、来源归因、Prompt Authoring 状态、Fragment 启停、缓存边界、本轮 L12 reminder 选择与工作区重采）、`/prompts [list [kind|source|state]|show <id>|health|observations [kind|source]|active [kind|source]|lint [tool]|benchmark [status [path]|list]|coverage|hash]`（跨 Agent/Tool/Workflow/Reminder/Subagent/Compact/Review/扩展来源的 content-light Prompt Surface 目录、健康度、最近 turn 实际渲染、Tool Prompt lint、live behavior report 与契约观测）、`/prompt-release [list|status|approve|reject]`（content-light Prompt Release proposal 与仅限前台人类的审批）、`/security-review [--staged] [--focus <重点>]`（只读安全审查与结构化 JSON 报告）、`/memory [list [scope]|show|add <text> --scope --type --why --how --topic|search|pin|unpin|forget|mode|review|migrate]`（索引、按需主题、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
+REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Markdown 思考）、`/plan [任务|approve|cancel]`（生成/查看计划，批准后自动开启执行轮）、`/permissions [mode|add|remove ...]`（运行时模式与 session/workspace 规则）、`/tool-output [编号|last]`、`/queue [delete <n>|move <n> <m>|clear]`（查看/管理下一条消息队列）、`/tools`（当前工具池的 core/discoverable/deferred/loaded/excluded 状态）、`/commands [show <name>]`（命令来源、trust、参数策略、工具 allowlist、reminder 声明与模板 Hash）、`/session`、`/sessions [search <关键词>]`、`/resume <n|latest|path>`、`/fork [--turn <n>] [名称]`、`/rewind [n|list|fork <n> [名称]]`（回到任意轮开始前，联合恢复 history/compact checkpoint/文件/plan）、`/rename <名称>`、`/delete <n|path> [--force]`、`/mcp [reload|conformance [server]|auth <server>]`（状态、热重载、一致性矩阵、OAuth + PKCE 授权）、`/agents [list|feed|pause|resume|kill|definitions|sidechains]`（子代理实时事件、控制与 sidechain）、`/jobs [list|output <id>|kill <id>]`（后台 Shell 进程与增量输出）、`/skills [关键词|reload|show <name>]`（发现、查看、热重载 Skill）、`/skill <name> [参数]`（用户主动调用 Skill）、`/plugins [reload|show|verify|deps|install|update|enable|disable|remove|registry|trust ...]`（插件生命周期、依赖图、签名与可信 registry）、`/extensions [kind] [source]`（统一扩展来源与冲突）、`/lsp`（语言服务器状态）、`/web`（网页工具安全配置）、`/output-style [list|show <name>|reload|off|<name>]`（声明式输出样式）、`/statusline [要求]`（启动 `statusline-setup` 子代理）、`/compact [preview [--auto]|<focus>]`（立即压缩；预览边界或指定交接重点）、`/undo`（回滚上一轮文件改动）、`/undo list`、`/cost`（token 用量 + 估算成本 $）、`/model [provider/model]`（运行时热切换模型，预算联动）、`/allow`（旧版程序白名单兼容入口）、`/context [plan|why <id>|sources|rules|conflicts|authoring|fragments|enable|disable|toggle|reset|cache|ledger|reminders|refresh]`（请求 token 分项、来源归因、Prompt Authoring 状态、Fragment 启停、缓存边界、本轮 L12 reminder 选择与工作区重采）、`/prompts [list [kind|source|state]|show <id>|health|observations [kind|source]|active [kind|source]|lint [tool]|benchmark [status [path]|list]|coverage|hash]`（跨 Agent/Tool/Workflow/Reminder/Subagent/Compact/Review/扩展来源的 content-light Prompt Surface 目录、健康度、最近 turn 实际渲染、Tool Prompt lint、live behavior report 与契约观测）、`/prompt-release [list|status|approve|reject]`（content-light Prompt Release proposal 与仅限前台人类的审批）、`/security-review [--staged] [--focus <重点>]`（只读安全审查与结构化 JSON 报告）、`/memory [list [scope]|show|add <text> --scope --type --why --how --topic|search|pin|unpin|forget|mode|review|migrate]`（索引、按需主题、审核与幂等迁移）、`/export [路径]`（Markdown；`.json` 输出可恢复快照）、`/stop`（中止运行中任务）、`/reset`、`/exit`。
 
 所有命令由统一 `CommandRegistry` 发现：`/help`、slash 菜单、Tab 补全、运行态过滤和 InputProcessor 共用同一份 catalog。来源优先级为 `builtin > custom > skill > plugin > MCP`。用户/项目 Markdown Command 来自 `~/.krelcode/commands/*.md`、`<workspace>/.krelcode/commands/*.md`、`<workspace>/.commands/*.md` 与 `[commands].paths`；`$ARGUMENTS` / `${ARGUMENTS}` 渲染参数，`allowed-tools` 只能收窄工具集。所有 Prompt Command 使用统一 `CommandTemplate` 记录 source/trust/参数策略/envelope/allowlist/reminder 声明与稳定 Hash；Custom/Plugin/Skill 以 user 或 project authority 进入，MCP 固定 untrusted evidence，均不能冒充 Managed policy。允许用户调用的 Skill 会自动显示为 `/<skill-name> [参数]`，MCP Prompt 会命名空间化为 `/mcp__<server>__<prompt> [参数]`；`/skills reload`、`/mcp reload` 与 `/plugins reload` 会原地刷新对应来源，内置命令在命名冲突时保持最高优先级。
 
@@ -626,10 +626,38 @@ Plugin v1 的 `entrypoint = "plugin:tools"` 继续兼容。插件工具命名为
 /plugins enable|disable <name>
 /plugins remove <name>
 /plugins reload
+/plugins verify <name>
+/plugins deps [name]
+/plugins registry list|add|remove|install ...
+/plugins trust list|add|revoke ...
 /extensions [plugin|tool|skill|agent|command|hook|mcp] [source]
 ```
 
 安装会拒绝 symlink、路径逃逸、超大/超量包并原子替换；remove 移入插件目录的 `.trash`。启用状态持久化到 `~/.krelcode/plugin-state.json`，作用域键为 `user:<name>` / `project:<name>`，避免同名项目互相影响。单个 manifest/import/组件失败只影响该插件，不阻断主 Agent。
+
+### 插件签名、依赖与可信 Registry（P1-2）
+
+插件可以在 manifest 中声明 SemVer 依赖和冲突，加载器会验证版本、检测缺失/循环/禁用依赖，并按依赖拓扑顺序加载。必需依赖失败会阻断依赖它的子图；无关插件继续加载。可选依赖缺失不会阻断。
+
+```toml
+[dependencies]
+core-utils = "^1.0"
+docs-pack = { version = "~2.1", optional = true }
+
+conflicts = ["legacy-tools@<1.0"]
+```
+
+支持 `1.2.3`、`^1.2`、`~1.2`、`>=1,<2`、`1.x`、`*` 和 `||`。`plugin.sig.json` 使用 Ed25519 detached signature，覆盖规范化 manifest、排序后的组件文件 Hash 和文件数量；客户端信任库只保存公钥。验签发生在任何插件代码 import 之前，Hash 不匹配、未知/撤销 key、签名者或 registry 切换、版本降级都会 fail closed。
+
+```text
+/plugins registry add team /srv/krelcode-registry
+/plugins trust add team release-2026 <base64-ed25519-public-key> --label "Release 2026"
+/plugins registry install team app@^1 --scope user
+/plugins verify app
+/plugins deps app
+```
+
+可信 registry 使用 `registry.json` + `registry.sig.json`；安装时总是要求 registry index 与每个插件的签名有效，并递归安装必需依赖。默认信任策略为 `prefer`：未签名本地开发插件可加载，但存在错误/不受信签名时阻止；`strict` 要求所有插件具有有效可信签名。
 
 ### 会话分支与交换
 

@@ -733,7 +733,18 @@ Krelcode 仍保持“pi 式分层 + 轻量事件总线”，但把 Plugin v1 的
 5. **热重载一致性**：一次 reload 原子刷新 Plugin Tool、Skill roots、Agent Definition roots、Plugin Commands、Hook specs、MCP 配置和 ExtensionRegistry。显式 TOML MCP 配置覆盖插件默认；配置/Plugin Hook 合并。
 6. **配置分层**：默认配置按 `user → project → local → managed` 合并。字典递归合并，数组/标量由高层替换；`--config` 保持显式独占。managed 损坏 fail-closed，普通层损坏由 doctor 报告但不阻断其余可信层。`krelcode.local.toml` 被写保护且默认不提交。
 
-安全边界：插件代码仍是用户显式安装的本地可信 Python，不等同于 MCP 远程工具的 readOnlyHint；其读写/命令能力继续经过 Tool 实现、权限模式、审批与 Sandbox。当前不自动安装插件依赖，也不提供不可信代码的进程级沙箱。
+安全边界：插件代码仍是用户显式安装的本地可信 Python，不等同于 MCP 远程工具的 readOnlyHint；其读写/命令能力继续经过 Tool 实现、权限模式、审批与 Sandbox。普通目录发现不会联网补装依赖；显式 `registry install` 才递归安装签名依赖。当前仍不提供不可信代码的进程级沙箱。
+
+### 插件信任、依赖图与可信 Registry（P1-2）
+
+P1-2 把插件从“目录代码”提升为可验证的软件包，同时保持零第三方运行时依赖。
+
+1. **签名边界**：`plugin.sig.json` 是 detached Ed25519 签名；签名 payload 包含 `plugin/version/registry/key_id/manifest_sha256/files_sha256/files_count`，采用排序 JSON。`files_sha256` 对排序后的相对 POSIX 路径、逐文件 SHA-256 和大小做二次 Hash，排除签名、registry 安装标记和编译缓存。客户端只存公钥；`public_key_from_seed` 与 `sign` 仅作为发布工具/互操作测试 helper。
+2. **验签时机**：`PluginManager.load()` 在动态 import 之前验签；安装复制到 staging 后再次验签并比较完整包摘要，防止 TOCTOU。更新拒绝 SemVer 降级、撤销 key 后继续更新、空签名降级和静默更换 signer/registry。
+3. **信任策略**：`off/prefer/signed/strict` 由 `PluginTrustPolicy` 解释；本地未签名开发插件在默认 `prefer` 下可用，但存在签名时必须有效。未知/撤销 key 与 Hash 不匹配不能通过模式绕过（`off` 除外）。
+4. **依赖图**：manifest 的必需/可选依赖和冲突进入独立 `dependencies.py`。SemVer 解析不使用 `packaging`；缺失、版本不兼容、禁用、冲突和循环使用 Kahn 拓扑解析并 fail-closed。失败只阻断受影响子图，加载顺序稳定，可选依赖缺失不阻断。
+5. **可信 registry**：`registry.json` 列出 name/version/path/yanked，`registry.sig.json` 对 index SHA-256 签名。`PluginTrustStore` 保存 registry 路径与按 registry 隔离的公钥，文件权限 0600；registry 包路径拒绝 `..` 和任一组件符号链接。远端下载不是本阶段的隐含行为，registry 当前是可挂载/同步的本地目录。
+6. **生命周期与观测**：`PluginRecord` 增加 trust/signer/key/registry/integrity/dependencies/dependents；`/plugins verify`、`/plugins deps`、`/plugins registry`、`/plugins trust` 暴露内容轻量状态，不输出组件正文或私钥材料。
 
 ## 生产可用性 P1（Step 96）
 

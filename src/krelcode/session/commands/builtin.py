@@ -91,8 +91,10 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             "skills", "查看或重载 Skills", argument_hint="[reload|show <name>]",
             help="列出 Skill；/skills reload 热重载；/skills show <name> 查看详情"),
         CommandSpec(
-            "plugins", "查看或重载插件", argument_hint="[reload|show <name>]",
-            help="列出目录插件与加载问题；/plugins reload 热重载"),
+            "plugins", "查看、验证或安装插件",
+            argument_hint=("[reload|show|verify|deps|registry|trust] ..."),
+            help=("列出插件与依赖/签名状态；/plugins reload 热重载；"
+                  "/plugins registry install 从可信 registry 安装签名插件")),
         CommandSpec(
             "lsp", "查看 LSP 客户端状态",
             argument_hint="[status]",

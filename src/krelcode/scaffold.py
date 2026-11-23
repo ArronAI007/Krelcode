@@ -81,6 +81,13 @@ api_key_env = "GEMINI_API_KEY"
 # [plugins]
 # enabled = true                    # false 等价 --no-plugins
 # paths = ["./team-plugins"]       # 额外目录；相对路径基于工作区
+# trust_store = "~/.krelcode/plugin-trust.json"
+
+# [plugins.trust]
+# mode = "prefer"                  # off / prefer / signed / strict
+# allow_local_unsigned = true      # signed 模式下允许本地开发插件
+# require_signature_for_install = false
+# enforce_dependencies = true
 
 # ---- 用户/项目 Markdown slash commands ----
 # [commands]

@@ -74,6 +74,8 @@ from .llm.registry import create_provider, resolve_settings
 from .llm.retry import RetryPolicy, RetryingProvider
 from .mcp.supervisor import MCPSupervisor
 from .plugins import PluginManager
+from .plugins.signing import PluginSignatureError
+from .plugins.trust import PluginTrustError, PluginTrustPolicy, PluginTrustStore
 from .safety.policy import AllowAllPolicy, SandboxPolicy
 from .safety.sandbox import ExecutionSandbox, SandboxError
 from .session.autocommit import AutoCommitter
@@ -408,10 +410,24 @@ def build_plugin_manager(
         not getattr(args, "no_plugins", False)
         and bool(section.get("enabled", True))
     )
+    trust_section = section.get("trust")
+    if trust_section is not None and not isinstance(trust_section, dict):
+        trust_section = None
+    trust_policy = PluginTrustPolicy.from_config(
+        section, trust_section=trust_section)
+    trust_store_path = section.get("trust_store")
+    if trust_store_path:
+        configured_store = Path(str(trust_store_path)).expanduser()
+        if not configured_store.is_absolute():
+            configured_store = workspace_root / configured_store
+    else:
+        configured_store = None
     return PluginManager(
         workspace_root,
         extra_paths=list(configured) + list(cli_paths),
         enabled=enabled,
+        trust_policy=trust_policy,
+        trust_store_path=configured_store,
     )
 
 
@@ -555,8 +571,19 @@ async def build_loop(
     memory_store = MemoryStore(workspace_root)
     base_skill_paths = configured_skill_paths(args, config)
     custom_commands = build_custom_command_manager(config, workspace_root)
-    plugin_manager = build_plugin_manager(args, config, workspace_root)
-    await plugin_manager.load()
+    try:
+        plugin_manager = build_plugin_manager(args, config, workspace_root)
+        await plugin_manager.load()
+    except (PluginTrustError, PluginSignatureError) as exc:
+        # Trust metadata is security-sensitive: a malformed store disables the
+        # plugin plane for this process instead of silently loading untrusted code.
+        empty_store = PluginTrustStore(
+            workspace_root / ".krelcode" / ".plugin-trust-disabled.json",
+            load=False,
+        )
+        plugin_manager = PluginManager(
+            workspace_root, enabled=False, trust_store=empty_store)
+        log(f"[plugins] 信任库无效，插件系统已 fail-closed 禁用: {exc}")
     plugin_tools = list(plugin_manager.tools)
     skill_manager = build_skill_manager(
         args, config, plugin_paths=list(plugin_manager.skill_paths))

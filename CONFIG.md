@@ -181,7 +181,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/skills show <name>` | 查看元数据、资源与完整 `SKILL.md` |
 | `/statusline [要求]` | 启动内置 `statusline-setup` Agent；要求可描述希望展示的模型、分支、权限、上下文等字段 |
 | `/skill <name> [参数]` | 用户主动加载并执行 Skill；参数替换 `$ARGUMENTS` |
-| `/plugins [reload\|show <name>\|install\|update\|enable\|disable\|remove ...]` | 查看状态、热重载和 Plugin v2 基础生命周期 |
+| `/plugins [reload\|show\|verify\|deps\|install\|update\|enable\|disable\|remove\|registry\|trust ...]` | 插件生命周期、依赖图、签名验证与可信 registry |
 | `/commands [show <name>]` | 查看命令的 source/trust、参数策略、工具 allowlist、reminder 声明与模板 Hash；不显示正文或用户参数 |
 | `/extensions [kind] [source]` | 统一列出 Plugin/Tool/Skill/Agent/Command/Hook/MCP 的来源、scope、启停与冲突 |
 | `/lsp` | 查看语言服务器配置、按需启动状态与加载问题（不启动未使用的服务器） |
@@ -346,6 +346,13 @@ paths = ["./team-skills", "/opt/shared-skills"]  # 额外目录，可相对工�
 [plugins]                            # 轻量目录插件（本地可信代码）
 enabled = true                       # false 等价 --no-plugins
 paths = ["./team-plugins", "/opt/shared-plugins"] # 额外目录，可相对工作区
+trust_store = "~/.krelcode/plugin-trust.json"
+
+[plugins.trust]
+mode = "prefer"                      # off / prefer / signed / strict
+allow_local_unsigned = true          # signed 模式允许本地开发插件
+require_signature_for_install = false
+enforce_dependencies = true
 
 [commands]                           # 自定义 Markdown slash command
 paths = ["./team-commands", "/opt/shared-commands"]
@@ -857,6 +864,78 @@ paths = ["mcp.toml"]
 会持久化生命周期状态；安装限制 5000 文件 / 100 MiB，remove 移到 `.trash`。
 插件 `hooks.toml` 与用户 Hook 使用相同 `command/http/prompt` schema，并自动带来源
 `plugin:<name>@<version>` 与 `KRELCODE_PLUGIN_ROOT`。
+
+#### 签名、依赖与可信 registry（P1-2）
+
+插件依赖使用受限 SemVer：`1.2.3`、`^1.2`、`~1.2`、`>=1,<2`、`1.x`、`*`、
+`||`。manifest 可写：
+
+```toml
+[dependencies]
+core-utils = "^1.0"
+docs = { version = "~2.1", optional = true }
+
+conflicts = ["legacy@<1.0"]
+```
+
+加载器先验证所有 manifest/签名，再解析依赖图。缺失、版本不兼容、循环、冲突或
+被禁用的必需依赖会阻断该子图；可选依赖缺失不阻断；没有依赖关系的插件仍会加载。
+
+签名文件为插件根目录的 `plugin.sig.json`：
+
+```json
+{
+  "schema": 1,
+  "plugin": "demo",
+  "version": "1.0.0",
+  "algorithm": "ed25519",
+  "key_id": "release-2026",
+  "registry": "team",
+  "manifest_sha256": "...",
+  "files_sha256": "...",
+  "files_count": 7,
+  "signature": "base64-64-byte-ed25519-signature"
+}
+```
+
+签名 payload 是除 `signature` 外字段的稳定排序 JSON；manifest 单独由
+`manifest_sha256` 覆盖，`files_sha256` 覆盖除 `plugin.toml`、`plugin.sig.json`、
+`.krelcode-registry.json`、缓存/编译产物外的组件普通文件。
+Krelcode 客户端只保存 Ed25519 公钥，不读取私钥。manifest、组件或签名任一变化都会
+导致验证失败。
+
+`~/.krelcode/plugin-trust.json`（权限 0600）保存 registry 路径与公钥；可用命令管理：
+
+```text
+/plugins registry list
+/plugins registry add team /srv/krelcode-registry
+/plugins registry remove team
+/plugins registry install team app@^1 [--scope user|project]
+/plugins trust list
+/plugins trust add team release-2026 <base64-public-key> --label "Release 2026"
+/plugins trust revoke team release-2026
+/plugins verify app
+/plugins deps [app]
+```
+
+可信 registry 目录包含：
+
+```text
+registry.json       # schema=1, name, [{name,version,path,yanked}]
+registry.sig.json   # registry index Hash 的 Ed25519 签名
+packages/demo/      # 每个包自身带 plugin.sig.json
+```
+
+`registry install` 始终要求 index 与包签名有效，并递归解析/安装必需依赖。直接安装本地
+路径时，`require_signature_for_install=true` 可强制签名。更新拒绝降级、撤销 key 后继续
+更新以及无提示更换签名者/registry。`trust_mode` 语义：
+
+| mode | 行为 |
+|------|------|
+| `off` | 兼容模式；状态可见但不因签名阻止加载 |
+| `prefer` | 有签名必须有效；未签名本地插件允许（默认） |
+| `signed` | 与 prefer 相同，但可关闭 `allow_local_unsigned` 要求签名 |
+| `strict` | 所有启用插件必须来自可信 key 且签名有效 |
 
 ### 运行时权限与规则示例
 

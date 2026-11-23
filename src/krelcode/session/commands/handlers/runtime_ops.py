@@ -518,6 +518,140 @@ async def handle_plugins(ctx: CommandContext) -> CommandResult:
             return _ok(
                 f"  [plugins] {operation} 失败: {type(exc).__name__}: {exc}")
         output.append(f"  [plugins] {result.message} · scope={result.scope}")
+    elif operation == "registry":
+        if len(parts) < 2:
+            return _ok(
+                "  用法: /plugins registry list",
+                "  /plugins registry add <name> <path>",
+                "  /plugins registry remove <name>",
+                "  /plugins registry install <name> <plugin>[@约束] "
+                "[--scope user|project]")
+        action = parts[1].lower()
+        if action == "list":
+            if len(parts) != 2:
+                return _ok("  用法: /plugins registry list")
+            output.extend(manager.registry_lines())
+        elif action == "add":
+            if len(parts) != 4:
+                return _ok("  用法: /plugins registry add <name> <path>")
+            try:
+                config = manager.add_registry(parts[2], parts[3])
+            except Exception as exc:
+                return _ok(
+                    f"  [plugins] registry add 失败: {type(exc).__name__}: {exc}")
+            output.append(
+                f"  [plugins] registry 已加入可信配置: {config.name} · {config.path}")
+        elif action == "remove":
+            if len(parts) != 3:
+                return _ok("  用法: /plugins registry remove <name>")
+            try:
+                config = manager.remove_registry(parts[2])
+                await _refresh_plugin_runtime(ctx)
+            except Exception as exc:
+                return _ok(
+                    f"  [plugins] registry remove 失败: {type(exc).__name__}: {exc}")
+            output.append(f"  [plugins] registry 已移除: {config.name}")
+        elif action == "install":
+            try:
+                filtered, scope = _plugin_lifecycle_args(raw)
+            except ValueError as exc:
+                return _ok(f"  [plugins] {exc}")
+            # filtered: registry, install, <registry>, <plugin>[@constraint]
+            if len(filtered) != 4:
+                return _ok(
+                    "  用法: /plugins registry install <registry> "
+                    "<plugin>[@约束] [--scope user|project]")
+            registry_name = filtered[2]
+            package_spec = filtered[3]
+            if "@" in package_spec:
+                plugin_name, constraint = package_spec.split("@", 1)
+            else:
+                plugin_name, constraint = package_spec, "*"
+            try:
+                results = await manager.install_from_registry(
+                    registry_name,
+                    plugin_name,
+                    constraint=constraint or "*",
+                    scope=scope,
+                )
+                await _refresh_plugin_runtime(ctx)
+            except Exception as exc:
+                return _ok(
+                    f"  [plugins] registry install 失败: "
+                    f"{type(exc).__name__}: {exc}")
+            for result in results:
+                output.append(
+                    f"  [plugins] {result.message} · scope={result.scope} · "
+                    f"registry={registry_name}")
+        else:
+            return _ok(
+                "  用法: /plugins registry list|add|remove|install ...")
+    elif operation == "trust":
+        if len(parts) < 2:
+            return _ok(
+                "  用法: /plugins trust list",
+                "  /plugins trust add <registry> <key-id> <base64-public-key> "
+                "[--label <名称>]",
+                "  /plugins trust revoke <registry> <key-id>")
+        action = parts[1].lower()
+        if action == "list":
+            output.extend(manager.trust_store.status_lines())
+        elif action == "add":
+            label = ""
+            values = list(parts[2:])
+            if "--label" in values:
+                index = values.index("--label")
+                if index + 1 >= len(values):
+                    return _ok("  [plugins] --label 需要值")
+                label = values[index + 1]
+                del values[index:index + 2]
+            if len(values) != 3:
+                return _ok(
+                    "  用法: /plugins trust add <registry> <key-id> "
+                    "<base64-public-key> [--label <名称>]")
+            try:
+                key = manager.add_trusted_key(
+                    values[0], values[1], values[2], label=label)
+                await _refresh_plugin_runtime(ctx)
+            except Exception as exc:
+                return _ok(
+                    f"  [plugins] trust add 失败: {type(exc).__name__}: {exc}")
+            output.append(
+                f"  [plugins] trusted key: {key.registry}/{key.key_id} · "
+                f"sha256:{key.fingerprint}")
+        elif action == "revoke":
+            if len(parts) != 4:
+                return _ok("  用法: /plugins trust revoke <registry> <key-id>")
+            try:
+                key = manager.revoke_trusted_key(parts[2], parts[3])
+                await _refresh_plugin_runtime(ctx)
+            except Exception as exc:
+                return _ok(
+                    f"  [plugins] trust revoke 失败: {type(exc).__name__}: {exc}")
+            output.append(f"  [plugins] trusted key 已撤销: {key.registry}/{key.key_id}")
+        else:
+            return _ok("  用法: /plugins trust list|add|revoke ...")
+    elif operation == "verify":
+        if len(parts) != 2:
+            return _ok("  用法: /plugins verify <name>")
+        try:
+            manifest, check = manager.verify(parts[1])
+        except Exception as exc:
+            return _ok(
+                f"  [plugins] verify 失败: {type(exc).__name__}: {exc}")
+        output.extend((
+            f"  [plugin] {manifest.name}@{manifest.version} · "
+            f"signature={check.status}",
+            f"  key: {check.registry + '/' if check.registry else ''}"
+            f"{check.key_id or '（无）'}",
+            f"  signer: {check.signer or '（未知/未签名）'}",
+            f"  integrity: {check.integrity_digest or '（无）'}",
+            f"  message: {check.message or check.status}",
+        ))
+    elif operation == "deps":
+        if len(parts) > 2:
+            return _ok("  用法: /plugins deps [name]")
+        output.extend(manager.dependency_lines(parts[1] if len(parts) == 2 else None))
     elif operation in {"enable", "disable"}:
         if len(parts) != 2:
             return _ok(f"  用法: /plugins {operation} <name>")
@@ -562,11 +696,18 @@ async def handle_plugins(ctx: CommandContext) -> CommandResult:
             f"  组件: tool={record.tools_count} skill={record.skills_count} "
             f"agent={record.agents_count} command={record.commands_count} "
             f"hook={record.hooks_count} mcp={record.mcp_servers_count}",
+            f"  信任: {record.trust_status or 'not_checked'} · "
+            f"registry={record.registry or '（无）'} · "
+            f"key={record.key_id or '（无）'}",
+            f"  依赖: {', '.join(record.dependencies) or '（无）'}",
+            f"  被依赖: {', '.join(record.dependents) or '（无）'}",
         ))
         if record.description:
             output.append(f"  描述: {record.description}")
         if record.error:
             output.append(f"  错误: {record.error}")
+        if record.integrity_digest:
+            output.append(f"  integrity: {record.integrity_digest}")
     elif operation == "list":
         output.extend(manager.status_lines())
     else:
@@ -574,7 +715,10 @@ async def handle_plugins(ctx: CommandContext) -> CommandResult:
             "  用法: /plugins | /plugins show <name> | /plugins reload",
             "  /plugins install <path> [--scope user|project]",
             "  /plugins update <path> [--scope user|project]",
-            "  /plugins enable|disable <name> | /plugins remove <name>")
+            "  /plugins enable|disable <name> | /plugins remove <name>",
+            "  /plugins verify <name> | /plugins deps [name]",
+            "  /plugins registry list|add|remove|install ...",
+            "  /plugins trust list|add|revoke ...")
     for issue in manager.issues:
         line = f"  ! {issue.path}: {issue.message}"
         if line not in output:
