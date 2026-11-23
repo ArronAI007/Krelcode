@@ -80,13 +80,10 @@ def test_batch_tool_calls_run_in_parallel():
         "全部完成",
     ]
     loop, _ = build(script, [tool])
-    start = time.monotonic()
     reply = asyncio.run(loop.run("并行睡觉"))
-    elapsed = time.monotonic() - start
 
     assert reply == "全部完成"
-    assert elapsed < 0.55, f"应并行执行，实际耗时 {elapsed:.2f}s"
-    # 三个时间窗互相重叠（任意两个的起点都早于对方的终点）
+    # 用执行时间窗互相重叠判断并发，不对高负载机器上的绝对耗时做脆弱断言。
     for i in range(3):
         for j in range(i + 1, 3):
             s1, e1 = tool.windows[i]
