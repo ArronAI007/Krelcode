@@ -1,29 +1,23 @@
-"""grep：纯 Python 正则代码搜索（零依赖，不依赖系统 ripgrep）。
+"""grep：ripgrep 加速、Python 等价降级的工作区正则搜索。
 
-- 遍历工作区（或指定子目录），剪枝隐藏/依赖/产物目录
+- 先用文件安全/敏感路径策略枚举候选文件，ripgrep 只接收这些文件
 - 输出 `相对路径:行号: 行内容`（行内容截断）
 - include 过滤（如 "*.py"）、ignore_case、max_results 上限
+- rg 不可用、JSON 异常或 Python 正则超出 Rust regex 子集时自动回退
 """
 
 from __future__ import annotations
 
-import fnmatch
-import os
 import re
-from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from ..base import ToolContext, ToolResult
-from ..fsutils import is_hidden_file, is_pruned_dir
-from ..paths import (
-    PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,
-)
+from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
 from ..prompt import ToolPromptExample
-from ..secret_guard import classify_secret_path
+from ..workspace_search import WorkspaceSearcher
 
 DEFAULT_MAX_RESULTS = 100
 MAX_RESULT_LIMIT = 500
-MAX_LINE_CHARS = 300
 
 
 class GrepTool:
@@ -31,8 +25,9 @@ class GrepTool:
     name = "grep"
     description = (
         "在工作区内按正则搜索文件内容，输出 '路径:行号: 行内容'。"
+        "优先使用 ripgrep；不可用或不兼容时自动回退到内置搜索。"
         "可用 path 限定子目录、include 过滤文件名（如 '*.py'）、"
-        "ignore_case 忽略大小写。自动跳过隐藏与依赖目录。"
+        "ignore_case 忽略大小写。自动跳过隐藏、依赖与敏感文件。"
     )
     prompt = """\
 Use grep to locate known text, identifiers, errors, call sites, or patterns in
@@ -40,7 +35,7 @@ workspace files. Start with the narrowest useful path and include filter; widen
 the search only when the focused query is insufficient. Treat matches as pointers
 to evidence, not as a substitute for reading the relevant file section. Do not
 use grep for every task or dump an unbounded result set. Runtime secret-file
-filtering cannot be bypassed.
+filtering cannot be bypassed by the ripgrep acceleration path.
 """
     when_to_use = (
         "The content to find is known but its file location is not.",
@@ -66,7 +61,7 @@ filtering cannot be bypassed.
             ),
         ),
     )
-    prompt_version = "1"
+    prompt_version = "2"
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -78,6 +73,9 @@ filtering cannot be bypassed.
         },
         "required": ["pattern"],
     }
+
+    def __init__(self, *, backend: str = "auto") -> None:
+        self._searcher = WorkspaceSearcher(backend=backend)
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
         pattern = args.get("pattern")
@@ -99,61 +97,42 @@ filtering cannot be bypassed.
         include = args.get("include")
         if include is not None and not isinstance(include, str):
             return ToolResult(content="include 必须是字符串", is_error=True)
-        max_results = _clamp_int(args.get("max_results"), DEFAULT_MAX_RESULTS, MAX_RESULT_LIMIT)
+        max_results = _clamp_int(
+            args.get("max_results"), DEFAULT_MAX_RESULTS, MAX_RESULT_LIMIT)
 
-        matches: List[str] = []
-        truncated = False
-        files_scanned = 0
-        for root, dirs, files in os.walk(base):
-            dirs[:] = sorted(
-                d for d in dirs
-                if not is_pruned_dir(d) and not Path(root, d).is_symlink())
-            for name in sorted(files):
-                if is_hidden_file(name):
-                    continue
-                if include and not fnmatch.fnmatch(name, include):
-                    continue
-                file_path = Path(root) / name
-                if not safe_file_in_workspace(file_path, ctx.workspace_root):
-                    continue
-                if classify_secret_path(file_path, ctx.workspace_root) is not None:
-                    continue  # 敏感文件不参与搜索，防 grep 命中密钥
-                rel = file_path.resolve().relative_to(
-                    ctx.workspace_root.resolve()).as_posix()
-                files_scanned += 1
-                try:
-                    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                        for lineno, line in enumerate(f, start=1):
-                            if "\x00" in line:  # 二进制防呆
-                                break
-                            if regex.search(line):
-                                snippet = line.rstrip("\n")
-                                if len(snippet) > MAX_LINE_CHARS:
-                                    snippet = snippet[:MAX_LINE_CHARS] + "…"
-                                matches.append(f"{rel}:{lineno}: {snippet}")
-                                if len(matches) >= max_results:
-                                    truncated = True
-                                    break
-                except OSError:
-                    continue
-                if truncated:
-                    break
-            if truncated:
-                break
-
-        if not matches:
-            return ToolResult(
-                content=f"未找到匹配: {pattern!r}（扫描 {files_scanned} 个文件）",
-                data={"count": 0, "files_scanned": files_scanned},
-            )
-        note = f"\n[已达上限 {max_results} 条，结果被截断；可缩小 path/include 范围]" if truncated else ""
-        return ToolResult(
-            content="\n".join(matches) + note,
-            data={
-                "count": len(matches), "truncated": truncated,
-                "files_scanned": files_scanned,
-            },
+        batch = await self._searcher.search(
+            pattern=pattern,
+            regex=regex,
+            base=base,
+            workspace_root=ctx.workspace_root,
+            include=include,
+            ignore_case=bool(args.get("ignore_case")),
+            max_results=max_results,
+            abort=ctx.abort,
         )
+        data = {
+            "count": len(batch.matches),
+            "truncated": batch.truncated,
+            "files_scanned": batch.files_scanned,
+            "backend": batch.backend,
+        }
+        if not batch.matches:
+            return ToolResult(
+                content=(
+                    f"未找到匹配: {pattern!r}"
+                    f"（扫描 {batch.files_scanned} 个文件）"
+                ),
+                data=data,
+            )
+        rendered = [
+            f"{match.path}:{match.line}: {match.text}"
+            for match in batch.matches
+        ]
+        note = (
+            f"\n[已达上限 {max_results} 条，结果被截断；可缩小 path/include 范围]"
+            if batch.truncated else ""
+        )
+        return ToolResult(content="\n".join(rendered) + note, data=data)
 
 
 def _clamp_int(value: Any, default: int, limit: int) -> int:
