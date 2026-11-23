@@ -385,9 +385,23 @@ def _catalog_score(
     tokens: Tuple[str, ...],
     entry: ToolPoolEntry,
 ) -> int:
+    """Rank a tool with partial multi-token matching.
+
+    ToolSearch queries are often natural-language capability descriptions rather
+    than exact names. Requiring every token to match makes one generic word hide
+    an otherwise exact result, so ranking requires at least one strong signal
+    (name/alias/search term) and then rewards additional partial matches.
+    Permission and runtime filtering happens before this function.
+    """
     name = entry.name.casefold()
     name_words = name.replace("_", " ").replace("-", " ")
+    name_tokens = frozenset(name_words.split())
     description = _one_line(entry.prompt_spec.description).casefold()
+    guidance = " ".join((
+        entry.prompt_spec.instructions,
+        *entry.prompt_spec.when_to_use,
+        *entry.prompt_spec.when_not_to_use,
+    )).casefold()
     terms = tuple(entry.descriptor.search_terms)
     aliases = entry.prompt_spec.aliases
 
@@ -404,24 +418,47 @@ def _catalog_score(
     if "*" in tokens:
         return max(score, 1)
 
+    matched = 0
+    strong = 0
     for token in tokens:
         token_score = 0
         if token == name:
             token_score = 400
         elif token in aliases:
             token_score = 340
-        elif token in name_words:
+        elif token in name_tokens:
             token_score = 260
-        elif any(token == term for term in terms):
+        elif _partial_token_match(token, name_tokens):
+            token_score = 180
+        elif token in terms:
             token_score = 220
-        elif any(token in term for term in terms):
+        elif _partial_token_match(token, terms):
             token_score = 140
         elif token in description:
             token_score = 80
-        if token_score == 0:
-            return 0
-        score += token_score
+        elif token in guidance:
+            token_score = 60
+        if token_score:
+            score += token_score
+            matched += 1
+            if token_score >= 140:
+                strong += 1
+
+    if strong == 0:
+        return 0
+    score += min(matched, 6) * 20
+    score += min(strong, 4) * 30
     return score
+
+
+def _partial_token_match(token: str, candidates: Tuple[str, ...] | frozenset[str]) -> bool:
+    """Match inflections/abbreviations without treating short fragments as hits."""
+    if len(token) < 3:
+        return False
+    return any(
+        len(candidate) >= 3 and (token in candidate or candidate in token)
+        for candidate in candidates
+    )
 
 
 def _one_line(text: str, limit: int = 180) -> str:

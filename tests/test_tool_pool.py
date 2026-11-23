@@ -27,6 +27,7 @@ from krelcode.tools.base import (
     ToolTier,
 )
 from krelcode.tools.builtin.read_file import ReadFileTool
+from krelcode.tools.builtin.repo_map import RepoMapTool
 from krelcode.tools.builtin.time_tool import GetTimeTool
 from krelcode.tools.builtin.tool_search import ToolSearchTool
 from krelcode.tools.builtin.write_file import WriteFileTool
@@ -234,6 +235,29 @@ def _tier_registry(order):
         "deferred_a": CatalogTool("deferred_a", ToolTier.DEFERRED),
     }
     return ToolRegistry([tools[name] for name in order]), tools
+
+
+def test_tool_search_uses_ranked_partial_multi_token_matching():
+    registry = ToolRegistry([
+        ToolSearchTool(),
+        RepoMapTool(),
+        CatalogTool(
+            "job_list",
+            ToolTier.DISCOVERABLE,
+            search_terms=("background", "process", "shell"),
+        ),
+        CatalogTool("unrelated_tool", ToolTier.DISCOVERABLE),
+    ])
+    pool = TurnToolPool(registry)
+
+    matches = pool.search_catalog(
+        "repo_map repository structure symbols code map", limit=4)
+    assert matches[0].name == "repo_map"
+    assert "repo_map" in {
+        item.name for item in pool.search_catalog("repository structure")
+    }
+    assert pool.search_catalog("background process list")[0].name == "job_list"
+    assert pool.search_catalog("helpful generic operation") == ()
 
 
 def test_dynamic_catalog_has_three_tiers_and_stable_order():
