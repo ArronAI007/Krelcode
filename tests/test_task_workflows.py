@@ -50,6 +50,12 @@ from krelcode.tools.registry import ToolRegistry
         ("补充测试覆盖异常路径", TaskType.TEST_VERIFICATION),
         ("了解这个项目的架构", TaskType.REPOSITORY_EXPLORATION),
         ("解释这个模块的作用", TaskType.CODE_EXPLANATION),
+        ("用 Playwright 打开网页并点击登录按钮", TaskType.BROWSER_AUTOMATION),
+        ("browser automation: fill the form and take a screenshot", TaskType.BROWSER_AUTOMATION),
+        ("检查并修改 notebook 的第二个 cell", TaskType.NOTEBOOK_EDITING),
+        ("jupyter notebook 执行前先检查 cell 结构", TaskType.NOTEBOOK_EDITING),
+        ("修复数据库迁移的回滚问题", TaskType.DATABASE_MIGRATION),
+        ("create a flyway schema migration with rollback", TaskType.DATABASE_MIGRATION),
         ("继续", TaskType.GENERAL),
     ],
 )
@@ -88,6 +94,37 @@ def test_attachment_and_code_fence_content_cannot_change_workflow():
 
     assert workflow.task_type is TaskType.GENERAL
     assert workflow.classification.confidence == CONFIDENCE_LOW
+
+
+@pytest.mark.parametrize(
+    ("request_text", "workflow_id", "required_text"),
+    [
+        (
+            "打开网页并点击登录按钮",
+            "browser-automation",
+            "untrusted evidence",
+        ),
+        (
+            "修改 notebook 的 cell 源码",
+            "notebook-editing",
+            "Never execute notebook code inside the file tool",
+        ),
+        (
+            "创建数据库迁移并提供回滚",
+            "database-migration",
+            "down/rollback",
+        ),
+    ],
+)
+def test_specialized_workflows_carry_domain_safety_contract(
+    request_text, workflow_id, required_text,
+):
+    selection = select_task_workflow(request_text)
+    fragment = DEFAULT_TASK_WORKFLOW_CATALOG.fragment(selection)
+
+    assert selection.definition.id == workflow_id
+    assert fragment.id == f"workflow:{workflow_id}"
+    assert required_text in fragment.content
 
 
 def test_workflow_fragment_is_turn_scoped_managed_instruction():

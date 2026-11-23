@@ -5,14 +5,14 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（Step 134）
+## 1. 项目统计（P1-4 完成）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 87,878 行（Python，**零第三方运行时依赖**） |
-| 测试 | 40,858 行 / 165 个 `test_*.py` 模块 / 1,713 个通过用例 + 3 个本地端口集成 skip |
-| 提交 | 187 个增量提交，每个功能阶段均包含测试与语义化 commit |
-| 工具 | 默认内置 17 + 只读 `memory_search`（装配 MemoryStore 时）+ `prompt_lab`（Prompt Authoring 开启时；生产只读，proposal 仅写 `.krelcode/`）+ 子代理 9 + Skill 5 + LSP 4 + Web 2 + MCP/Plugin 动态注册；39 个已知工具均有自有 Prompt 契约 |
+| 源码 | 94,024 行（Python，**零第三方运行时依赖**） |
+| 测试 | 42,226 行 / 171 个 `test_*.py` 模块 / 1,782 个通过用例 + 3 个本地端口集成 skip |
+| 提交 | 189 个增量提交，每个功能阶段均包含测试与语义化 commit |
+| 工具 | 默认内置 17 + Web 2 + 静态 Browser 3（Playwright 额外 3）+ Notebook 3 + 数据库迁移 3 + 只读 `memory_search`（装配 MemoryStore 时）+ `prompt_lab`（Prompt Authoring 开启时）+ 子代理 9 + Skill 5 + LSP 4 + MCP/Plugin 动态注册；51 个已知工具均有自有 Prompt 契约 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
 | CLI 入口 | REPL 对话 · -m 单次（text/json/stream-json）· stream-json 持久会话 · Python SDK · doctor · init · review |
 | 文档 | README（上手）· CONFIG（全量参考）· DESIGN（契约）· ARCHITECTURE（对标）· PLAN（路线）· BUILD（本文） |
@@ -258,6 +258,19 @@ PYTHONPATH=src pytest -q tests/test_p1_2_plugin_trust_registry.py \
 strict/prefer 策略、SemVer 约束、依赖拓扑/缺失/禁用/循环/冲突、registry index 与包双重
 签名、传递版本交集求解、降级与 signer switch 拒绝、symlink/path traversal 和 Slash
 命令输出。发布端私钥不属于 Krelcode 运行时；客户端 trust store 只保存公钥。
+
+## P1-4 浏览器、Notebook 与数据库迁移验证
+
+```bash
+PYTHONPATH=src pytest -q tests/test_p1_4_browser.py   tests/test_p1_4_notebook.py tests/test_p1_4_database_migration.py   tests/test_p1_4_integration.py tests/test_task_workflows.py   tests/test_step120_tool_prompt_layering.py tests/test_step129_tool_prompt_lint.py
+```
+
+专项覆盖：Browser 静态快照/元素 ID/私网拒绝/会话上限/敏感 URL 脱敏/工作区截图路径；
+Notebook 原始 output 隐藏、结构校验、symlink/敏感路径、原子写、未修改 cell 保真与
+stale output 清理；迁移框架发现、Alembic file-head 图、破坏性 SQL、无 WHERE DML、
+锁风险、缺失/未实现 downgrade、Flyway rollback 证据、脚手架 fail-closed 与 path
+traversal。Interactive Browser 使用 fake backend 验证动作与审批边界；Playwright 为
+可选依赖，不进入默认测试或无网络 CI。
 
 ## P2 验证命令
 

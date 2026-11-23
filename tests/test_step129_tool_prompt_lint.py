@@ -8,6 +8,15 @@ from pathlib import Path
 
 from krelcode.agent.loop import AgentLoop
 from krelcode.app import default_tools
+from krelcode.browser.runtime import BrowserOptions, BrowserRuntime
+from krelcode.browser.tools import (
+    BrowserClickTool,
+    BrowserCloseTool,
+    BrowserFillTool,
+    BrowserOpenTool,
+    BrowserScreenshotTool,
+    BrowserSnapshotTool,
+)
 from krelcode.llm.providers.mock import MockProvider
 from krelcode.lsp.tools import build_lsp_tools
 from krelcode.safety.policy import AllowAllPolicy
@@ -20,7 +29,19 @@ from krelcode.tools.base import (
     ToolResult,
     ToolSource,
 )
+from krelcode.tools.builtin.database_migration import (
+    MigrationCreateTool,
+    MigrationInspectTool,
+    MigrationOptions,
+    MigrationValidateTool,
+)
 from krelcode.tools.builtin.memory_search import MemorySearchTool
+from krelcode.tools.builtin.notebook import (
+    NotebookCreateTool,
+    NotebookEditTool,
+    NotebookInspectTool,
+    NotebookOptions,
+)
 from krelcode.tools.builtin.prompt_lab import PromptLabTool
 from krelcode.tools.prompt import ToolPromptExample, ToolPromptSpec
 from krelcode.tools.prompt_lint import (
@@ -70,6 +91,9 @@ def _codes(spec: ToolPromptSpec, *, source: str = "builtin") -> set[str]:
 
 def _all_known_tools():
     manager = object()
+    browser = BrowserRuntime.from_options(BrowserOptions())
+    notebook = NotebookOptions()
+    migration = MigrationOptions()
     return [
         *default_tools(),
         MemorySearchTool(lambda: None),
@@ -79,6 +103,18 @@ def _all_known_tools():
         WebFetchTool(manager),
         WebSearchTool(manager),
         *build_skill_tools(manager),
+        BrowserOpenTool(browser),
+        BrowserSnapshotTool(browser),
+        BrowserClickTool(browser),
+        BrowserFillTool(browser),
+        BrowserScreenshotTool(browser),
+        BrowserCloseTool(browser),
+        NotebookInspectTool(notebook),
+        NotebookEditTool(notebook),
+        NotebookCreateTool(notebook),
+        MigrationInspectTool(migration),
+        MigrationValidateTool(migration),
+        MigrationCreateTool(migration),
     ]
 
 
@@ -220,7 +256,7 @@ def test_all_known_model_visible_tools_have_schema_valid_examples():
 
     report = lint_tool_registry(registry)
 
-    assert len(tools) == 39
+    assert len(tools) == 51
     assert report.tool_count == len(tools)
     assert report.error_count == 0
     assert report.warning_count == 0

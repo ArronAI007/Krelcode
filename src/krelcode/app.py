@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -56,6 +57,7 @@ from .agent.runtime import AgentRuntime
 from .agent.usage import UsageTracker
 from .agent.working_context import WorkingContextStore
 from .benchmarks.parity import load_prompt_baseline
+from .browser import BrowserOptions, BrowserRuntime
 from .config import load_config_layers
 from .core.events import EventBus
 from .core.errors import ConfigError
@@ -125,6 +127,10 @@ from .tools.base import (
     ToolSource,
 )
 from .tools.builtin.check_syntax import CheckSyntaxTool
+from .tools.builtin.database_migration import (
+    MigrationOptions,
+    build_migration_tools,
+)
 from .tools.builtin.edit_file import EditFileTool
 from .tools.builtin.glob import GlobTool
 from .tools.builtin.grep import GrepTool
@@ -135,6 +141,7 @@ from .tools.builtin.job_tools import (
     JobStartTool,
 )
 from .tools.builtin.memory_search import MemorySearchTool
+from .tools.builtin.notebook import NotebookOptions, build_notebook_tools
 from .tools.builtin.prompt_lab import PromptLabTool
 from .tools.builtin.read_file import ReadFileTool
 from .tools.builtin.repo_map import RepoMapTool
@@ -159,10 +166,13 @@ def default_tools(
     *,
     lsp_manager: Optional[LSPManager] = None,
     web_runtime: Optional[WebRuntime] = None,
+    browser_runtime: Optional[BrowserRuntime] = None,
+    notebook_options: Optional[NotebookOptions] = None,
+    migration_options: Optional[MigrationOptions] = None,
 ) -> List[Tool]:
     """内置工具集（17 个 + 9 个子代理工具在 build_loop 注册）。
-    MCP 远程工具在运行时追加注册；传入 MemoryStore 时额外暴露只读
-    ``memory_search``。"""
+    MCP 远程工具在运行时追加注册；Memory、Web、Browser、Notebook 与数据库
+    迁移能力只在对应运行时/配置显式传入时装配，保持基础工具集向后兼容。"""
     tools: List[Tool] = [
         GetTimeTool(), ReadFileTool(), WriteFileTool(), EditFileTool(),
         RunCommandTool(), GrepTool(), GlobTool(), RepoMapTool(),
@@ -176,6 +186,14 @@ def default_tools(
         tools.extend(build_lsp_tools(lsp_manager))
     if web_runtime is not None and web_runtime.options.enabled:
         tools.extend(web_runtime.build_tools())
+    if browser_runtime is not None and browser_runtime.options.enabled:
+        from .browser.tools import build_browser_tools
+
+        tools.extend(build_browser_tools(browser_runtime))
+    if notebook_options is not None and notebook_options.enabled:
+        tools.extend(build_notebook_tools(notebook_options))
+    if migration_options is not None and migration_options.enabled:
+        tools.extend(build_migration_tools(migration_options))
     return tools
 
 
@@ -666,14 +684,37 @@ async def build_loop(
             search_max_results=web_options.search_max_results,
         )
     web_runtime = WebRuntime.from_options(web_options)
+    browser_options = BrowserOptions.from_config(config.get("browser"))
+    if getattr(args, "no_web", False) or getattr(args, "no_browser", False):
+        browser_options = replace(browser_options, enabled=False)
+    browser_runtime = BrowserRuntime.from_options(browser_options)
+    notebook_options = NotebookOptions.from_config(config.get("notebook"))
+    if getattr(args, "no_notebook", False):
+        notebook_options = replace(notebook_options, enabled=False)
+    migration_options = MigrationOptions.from_config(config.get("database"))
+    if getattr(args, "no_database", False):
+        migration_options = replace(migration_options, enabled=False)
     builtin_tools = default_tools(
-        memory_store, lsp_manager=lsp_manager, web_runtime=web_runtime)
+        memory_store,
+        lsp_manager=lsp_manager,
+        web_runtime=web_runtime,
+        browser_runtime=browser_runtime,
+        notebook_options=notebook_options,
+        migration_options=migration_options,
+    )
     if prompt_authoring_enabled:
         builtin_tools.append(PromptLabTool())
 
     def child_tool_factory() -> List[Tool]:
         tools = (
-            default_tools(memory_store, lsp_manager=lsp_manager, web_runtime=web_runtime)
+            default_tools(
+                memory_store,
+                lsp_manager=lsp_manager,
+                web_runtime=web_runtime,
+                browser_runtime=browser_runtime,
+                notebook_options=notebook_options,
+                migration_options=migration_options,
+            )
             + skill_tools
             + list(extra_tools or [])
             + list(plugin_manager.tools)
@@ -889,6 +930,9 @@ async def build_loop(
     loop.lsp_manager = lsp_manager
     loop.output_style_manager = output_style_manager
     loop.web_runtime = web_runtime
+    loop.browser_runtime = browser_runtime
+    loop.notebook_options = notebook_options
+    loop.migration_options = migration_options
     loop.status_line_renderer = StatusLineRenderer(
         StatusLineOptions.from_config(config.get("status_line")))
     loop.context_checkpoint_store = context_checkpoint_store

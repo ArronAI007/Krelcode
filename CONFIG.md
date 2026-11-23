@@ -47,7 +47,10 @@ krelcode [子命令] [选项]
 | `--output-style <名称>` | — | 覆盖当前 Output Style（内置 default/explanatory/learning）；也可用 `[output_styles].active` |
 | `--output-style-dir <路径>` | — | 追加 Output Style 文件或目录，可重复 |
 | `--no-output-styles` | — | 禁用 Output Styles |
-| `--no-web` | — | 禁用 WebFetch/WebSearch |
+| `--no-web` | — | 禁用 WebFetch/WebSearch，并关闭 Browser 网络能力 |
+| `--no-browser` | — | 禁用 Browser 会话工具；不影响 WebFetch/WebSearch |
+| `--no-notebook` | — | 禁用 Notebook inspect/edit/create 工具 |
+| `--no-database` | — | 禁用数据库迁移 inspect/validate/create 工具 |
 | `--auto-approve` | — | ASK 级操作自动批准（DENY 级仍拒绝） |
 | `--permission-mode default\|read-only\|auto-approve\|plan` | 配置/`default` | 工具权限模式；`read-only`/`plan` 只暴露只读工具 |
 | `--sandbox-backend auto\|static\|seatbelt\|bubblewrap` | auto | 运行时隔离后端；显式后端不可用则启动失败 |
@@ -185,7 +188,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/commands [show <name>]` | 查看命令的 source/trust、参数策略、工具 allowlist、reminder 声明与模板 Hash；不显示正文或用户参数 |
 | `/extensions [kind] [source]` | 统一列出 Plugin/Tool/Skill/Agent/Command/Hook/MCP 的来源、scope、启停与冲突 |
 | `/lsp` | 查看语言服务器配置、按需启动状态与加载问题（不启动未使用的服务器） |
-| `/web` | 查看 WebFetch/WebSearch 网络边界、搜索后端与密钥环境变量是否就绪（不发起请求） |
+| `/web` | 查看 WebFetch/WebSearch 网络边界、Browser 后端/会话上限/能力与搜索密钥环境变量是否就绪（不发起请求） |
 | `/output-style [list\|show <name>\|reload\|off\|<name>]` | 查看、切换或重载声明式 Output Style |
 | `/mcp` · `/mcp reload` | MCP 状态（含 Resource/Template/OAuth 统计）· 重读配置热重载 |
 | `/mcp conformance [server]` | 输出 content-light 协议/传输/能力/反向请求/健壮性矩阵；不执行远端工具或读取 Resource |
@@ -406,6 +409,39 @@ provider = "brave"
 api_key_env = "BRAVE_SEARCH_API_KEY"
 endpoint = "https://api.search.brave.com/res/v1/web/search"
 max_results = 5
+
+[browser]                            # 有界浏览器会话；默认 static 只读快照
+enabled = true
+backend = "static"                   # static | auto | playwright
+max_bytes = 2097152
+timeout = 20
+max_text_chars = 30000
+max_sessions = 4
+session_ttl = 600
+screenshot_max_bytes = 5242880
+allowed_ports = [80, 443]
+allow_private = false
+
+[notebook]                           # nbformat 4 inspect/edit/create；不启动 kernel
+enabled = true
+max_file_bytes = 5000000
+max_cells = 500
+max_cell_chars = 50000
+
+[database]                           # 只静态检查迁移文件；不连接数据库
+enabled = true
+max_files = 300
+max_file_bytes = 1000000
+max_output_chars = 40000
+
+> `[browser].backend = "static"` 不需要额外依赖，只提供 `browser_open` /
+> `browser_snapshot` / `browser_close` 的只读页面快照。交互式 click/fill/screenshot
+> 必须显式选择 `playwright` 并安装 `playwright` 与 Chromium；模型不能传入 JavaScript、
+> Cookie、Storage、Header 或 file/data URL，所有动作仍走现有审批与路径边界。
+>
+> Notebook 原始 cell outputs 默认不进入模型输出；数据库迁移工具不会读取 `.env` 等
+> 凭据文件，也不会连接数据库。Migration apply/rollback 必须使用框架原生命令并通过
+> `run_command`、Sandbox 和审批执行。
 
 [mcp_servers.fetch]                  # stdio 传输
 command = "uvx"

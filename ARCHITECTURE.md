@@ -120,3 +120,25 @@ VS Code 与 JetBrains 只实现宿主职责：命令/Action、输入 UI、Output
 选区与诊断采集、权限确认。二者共享协议和行为契约，不共享 Provider 代码；JetBrains
 不依赖 Node，而是直接管理 `krelcode --input-format stream-json` 子进程。这样 IDE
 离线、Daemon、REPL、SDK 与 headless 仍走同一条权限和工具执行链。
+
+
+## 14. 浏览器 / Notebook / 数据库迁移（P1-4）
+
+```text
+                     ┌── BrowserRuntime ── static SafeHttpClient
+Browser tools ───────┤                    └─ Playwright (optional, explicit)
+                     └─ session TTL / element IDs / approval-bound actions
+
+Notebook tools ─────── nbformat 4 validate → targeted cell edit → atomic replace
+                       (outputs are never raw; no implicit kernel)
+
+Migration tools ────── bounded file discovery → framework graph → static findings
+                       (no DB connection; apply/rollback = run_command + Sandbox)
+```
+
+这三种能力都采用 discoverable tool tier，避免扩大每次请求的 core Schema。工具只在对应
+`[browser]/[notebook]/[database]` 启用时进入 Registry；`--no-browser`、`--no-notebook`
+与 `--no-database` 可以独立关闭。Browser 的 click/fill/screenshot 仍是 mutating，
+在 plan/read-only 模式下被 TurnToolPool 排除并在默认模式走审批；Notebook 写工具与
+Migration create 同样不进入只读池。领域执行策略由 Task Workflow L9 提供，而不是污染
+稳定 L1 Base Prompt。

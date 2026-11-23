@@ -963,10 +963,29 @@ async def handle_lsp(ctx: CommandContext) -> CommandResult:
 async def handle_web(ctx: CommandContext) -> CommandResult:
     runtime = getattr(ctx.loop, "web_runtime", None)
     options = getattr(runtime, "options", None)
+    browser = getattr(ctx.loop, "browser_runtime", None)
+    browser_options = getattr(browser, "options", None)
     if options is None or not options.enabled:
-        return _ok("  WebFetch/WebSearch 已禁用（--no-web 或 [web].enabled=false）")
+        browser_line = (
+            "  Browser: disabled"
+            if browser_options is None or not browser_options.enabled
+            else f"  Browser: enabled · backend={browser.backend_name}"
+        )
+        return _ok(
+            "  WebFetch/WebSearch 已禁用（--no-web 或 [web].enabled=false）",
+            browser_line,
+        )
     key_env = getattr(options, "search_api_key_env", "")
     configured = bool(os.environ.get(key_env)) if key_env else False
+    if browser_options is None or not browser_options.enabled:
+        browser_line = "  Browser: disabled"
+    else:
+        capabilities = ", ".join(sorted(browser.capabilities)) or "none"
+        browser_line = (
+            f"  Browser: enabled · backend={browser.backend_name}"
+            f" · max_sessions={browser_options.max_sessions}"
+            f" · capabilities={capabilities}"
+        )
     return _ok(
         f"  WebFetch: enabled · timeout {options.timeout:g}s"
         f" · max {options.max_bytes} bytes · private={'allow' if options.allow_private else 'deny'}",
@@ -975,6 +994,7 @@ async def handle_web(ctx: CommandContext) -> CommandResult:
         f" · provider={options.search_provider}"
         f" · key_env={key_env or '（无）'}"
         f" · configured={'yes' if configured else 'no'}",
+        browser_line,
     )
 
 

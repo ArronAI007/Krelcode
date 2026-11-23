@@ -14,6 +14,15 @@ from krelcode.agent.prompts import PROMPT_BASE_SECTIONS
 from krelcode.agent.tool_playbooks import DEFAULT_TOOL_PLAYBOOK_CATALOG
 from krelcode.agent.tool_pool import TurnToolPool
 from krelcode.app import default_tools
+from krelcode.browser.runtime import BrowserOptions, BrowserRuntime
+from krelcode.browser.tools import (
+    BrowserClickTool,
+    BrowserCloseTool,
+    BrowserFillTool,
+    BrowserOpenTool,
+    BrowserScreenshotTool,
+    BrowserSnapshotTool,
+)
 from krelcode.core.messages import Message
 from krelcode.lsp.tools import build_lsp_tools
 from krelcode.skills.tools import (
@@ -25,8 +34,20 @@ from krelcode.skills.tools import (
 )
 from krelcode.subagent.tools import build_subagent_tools
 from krelcode.tools.extension.ask_user import AskUserTool
+from krelcode.tools.builtin.database_migration import (
+    MigrationCreateTool,
+    MigrationInspectTool,
+    MigrationOptions,
+    MigrationValidateTool,
+)
 from krelcode.tools.builtin.edit_file import EditFileTool
 from krelcode.tools.builtin.memory_search import MemorySearchTool
+from krelcode.tools.builtin.notebook import (
+    NotebookCreateTool,
+    NotebookEditTool,
+    NotebookInspectTool,
+    NotebookOptions,
+)
 from krelcode.tools.builtin.prompt_lab import PromptLabTool
 from krelcode.tools.builtin.read_file import ReadFileTool
 from krelcode.tools.builtin.run_command import RunCommandTool
@@ -42,6 +63,9 @@ def _normalized(value: str) -> str:
 
 def _all_known_tools():
     manager = object()
+    browser = BrowserRuntime.from_options(BrowserOptions())
+    notebook = NotebookOptions()
+    migration = MigrationOptions()
     return [
         *default_tools(),
         MemorySearchTool(lambda: None),
@@ -55,6 +79,18 @@ def _all_known_tools():
         ListSkillResourcesTool(manager),
         ReadSkillResourceTool(manager),
         RunSkillScriptTool(manager),
+        BrowserOpenTool(browser),
+        BrowserSnapshotTool(browser),
+        BrowserClickTool(browser),
+        BrowserFillTool(browser),
+        BrowserScreenshotTool(browser),
+        BrowserCloseTool(browser),
+        NotebookInspectTool(notebook),
+        NotebookEditTool(notebook),
+        NotebookCreateTool(notebook),
+        MigrationInspectTool(migration),
+        MigrationValidateTool(migration),
+        MigrationCreateTool(migration),
     ]
 
 

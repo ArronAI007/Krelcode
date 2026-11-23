@@ -1430,7 +1430,7 @@ Krelcode 从 Step 120 起把两层职责明确拆开：
 | Tool Playbook | 多个工具如何形成稳定目录和缓存身份 | 工具族标题、顺序、active tools、版本与 hash | `ToolPlaybookCatalog`，L5 session |
 | Runtime Contract | 本轮到底允许什么 | approval、Sandbox、权限模式、工具池过滤、MCP 健康 | `ModePermissionContract` / `TurnToolPool` |
 
-默认内置、子代理、Skill、LSP、Web、Memory 与 `prompt_lab` 共 39 个已知工具均拥有非空
+当前内置、子代理、Skill、LSP/Web/Browser/Notebook/Database 与 Memory/`prompt_lab` 共 51 个已知工具均拥有非空
 `prompt`、`when_to_use`、`when_not_to_use` 和版本；复杂工具还拥有可审查示例。工具 Prompt
 随 `ToolPromptSpec.from_tool()` 进入统一快照，Provider wire 仍只序列化
 `name/description/parameters`。`run_command` 的专用工具偏好、Git destructive-command
@@ -1473,7 +1473,7 @@ guidance 冲突、长度上限、疑似真实凭据形状和可选参数覆盖�
 工具名、字段路径、错误码、计数和 content-light 标志，不包含 instructions、Schema 注解、
 example input 或 Secret 文本。`/prompts lint` 不刷新 Prompt Surface 目录，也不触发磁盘扫描。
 
-截至 Step E，内置、扩展、子代理、LSP、Web、Skill、Memory 与 `prompt_lab` 共 39 个模型可见
+P1-4 完成后，内置、扩展、子代理、LSP/Web/Browser/Notebook/Database、Skill、Memory 与 `prompt_lab` 共 51 个模型可见
 工具均有至少一个 schema-valid example；复杂工具用多个 example 区分正常、安全或边界调用。
 
 ## Prompt Conflict Analyzer（Step 110）
@@ -2825,3 +2825,58 @@ input/requested(input_id)
 Prompt 前阻断；内容做密钥模式脱敏和长度上限；Prompt 标记
 `requires_validation: true` / `trust: untrusted-editor-data`。编辑器不应递归加载其他
 文件，也不应把 IDE 品牌、建议或诊断文本提升为 instruction。
+
+## Browser / Notebook / Database Migration（P1-4）
+
+P1-4 不把三种能力塞进一个通用“超级工具”，而是保持三个独立边界，并统一进入
+`ToolPromptSpec → ToolDescriptor → TurnToolPool → ApprovalPolicy` 链路。
+
+```text
+browser_open / snapshot / click / fill / screenshot / close
+  → BrowserRuntime(options, BrowserBackend)
+  → static: SafeHttpClient + HTMLParser
+  → playwright(optional): fixed-action Chromium context + per-request URL validation
+  → session TTL / max sessions / element ID revision / workspace screenshot path
+
+notebook_inspect / edit / create
+  → nbformat 4 structural validation
+  → output summary only
+  → targeted cell mutation
+  → atomic_write_text(expected snapshot)
+  → no kernel / no execution
+
+migration_inspect / validate / create
+  → bounded workspace discovery
+  → framework/revision graph
+  → static SQL/Alembic risk findings
+  → fail-closed scaffold
+  → apply/rollback remains run_command + Sandbox + approval
+```
+
+**Browser 边界。** `BrowserOptions` 限制网络端口、响应体、文本、会话数、TTL 与截图大小。
+static 后端只支持快照，不伪装 click/fill；Playwright 必须显式配置，模型不能传
+JavaScript、Cookie、Storage、Header、file/data URL。每个浏览器请求都经
+`SafeHttpClient.validate` 检查，Playwright 导航后的最终 URL 再检查一次。敏感 query
+参数（token/password/session/code 等）在模型输出前替换为 `***`。click/fill/screenshot
+是 mutating 工具，受 ApprovalPolicy、read-only/plan 工具池过滤与 workspace path 约束。
+会话过期时会显式关闭 backend context；元素 ID 只对最近快照有效。
+
+**Notebook 边界。** 只接受 workspace 内的 `.ipynb` 与 nbformat 4；单文件、cell 数、
+cell 大小都受限。`notebook_inspect` 永不返回原始 outputs，只返回 output type/count。
+`notebook_edit` 按 index 替换/插入/删除/清空，不重建整个 notebook；未修改 cell 的
+outputs/metadata 原样保留，替换 code source 默认清除 stale output/execution_count。
+写入通过文件快照、同目录临时文件与 `os.replace` 原子完成。工具从不启动 kernel，执行是
+另一个可审计的 `run_command` 决策。
+
+**Migration 边界。** 工具只读迁移文件，不读 `.env`/credentials，不建立数据库连接。
+inspector 识别 Alembic/Django/Prisma/Flyway/Liquibase/Rails/generic SQL；Alembic head
+来自本地 revision/down_revision 图，并明确标注“非数据库真实状态”。validator 将 SQL
+与管理性 Python 操作归为 critical/high/medium/low，检测 DROP/TRUNCATE、无 WHERE 的
+DELETE/UPDATE、NOT NULL 无 DEFAULT、类型/索引锁风险以及 downgrade/undo/rollback 证据。
+所有 finding 带文件/行号和稳定 code。create 只产生带 TODO 的脚手架；Alembic 两个方向
+默认 raise `NotImplementedError`，不会生成可以误应用的空迁移。apply/rollback 永远走框架
+原生命令、用户审批和 Sandbox。
+
+**Workflow。** `browser-automation`、`notebook-editing`、`database-migration` 是
+turn-scoped、managed、非缓存 L9 Fragment。分类只看用户指令正文，忽略附件/fenced code；
+领域安全约束在专用 Workflow 中显式写出，但不会扩大稳定 Base Prompt 或跨轮缓存前缀。

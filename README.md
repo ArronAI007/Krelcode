@@ -490,7 +490,7 @@ pip install -e ".[syntax]"
 # 或安装已打包 wheel：pip install "krelcode[syntax]"
 ```
 
-默认工具 17 个：文件/检索与执行工具（`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`、`repo_map`、`find_refs`、`check_syntax` 等）、`get_time`、`ask_user`、`update_plan`、`tool_search`，以及 `job_start/job_output/job_list/job_kill`；显式启用 `[prompt.authoring].enabled=true` 时再注册 `prompt_lab`（仅生成 content-light proposal，不写生产 Prompt）。另注册 9 个子代理工具：`spawn_agent`、`wait_agent`、`send_to_agent`、`list_agents`、`get_agent_feed`、`pause_agent`、`resume_agent`、`kill_agent`、`list_agent_definitions`。启用 Skills 时另加 5 个 Skill 工具，并叠加 MCP 远程工具和插件工具。
+默认工具 17 个：文件/检索与执行工具（`read_file`、`write_file`、`edit_file`、`run_command`、`grep`、`glob`、`repo_map`、`find_refs`、`check_syntax` 等）、`get_time`、`ask_user`、`update_plan`、`tool_search`，以及 `job_start/job_output/job_list/job_kill`；P1-4 默认再装配 3 个 Notebook 工具与 3 个数据库迁移工具，并装配静态浏览器 `browser_open/browser_snapshot/browser_close`。显式配置 Playwright 时增加 click/fill/screenshot；显式启用 `[prompt.authoring].enabled=true` 时再注册 `prompt_lab`（仅生成 content-light proposal，不写生产 Prompt）。另注册 9 个子代理工具：`spawn_agent`、`wait_agent`、`send_to_agent`、`list_agents`、`get_agent_feed`、`pause_agent`、`resume_agent`、`kill_agent`、`list_agent_definitions`。启用 Skills 时另加 5 个 Skill 工具，并叠加 MCP 远程工具和插件工具。
 
 ### 动态工具目录与 ToolSearch
 
@@ -506,7 +506,7 @@ ToolSearch 只搜索已通过运行时过滤的候选集，不能加载被禁用
 
 从 Step 120 起，Base Prompt 只回答“Agent 是什么、总体工作原则是什么、如何选择工具”。具体工具的使用时机、参数习惯、操作顺序、安全协议、禁止项和示例由该工具自己的 `prompt` / `when_to_use` / `when_not_to_use` / `prompt_examples` 承担，不再堆进主系统 Prompt。例如 `run_command` 自己声明专用工具偏好、Git 安全协议和 Sandbox 不可绕过；`edit_file` 自己声明精确匹配、`replace_all`、串行写入和 diff 检查；`ask_user` 自己声明先调查、只问单一阻塞决策。
 
-`ToolPromptSpec` 是这些字段的规范化投影，也是 Provider Schema、目录检索、Prompt Plan 和观测 hash 的共同来源。当前默认内置工具、子代理工具、Skill 工具、LSP 工具、Web 工具和 Memory/`prompt_lab` 等 39 个已知工具均有自有 Prompt 契约和至少一个 Schema-valid example；动态 MCP/Plugin 可按同一协议提供 `ToolPromptSpec`。`ToolDescriptor` 继续只负责 source、权限、tier 和运行模式，Provider wire 依然只接收 `name/description/parameters`，不会把操作正文塞回 JSON Schema。
+`ToolPromptSpec` 是这些字段的规范化投影，也是 Provider Schema、目录检索、Prompt Plan 和观测 hash 的共同来源。当前默认内置工具、子代理工具、Skill 工具、LSP/Web/Browser/Notebook/Database 工具和 Memory/`prompt_lab` 等 51 个已知工具均有自有 Prompt 契约和至少一个 Schema-valid example；动态 MCP/Plugin 可按同一协议提供 `ToolPromptSpec`。`ToolDescriptor` 继续只负责 source、权限、tier 和运行模式，Provider wire 依然只接收 `name/description/parameters`，不会把操作正文塞回 JSON Schema。
 
 Step E 新增独立 `tools/prompt_lint.py`：对 name、JSON Schema、必填字段、instructions、when/exclusion、重复 example、未知参数、类型/枚举/范围、疑似凭据形状和 example 覆盖执行确定性检查。内置/Skill/Subagent 工具缺 example 为 error，MCP/Plugin 为 warning，避免离线外部能力阻塞本地运行。`/prompts lint [tool]` 只显示稳定错误码、字段名、计数与 hash 级摘要，不回显工具 Prompt 或 example 正文。
 
@@ -541,7 +541,21 @@ Workflow 是 turn 级 `managed` instruction，不进入稳定缓存前缀，也�
 - **WebFetch/WebSearch**：内置安全 HTTP 客户端拒绝 localhost、私网、非公网 DNS、
   非 http/https、异常端口、敏感 Header 与超大响应；重定向逐跳复检。WebSearch
   通过 `SearchBackend` 解耦，默认 Brave，密钥只从 `[web_search].api_key_env` 读取。
-  `--no-web` 完全关闭网页工具。
+  `--no-web` 同时关闭 Web 与 Browser 网络能力；`--no-browser` 仅关闭浏览器会话，
+  `--no-notebook`/`--no-database` 分别关闭 P1-4 文件工作流工具。
+- **Browser**：独立的 `BrowserRuntime` 提供有界会话与稳定元素 ID。默认 `static`
+  后端复用 SSRF-safe HTTP 客户端，只做只读 HTML/JSON 快照；显式设置
+  `[browser].backend = "playwright"` 并安装 Playwright/Chromium 后才有
+  click/fill/screenshot。模型不能传入 JavaScript、Cookie、存储、Header 或 file/data URL；
+  所有请求逐次复检 URL/端口/私网策略，交互动作经过 ApprovalPolicy，截图只能原子写入工作区。
+- **Notebook**：`notebook_inspect/notebook_edit/notebook_create` 直接解析并原子写
+  nbformat 4 JSON。默认只返回 cell/执行状态/output 类型统计，不输出原始 output；修改
+  未触及 cell 的 outputs/metadata，替换 code cell 默认清除 stale output。工具从不启动
+  kernel，执行必须另走受审批的 `run_command`。
+- **数据库迁移**：`migration_inspect/validate/create` 静态识别 Alembic、Django、Prisma、
+  Flyway、Liquibase、Rails 和通用 SQL 目录，报告 revision/file head、破坏性 DDL/DML、
+  无 WHERE 更新/删除、锁风险与 downgrade/rollback 证据。工具不读取凭据、不连接数据库；
+  apply/rollback 仍由框架原生命令通过 `run_command`、Sandbox 和审批执行。
 - **TypeScript SDK**：`typescript-sdk/` 提供零运行时依赖的 Node/TypeScript 客户端，
   复用 `stream-json` v1；支持并发 `requestId` 路由、流式 `query()`、`run()`、
   `interrupt()`、环境变量密钥与有界 stderr 脱敏。见 `typescript-sdk/README.md`。

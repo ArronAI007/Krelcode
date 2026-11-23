@@ -77,7 +77,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-output-styles", action="store_true",
                    help="禁用 Output Styles 发现与注入")
     p.add_argument("--no-web", action="store_true",
-                   help="禁用内置 WebFetch/WebSearch 工具")
+                   help="禁用内置 WebFetch/WebSearch 与浏览器网络工具")
+    p.add_argument("--no-browser", action="store_true",
+                   help="禁用浏览器会话工具（不影响 WebFetch/WebSearch）")
+    p.add_argument("--no-notebook", action="store_true",
+                   help="禁用 Jupyter Notebook inspect/edit/create 工具")
+    p.add_argument("--no-database", action="store_true",
+                   help="禁用数据库迁移 inspect/validate/create 工具")
     p.add_argument("--no-plugins", action="store_true",
                    help="禁用本地目录插件发现与插件工具")
     p.add_argument("--plugins-dir", action="append", default=[],
