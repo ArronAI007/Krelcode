@@ -305,16 +305,30 @@ def build_policy(
     bus: EventBus,
     *,
     approver=None,
+    config: Optional[Dict[str, Any]] = None,
 ):
     """--no-sandbox 回退全放行；否则 SandboxPolicy（规则分级+持久化+交互审批）。"""
     if args.no_sandbox:
         return AllowAllPolicy()
+    ui_section = (config or {}).get("ui") or {}
+    configured_review = (
+        bool(ui_section.get("diff_review", True))
+        if isinstance(ui_section, dict) else True
+    )
+    review_writes = bool(
+        configured_review
+        and not getattr(args, "no_diff_review", False)
+        and not args.auto_approve
+        and approver is not None
+        and resolve_run_mode(args) is RunMode.REPL
+    )
     return SandboxPolicy(
         approver=approver,
         rules_path=workspace_root / ".krelcode" / "allow_rules.json",
         bus=bus,
         auto_approve=args.auto_approve,
         workspace_root=workspace_root,
+        review_writes=review_writes,
     )
 
 
@@ -665,7 +679,8 @@ async def build_loop(
     else:
         shell_jobs = ShellJobManager(bus, workspace_root=workspace_root)
     tool_context.shell_jobs = shell_jobs
-    policy = build_policy(args, workspace_root, bus, approver=approver)
+    policy = build_policy(
+        args, workspace_root, bus, approver=approver, config=config)
     lsp_manager = LSPManager(
         workspace_root, options=LSPOptions.from_config(config.get("lsp")))
     web_options = WebOptions.from_config(

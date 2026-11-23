@@ -41,7 +41,7 @@ def test_repl_commands_documented():
                     "/context sources", "/context cache", "/context ledger",
                     "/context refresh",
                     "/compact", "/export", "/reset", "/stop", "/exit",
-                    "/thinking", "/tool-output", "/plugins", "/fork",
+                    "/thinking", "/tool-output", "/diff", "/plugins", "/fork",
                     "/rewind", "/rename", "/delete", "/memory",
                     "/memory list", "/memory show", "/memory add",
                     "/memory search", "/memory pin",

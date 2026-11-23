@@ -5,13 +5,13 @@
 > 使用文档见 [README.md](README.md)，全量配置见 [CONFIG.md](CONFIG.md)，契约细节见 [DESIGN.md](DESIGN.md)，
 > 逐步骤路线见 [PLAN.md](PLAN.md)。
 
-## 1. 项目统计（P1-4 完成）
+## 1. 项目统计（P2-1 完成）
 
 | 维度 | 数值 |
 |------|------|
-| 源码 | 94,024 行（Python，**零第三方运行时依赖**） |
-| 测试 | 42,226 行 / 171 个 `test_*.py` 模块 / 1,782 个通过用例 + 3 个本地端口集成 skip |
-| 提交 | 189 个增量提交，每个功能阶段均包含测试与语义化 commit |
+| 源码 | 95,180 行（Python，**零第三方运行时依赖**） |
+| 测试 | 42,514 行 / 172 个 `test_*.py` 模块 / 1,792 个通过用例 + 3 个本地端口集成 skip |
+| 提交 | 191 个增量提交，每个功能阶段均包含测试与语义化 commit |
 | 工具 | 默认内置 17 + Web 2 + 静态 Browser 3（Playwright 额外 3）+ Notebook 3 + 数据库迁移 3 + 只读 `memory_search`（装配 MemoryStore 时）+ `prompt_lab`（Prompt Authoring 开启时）+ 子代理 9 + Skill 5 + LSP 4 + MCP/Plugin 动态注册；51 个已知工具均有自有 Prompt 契约 |
 | Provider | OpenAI 兼容 / Anthropic / Gemini / Mock（统一事件流） |
 | CLI 入口 | REPL 对话 · -m 单次（text/json/stream-json）· stream-json 持久会话 · Python SDK · doctor · init · review |
@@ -20,13 +20,13 @@
 源码按层分布：
 
 ```
-agent 25462 · session 14019 · benchmarks 7990 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4680
-tools 6181 · mcp 4538 · ui 3971 · llm 3797 · subagent 3184 · safety 3138 · daemon 3057
-lsp 1401 · plugins 1134 · skills 1112 · security_review 1097 · core 1065 · web 950
-jobs 591 · entrypoints 511
+agent 25600 · session 14373 · benchmarks 7990 · 顶层(app/config/doctor/scaffold/hooks/review/sdk) 4826
+tools 7725 · ui 5183 · mcp 4538 · llm 3797 · plugins 3639 · subagent 3184
+safety 3146 · daemon 3057 · lsp 1401 · browser 1385 · skills 1112 · security_review 1097
+core 1067 · web 950 · jobs 591 · entrypoints 519
 ```
 
-core 只有 1065 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
+core 只有 1067 行——内核保持极小、能力在边缘，正是当初对标 pi/dsh 想要的形状。
 测试代码量约为源码的 46%，覆盖协议、安全边界与端到端行为。
 
 ## 2. 关键架构决策时间线
@@ -271,6 +271,22 @@ stale output 清理；迁移框架发现、Alembic file-head 图、破坏性 SQL
 锁风险、缺失/未实现 downgrade、Flyway rollback 证据、脚手架 fail-closed 与 path
 traversal。Interactive Browser 使用 fake backend 验证动作与审批边界；Playwright 为
 可选依赖，不进入默认测试或无网络 CI。
+
+## P2-1 高级 TUI/diff 审阅验证
+
+```bash
+PYTHONPATH=src python -m pytest -q tests/test_p2_1_diff_review.py \
+  tests/test_approval_broker.py tests/test_repl.py \
+  tests/test_repl_event_architecture.py tests/test_safety_policy.py \
+  tests/test_tui_panels.py tests/test_input_processor.py \
+  tests/test_command_registry.py tests/test_config_reference.py
+```
+
+专项覆盖 unified diff 解析与行号、固定高度 pager/文件切换、`edit_file` 无副作用预览、
+凭据脱敏、敏感路径/工作区逃逸、tracked+untracked、staged-only 隔离、`review_writes`
+开关矩阵，以及 REPL 写前审批后落盘的端到端路径。`--no-diff-review` 与
+`[ui].diff_review=false` 均保持为显式关闭入口；headless、SDK 和 `--auto-approve`
+不会额外弹出交互式审阅。
 
 ## P2 验证命令
 

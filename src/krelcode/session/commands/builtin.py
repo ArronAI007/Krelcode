@@ -29,6 +29,12 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             argument_hint="[编号|last]", available_during_run=True,
             help="列出工具输出；/tool-output <编号|last> 展开灰色面板"),
         CommandSpec(
+            "diff", "审阅工具写入或 Git 变更", kind=ui,
+            argument_hint="[staged|refresh|next|prev|file <n>|close]",
+            help=("打开高级 diff 审阅器；待审批文件写入显示预写入差异，"
+                  "普通模式显示工作区未提交差异。审阅中可用 j/k、PgUp/PgDn、[/]、"
+                  "y/n/q 键操作。")),
+        CommandSpec(
             "queue", "查看或管理下一条消息队列", kind=ui,
             argument_hint="[delete|move|clear ...]",
             available_during_run=True,

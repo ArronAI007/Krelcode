@@ -142,3 +142,21 @@ Migration tools ────── bounded file discovery → framework graph �
 在 plan/read-only 模式下被 TurnToolPool 排除并在默认模式走审批；Notebook 写工具与
 Migration create 同样不进入只读池。领域执行策略由 Task Workflow L9 提供，而不是污染
 稳定 L1 Base Prompt。
+
+## 15. 高级 TUI / Diff 审阅（P2-1）
+
+交互层在原有 `PromptWriter + Panel Dock + stream renderer` 上增加一个模态 diff review
+surface。它仍是 scrollback 友好的，不切换全屏 alternate screen：
+
+```text
+Tool approval / /diff
+  └─ DiffReview → DiffPager overlay
+       ├─ file/hunk/line 导航
+       ├─ bounded + redacted unified diff
+       └─ y/n/q → ApprovalBroker / SandboxPolicy
+```
+
+`Review` 是默认第五个 Panel Dock 面板，和 `Tasks / Activity / Context / Memory` 共用
+稳定布局与缓存快照。写前审阅只读取目标文件和工具参数，不先执行写入；普通 `/diff` 只
+采集 Git tracked/staged/安全 untracked 文本。diff 引擎和 Git 采集在 UI 层之外保持纯数据、
+可测试、零第三方依赖，实际执行仍完全经过现有权限、审批、Hook 与 Sandbox 链。

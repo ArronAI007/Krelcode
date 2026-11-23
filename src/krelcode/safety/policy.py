@@ -79,6 +79,7 @@ class SandboxPolicy:
         bus: Optional[EventBus] = None,
         auto_approve: bool = False,
         workspace_root: Optional[Path] = None,
+        review_writes: bool = False,
     ) -> None:
         self.approver = approver
         self.rules = AllowRules(
@@ -87,6 +88,7 @@ class SandboxPolicy:
         )
         self.bus = bus
         self.auto_approve = auto_approve
+        self.review_writes = bool(review_writes)
 
     async def check(self, tool_call: ToolCall, ctx: ToolContext) -> Decision:
         name = tool_call.name
@@ -128,6 +130,12 @@ class SandboxPolicy:
                     tool_call, f"写入受保护路径（{protected}）", ctx=ctx)
             if rule_match is not None and rule_match.decision is RuleDecision.ALLOW:
                 return Decision(True, rule_match.reason)
+            if self.review_writes and self.approver is not None:
+                return await self._ask(
+                    tool_call,
+                    "REPL diff review: 文件内容变更需要先审阅再写入",
+                    ctx=ctx,
+                )
             return ALLOW
 
         if name in SHELL_TOOLS:

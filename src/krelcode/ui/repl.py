@@ -17,6 +17,7 @@ import codecs
 import os
 import re
 import select
+import shlex
 import shutil
 import sys
 import threading
@@ -25,7 +26,7 @@ import unicodedata
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 try:  # POSIX TTY；Windows 自动退回普通 input()
     import termios
@@ -65,6 +66,12 @@ from ..session.prompt_queue import PromptQueue
 from ..session.repl_session import ReplSessionRunner, SessionPrompt
 from ..session.state import SessionViewState
 from .approval import ApprovalBroker, ApprovalRequest
+from .diff_review import (
+    DiffPager,
+    DiffReview,
+    build_tool_call_review,
+    collect_git_review,
+)
 from .editor import (
     EditBuffer,
     HistorySearch,
@@ -98,6 +105,8 @@ class ReplControl(str, Enum):
 
     INTERRUPT = "interrupt"
     CYCLE_PERMISSION = "cycle-permission"
+    APPROVE_DIFF = "approve-diff"
+    REJECT_DIFF = "reject-diff"
 
 
 @dataclass(frozen=True)
@@ -573,7 +582,7 @@ class TerminalLineEditor:
     COMPLETE_ESCAPE_SEQUENCES = frozenset({
         b"[A", b"OA", b"[B", b"OB", b"[D", b"OD", b"[C", b"OC",
         b"[H", b"OH", b"[1~", b"[7~", b"[F", b"OF", b"[4~", b"[8~",
-        b"[3~", b"[3;5~", b"[200~", b"[Z", b"[13;2u", b"[13;3u",
+        b"[3~", b"[3;5~", b"[5~", b"[6~", b"[200~", b"[Z", b"[13;2u", b"[13;3u",
         b"[27;2;13~", b"[27;3;13~",
         b"b", b"B", b"f", b"F", b"\x7f", b"\r", b"\n",
     })
@@ -582,15 +591,34 @@ class TerminalLineEditor:
                  suggest: Callable[[str], list[tuple[str, str]]],
                  color: bool = False,
                  history: Optional[InputHistory] = None,
-                 panels: Optional[PanelController] = None) -> None:
+                 panels: Optional[PanelController] = None,
+                 on_diff_pager_change: Optional[Callable[[], None]] = None) -> None:
         self._prompt = prompt
         self._suggest = suggest
         self._color = color
         self._history = history if history is not None else InputHistory()
         self._panels = panels
+        self._diff_pager: Optional[DiffPager] = None
+        self._on_diff_pager_change = on_diff_pager_change
         self._pending_input = bytearray()
         if panels is not None:
             prompt.set_cursor_probe(True)
+
+    def set_diff_pager(self, pager: Optional[DiffPager]) -> None:
+        self._diff_pager = pager
+
+    def _handle_diff_key(self, key: str) -> Optional[ReplControl]:
+        pager = self._diff_pager
+        if pager is None or not pager.active:
+            return None
+        action = pager.handle_key(key)
+        if action == "approve":
+            return ReplControl.APPROVE_DIFF
+        if action == "reject":
+            return ReplControl.REJECT_DIFF
+        if self._on_diff_pager_change is not None:
+            self._on_diff_pager_change()
+        return None
 
     @property
     def available(self) -> bool:
@@ -627,6 +655,39 @@ class TerminalLineEditor:
                 data = self._read_one(fd)
                 if not data:
                     raise EOFError
+                pager = self._diff_pager
+                if pager is not None and pager.active:
+                    if data == b"\x1b":
+                        sequence = self._read_escape_sequence(fd)
+                        if parse_sgr_mouse(sequence) is not None:
+                            self._refresh(prompt_text(), buffer, search=search)
+                            continue
+                        key = {
+                            b"": "escape",
+                            b"[A": "up", b"OA": "up",
+                            b"[B": "down", b"OB": "down",
+                            b"[C": "]", b"OC": "]",
+                            b"[D": "[", b"OD": "[",
+                            b"[5~": "pageup", b"[6~": "pagedown",
+                            b"[H": "home", b"OH": "home",
+                            b"[F": "end", b"OF": "end",
+                            b"[Z": "shift-tab", b"\t": "tab",
+                        }.get(sequence, "")
+                    else:
+                        char = decoder.decode(data)
+                        if not char:
+                            continue
+                        if char == "\x03":
+                            return ReplControl.INTERRUPT
+                        key = {
+                            "\r": "enter", "\n": "enter",
+                            "\t": "tab", "\x7f": "b",
+                        }.get(char, char)
+                    control = self._handle_diff_key(key)
+                    if control is not None:
+                        return control
+                    self._refresh(prompt_text(), buffer, search=search)
+                    continue
                 if data == b"\x1b":
                     sequence = self._read_escape_sequence(fd)
                     if sequence == b"[200~":
@@ -1114,6 +1175,9 @@ async def run_repl(
     state = SessionViewState()
     panel_controller = PanelController()
     quick_status = ""
+    review_pager: Optional[DiffPager] = None
+    approval_review: Optional[DiffReview] = None
+    git_review: Optional[DiffReview] = None
 
     # Panel redraws are high-frequency and must stay disk-free. Refresh this
     # cache only after an explicit memory mutation or MemoryWritten event.
@@ -1128,7 +1192,13 @@ async def run_repl(
         fragments = getattr(snapshot, "fragments", ())
         cache = getattr(snapshot, "cache", None)
         context_manager = getattr(loop, "context_manager", None)
-        columns = max(1, shutil.get_terminal_size((80, 24)).columns - 1)
+        terminal = shutil.get_terminal_size((80, 24))
+        columns = max(1, terminal.columns - 1)
+        if review_pager is not None and review_pager.active:
+            overlay = review_pager.render(
+                columns, max(8, terminal.lines - 8), color=use_color)
+            prompt.set_panels(overlay)
+            return
         panels = build_panels(
             state,
             permission_mode=controller.permission_manager.mode.value,
@@ -1141,6 +1211,7 @@ async def run_repl(
             memory_total=memory_cache.total_entries,
             memory_tokens=memory_cache.tokens,
             quick_status=quick_status,
+            diff_review=approval_review or git_review,
         )
         panel_controller.set_panels(panels)
         layout = panel_controller.render(columns)
@@ -1177,12 +1248,20 @@ async def run_repl(
 
     editor = TerminalLineEditor(
         prompt, suggest, color=use_color, history=input_history,
-        panels=panel_controller)
+        panels=panel_controller,
+        on_diff_pager_change=lambda: refresh_panels(
+            queue_size=len(runner.queue)),
+    )
 
     def render_status(view: SessionViewState) -> str:
         """Build a status line without touching disk on every redraw."""
         progress = view.status_text()
-        if not progress and controller.plan_manager.pending:
+        if review_pager is not None and review_pager.active:
+            mode = "待审批" if review_pager.can_decide else "只读"
+            progress = (
+                f"diff {mode} · {review_pager.review.stats} · "
+                "j/k 滚动 · y/n 决定 · q 返回")
+        elif not progress and controller.plan_manager.pending:
             progress = "计划待确认 · /plan approve 执行"
         tokens = estimate_history_tokens(loop.history)
         manager = getattr(loop, "context_manager", None)
@@ -1248,13 +1327,48 @@ async def run_repl(
         text = str(value)
         return redactor.redact(text) if redactor is not None else text
 
+    def clear_review() -> None:
+        nonlocal review_pager, approval_review
+        if review_pager is not None:
+            review_pager.active = False
+        review_pager = None
+        approval_review = None
+        editor.set_diff_pager(None)
+
+    def activate_review(review: DiffReview, *, can_decide: bool) -> DiffPager:
+        nonlocal review_pager
+        pager = DiffPager(review, can_decide=can_decide, active=True)
+        review_pager = pager
+        editor.set_diff_pager(pager)
+        refresh_panels(queue_size=len(runner.queue))
+        return pager
+
     def show_approval(request: ApprovalRequest) -> None:
+        nonlocal approval_review
         tool_call = request.tool_call
         command = tool_call.arguments.get("command")
         detail = command if command is not None else tool_call.arguments
         prompt.suspend()
         _stdout_write(f"  [审批] {tool_call.name}: {redact_value(detail)}\n")
         _stdout_write(f"  原因: {redact_value(request.reason)}\n")
+
+        review = build_tool_call_review(
+            tool_call, workspace_root, redactor=redactor)
+        approval_review = review
+        if review.has_changes:
+            _stdout_write(f"  差异审阅: {redact_value(review.stats)}\n")
+            for line in review.summary_lines(limit=4):
+                _stdout_write(f"    {redact_value(line)}\n")
+            for line in review.preview_lines(limit=7):
+                _stdout_write(f"    {redact_value(line)}\n")
+            activate_review(review, can_decide=True)
+            _stdout_write(
+                "  j/k 滚动 · PgUp/PgDn 翻页 · [/] 切换文件 · "
+                "y 允许 · n 拒绝 · q 返回\n")
+            return
+
+        if review.notice:
+            _stdout_write(f"  {redact_value(review.notice)}\n")
         _stdout_write(
             "  允许执行? [y]是 / [n]否 / [a]始终允许此命令（直接 Enter=否）\n")
 
@@ -1365,6 +1479,96 @@ async def run_repl(
         input_broker=input_broker,
     )
 
+    async def handle_diff_command(arguments: str) -> bool:
+        """Open or navigate the current approval/Git diff review."""
+        nonlocal git_review
+        try:
+            parts = shlex.split(arguments) if arguments.strip() else []
+        except ValueError as exc:
+            print(f"  [diff] 参数解析失败: {exc}")
+            return True
+        operation = parts[0].lower() if parts else ""
+
+        if review_pager is None or not review_pager.active:
+            if operation == "close":
+                clear_review()
+                return True
+            if runner.pending is not None and approval_review is not None:
+                activate_review(approval_review, can_decide=True)
+            else:
+                staged = operation == "staged"
+                if operation not in {"", "staged", "refresh"}:
+                    print("  用法: /diff [staged|refresh|next|prev|file <n>|close]")
+                    return True
+                review = await asyncio.to_thread(
+                    collect_git_review,
+                    workspace_root,
+                    staged=staged,
+                    redactor=redactor,
+                )
+                git_review = review
+                if not review.files:
+                    print(f"  [diff] {review.notice or '没有可审阅差异'}")
+                    return True
+                activate_review(review, can_decide=False)
+
+        pager = review_pager
+        if pager is None:
+            return True
+        if operation == "close" or operation == "q":
+            clear_review()
+            refresh_panels(queue_size=len(runner.queue))
+            return True
+        if operation == "next":
+            pager.switch_file(1)
+        elif operation == "prev":
+            pager.switch_file(-1)
+        elif operation == "file":
+            if len(parts) != 2:
+                print("  用法: /diff file <n>")
+                return True
+            try:
+                index = max(1, int(parts[1])) - 1
+            except ValueError:
+                print("  用法: /diff file <n>")
+                return True
+            pager.select_file(index)
+        elif operation == "top":
+            pager.go_start()
+        elif operation == "end":
+            pager.go_end()
+        elif operation == "numbers":
+            pager.toggle_line_numbers()
+        elif operation in {"staged", "refresh"} and runner.pending is not None:
+            # Keep the decision review authoritative while approval is pending.
+            pass
+        elif operation in {"", "staged", "refresh"}:
+            # A bare /diff while a review is open is a refresh request.
+            if operation != "":
+                staged = operation == "staged"
+                review = await asyncio.to_thread(
+                    collect_git_review,
+                    workspace_root,
+                    staged=staged,
+                    redactor=redactor,
+                )
+                git_review = review
+                if not review.files:
+                    print(f"  [diff] {review.notice or '没有可审阅差异'}")
+                    return True
+                activate_review(review, can_decide=False)
+                pager = review_pager
+        else:
+            print("  用法: /diff [staged|refresh|next|prev|file <n>|close]")
+            return True
+
+        if pager is not None:
+            refresh_panels(queue_size=len(runner.queue))
+            print(f"  [diff] {pager.review.stats}")
+            for line in pager.review.summary_lines(limit=4):
+                print(f"    {line}")
+        return True
+
     async def cancel_quick_task(
         message: str = "⎿ Shell 快捷命令已中止",
         *,
@@ -1414,6 +1618,7 @@ async def run_repl(
             model_switch=model_switch, skills=skills,
             skills_reload=skills_reload, controller=controller,
             command_registry=processor.command_registry,
+            diff_handler=handle_diff_command,
         )
         if action.command == "/memory":
             refresh_memory_cache()
@@ -1478,6 +1683,20 @@ async def run_repl(
             raw_action = action_get.result()
             action_get = asyncio.create_task(action_queue.get())
 
+            if raw_action in {
+                ReplControl.APPROVE_DIFF, ReplControl.REJECT_DIFF,
+            }:
+                prompt.hide()
+                if runner.pending is None:
+                    clear_review()
+                    restore_prompt()
+                    continue
+                clear_review()
+                runner.resolve_approval(
+                    "y" if raw_action is ReplControl.APPROVE_DIFF else "n")
+                restore_prompt()
+                continue
+
             # Shift-Tab：在任意前台状态快速轮换权限模式，保留当前草稿。
             if raw_action is ReplControl.CYCLE_PERMISSION:
                 plan_status_before = controller.plan_manager.status.value
@@ -1490,6 +1709,7 @@ async def run_repl(
                     suffix = "；待确认计划已取消"
                 if current in {"plan", "read-only"} and runner.pending is not None:
                     runner.reject_pending_approval()
+                    clear_review()
                     suffix += "；待审批请求已拒绝"
                 notice(
                     f"权限模式: {previous} → {current}{suffix}")
@@ -1499,6 +1719,8 @@ async def run_repl(
             # Esc/Ctrl-C：运行中中止；空闲时只清空当前输入。
             if isinstance(raw_action, ReplControl):
                 prompt.hide()
+                if runner.pending is not None:
+                    clear_review()
                 if quick_task is not None:
                     await cancel_quick_task()
                     restore_prompt()
@@ -1568,6 +1790,7 @@ async def run_repl(
                     continue
                 if action.kind is InputKind.CONTROL:
                     runner.reject_pending_approval()
+                    clear_review()
                     if action.command == "/stop" and quick_task is not None:
                         await cancel_quick_task()
                         restore_prompt()
@@ -1588,6 +1811,7 @@ async def run_repl(
                         restore_prompt()
                     continue
                 prompt.hide()
+                clear_review()
                 runner.resolve_approval(action.raw_text)
                 restore_prompt()
                 continue
@@ -1779,10 +2003,19 @@ async def _handle_command(
     plugins_reload=None,
     controller: Optional[SessionController] = None,
     command_registry: Optional[CommandRegistry] = None,
+    diff_handler: Optional[Callable[[str], Awaitable[bool]]] = None,
 ):
     """兼容入口：终端展示命令留在 UI，业务命令委托 SessionController。"""
     if not user_input.startswith("/"):
         return None
+
+    if user_input == "/diff" or user_input.startswith("/diff "):
+        arguments = user_input.partition(" ")[2]
+        if diff_handler is not None:
+            await diff_handler(arguments)
+        else:
+            print("  （当前前台不支持 diff 审阅器）")
+        return False
 
     # 这两类命令操作的是当前终端 renderer 的展示缓存，不属于会话业务状态。
     if user_input == "/thinking":

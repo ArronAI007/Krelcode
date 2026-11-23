@@ -1140,7 +1140,7 @@ ui/tui/
 ├─ layout.py      固定高度边框、CJK 截断、tab/item hitbox
 ├─ controller.py  焦点、选择、键鼠路由
 ├─ mouse.py       SGR mouse + CPR cursor origin codec
-└─ panels.py      SessionViewState → Tasks / Activity / Context / Memory
+└─ panels.py      SessionViewState → Tasks / Activity / Context / Review / Memory
           │
           ▼
 PromptWriter [Panel Dock] → 上分隔线 → 输入 → 下分隔线 → 状态/slash menu
@@ -2880,3 +2880,43 @@ DELETE/UPDATE、NOT NULL 无 DEFAULT、类型/索引锁风险以及 downgrade/un
 **Workflow。** `browser-automation`、`notebook-editing`、`database-migration` 是
 turn-scoped、managed、非缓存 L9 Fragment。分类只看用户指令正文，忽略附件/fenced code；
 领域安全约束在专用 Workflow 中显式写出，但不会扩大稳定 Base Prompt 或跨轮缓存前缀。
+
+## 高级 TUI / Diff 审阅（P2-1）
+
+`ui/diff_review.py` 是终端无关的 diff 数据层，负责把 bounded unified diff 解析为
+`DiffFile → DiffHunk → DiffLine`，并维护 `DiffPager`。它不依赖 Rich/Textual/Pygments，
+也不在渲染时访问磁盘。
+
+```text
+ToolCall(write_file/edit_file)
+  → build_tool_call_review()  # 只读当前目标 + 参数，不执行工具
+  → unified diff + redact + size/sensitive guard
+  → DiffPager（待审批）
+  → ApprovalBroker y/n → SandboxPolicy → Tool.execute()
+
+/diff [staged|refresh]
+  → collect_git_review()      # tracked/staged + safe untracked text
+  → DiffPager（只读）
+```
+
+写前预览必须从工具参数和写前文件快照生成，不能等 `ToolResult` 返回后再反推；这样拒绝时
+不会产生任何文件副作用。`write_file` 预览完整目标正文，`edit_file` 预览精确替换后的
+结果；目标大小上限为 1 MiB，超出或属于整体敏感文件时只显示安全 notice。预写入 diff
+正文统一经过 `redact_obvious_secrets` 与当前 `SecretRedactor`；`.env`/`krelcode.toml`
+保留结构但脱敏，`credentials*`、私钥和工作区逃逸路径不显示正文。
+
+Git 审阅支持工作区、暂存区、新增/删除/rename 和 binary 状态；未跟踪文件只纳入普通文本、
+非敏感且未超限的文件。单文件、文件数、hunk 数、单 hunk 行数和总字符数均有上限，正文
+截断状态进入 `DiffReview.truncated`。解析器不执行 diff 中的任何文本，Git 子进程复用
+`scrub_environment()`，并禁用 external diff。
+
+`DiffPager` 以固定高度 overlay 嵌入现有 Panel Dock，不切换 alternate screen。
+`j/k`、`PgUp/PgDn`、`[/]`、`#`、`g/G` 只修改审阅状态；审批中的 `y/n/q` 由前台
+输入循环转成 `APPROVE_DIFF/REJECT_DIFF`，普通输入不会污染 prompt。`Review` 面板只
+消费同一份 `DiffReview` 快照，不触发额外磁盘扫描。
+
+启用边界由 `SandboxPolicy.review_writes` 和 composition root 共同控制：默认仅 REPL、
+有前台 approver、default 模式且未设置 `--no-diff-review` 时启用；`[ui].diff_review=false`
+可配置关闭。headless、stream-json/SDK、`--auto-approve` 与无 approver 场景保持原有
+失败关闭/审批语义，不额外弹出交互式 pager。显式 allow 规则、只读/plan 模式和受保护路径
+仍由既有权限链决定，diff review 不能替代 Sandbox 或 DENY。

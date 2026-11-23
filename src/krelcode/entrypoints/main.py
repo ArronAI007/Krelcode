@@ -90,6 +90,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="额外插件根目录（可重复；优先级高于项目/全局目录）")
     p.add_argument("--auto-approve", action="store_true",
                    help="ASK 级操作自动批准（信任模式；DENY 级仍然拒绝）")
+    p.add_argument("--no-diff-review", action="store_true",
+                   help="关闭 REPL 文件写入前的交互式 diff 审阅（仍保留安全审批）")
     daemon_group = p.add_mutually_exclusive_group()
     daemon_group.add_argument(
         "--daemon", dest="daemon_enabled", action="store_true", default=None,

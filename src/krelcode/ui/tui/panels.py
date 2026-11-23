@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Iterable, Mapping, Optional
 
 from ...session.state import SessionPhase, SessionViewState
+from ..diff_review import DiffReview
 from .model import Panel, PanelItem
 
 _TASK_MARKS = {
@@ -68,8 +69,9 @@ def build_panels(
     memory_total: Optional[int] = None,
     memory_tokens: int = 0,
     quick_status: str = "",
+    diff_review: Optional[DiffReview] = None,
 ) -> tuple[Panel, ...]:
-    """Create the four default panels shown above the input editor."""
+    """Create the fixed panel snapshots shown above the input editor."""
     memories = tuple(memory_entries)
     total_memories = len(memories) if memory_total is None else memory_total
     phase = {
@@ -259,9 +261,37 @@ def build_panels(
             "memory-empty", "暂无记忆",
             "#内容 / #user: / #project: / #session:", "○"))
 
+    review_items: list[PanelItem] = []
+    if diff_review is not None and diff_review.files:
+        for index, item in enumerate(diff_review.files, 1):
+            status = {
+                "added": "+", "deleted": "-", "modified": "~",
+                "renamed": "→", "binary": "■",
+            }.get(item.status, "~")
+            detail = f"+{item.additions} −{item.deletions}"
+            if item.binary:
+                detail += " · binary"
+            if item.note:
+                detail += f" · {_compact(item.note, 32)}"
+            review_items.append(PanelItem(
+                id=f"review-file-{index}",
+                label=_compact(item.path, 100),
+                detail=_compact(detail, 64),
+                status=status,
+            ))
+        if diff_review.notice:
+            review_items.insert(0, PanelItem(
+                "review-note", _compact(diff_review.notice, 100),
+                diff_review.stats, "ℹ"))
+    else:
+        review_items.append(PanelItem(
+            "review-empty", "暂无待审阅差异",
+            "文件写入审批或 /diff 时显示", "○"))
+
     return (
         Panel("tasks", "Tasks", _task_items(state)),
         Panel("activity", "Activity", tuple(activity)),
         Panel("context", "Context", context_items),
+        Panel("review", "Review", tuple(review_items)),
         Panel("memory", "Memory", tuple(memory_items)),
     )

@@ -52,6 +52,7 @@ krelcode [子命令] [选项]
 | `--no-notebook` | — | 禁用 Notebook inspect/edit/create 工具 |
 | `--no-database` | — | 禁用数据库迁移 inspect/validate/create 工具 |
 | `--auto-approve` | — | ASK 级操作自动批准（DENY 级仍拒绝） |
+| `--no-diff-review` | — | 关闭 REPL 的写前 diff 审阅；审批策略本身仍保留 |
 | `--permission-mode default\|read-only\|auto-approve\|plan` | 配置/`default` | 工具权限模式；`read-only`/`plan` 只暴露只读工具 |
 | `--sandbox-backend auto\|static\|seatbelt\|bubblewrap` | auto | 运行时隔离后端；显式后端不可用则启动失败 |
 | `--sandbox-network` | — | 允许 Sandbox 子进程访问网络（默认关闭） |
@@ -110,6 +111,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/permissions add <decision> <scope> <kind> <pattern>` | 添加 `allow/ask/deny` × `session/workspace` 规则 |
 | `/permissions remove <rule-id>` | 按 ID 删除规则 |
 | `/tool-output [编号\|last]` | 列出工具输出（默认折叠）；按编号或 `last` 在灰色背景面板中展开 |
+| `/diff [staged/refresh/next/prev/file <n>/top/end/numbers/close]` | 打开高级 diff 审阅器：审批中显示待写入 unified diff，普通状态显示工作区或 staged Git diff；支持文件切换、滚动、翻页和行号 |
 | `/queue [delete <n>\|move <n> <m>\|clear]` | 查看或管理 `Alt+Enter` 排队的下一条消息 |
 | `/tools` | 当前动态工具池：core/discoverable/deferred、ToolSearch 已加载状态、来源与排除原因 |
 | `/model [provider/]model` | 查看/热切换模型（预算联动，失败不破坏现状） |
@@ -197,6 +199,16 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/stop` | 中止运行中任务（历史自动修复） |
 | `/reset` | 清空历史与当前 turn 时间线 |
 | `/exit` | 退出（Ctrl-D 同） |
+
+### Diff 审阅
+
+REPL 默认对 `write_file` / `edit_file` 在真正写盘前生成并展示 unified diff。审批中可用
+`y` 允许、`n` 拒绝、`q`/`Esc` 关闭；`j/k` 或上下键滚动，`PgUp/PgDn` 翻页，`[/]`
+或左右键切换文件，`#` 切换行号。普通状态执行 `/diff` 审阅当前 Git 工作区，
+`/diff staged` 只审阅暂存区，`/diff refresh` 重新采集。审阅内容会限制文件/hunk/字符
+数量并统一脱敏；敏感文件、二进制和超大文件不会展示正文。只有“是”会继续执行写入。
+该能力默认只在带前台 approver 的 REPL 的 default 模式启用；headless、SDK、
+`--auto-approve`、无前台审批和 `[ui].diff_review=false` 时不会额外弹出。
 
 ### Custom / Plugin CommandSource
 
@@ -319,6 +331,9 @@ sonnet = "anthropic/claude-sonnet-4-5"
 haiku = "anthropic/claude-haiku-4-5"
 # opus = "anthropic/claude-opus-4-1"
 # DeepSeek 示例：haiku = "openai/deepseek-flash"
+
+[ui]
+diff_review = true                  # REPL 的 write_file/edit_file 写前显示 unified diff
 
 [sandbox]
 backend = "auto"                     # macOS seatbelt / Linux bubblewrap / 其他平台 static
@@ -1025,7 +1040,7 @@ workspace 规则文件新增字段示例：
 | 操作 | 处置 |
 |------|------|
 | 只读工具（get_time/read_file/grep/glob/find_refs/repo_map/check_syntax/memory_search/ask_user/update_plan，以及 list/load/read Skill） | 放行；显式 `deny/ask` 路径或工具规则优先；`ask_user` 无交互前台时工具结果 fail-closed |
-| write_file/edit_file（普通路径） | 放行（工作区约束兜底） |
+| write_file/edit_file（普通路径） | REPL 默认 ASK 并显示 unified diff；显式 allow、headless、`--auto-approve` 或 `[ui].diff_review=false` 时按策略放行（受保护路径仍 ASK） |
 | write/edit 受保护路径：`.git/`、`.krelcode/`、`krelcode.toml`、`.env*`、`*.pem/*.key/*.p12/*.pfx`、`id_rsa*`、`secrets.*`、`credentials*`、`.npmrc/.netrc/.pgpass/.htpasswd` | ASK（非交互拒绝） |
 | run_command 只读命令（ls/cat/grep/git status·log·diff…） | 放行 |
 | run_command 执行代码/装依赖/删文件/git 写操作/网络/未知命令/重定向 | ASK |
