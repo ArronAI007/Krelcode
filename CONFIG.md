@@ -78,6 +78,9 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `--tune` | 关闭 | 根据失败 trial 的工具轨迹与 checks 生成人工审核用 Prompt 调优候选 |
 | `--tune-output` | — | 将内容轻量的 tuning JSON 写入指定文件；不自动修改任何 Prompt |
 | `--save-report [path]` | — | 原子保存 content-light live behavior report；省略 path 时写入 `.krelcode/prompts/benchmarks/latest.json`（权限 0600） |
+| `--gate <baseline>` | — | 对 fresh full suite 执行 fail-closed Parity Gate；校验 model、Prompt Release/Profile、runner fingerprint、suite 和逐 case 稳定性 |
+| `--save-baseline <path>` | — | 完整 16-case × 至少 3-trial 通过后保存 content-light baseline；已有文件默认拒绝覆盖 |
+| `--force-baseline` | 关闭 | 显式允许替换已有 baseline；只用于审核后的校准更新 |
 
 ## 2. REPL 命令
 

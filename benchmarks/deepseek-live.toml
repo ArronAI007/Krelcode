@@ -1,0 +1,13 @@
+# Reproducible DeepSeek profile for live Prompt/Context regression tests.
+# The API key is read only from DEEPSEEK_API_KEY and is never written to reports.
+default_provider = "openai"
+
+[providers.openai]
+model = "deepseek-flash"
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+timeout = 120
+generation = { temperature = 0.0, stream_options = { include_usage = true } }
+
+[prompt]
+profile = "deepseek"

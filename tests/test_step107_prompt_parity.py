@@ -241,7 +241,13 @@ def test_cli_saves_and_enforces_content_light_baseline(tmp_path, monkeypatch, ca
 
         def run(self, case_ids=None):
             assert case_ids is None
-            return report
+            return replace(
+                report,
+                profile={
+                    **report.profile,
+                    **self.kwargs["provider_profile"],
+                },
+            )
 
     class Config:
         sources = ("test",)
@@ -268,6 +274,21 @@ def test_cli_saves_and_enforces_content_light_baseline(tmp_path, monkeypatch, ca
     assert saved["baseline_path"] == str(baseline_path)
     assert baseline_path.is_file()
     assert FakeRunner.instances[-1].kwargs["trials"] == 3
+    runner_profile = FakeRunner.instances[-1].kwargs["provider_profile"]
+    assert runner_profile["provider_base_url_hash"]
+    assert "test-key" not in json.dumps(runner_profile)
+    persisted_baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    assert (
+        persisted_baseline["profile"]["provider_base_url_hash"]
+        == runner_profile["provider_base_url_hash"]
+    )
+    assert "test-key" not in baseline_path.read_text(encoding="utf-8")
+
+    rc = benchmark_prompt.main([
+        "--live", "--json", "--save-baseline", str(baseline_path),
+    ])
+    assert rc == 2
+    assert "拒绝覆盖" in capsys.readouterr().err
 
     rc = benchmark_prompt.main([
         "--live", "--json", "--gate", str(baseline_path),
@@ -284,3 +305,47 @@ def test_cli_saves_and_enforces_content_light_baseline(tmp_path, monkeypatch, ca
     ])
     assert rc == 2
     assert "content-light" in capsys.readouterr().err
+
+
+def test_failed_baseline_run_still_emits_report_and_tuning(tmp_path, monkeypatch, capsys):
+    report = _full_report(failed_case="read-scope")
+
+    class FakeRunner:
+        def __init__(self, factory, **kwargs):
+            self.kwargs = kwargs
+
+        def run(self, case_ids=None):
+            return report
+
+    class Config:
+        sources = ("test",)
+        data = {}
+
+    monkeypatch.setattr(
+        benchmark_behavior, "load_config_layers", lambda **kwargs: Config())
+    monkeypatch.setattr(
+        benchmark_behavior,
+        "resolve_settings",
+        lambda **kwargs: ProviderSettings(
+            provider="scripted", model="scripted-model", api_key="test-key"),
+    )
+    monkeypatch.setattr(
+        benchmark_behavior, "BehaviorBenchmarkRunner", FakeRunner)
+
+    baseline_path = tmp_path / "baseline.json"
+    tuning_path = tmp_path / "tuning.json"
+    rc = benchmark_prompt.main([
+        "--live", "--json", "--trials", "1",
+        "--save-baseline", str(baseline_path),
+        "--tune-output", str(tuning_path),
+    ])
+    captured = capsys.readouterr()
+    output = json.loads(captured.out)
+    benchmark_output = output.get("benchmark", output)
+
+    assert rc == 1
+    assert benchmark_output["passed"] is False
+    assert output.get("baseline_path", "") == ""
+    assert not baseline_path.exists()
+    assert tuning_path.is_file()
+    assert "baseline 未保存" in captured.err

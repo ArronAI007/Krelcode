@@ -32,6 +32,17 @@ PROMPT_BASELINE_SCHEMA_VERSION = 2
 PROMPT_PARITY_CONTRACT_VERSION = "1"
 PROMPT_PARITY_MINIMUM_TRIALS = 3
 
+_RUNNER_PROFILE_KEYS = (
+    "sandbox_backend",
+    "context_max_tokens",
+    "max_steps",
+    "trial_timeout_seconds",
+    "provider_base_url_hash",
+    "provider_generation_hash",
+    "provider_timeout_seconds",
+    "provider_max_tokens",
+)
+
 
 class ParityDimension(str, Enum):
     ARCHITECTURE = "architecture"
@@ -513,6 +524,8 @@ class PromptParityBaseline:
             "prompt_profile", "prompt_profile_hash",
             "profile_calibration_id", "profile_calibration_hash",
             "profile_calibration_status", "profile_calibration_reason",
+            "provider_base_url_hash", "provider_generation_hash",
+            "provider_timeout_seconds", "provider_max_tokens",
         }
         profile_unknown = sorted(set(profile or ()) - allowed_profile)
         if profile_unknown:
@@ -802,6 +815,35 @@ def evaluate_prompt_parity(
             f"report {getattr(report, 'provider', '') or '?'}/"
             f"{getattr(report, 'model', '') or '?'}; "
             f"baseline {baseline.provider or '?'}/{baseline.model or '?'}"
+        ),
+    ))
+    baseline_runner = {
+        key: baseline.profile.get(key) for key in _RUNNER_PROFILE_KEYS
+    }
+    report_runner = {
+        key: report_profile.get(key) for key in _RUNNER_PROFILE_KEYS
+    }
+    frozen_runner_keys = tuple(
+        key for key, value in baseline_runner.items() if value is not None)
+    missing_runner_keys = tuple(
+        key for key in frozen_runner_keys
+        if report_runner.get(key) is None)
+    runner_mismatches = tuple(
+        key for key in frozen_runner_keys
+        if report_runner.get(key) is not None
+        and report_runner.get(key) != baseline_runner.get(key)
+    )
+    checks.append(_gate_check(
+        "runner-profile",
+        not missing_runner_keys and not runner_mismatches,
+        (
+            "frozen runner/provider settings match"
+            if frozen_runner_keys
+            else "legacy baseline has no frozen runner/provider fingerprint"
+        ) if not missing_runner_keys and not runner_mismatches else (
+            "missing runner fields: " + ", ".join(missing_runner_keys)
+            if missing_runner_keys else
+            "runner drift: " + ", ".join(runner_mismatches)
         ),
     ))
     checks.append(_gate_check(

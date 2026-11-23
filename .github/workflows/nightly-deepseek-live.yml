@@ -1,0 +1,139 @@
+name: Nightly DeepSeek Live Regression
+
+on:
+  schedule:
+    # 18:00 UTC = 02:00 Asia/Shanghai.
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run the frozen baseline gate or create a candidate baseline"
+        required: true
+        default: regression
+        type: choice
+        options:
+          - regression
+          - freeze
+      model:
+        description: "DeepSeek model identifier"
+        required: true
+        default: deepseek-flash
+        type: string
+      trials:
+        description: "Trials per case (minimum 3)"
+        required: true
+        default: "3"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-deepseek-live
+  cancel-in-progress: false
+
+jobs:
+  live-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      PYTHONPATH: src
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      BASELINE: benchmarks/baselines/deepseek-flash.json
+      LIVE_MODE: ${{ inputs.mode || 'regression' }}
+      LIVE_MODEL: ${{ inputs.model || 'deepseek-flash' }}
+      LIVE_TRIALS: ${{ inputs.trials || '3' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Krelcode
+        run: |
+          python -m pip install pytest
+          python -m pip install --no-deps -e .
+
+      - name: Run offline benchmark safeguards
+        run: |
+          python -m pytest -q \
+            tests/test_live_behavior_benchmark.py \
+            tests/test_step107_prompt_parity.py \
+            tests/test_step111_prompt_release.py \
+            tests/test_nightly_deepseek_regression.py
+
+      - name: Run DeepSeek live regression
+        id: live
+        shell: bash
+        run: |
+          set -u
+          mkdir -p .nightly
+          if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
+            echo "DEEPSEEK_API_KEY is not configured" >&2
+            exit 2
+          fi
+
+          mode="$LIVE_MODE"
+          model="$LIVE_MODEL"
+          trials="$LIVE_TRIALS"
+          common=(
+            --live
+            --config benchmarks/deepseek-live.toml
+            --model "$model"
+            --trials "$trials"
+            --sandbox-backend static
+            --save-report .nightly/report.json
+            --tune-output .nightly/tuning.json
+            --json
+          )
+
+          if [ "$mode" = "freeze" ]; then
+            baseline_args=(
+              --save-baseline .nightly/deepseek-flash.candidate.json
+              --force-baseline
+            )
+          else
+            if [ ! -f "$BASELINE" ]; then
+              echo "Frozen baseline is missing: $BASELINE" >&2
+              exit 2
+            fi
+            baseline_args=(--gate "$BASELINE")
+          fi
+
+          set +e
+          python -m krelcode.benchmarks.prompt \
+            "${common[@]}" "${baseline_args[@]}" \
+            > .nightly/result.json
+          rc=$?
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Write regression summary
+        if: always()
+        run: |
+          if [ -f .nightly/result.json ]; then
+            python -m krelcode.benchmarks.nightly \
+              --summary .nightly/result.json \
+              >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## DeepSeek live regression" >> "$GITHUB_STEP_SUMMARY"
+            echo "No machine-readable result was produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepseek-live-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .nightly/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce live result
+        if: always() && steps.live.outputs.exit_code != '0'
+        run: exit 1

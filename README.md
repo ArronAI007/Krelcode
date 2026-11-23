@@ -241,6 +241,39 @@ configuration/internal）、Krelcode/Python 版本、Sandbox 配置与 suite has
 调优器不会自动修改生产 Prompt，必须人工审核后修改对应来源并重跑相同场景与全量
 Benchmark，避免单次失败导致 Prompt 过拟合或权限/安全约束被意外削弱。
 
+### DeepSeek baseline 冻结与 nightly 回归
+
+DeepSeek live baseline 使用仓库内的固定配置，避免用户全局 model、endpoint 或采样参数
+漂移导致历史结果失去可比性。密钥只从 `DEEPSEEK_API_KEY` 读取：
+
+```bash
+export DEEPSEEK_API_KEY=sk-...
+
+PYTHONPATH=src python -m krelcode.benchmarks.prompt \
+  --live --config benchmarks/deepseek-live.toml --trials 3 \
+  --sandbox-backend static \
+  --save-baseline benchmarks/baselines/deepseek-flash.json \
+  --save-report .krelcode/prompts/benchmarks/deepseek-freeze.json --json
+```
+
+只有完整 16-case × 3-trial suite 全部稳定通过才会写入 baseline。已有 baseline 默认拒绝
+覆盖，必须显式传 `--force-baseline` 才能替换。baseline 冻结模型的 endpoint 哈希、
+generation 哈希、provider timeout/max tokens、Sandbox、步数、超时、Prompt
+Release/Profile 和行为 suite；不保存 endpoint 明文、API key、Prompt、答案或工具参数。
+
+`.github/workflows/nightly-deepseek-live.yml` 每天 02:00 Asia/Shanghai 执行 fresh live
+gate，也支持手动选择 `regression` 或 `freeze`。仓库需配置 `DEEPSEEK_API_KEY` secret；
+失败时会保留 content-light report、tuning candidate 和 Step Summary，freeze candidate
+只作为 artifact 供人工审核，不会自动修改仓库。
+
+```bash
+PYTHONPATH=src python -m krelcode.benchmarks.prompt \
+  --live --config benchmarks/deepseek-live.toml --trials 3 \
+  --sandbox-backend static \
+  --gate benchmarks/baselines/deepseek-flash.json \
+  --save-report .krelcode/prompts/benchmarks/latest.json --json
+```
+
 ### 生产级 Base Prompt 与模型 profile
 
 所有生产入口还会在 L1 Base Prompt 之前固定装配 `managed:cyber-risk` L0 Managed
