@@ -21,6 +21,14 @@ from ..core.messages import (
 )
 from .runtime import PermissionMode, RunMode, RuntimeSnapshot
 from .safety import SandboxPort
+from .service_ports import (
+    EnterprisePolicyPort,
+    PrincipalPort,
+    PromptBenchmarkServicesPort,
+    PromptFragmentRegistryPort,
+    PromptReleasePipelinePort,
+    ShellJobManagerPort,
+)
 
 
 @dataclass
@@ -113,7 +121,7 @@ class ToolServices:
 class TurnAbortSignal:
     """工具可见的协作式中止信号；Task.cancel 仍负责强制中断。"""
 
-    _event: Any = field(default=None, repr=False)
+    _event: Optional[asyncio.Event] = field(default=None, repr=False)
     reason: str = ""
 
     def __post_init__(self) -> None:
@@ -122,10 +130,12 @@ class TurnAbortSignal:
 
     @property
     def is_cancelled(self) -> bool:
-        return bool(self._event.is_set())
+        return bool(self._event is not None and self._event.is_set())
 
     def cancel(self, reason: str = "用户中止") -> None:
         self.reason = reason
+        if self._event is None:
+            self._event = asyncio.Event()
         self._event.set()
 
     def check(self) -> None:
@@ -133,6 +143,8 @@ class TurnAbortSignal:
             raise asyncio.CancelledError(self.reason or "任务已中止")
 
     async def wait(self) -> None:
+        if self._event is None:
+            self._event = asyncio.Event()
         await self._event.wait()
 
 
@@ -162,13 +174,18 @@ class ToolContext:
     output_emitter: Optional[OutputEmitter] = field(default=None, repr=False)
     input_requester: Optional[InputRequester] = field(default=None, repr=False)
     plan_emitter: Optional[PlanEmitter] = field(default=None, repr=False)
-    shell_jobs: Any = field(default=None, repr=False)
+    shell_jobs: Optional[ShellJobManagerPort] = field(
+        default=None, repr=False)
     tool_catalog: Optional[ToolCatalog] = field(default=None, repr=False)
-    prompt_registry: Any = field(default=None, repr=False)
-    prompt_release_pipeline: Any = field(default=None, repr=False)
-    prompt_benchmark_services: Any = field(default=None, repr=False)
-    enterprise_policy: Any = field(default=None, repr=False)
-    principal: Any = field(default=None, repr=False)
+    prompt_registry: Optional[PromptFragmentRegistryPort] = field(
+        default=None, repr=False)
+    prompt_release_pipeline: Optional[PromptReleasePipelinePort] = field(
+        default=None, repr=False)
+    prompt_benchmark_services: Optional[PromptBenchmarkServicesPort] = field(
+        default=None, repr=False)
+    enterprise_policy: Optional[EnterprisePolicyPort] = field(
+        default=None, repr=False)
+    principal: Optional[PrincipalPort] = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not self.sandbox_enabled:

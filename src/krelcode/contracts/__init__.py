@@ -2,6 +2,20 @@
 
 from .runtime import PermissionMode, RunMode, RuntimeSnapshot
 from .safety import SandboxPort
+from .service_ports import (
+    EnterprisePolicyPort,
+    PrincipalPort,
+    PromptBenchmarkServicesPort,
+    PromptFragmentPort,
+    PromptFragmentRegistryPort,
+    PromptReleasePipelinePort,
+    PromptReleaseProposalPort,
+    PromptReleaseStorePort,
+    ShellJobManagerPort,
+    ShellJobPagePort,
+    ShellJobPort,
+    ShellJobStatusPort,
+)
 from .tool import (
     CommandDescriptor,
     Tool,
@@ -18,10 +32,22 @@ from .tool import (
 
 __all__ = [
     "CommandDescriptor",
+    "EnterprisePolicyPort",
     "PermissionMode",
+    "PrincipalPort",
+    "PromptBenchmarkServicesPort",
+    "PromptFragmentPort",
+    "PromptFragmentRegistryPort",
+    "PromptReleasePipelinePort",
+    "PromptReleaseProposalPort",
+    "PromptReleaseStorePort",
     "RunMode",
     "RuntimeSnapshot",
     "SandboxPort",
+    "ShellJobManagerPort",
+    "ShellJobPagePort",
+    "ShellJobPort",
+    "ShellJobStatusPort",
     "Tool",
     "ToolCatalog",
     "ToolCatalogMatch",
