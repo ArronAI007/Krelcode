@@ -10,10 +10,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import re
-from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from itertools import count
 from typing import (
     Any, Awaitable, Callable, Dict, Iterable, List, Optional, Protocol,
@@ -24,127 +21,47 @@ from ..core.interactions import UserInputPort
 from ..core.redact import SecretRedactor
 from ..core.events import (
     AgentEvent,
-    CompactCheckpointCreated,
-    ContextAssembled,
-    ContextCompressed,
-    ContextDropped,
-    ContextMicrocompacted,
     ErrorOccurred,
     EventBus,
     HookTriggered,
-    LLMResponseReceived,
-    LLMStreamDelta,
-    LLMThinkingDelta,
-    MemoryLoaded,
-    PermissionDenied,
-    PlanUpdated,
     QueryPhaseChanged,
     RunCancelled,
     RunFinished,
     RunStarted,
     StepStarted,
-    ToolCallCompleted,
-    ToolCallStarted,
-    ToolOutputDelta,
-    ToolProgress,
-    UserInputRequested,
-    UserInputResolved,
     UserSteered,
 )
-from ..core.textutil import truncate_middle
-from ..core.messages import (
-    INVALID_ARGUMENTS_KEY,
-    ImageBlock,
-    Message,
-    ResourceBlock,
-    SteeringInput,
-    StructuredBlock,
-    TextBlock,
-    ToolCall,
-    sanitize_history,
-)
-from ..llm.base import (
-    FINISH_LENGTH,
-    FINISH_TOOLS,
-    LLMProvider,
-    PreparedLLMRequest,
-    StreamFinished,
-    TextDelta,
-    ThinkingDelta,
-    ToolCallReady,
-    supports_keyword_argument,
-)
-from ..safety.contract import (
-    ModePermissionContract,
-    build_mode_permission_contract,
-)
+from ..core.messages import Message, SteeringInput, ToolCall
+from ..llm.base import LLMProvider
 from .compression import ContextManager
-from .attachments import (
-    ContextAttachmentDiff,
-    ContextAttachmentKind,
-    ContextAttachmentStore,
-    agent_catalog_attachment,
-    attachment_id,
-    date_attachment,
-    environment_attachments,
-    mcp_instructions_attachment,
-    mode_permission_contract_attachment,
-    skill_catalog_attachment,
-    token_budget_reminder_attachment,
-)
-from .context import build_workspace_context_bundle
 from .context_assembler import ContextAssembler
-from .context_cache_ledger import ContextCacheLedger
-from .context_plan import ContextPlanSnapshot, history_digest
-from .prompt_plan import PromptPlanSnapshot
 from .context_source import (
-    ContextAssembly,
-    ContextRequest,
-    MemoryContextSource,
     RetrievedMemoryContextSource,
     default_context_sources,
 )
-from .context_usage import build_context_usage_snapshot
-from .fragments import (
-    is_rule_fragment,
-    refresh_registry_snapshot,
-    sync_rule_fragments,
-    workspace_rule_fragments,
-)
+from .dependencies import AgentDependencies
+from .context_turn import ContextTurnCoordinator
 from .intent import TurnIntent, infer_turn_intent
-from .workflows import TaskWorkflowSelection, select_task_workflow
-from .pricing import match_context_window
-from .prompt_assembler import (
-    PromptAssembler,
-    PromptAssemblyRequest,
-    PromptPlan,
+from .model_turn import (
+    LLMTurnResult,
+    ModelTurnExecutor,
+    finish_reason_failure,
 )
-from .prompt_surface import (
-    PromptSurfaceRegistry,
-    main_prompt_surface,
-    prompt_content_hash,
-    update_observation,
-)
+from .prompt_assembler import PromptAssembler
+from .prompt_surface import PromptSurfaceRegistry, main_prompt_surface
 from .reminders import (
-    DEFAULT_REMINDER_BUDGET_TOKENS,
     ReminderCatalog,
-    ReminderContext,
     ReminderSelection,
     default_reminder_catalog,
 )
-from .streaming_tools import StreamingToolExecutor
-from .tokens import estimate_history_tokens
 from .tool_pool import TurnToolPool
 from .tool_microcompact import MicrocompactReport, ToolMicrocompactor
-from .working_context import (
-    WorkingContextSource,
-    WorkingContextStore,
-    compact_tool_metadata,
-)
+from .tool_turn import ToolBatchExecutor
+from .working_context import WorkingContextSource, WorkingContextStore
+from .workflows import TaskWorkflowSelection, select_task_workflow
 from ..safety.policy import ApprovalPolicy
 from ..contracts.tool import RuntimeSnapshot, ToolContext, ToolResult, TurnAbortSignal
 from ..tools.registry import ToolRegistry
-from ..tools.schema import validate_tool_arguments
 
 DEFAULT_MAX_STEPS = 64
 
@@ -168,33 +85,30 @@ INTERRUPTED_NOTE = "[已被用户中止]"
 STEERING_PREFIX = "[用户插话] "
 
 
-@dataclass(frozen=True)
-class LLMTurnResult:
-    """一次模型响应及其已完成的工具结果（结果尚未写入历史）。"""
-
-    message: Message
-    tool_results: List[ToolResult]
-    finish_reason: Optional[str] = None
-
-
-def finish_reason_failure(
-    finish_reason: Optional[str], *, has_tool_calls: bool,
-) -> Optional[str]:
-    """把异常/不兼容 finish_reason 转成可见终态错误；None 表示可继续。"""
-    if finish_reason == FINISH_LENGTH:
-        return (
-            "模型响应达到输出长度上限，回答或工具参数可能不完整，本轮已中止。"
-            "请缩小请求范围或提高模型 max_tokens 后重试。")
-    if finish_reason == FINISH_TOOLS and not has_tool_calls:
-        return "Provider 返回 finish_reason=tool_calls 但没有工具调用，协议不一致。"
-    if finish_reason not in (None, "stop", FINISH_TOOLS, FINISH_LENGTH):
-        return (
-            f"Provider 以非正常原因结束响应: {finish_reason}。"
-            "本轮结果可能被安全策略、内容过滤或上游服务截断。")
-    return None
-
-
 class AgentLoop:
+    """Turn orchestration facade.
+
+    Model streaming, context assembly and tool batch execution live in
+    dedicated executors.  This class owns only turn sequencing, lifecycle
+    guards and the backwards-compatible public surface.
+    """
+
+    _DEPENDENCY_ATTRS = frozenset({
+        "llm", "registry", "tool_context", "policy", "bus", "max_steps",
+        "repeat_failure_limit", "context_manager", "tool_output_inline_limit",
+        "token_budget", "redactor", "working_context_store",
+        "tool_microcompactor", "context_assembler", "prompt_assembler",
+        "reminder_catalog", "compact_checkpoint_store",
+        "runtime_snapshot_provider", "hook_port", "user_input_port",
+        "step_gate",
+    })
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        object.__setattr__(self, name, value)
+        dependencies = self.__dict__.get("dependencies")
+        if dependencies is not None and name in self._DEPENDENCY_ATTRS:
+            setattr(dependencies, name, value)
+
     def __init__(
         self,
         llm: LLMProvider,
@@ -265,8 +179,6 @@ class AgentLoop:
                     working_context_store=self.working_context_store))
         else:
             self.context_assembler = context_assembler
-            # An explicitly supplied store is an opt-in integration boundary;
-            # custom assemblers without it remain unchanged for compatibility.
             if (
                 working_context_store is not None
                 and "working_context" not in self.context_assembler.source_names
@@ -275,51 +187,24 @@ class AgentLoop:
                     WorkingContextSource(self.working_context_store))
             if "memory_retrieval" not in self.context_assembler.source_names:
                 self.context_assembler.register(RetrievedMemoryContextSource())
-        self.context_engine = str(
-            getattr(self.context_assembler, "engine", "v3") or "v3")
         self.prompt_assembler = prompt_assembler or PromptAssembler(
             self.context_assembler,
             registry_provider=lambda: getattr(
                 self, "prompt_registry", None),
         )
+        self.context_engine = str(
+            getattr(self.context_assembler, "engine", "v3") or "v3")
         self.reminder_catalog = reminder_catalog or default_reminder_catalog()
         self.last_reminder_selection: Optional[ReminderSelection] = None
         self._turn_reminder_selection: Optional[ReminderSelection] = None
         self._turn_requested_reminder_ids: tuple[str, ...] = ()
-        # Observability-only catalogue. App assembly replaces this minimal
-        # entry with the full tool/workflow/subagent/extension directory.
         self.prompt_surface_registry = PromptSurfaceRegistry({
             "main": (main_prompt_surface(system_prompt),),
         })
-        self.last_prompt_plan: PromptPlan | None = None
-        self.last_provider_messages = None
-        self.last_context_assembly = None
-        self.last_context_snapshot = None
-        self.previous_context_snapshot = None
-        self.last_context_plan: ContextPlanSnapshot | None = None
-        self.last_context_cache_ledger: ContextCacheLedger | None = None
-        self.previous_context_cache_ledger: ContextCacheLedger | None = None
-        self.cache_ledger_owner = "main"
-        self.parent_policy_instruction_hash = ""
-        self.last_context_restore = None
-        self.context_integrity = None
-        self.context_workspace_fingerprint = None
-        self.restored_workspace_fingerprint = None
-        self.restored_context_checkpoint_id = ""
-        self.restored_memory_context: tuple[str, ...] = ()
-        self.restored_relevant_memory_ids: tuple[str, ...] = ()
-        self.pending_context_refresh = False
-        self.context_attachments = ContextAttachmentStore()
-        self.last_attachment_diff = ContextAttachmentDiff(0, 0)
-        self.last_mode_permission_contract: Optional[ModePermissionContract] = None
-        self._today_provider = today_provider
-        self.last_microcompact_report: Optional[MicrocompactReport] = None
         self.compact_checkpoint_store = compact_checkpoint_store
-        self.last_compact_checkpoint = None
         self.runtime_snapshot_provider = runtime_snapshot_provider
         self.hook_port = hook_port
         self.user_input_port = user_input_port
-        # 通用协作式运行边界（子代理 pause 等）；主 Agent 默认为 None。
         self.step_gate = step_gate
         self.runtime_context: List[str] = []
         self._token_total = 0
@@ -334,38 +219,64 @@ class AgentLoop:
         self._current_turn_id = ""
         self._input_counter = count(1)
         self._turn_prepared = False
-        # 运行中用户插话队列（REPL steering）：每个 step 开始前注入历史
         self.steering_queue: asyncio.Queue = asyncio.Queue()
         self.history: List[Message] = (
             [Message.system(system_prompt)] if system_prompt else []
         )
+
+        self.dependencies = AgentDependencies(
+            llm=self.llm,
+            registry=self.registry,
+            tool_context=self.tool_context,
+            bus=self.bus,
+            context_manager=self.context_manager,
+            context_assembler=self.context_assembler,
+            prompt_assembler=self.prompt_assembler,
+            working_context_store=self.working_context_store,
+            tool_microcompactor=self.tool_microcompactor,
+            compact_checkpoint_store=self.compact_checkpoint_store,
+            reminder_catalog=self.reminder_catalog,
+            policy=self.policy,
+            redactor=self.redactor,
+            runtime_snapshot_provider=self.runtime_snapshot_provider,
+            hook_port=self.hook_port,
+            user_input_port=self.user_input_port,
+            step_gate=self.step_gate,
+            today_provider=today_provider,
+            tool_output_inline_limit=self.tool_output_inline_limit,
+            repeat_failure_limit=self.repeat_failure_limit,
+            max_steps=self.max_steps,
+            token_budget=self.token_budget,
+        )
+        self.context_coordinator = ContextTurnCoordinator(
+            self, self.dependencies)
+        self.tool_executor = ToolBatchExecutor(self, self.dependencies)
+        self.model_executor = ModelTurnExecutor(
+            self,
+            self.dependencies,
+            self.context_coordinator,
+            self.tool_executor,
+        )
+
         if self.context_manager is not None:
             self.context_manager.rebuild_state(self.history)
-        # L5 is always available, even before an app-level catalog/MCP refresh.
-        self._sync_mode_permission_contract()
+        self.context_coordinator.sync_mode_permission_contract()
 
     async def _emit(self, event: AgentEvent) -> None:
         await self.bus.emit(event)
 
     def reset(self) -> None:
-        """清空历史，只保留系统提示词。"""
-        self.history = self.history[:1] if self.history and self.history[0].role == "system" else []
+        """Clear history while preserving the system prompt."""
+        self.history = (
+            self.history[:1]
+            if self.history and self.history[0].role == "system" else []
+        )
         self._turn_intent = TurnIntent()
         self._turn_workflow = None
         self._turn_reminder_selection = None
         self._turn_requested_reminder_ids = ()
         self.last_reminder_selection = None
-        self.last_prompt_plan = None
-        self.last_provider_messages = None
-        self.last_context_assembly = None
-        self.last_context_snapshot = None
-        self.previous_context_snapshot = None
-        self.last_context_cache_ledger = None
-        self.previous_context_cache_ledger = None
-        self.last_microcompact_report = None
-        self.last_compact_checkpoint = None
-        self.context_attachments.clear()
-        self.last_attachment_diff = ContextAttachmentDiff(0, 0)
+        self.context_coordinator.reset()
         self.working_context_store.clear()
 
     def rebuild_working_context(self):
@@ -376,37 +287,7 @@ class AgentLoop:
         return snapshot
 
     async def refresh_workspace_context(self):
-        """Reload rules and replace only changed environment attachments."""
-        options = getattr(self, "context_options", None)
-        rule_loader = getattr(self, "rule_loader", None)
-        bundle = await build_workspace_context_bundle(
-            self.tool_context.workspace_root,
-            options=options,
-            rule_loader=rule_loader,
-        )
-        self.workspace_context = bundle
-        registry = getattr(self, "prompt_registry", None)
-        if registry is not None:
-            rules = workspace_rule_fragments(bundle)
-            current = tuple(
-                fragment for fragment in registry.list()
-                if is_rule_fragment(fragment)
-            )
-            if current != rules:
-                sync_rule_fragments(registry, bundle)
-                refresh_registry_snapshot(self)
-        self.sync_context_attachments()
-        self.pending_context_refresh = False
-        # Refresh can replace the system shell/provider metadata.  Keep the
-        # restored ContextPlan tied to the authoritative live history instead
-        # of leaving a pre-refresh digest on the session.
-        current_plan = getattr(self, "last_context_plan", None)
-        if current_plan is not None:
-            self.last_context_plan = replace(
-                current_plan,
-                history_digest=history_digest(self.history),
-            )
-        return bundle
+        return await self.context_coordinator.refresh_workspace_context()
 
     def sync_context_attachments(
         self,
@@ -416,133 +297,20 @@ class AgentLoop:
         include_mcp: bool = True,
         include_contract: bool = True,
         include_reminders: bool = True,
-    ) -> ContextAttachmentDiff:
-        """Replace only attachments whose semantic content changed.
-
-        Catalog builders consume already-loaded manager snapshots.  This method
-        never scans the workspace or MCP servers; callers explicitly refresh
-        those owners first.
-        """
-        previous = self.context_attachments.snapshot()
-
-        if include_environment:
-            try:
-                bundle = getattr(self, "workspace_context", None)
-                environment_ids = {
-                    attachment_id(ContextAttachmentKind.ENVIRONMENT_SNAPSHOT),
-                    attachment_id(ContextAttachmentKind.ENVIRONMENT_DELTA),
-                }
-                has_environment = (
-                    bundle is not None
-                    and any(section.name != "rules" for section in bundle.sections)
-                )
-                if has_environment:
-                    snapshot_id = attachment_id(
-                        ContextAttachmentKind.ENVIRONMENT_SNAPSHOT)
-                    changed = environment_attachments(
-                        bundle, self.context_attachments.get(snapshot_id))
-                    for item in changed:
-                        self.context_attachments.upsert(item)
-                else:
-                    for item_id in environment_ids:
-                        self.context_attachments.remove(item_id)
-            except Exception:
-                # Keep the previous environment snapshot on malformed input;
-                # a partial refresh is safer than dropping all working state.
-                pass
-
-        if include_catalogs:
-            self._sync_catalog_attachment(
-                ContextAttachmentKind.SKILL_CATALOG_DELTA,
-                getattr(self, "skill_manager", None),
-                skill_catalog_attachment,
-            )
-            self._sync_catalog_attachment(
-                ContextAttachmentKind.AGENT_CATALOG_DELTA,
-                getattr(self, "agent_definitions", None),
-                agent_catalog_attachment,
-            )
-
-        if include_mcp:
-            self._sync_catalog_attachment(
-                ContextAttachmentKind.MCP_INSTRUCTIONS_DELTA,
-                getattr(self, "mcp_supervisor", None),
-                mcp_instructions_attachment,
-            )
-
-        if include_contract:
-            self._sync_mode_permission_contract()
-
-        if include_reminders:
-            try:
-                today = (
-                    self._today_provider()
-                    if self._today_provider is not None else None
-                )
-            except Exception:
-                today = None
-            self.context_attachments.upsert(date_attachment(today))
-            token_budget_id = attachment_id(
-                ContextAttachmentKind.TOKEN_BUDGET_REMINDER)
-            if self.token_budget is None:
-                self.context_attachments.remove(token_budget_id)
-            else:
-                self.context_attachments.upsert(
-                    token_budget_reminder_attachment(
-                        self.token_budget, self._token_total))
-
-        diff = self.context_attachments.diff(previous)
-        self.last_attachment_diff = diff
-        return diff
+    ):
+        return self.context_coordinator.sync_context_attachments(
+            include_environment=include_environment,
+            include_catalogs=include_catalogs,
+            include_mcp=include_mcp,
+            include_contract=include_contract,
+            include_reminders=include_reminders,
+        )
 
     def _sync_mode_permission_contract(self) -> None:
-        """Refresh the L5 contract from the same live boundary used to execute tools."""
-        item_id = attachment_id(
-            ContextAttachmentKind.MODE_PERMISSION_CONTRACT)
-        try:
-            context = self._turn_tool_context
-            contract = build_mode_permission_contract(
-                context.runtime,
-                self._current_tool_pool().exposure_snapshot(),
-                sandbox=context.sandbox,
-                sandbox_enabled=context.sandbox_enabled,
-                policy=self.policy,
-                subagent_definition=getattr(
-                    self, "subagent_definition_name", ""),
-            )
-        except Exception:
-            # Never retain a stale capability contract after a failed refresh.
-            self.last_mode_permission_contract = None
-            self.context_attachments.remove(item_id)
-            return
-        self.last_mode_permission_contract = contract
-        self.context_attachments.upsert(
-            mode_permission_contract_attachment(contract))
-        # The legacy two-line reminder is superseded by the authoritative L5
-        # contract.  Remove any state restored from an older session.
-        self.context_attachments.remove(
-            attachment_id(ContextAttachmentKind.MODE_REMINDER))
+        self.context_coordinator.sync_mode_permission_contract()
 
-    def _sync_catalog_attachment(
-        self,
-        kind: ContextAttachmentKind,
-        manager: object,
-        builder,
-    ) -> None:
-        item_id = attachment_id(kind)
-        if manager is None:
-            self.context_attachments.remove(item_id)
-            return
-        try:
-            item = builder(manager, self.context_attachments.get(item_id))
-        except Exception:
-            # Catalog providers are optional extension surfaces.  A broken
-            # provider must not break the prompt assembly path.
-            return
-        if item is None:
-            self.context_attachments.remove(item_id)
-        else:
-            self.context_attachments.upsert(item)
+    def _sync_catalog_attachment(self, kind, manager, builder) -> None:
+        self.context_coordinator._sync_catalog_attachment(kind, manager, builder)
 
     def add_runtime_context(self, contents: Iterable[str], source: str = "hook") -> int:
         """注入不写入历史快照的运行时上下文（SessionStart/Compact Hook）。"""
@@ -781,42 +549,10 @@ class AgentLoop:
         )
 
     def _select_turn_reminders(self) -> ReminderSelection:
-        """Select reminders once per turn, never once per model step."""
-        if self._turn_reminder_selection is not None:
-            return self._turn_reminder_selection
-        workflow = self._turn_workflow
-        runtime = self._turn_tool_context.runtime
-        tool_pool = self._active_tool_pool
-        context = ReminderContext(
-            requested_reminder_ids=self._turn_requested_reminder_ids,
-            task_type=(
-                workflow.task_type.value if workflow is not None else ""),
-            workflow_id=(
-                workflow.definition.id if workflow is not None else ""),
-            intent=self._turn_intent.mode,
-            permission_mode=runtime.permission_mode.value,
-            run_mode=runtime.run_mode.value,
-            active_tools=(
-                tuple(tool_pool.names()) if tool_pool is not None else ()),
-            token_usage_ratio=self._current_context_usage_ratio(),
-        )
-        selection = self.reminder_catalog.select(
-            context,
-            budget_tokens=DEFAULT_REMINDER_BUDGET_TOKENS,
-        )
-        self._turn_reminder_selection = selection
-        self.last_reminder_selection = selection
-        return selection
+        return self.context_coordinator.select_turn_reminders()
 
     def _current_context_usage_ratio(self) -> float:
-        manager = self.context_manager
-        max_tokens = max(
-            int(getattr(manager, "max_tokens", 0) or 0),
-            0,
-        )
-        if not max_tokens:
-            return 0.0
-        return min(1.0, estimate_history_tokens(self.history) / max_tokens)
+        return self.context_coordinator.current_context_usage_ratio()
 
     def abort_current_turn(self, reason: str = "用户中止") -> None:
         """向正在执行的工具广播协作式取消；Task.cancel 仍由 Runtime 负责。"""
@@ -857,25 +593,8 @@ class AgentLoop:
         *,
         trigger: str = "manual",
     ) -> MicrocompactReport:
-        """Run the free tool-result tier before considering LLM compaction."""
-        report = self.tool_microcompactor.compact(
-            self.history,
-            trigger=trigger,
-            current_turn_id=self._current_turn_id,
-        )
-        self.last_microcompact_report = report
-        if report.changed:
-            await self._emit(ContextMicrocompacted(
-                trigger=report.trigger,
-                before_tokens=report.before_tokens,
-                after_tokens=report.after_tokens,
-                compacted_count=report.compacted_count,
-                preserved_count=report.preserved_count,
-                protected_count=report.protected_count,
-                summarized_count=report.summarized_count,
-                referenced_count=report.referenced_count,
-            ))
-        return report
+        return await self.context_coordinator.microcompact_tools(
+            trigger=trigger)
 
     async def compress_context(
         self,
@@ -887,122 +606,17 @@ class AgentLoop:
         model_context_window: Optional[int] = None,
         pre_microcompacted: bool = False,
     ) -> bool:
-        """统一压缩入口：真实请求预算检查、Hook 与事件。
-
-        ``pre_microcompacted`` is set by the exact-request path after it has
-        already run ``microcompact_tools``.  In that case this method skips a
-        duplicate scan and only performs the LLM-summary fallback if needed.
-        """
-        if self.context_manager is None:
-            return False
-        history_tokens = estimate_history_tokens(self.history)
-        before = max(history_tokens, int(request_tokens or 0))
-        extra_tokens = max(0, before - history_tokens)
-        needs_compression = force or self.context_manager.over_budget(
-            self.history,
-            extra_tokens=extra_tokens,
-            output_reserve_tokens=output_reserve_tokens,
-            model_context_window=model_context_window,
-        )
-        if needs_compression:
-            await self.run_lifecycle_hook(
-                "pre_compact", {"before_tokens": str(before)})
-        pre_compact_history = deepcopy(self.history)
-        self.context_manager.last_compact_result = None
-        self.last_compact_checkpoint = None
-        changed = await self.context_manager.maybe_compress(
-            self.history,
+        return await self.context_coordinator.compress_context(
             force=force,
-            extra_tokens=extra_tokens,
+            focus=focus,
+            request_tokens=request_tokens,
             output_reserve_tokens=output_reserve_tokens,
             model_context_window=model_context_window,
-            microcompact=not pre_microcompacted,
-            current_turn_id=self._current_turn_id,
-            focus=focus,
+            pre_microcompacted=pre_microcompacted,
         )
-        report = self.context_manager.last_microcompact_report
-        if (
-            report is not None
-            and report.changed
-            and not pre_microcompacted
-        ):
-            self.last_microcompact_report = report
-            await self._emit(ContextMicrocompacted(
-                trigger=report.trigger,
-                before_tokens=report.before_tokens,
-                after_tokens=report.after_tokens,
-                compacted_count=report.compacted_count,
-                preserved_count=report.preserved_count,
-                protected_count=report.protected_count,
-                summarized_count=report.summarized_count,
-                referenced_count=report.referenced_count,
-            ))
-        if not changed:
-            return False
-        after = estimate_history_tokens(self.history) + extra_tokens
-        result = self.context_manager.last_compact_result
-        checkpoint = None
-        if result is not None and self.compact_checkpoint_store is not None:
-            working = self.working_context_store.snapshot().as_checkpoint_record()
-            checkpoint = self.compact_checkpoint_store.record(
-                pre_compact_history=pre_compact_history,
-                summary=result.summary,
-                trigger=result.trigger,
-                before_tokens=before,
-                after_tokens=after,
-                session_id=(
-                    self._turn_tool_context.runtime.session_id or ""),
-                turn_id=self._current_turn_id,
-                boundary={
-                    "head_end": result.boundary.head_end,
-                    "middle_start": result.boundary.middle_start,
-                    "middle_end": result.boundary.middle_end,
-                    "tail_start": result.boundary.tail_start,
-                    "tail_end": result.boundary.tail_end,
-                    "turn_aligned": result.boundary.turn_aligned,
-                    "safe_adjusted": result.boundary.safe_adjusted,
-                },
-                source_savings=result.savings_dict(),
-                working_context=working,
-            )
-            self.last_compact_checkpoint = checkpoint
-            if checkpoint is not None:
-                await self._emit(CompactCheckpointCreated(
-                    checkpoint_id=checkpoint.id,
-                    generation=result.generation,
-                    before_tokens=before,
-                    after_tokens=after,
-                    summary_digest=checkpoint.summary.digest,
-                    strategy="structured_summary",
-                    trigger=result.trigger,
-                    source_savings=result.source_savings,
-                ))
-        await self.run_lifecycle_hook(
-            "post_compact",
-            {"before_tokens": str(before), "after_tokens": str(after)},
-        )
-        await self._emit(ContextCompressed(
-            before,
-            after,
-            strategy="structured_summary" if result is not None else "evict_tools",
-            summary_source=result.summary_source if result is not None else "",
-            generation=result.generation if result is not None else 0,
-            high_watermark_tokens=(
-                result.high_watermark_tokens if result is not None
-                else self.context_manager.high_watermark_tokens),
-            low_watermark_tokens=(
-                result.low_watermark_tokens if result is not None
-                else self.context_manager.low_watermark_tokens),
-            source_savings=(
-                result.source_savings if result is not None else ()),
-            checkpoint_id=checkpoint.id if checkpoint is not None else "",
-        ))
-        return True
 
     def _repair_after_cancel(self) -> None:
-        sanitize_history(self.history)
-        if self.history and self.history[-1].role == "user":
-            self.history.append(Message.assistant(INTERRUPTED_NOTE))
+        self.context_coordinator.repair_after_cancel()
 
     # -- 内部：一次 LLM 调用 ---------------------------------------------------
 
@@ -1014,125 +628,16 @@ class AgentLoop:
         specs: list,
         tools,
     ):
-        self.sync_context_attachments()
-        attachment_snapshot = self.context_attachments.snapshot()
-        memory_store = getattr(self, "memory_store", None)
-        if (
-            self.context_engine == "v3"
-            and memory_store is not None
-            and "memory" not in self.context_assembler.source_names
-        ):
-            self.context_assembler.register(MemoryContextSource(memory_store))
-        base_message = (
-            self.history[0]
-            if self.history and self.history[0].role == "system" else None
-        )
-        context_request = ContextRequest(
-            turn_id=self._current_turn_id,
+        return await self.context_coordinator.build_llm_request(
             step=step,
-            history=tuple(self.history),
-            workspace_root=self.tool_context.workspace_root,
-            system_prompt=(base_message.content or "") if base_message else "",
-            system_provider_meta=(
-                base_message.provider_meta if base_message else None),
-            prompt_snapshot=getattr(self, "prompt_snapshot", None),
-            tool_pool=self._current_tool_pool(),
-            intent=self._turn_intent,
-            task_workflow=self._turn_workflow,
-            runtime_context=tuple(self.runtime_context),
-            working_context=self.working_context_store.snapshot(),
-            relevant_memory=tuple(self.restored_memory_context),
+            prompt_specs=prompt_specs,
+            specs=specs,
+            tools=tools,
         )
-        reminder_selection = self._select_turn_reminders()
-        prompt_plan = await self.prompt_assembler.assemble(
-            PromptAssemblyRequest(
-                context_request=context_request,
-                prompt_snapshot=getattr(self, "prompt_snapshot", None),
-                tools=tuple(prompt_specs or ()),
-                per_turn_reminders=reminder_selection.selected,
-                attachments=attachment_snapshot.items,
-            ))
-        context_assembly = prompt_plan.context_assembly
-        if context_assembly is None:
-            raise RuntimeError("PromptAssembler 未产出 ContextAssembly 兼容视图")
-        previous_context_plan = getattr(self, "last_context_plan", None)
-        previous_prompt_plan = (
-            previous_context_plan.prompt_plan
-            if previous_context_plan is not None else None
-        )
-        current_history_digest = history_digest(self.history)
-        prompt_plan_snapshot = PromptPlanSnapshot.from_prompt_plan(
-            prompt_plan,
-            turn_id=self._current_turn_id,
-            step=step,
-            history_digest=current_history_digest,
-            tools=tuple(prompt_specs or ()),
-            dropped_items=_context_dropped_items(self),
-            previous=previous_prompt_plan,
-        )
-        self.last_prompt_plan = prompt_plan
-        self._observe_prompt_surfaces(
-            prompt_plan, tuple(prompt_specs or ()), step)
-        working_snapshot = self.working_context_store.snapshot()
-        self.last_context_plan = ContextPlanSnapshot.from_assembly(
-            context_assembly,
-            history=self.history,
-            turn_id=self._current_turn_id,
-            step=step,
-            working_context_sequence=working_snapshot.sequence,
-            prompt_plan=prompt_plan_snapshot,
-        )
-        provider_messages = self.prompt_assembler.provider_messages(
-            prompt_plan, tools=tuple(specs or ()))
-        self.last_provider_messages = provider_messages
-        messages = list(provider_messages.messages)
-        prepared: Optional[PreparedLLMRequest] = None
-        prepare = getattr(self.llm, "prepare_request", None)
-        stream_prepared = getattr(self.llm, "stream_prepared", None)
-        supported = getattr(self.llm, "supports_prepared_requests", True)
-        if supported and callable(prepare) and callable(stream_prepared):
-            capabilities = getattr(self.llm, "capabilities", None)
-            if (
-                getattr(capabilities, "supports_evidence_channel", False)
-                and supports_keyword_argument(prepare, "evidence")
-            ):
-                prepared = prepare(
-                    messages,
-                    tools,
-                    evidence=provider_messages.evidence_channel,
-                )
-            else:
-                prepared = prepare(messages, tools)
-        return messages, context_assembly, prepared
 
     def _finalize_context_cache_ledger(self, context_snapshot):
-        """Bind the final, actually-sent request to one content-free ledger."""
-        context_plan = self.last_context_plan
-        if context_plan is None:
-            return None
-        prompt_plan = context_plan.prompt_plan
-        previous = self.last_context_cache_ledger
-        current = ContextCacheLedger.from_components(
-            prompt_plan=prompt_plan,
-            attachment_snapshot=self.context_attachments.snapshot(),
-            compact_checkpoint_id=str(getattr(
-                self.last_compact_checkpoint, "id", "") or ""),
-            working_context_sequence=context_plan.working_context_sequence,
-            provider=(
-                context_snapshot.provider
-                or str(getattr(self.llm, "name", "") or "")),
-            model=str(getattr(self.llm, "model", "") or ""),
-            provider_request_digest=context_snapshot.request_digest,
-            wire_fidelity=context_snapshot.wire_fidelity,
-            owner=getattr(self, "cache_ledger_owner", "main"),
-            parent_policy_instruction_hash=getattr(
-                self, "parent_policy_instruction_hash", ""),
-        ).compared_with(previous)
-        self.previous_context_cache_ledger = previous
-        self.last_context_cache_ledger = current
-        self.last_context_plan = replace(
-            context_plan, cache_ledger=current)
-        return current
+        return self.context_coordinator.finalize_context_cache_ledger(
+            context_snapshot)
 
     def _request_snapshot(
         self,
@@ -1140,165 +645,19 @@ class AgentLoop:
         step: int,
         specs: list,
         messages: List[Message],
-        context_assembly: ContextAssembly,
-        prepared: Optional[PreparedLLMRequest],
+        context_assembly,
+        prepared,
     ):
-        budget_tokens = (
-            self.context_manager.max_tokens
-            if self.context_manager is not None else None
-        )
-        return build_context_usage_snapshot(
-            messages,
-            turn_id=self._current_turn_id,
+        return self.context_coordinator.request_snapshot(
             step=step,
-            tool_specs=specs,
+            specs=specs,
+            messages=messages,
             context_assembly=context_assembly,
-            budget_tokens=budget_tokens,
-            model_context_window=match_context_window(
-                getattr(self.llm, "model", None)),
-            prepared_request=prepared,
-            provider_name=str(getattr(self.llm, "name", "") or ""),
-            dropped_items=_context_dropped_items(self),
+            prepared=prepared,
         )
 
     async def _llm_turn(self, step: int) -> LLMTurnResult:
-        # 能力协商：provider 声明不支持 tools 时不 advertise，避免 400。
-        # 无 capabilities 属性的测试替身保持旧行为（照常传 tools）。
-        capabilities = getattr(self.llm, "capabilities", None)
-        tool_pool = self._current_tool_pool()
-        if capabilities is not None and not capabilities.supports_tools:
-            tool_pool.clear_advertised()
-            prompt_specs = []
-            specs = []
-        else:
-            prompt_specs = tool_pool.prompt_specs()
-            specs = tool_pool.tool_specs()
-        tools = specs or None
-        messages, context_assembly, prepared = await self._build_llm_request(
-            step=step,
-            prompt_specs=prompt_specs,
-            specs=specs,
-            tools=tools,
-        )
-        context_snapshot = self._request_snapshot(
-            step=step, specs=specs, messages=messages,
-            context_assembly=context_assembly, prepared=prepared)
-
-        # 真实请求（含 system/tools/wire 开销与 output reserve）超预算时：
-        # 1) 先做零成本 Tool Microcompact；2) 重新装配并确认是否已恢复；
-        # 3) 仍超限才进行一次完整 compact。绝不循环探测，避免压缩死循环。
-        if self.context_manager is not None and not context_snapshot.input_fits:
-            micro_report = await self.microcompact_tools(trigger="auto")
-            if micro_report.changed:
-                messages, context_assembly, prepared = await self._build_llm_request(
-                    step=step,
-                    prompt_specs=prompt_specs,
-                    specs=specs,
-                    tools=tools,
-                )
-                context_snapshot = self._request_snapshot(
-                    step=step, specs=specs, messages=messages,
-                    context_assembly=context_assembly, prepared=prepared)
-            if not context_snapshot.input_fits:
-                changed = await self.compress_context(
-                    request_tokens=context_snapshot.estimated_input_tokens,
-                    output_reserve_tokens=context_snapshot.output_reserve_tokens,
-                    model_context_window=context_snapshot.model_context_window,
-                    # The deterministic pass has already run, even when all
-                    # eligible results were protected or too small.  Do not
-                    # rescan the same history during the summary fallback.
-                    pre_microcompacted=True,
-                )
-                if changed:
-                    messages, context_assembly, prepared = await self._build_llm_request(
-                        step=step,
-                        prompt_specs=prompt_specs,
-                        specs=specs,
-                        tools=tools,
-                    )
-                    context_snapshot = self._request_snapshot(
-                        step=step, specs=specs, messages=messages,
-                        context_assembly=context_assembly, prepared=prepared)
-
-        self.previous_context_snapshot = self.last_context_snapshot
-        self.last_context_assembly = context_assembly
-        self.last_context_snapshot = context_snapshot
-        ledger = self._finalize_context_cache_ledger(context_snapshot)
-        await self._emit(ContextAssembled(
-            context_snapshot,
-            ledger=ledger.as_dict() if ledger is not None else None,
-        ))
-        if context_snapshot.dropped_items:
-            await self._emit(ContextDropped(
-                items=tuple(context_snapshot.dropped_items),
-                reason="budget",
-            ))
-        memory_ids, memory_scopes, memory_tokens = _memory_selection(
-            context_assembly)
-        if memory_ids or memory_scopes or memory_tokens:
-            await self._emit(MemoryLoaded(
-                entry_ids=memory_ids,
-                scope_counts=tuple(sorted(memory_scopes.items())),
-                tokens=memory_tokens,
-            ))
-        finished: Optional[StreamFinished] = None
-        executor = StreamingToolExecutor(
-            self._current_tool_pool(), self._run_stream_tool)
-        if prepared is not None:
-            stream = self.llm.stream_prepared(prepared)
-        else:
-            capabilities = getattr(self.llm, "capabilities", None)
-            if (
-                self.last_provider_messages is not None
-                and getattr(
-                    capabilities, "supports_evidence_channel", False)
-                and supports_keyword_argument(self.llm.stream, "evidence")
-            ):
-                stream = self.llm.stream(
-                    messages,
-                    tools,
-                    evidence=self.last_provider_messages.evidence_channel,
-                )
-            else:
-                stream = self.llm.stream(messages, tools)
-        try:
-            async for event in stream:
-                if isinstance(event, TextDelta):
-                    await self._emit(LLMStreamDelta(event.text))
-                elif isinstance(event, ThinkingDelta):
-                    await self._emit(LLMThinkingDelta(event.text))
-                elif isinstance(event, ToolCallReady):
-                    # 参数已完整：无需等后续文本/其他工具参数，立刻进入调度。
-                    executor.register(event.index, event.tool_call)
-                elif isinstance(event, StreamFinished):
-                    finished = event
-            if finished is None:  # provider 违反契约
-                raise RuntimeError("LLMProvider 未产出 StreamFinished")
-
-            # 旧 Provider 可能只在最终消息里给出 tool_calls；统一补齐。
-            final_calls = list(finished.message.tool_calls or [])
-            executor.register_final(final_calls)
-
-            # 必须先提交 assistant(tool_use) 再追加 tool_result，否则 wire
-            # 历史会出现无来源的结果。工具可在此前已执行完并推送 UI 事件。
-            self.history.append(finished.message)
-            usage = dict(finished.usage)
-            self._token_total += usage.get("total_tokens") or (
-                usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
-            await self._emit(LLMResponseReceived(finished.message, usage))
-
-            results = (
-                await executor.wait_results(len(final_calls))
-                if final_calls else []
-            )
-            return LLMTurnResult(
-                message=finished.message,
-                tool_results=results,
-                finish_reason=finished.finish_reason,
-            )
-        except BaseException:
-            await executor.abort()
-            raise
+        return await self.model_executor.run(step)
 
     async def _finish_protocol_failure(
         self,
@@ -1333,54 +692,6 @@ class AgentLoop:
         """Public, read-mostly view used by /tools and diagnostics."""
         return self._current_tool_pool()
 
-    def _observe_prompt_surfaces(
-        self,
-        prompt_plan: PromptPlan,
-        tool_specs: tuple[object, ...],
-        step: int,
-    ) -> None:
-        """Record content-light actual renders without changing the request."""
-        registry = getattr(self, "prompt_surface_registry", None)
-        if not isinstance(registry, PromptSurfaceRegistry):
-            return
-        system_tokens = sum(
-            int(getattr(fragment, "tokens", 0) or 0)
-            for fragment in prompt_plan.fragments
-        )
-        update_observation(
-            registry,
-            "main:agent",
-            content_hash=prompt_plan.full_hash,
-            tokens=system_tokens,
-            turn_id=self._current_turn_id,
-            step=step,
-        )
-        for spec in tool_specs:
-            name = str(getattr(spec, "name", "") or "")
-            if not name:
-                continue
-            update_observation(
-                registry,
-                f"tool:{name}",
-                content_hash=str(getattr(spec, "content_hash", "") or ""),
-                tokens=int(getattr(spec, "token_estimate", 0) or 0),
-                turn_id=self._current_turn_id,
-                step=step,
-            )
-        for fragment in prompt_plan.fragments:
-            fragment_id = str(getattr(fragment, "id", "") or "")
-            if not fragment_id.startswith("reminder:"):
-                continue
-            update_observation(
-                registry,
-                fragment_id,
-                content_hash=prompt_content_hash(
-                    getattr(fragment, "content", "")),
-                tokens=int(getattr(fragment, "tokens", 0) or 0),
-                turn_id=self._current_turn_id,
-                step=step,
-            )
-
     def current_task_workflow(self) -> Optional[TaskWorkflowSelection]:
         """Return the workflow selected for the current turn, if any."""
         return self._turn_workflow
@@ -1392,289 +703,24 @@ class AgentLoop:
         tool_calls: List[ToolCall],
         results: List[ToolResult],
     ) -> Optional[str]:
-        """按只读并发/写操作串行执行一批工具调用，结果按原序回填历史。
-
-        返回 None 表示继续；返回字符串表示触发卡死检测，应中止本轮。
-        """
-        for tool_call, result in zip(tool_calls, results):
-            metadata = compact_tool_metadata(
-                tool_call.name,
-                result.data,
-                is_error=result.is_error,
-                turn_id=self._current_turn_id,
-                arguments=tool_call.arguments,
-                redactor=self.redactor.redact if self.redactor else None,
-            )
-            persisted_path = _persisted_output_path(result.content)
-            if persisted_path:
-                metadata["full_output_path"] = persisted_path
-            self.history.append(
-                Message.tool_result(
-                    tool_call.id,
-                    result.content,
-                    blocks=list(result.blocks) or None,
-                    tool_name=tool_call.name,
-                    is_error=result.is_error,
-                    metadata=metadata,
-                )
-            )
-            self.working_context_store.record_tool_result(
-                tool_call,
-                result,
-                turn_id=self._current_turn_id,
-            )
-            signature = _call_signature(tool_call)
-            if result.is_error:
-                self._failure_counts[signature] = self._failure_counts.get(signature, 0) + 1
-                if self._failure_counts[signature] >= self.repeat_failure_limit:
-                    return (
-                        f"同一调用连续失败 {self._failure_counts[signature]} 次: "
-                        f"{signature}"
-                    )
-            else:
-                self._failure_counts.pop(signature, None)
-        return None
+        return await self.tool_executor.apply_results(tool_calls, results)
 
     async def _run_stream_tool(self, tool_call: ToolCall) -> ToolResult:
-        """流式调度器的 runner：执行一个调用并立即发布完成事件。"""
-        await self._emit(ToolCallStarted(tool_call))
-        result = await self._execute_one(tool_call)
-        await self._publish_tool_result(tool_call, result)
-        return result
+        return await self.tool_executor.run_stream_tool(tool_call)
 
     async def _publish_tool_result(
         self, tool_call: ToolCall, result: ToolResult,
     ) -> None:
-        """工具一完成就脱敏、持久化并推送 UI 事件。"""
-        content = self.redactor.redact(result.content) if self.redactor else result.content
-        inline_content = self._persist_large_output(tool_call, content)
-        result.content = inline_content
-        if self.redactor is not None:
-            result.blocks = tuple(
-                self._redact_tool_block(block) for block in result.blocks)
-            result.data = _redact_json(result.data, self.redactor.redact)
-        await self._emit(
-            ToolCallCompleted(
-                tool_call,
-                inline_content,
-                result.is_error,
-                result.blocks,
-                dict(result.data),
-            )
-        )
+        await self.tool_executor.publish_tool_result(tool_call, result)
 
     def _redact_tool_block(self, block):
-        redact = self.redactor.redact
-        if isinstance(block, TextBlock):
-            return TextBlock(redact(block.text))
-        if isinstance(block, ImageBlock):
-            return ImageBlock(block.media_type, block.data_b64, redact(block.alt))
-        if isinstance(block, ResourceBlock):
-            return ResourceBlock(
-                uri=redact(block.uri),
-                name=redact(block.name) if block.name else None,
-                mime_type=block.mime_type,
-                text=redact(block.text) if block.text else None,
-                blob=block.blob,
-            )
-        if isinstance(block, StructuredBlock):
-            return StructuredBlock(_redact_json(block.data, redact))
-        return block
+        return self.tool_executor._redact_tool_block(block)
 
     def _persist_large_output(self, tool_call: ToolCall, content: str) -> str:
-        """超长工具输出全文落盘，历史里只留截断版 + 文件引用。"""
-        if len(content) <= self.tool_output_inline_limit:
-            return content
-        try:
-            out_dir = self.tool_context.workspace_root / ".krelcode" / "tool_outputs"
-            out_dir.mkdir(parents=True, exist_ok=True)
-            safe_name = "".join(
-                c if c.isalnum() or c in "-_" else "_" for c in tool_call.name
-            )
-            call_id = tool_call.id or f"call{len(self.history)}"
-            path = out_dir / f"{safe_name}_{call_id}.txt"
-            path.write_text(content, encoding="utf-8")
-        except OSError as e:
-            # 落盘失败不阻断：退回纯截断
-            return truncate_middle(content, self.tool_output_inline_limit) + (
-                f"\n[注意: 输出落盘失败({e})，已就地截断]"
-            )
-        return (
-            truncate_middle(content, self.tool_output_inline_limit)
-            + f"\n[输出过长（{len(content)} 字符），全文已存盘: {path}]"
-        )
+        return self.tool_executor.persist_large_output(tool_call, content)
 
     async def _execute_one(self, tool_call: ToolCall) -> ToolResult:
-        # 1) 单轮工具池是执行边界：未暴露给模型的工具绝不能进入审批/执行。
-        pool = self._current_tool_pool()
-        tool = pool.get(tool_call.name)
-        if tool is None or not pool.is_executable(tool_call.name):
-            reason = pool.unavailable_reason(tool_call.name)
-            if reason is not None:
-                return ToolResult(
-                    content=(
-                        f"工具在本轮不可用: {tool_call.name}（{reason}；"
-                        "当前已暴露工具: "
-                        f"{', '.join(pool.advertised_names()) or '无'}）"
-                    ),
-                    is_error=True,
-                )
-            return ToolResult(
-                content=(
-                    f"未知工具: {tool_call.name}（本轮可用工具: "
-                    f"{', '.join(pool.advertised_names()) or '无'}）"
-                ),
-                is_error=True,
-            )
-
-        async def emit_progress(
-            message: str, data: Dict[str, object],
-        ) -> None:
-            safe_message = (
-                self.redactor.redact(message) if self.redactor else message)
-            safe_data = (
-                _redact_json(data, self.redactor.redact)
-                if self.redactor is not None else data)
-            await self._emit(ToolProgress(
-                tool_call.id, tool_call.name, safe_message, safe_data))
-
-        async def emit_output(text: str, stream: str) -> None:
-            if not text:
-                return
-            safe_text = (
-                self.redactor.redact(text) if self.redactor else text)
-            if safe_text:
-                await self._emit(ToolOutputDelta(
-                    tool_call.id, tool_call.name, safe_text, stream))
-
-        async def request_user_input(
-            prompt: str,
-            options: tuple[str, ...],
-            allow_free_text: bool,
-        ) -> Optional[str]:
-            if self.user_input_port is None:
-                return None
-            safe_prompt = (
-                self.redactor.redact(prompt) if self.redactor else prompt)
-            safe_options = tuple(
-                self.redactor.redact(option) if self.redactor else option
-                for option in options
-            )
-            turn_id = self._turn_tool_context.runtime.turn_id or "turn"
-            request_id = f"{turn_id}:input:{next(self._input_counter)}"
-            exchange = self.user_input_port.submit(
-                safe_prompt,
-                safe_options,
-                allow_free_text=allow_free_text,
-                request_id=request_id,
-            )
-            await self._emit(UserInputRequested(
-                request_id=exchange.request_id,
-                prompt=safe_prompt,
-                options=safe_options,
-                allow_free_text=allow_free_text,
-            ))
-            answer = await exchange.wait()
-            await self._emit(UserInputResolved(
-                request_id=exchange.request_id,
-                answered=answer is not None,
-            ))
-            return answer
-
-        async def emit_plan(
-            items: tuple[str, ...],
-            statuses: tuple[str, ...],
-            active_index: int,
-            explanation: str,
-        ) -> None:
-            redact = self.redactor.redact if self.redactor else (lambda text: text)
-            self.working_context_store.record_plan(
-                items,
-                statuses,
-                active_index=active_index,
-                explanation=redact(explanation),
-                turn_id=self._current_turn_id,
-            )
-            await self._emit(PlanUpdated(
-                items=tuple(redact(item) for item in items),
-                active_index=active_index,
-                statuses=tuple(redact(status) for status in statuses),
-                explanation=redact(explanation),
-                turn_id=self._current_turn_id,
-            ))
-
-        execution_ctx = replace(
-            self._turn_tool_context,
-            tool_descriptor=pool.descriptor(tool_call.name),
-            tool_catalog=pool,
-            progress_emitter=emit_progress,
-            output_emitter=emit_output,
-            input_requester=request_user_input,
-            plan_emitter=emit_plan,
-        )
-
-        # 2) 参数格式与 JSON Schema：坏参数不进入审批或工具实现。
-        if tool_call.has_invalid_arguments:
-            return ToolResult(
-                content=(
-                    "工具参数不是合法 JSON: "
-                    f"{tool_call.arguments[INVALID_ARGUMENTS_KEY]!r}"
-                ),
-                is_error=True,
-            )
-        validation_errors = validate_tool_arguments(
-            tool.parameters, tool_call.arguments)
-        if validation_errors:
-            rendered = [error.render() for error in validation_errors[:20]]
-            if len(validation_errors) > 20:
-                rendered.append(f"…另有 {len(validation_errors) - 20} 个错误")
-            return ToolResult(
-                content=(
-                    f"工具参数校验失败: {tool_call.name}\n- "
-                    + "\n- ".join(rendered)
-                ),
-                is_error=True,
-            )
-        args = dict(tool_call.arguments)
-        pre_hook = await self._before_tool_hook(tool_call)
-        if pre_hook.blocked:
-            return ToolResult(
-                content=f"PreToolUse Hook 阻止执行: {pre_hook.reason}",
-                is_error=True,
-                data={"hook_blocked": True, "hook_trigger": "pre_tool_use"},
-            )
-
-        # 3) 审批（策略看到的是已通过 schema 校验的参数）
-        if self.policy is not None:
-            await execution_ctx.emit_progress("安全策略检查中")
-            try:
-                decision = await self.policy.check(tool_call, execution_ctx)
-            except Exception as e:  # 审批器自身出错 → 保守拒绝
-                await self._emit(ErrorOccurred(str(e), "policy.check"))
-                await self._emit(PermissionDenied(tool_call, str(e)))
-                return ToolResult(content=f"审批检查失败，已拒绝执行: {e}", is_error=True)
-            if not decision.allowed:
-                await self._emit(PermissionDenied(tool_call, decision.reason))
-                return ToolResult(
-                    content=f"操作被安全策略拒绝: {decision.reason}", is_error=True
-                )
-
-        # 4) 执行（异常 → is_error 结果回填，错误恢复原则）
-        await execution_ctx.emit_progress("开始执行")
-        try:
-            result = await tool.execute(args, execution_ctx)
-        except Exception as e:
-            await self._emit(ErrorOccurred(f"{type(e).__name__}: {e}", tool_call.name))
-            result = ToolResult(
-                content=f"工具执行出错: {type(e).__name__}: {e}", is_error=True)
-
-        post_hook = await self._after_tool_hook(tool_call, result)
-        contexts = (*pre_hook.context, *post_hook.context)
-        if contexts:
-            blocks = "\n\n".join(
-                f"<hook_context>\n{item}\n</hook_context>" for item in contexts)
-            result.content = (result.content + "\n\n" + blocks).strip()
-        return result
+        return await self.tool_executor.execute_one(tool_call)
 
     async def run_lifecycle_hook(
         self, trigger: str, variables: dict[str, str],
@@ -1730,62 +776,3 @@ class AgentLoop:
                 "post_tool_use", True, hook_result.blocked, tool_call.name,
                 hook_result.reason, hook_result.system_message))
         return hook_result
-
-
-def _call_signature(tool_call: ToolCall) -> str:
-    """工具名 + 稳定序列化的参数，作为卡死检测的签名。"""
-    try:
-        args = json.dumps(tool_call.arguments, sort_keys=True, ensure_ascii=False)
-    except (TypeError, ValueError):
-        args = repr(tool_call.arguments)
-    if len(args) > 200:
-        args = args[:200] + "…"
-    return f"{tool_call.name}({args})"
-
-
-def _redact_json(value, redact):
-    """递归脱敏结构化工具结果中的字符串值。"""
-    if isinstance(value, str):
-        return redact(value)
-    if isinstance(value, list):
-        return [_redact_json(item, redact) for item in value]
-    if isinstance(value, dict):
-        return {
-            str(redact(str(key))): _redact_json(item, redact)
-            for key, item in value.items()
-        }
-    return value
-
-
-def _context_dropped_items(loop: AgentLoop) -> tuple[str, ...]:
-    workspace = getattr(loop, "workspace_context", None)
-    items = [
-        f"workspace:{item}"
-        for item in (getattr(workspace, "omitted", ()) or ())
-    ]
-    return tuple(dict.fromkeys(items))
-
-
-def _memory_selection(
-    assembly,
-) -> tuple[tuple[str, ...], dict[str, int], int]:
-    for layer in getattr(assembly, "layers", ()) or ():
-        metadata = getattr(layer, "metadata", {}) or {}
-        raw_ids = metadata.get("memory_entry_ids", ())
-        ids = tuple(str(item) for item in raw_ids) if isinstance(
-            raw_ids, (list, tuple, set)) else ()
-        raw_scopes = metadata.get("memory_scope_counts", {})
-        scopes = {
-            str(key): max(0, int(value))
-            for key, value in dict(raw_scopes).items()
-        } if isinstance(raw_scopes, dict) else {}
-        tokens = max(0, int(metadata.get("memory_tokens", 0) or 0))
-        if ids or scopes or tokens:
-            return ids, scopes, tokens
-    return (), {}, 0
-
-
-def _persisted_output_path(content: str) -> str:
-    """Extract the safe on-disk reference added by ``_persist_large_output``."""
-    match = re.search(r"全文已存盘:\s*([^\]\n]+)", content or "")
-    return match.group(1).strip()[:1_000] if match else ""

@@ -355,3 +355,79 @@ def test_cross_layer_code_imports_tool_dtos_from_contracts():
         if legacy:
             violations[str(relative)] = legacy
     assert not violations
+
+
+# ---------------------------------------------------------------------------
+# Agent turn runtime decomposition
+# ---------------------------------------------------------------------------
+
+def _class_node(path: Path, name: str) -> ast.ClassDef:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return next(
+        node for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == name
+    )
+
+
+def _method_node(path: Path, class_name: str, method_name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    klass = _class_node(path, class_name)
+    return next(
+        node for node in klass.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == method_name
+    )
+
+
+def test_agent_turn_runtime_has_explicit_executor_boundaries():
+    expected = {
+        "dependencies.py": "AgentDependencies",
+        "context_turn.py": "ContextTurnCoordinator",
+        "tool_turn.py": "ToolBatchExecutor",
+        "model_turn.py": "ModelTurnExecutor",
+    }
+    for filename, class_name in expected.items():
+        path = ROOT / "agent" / filename
+        assert path.exists(), filename
+        _class_node(path, class_name)
+
+
+def test_agent_loop_is_a_thin_turn_orchestration_facade():
+    path = ROOT / "agent" / "loop.py"
+    source = path.read_text(encoding="utf-8")
+    assert len(source.splitlines()) < 1_000
+    # Concrete context/model/tool mechanics must not drift back into the loop.
+    assert "async for event in stream" not in source
+    assert "ContextCacheLedger.from_components" not in source
+    assert "validate_tool_arguments(" not in source
+
+    delegated_methods = {
+        "_build_llm_request",
+        "_llm_turn",
+        "_apply_tool_results",
+        "_execute_one",
+        "microcompact_tools",
+        "compress_context",
+    }
+    oversized = {}
+    for method_name in delegated_methods:
+        node = _method_node(path, "AgentLoop", method_name)
+        end = getattr(node, "end_lineno", node.lineno)
+        length = end - node.lineno + 1
+        if length > 18:
+            oversized[method_name] = length
+    assert not oversized
+
+
+def test_runtime_executors_do_not_import_outer_layers():
+    forbidden = ("krelcode.ui", "krelcode.session", "krelcode.entrypoints")
+    violations = {}
+    for filename in ("dependencies.py", "context_turn.py", "tool_turn.py", "model_turn.py"):
+        path = ROOT / "agent" / filename
+        imports = imported_modules(path)
+        bad = sorted(
+            name for name in imports
+            if any(depends_on({name}, prefix) for prefix in forbidden)
+        )
+        if bad:
+            violations[filename] = bad
+    assert not violations

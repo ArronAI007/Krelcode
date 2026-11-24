@@ -220,3 +220,23 @@ def test_policy_and_tool_share_per_call_descriptor_snapshot():
     assert policy.descriptors == [tool.descriptor]
     assert tool.descriptor is not None
     assert tool.descriptor.read_only is True
+
+
+def test_turn_runtime_is_composed_from_explicit_dependencies_and_executors():
+    from krelcode.agent.context_turn import ContextTurnCoordinator
+    from krelcode.agent.dependencies import AgentDependencies
+    from krelcode.agent.model_turn import ModelTurnExecutor
+    from krelcode.agent.tool_turn import ToolBatchExecutor
+
+    loop, _, _ = make_loop(["ok"])
+    assert isinstance(loop.dependencies, AgentDependencies)
+    assert isinstance(loop.context_coordinator, ContextTurnCoordinator)
+    assert isinstance(loop.tool_executor, ToolBatchExecutor)
+    assert isinstance(loop.model_executor, ModelTurnExecutor)
+    assert loop.model_executor.context is loop.context_coordinator
+    assert loop.model_executor.tools is loop.tool_executor
+
+    replacement = MockProvider(scripted=["replacement"])
+    loop.llm = replacement
+    assert loop.dependencies.llm is replacement
+    assert loop.model_executor.dependencies.llm is replacement
