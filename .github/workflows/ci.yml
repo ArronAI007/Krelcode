@@ -1,0 +1,222 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONPATH: src
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  python:
+    name: Python ${{ matrix.python-version }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+        python-version:
+          - "3.11"
+          - "3.12"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]" build
+
+      - name: Run architecture tests
+        run: python -m pytest -q tests/test_architecture.py
+
+      - name: Run full test suite
+        run: python -m pytest -q
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Verify package artifacts
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+
+          wheels = sorted(Path("dist").glob("*.whl"))
+          sdists = sorted(Path("dist").glob("*.tar.gz"))
+          assert len(wheels) == 1, wheels
+          assert len(sdists) == 1, sdists
+          with zipfile.ZipFile(wheels[0]) as archive:
+              metadata_name = next(
+                  name for name in archive.namelist()
+                  if name.endswith(".dist-info/METADATA")
+              )
+              metadata = archive.read(metadata_name).decode("utf-8")
+          assert "Requires-Python: >=3.11" in metadata
+          required = [
+              line for line in metadata.splitlines()
+              if line.startswith("Requires-Dist:")
+              and 'extra == "dev"' not in line
+              and 'extra == "syntax"' not in line
+          ]
+          assert required == [], required
+          PY
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-${{ matrix.os }}-${{ matrix.python-version }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  install-smoke:
+    name: install.sh smoke / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Validate shell syntax
+        shell: bash
+        run: bash -n install.sh
+
+      - name: Run installer dry-run smoke test
+        shell: bash
+        run: |
+          python_path="$(command -v python)"
+          bash ./install.sh \
+            --dry-run \
+            --source "$GITHUB_WORKSPACE" \
+            --python "$python_path" \
+            --home "$RUNNER_TEMP/krelcode-ci-home" \
+            --bin-dir "$RUNNER_TEMP/krelcode-ci-bin" \
+            --no-modify-path
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run installer integration tests
+        run: python -m pytest -q tests/test_installer.py
+
+  typescript-sdk:
+    name: TypeScript SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.6.0"
+          cache: npm
+          cache-dependency-path: typescript-sdk/package-lock.json
+
+      - name: Install Krelcode for SDK subprocess tests
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --no-deps -e .
+
+      - name: Install SDK dependencies
+        working-directory: typescript-sdk
+        run: npm ci --no-audit --no-fund
+
+      - name: Run TypeScript SDK tests
+        working-directory: typescript-sdk
+        env:
+          PYTHON: python
+        run: npm test
+
+      - name: Typecheck TypeScript SDK
+        working-directory: typescript-sdk
+        run: npm run typecheck
+
+      - name: Build TypeScript SDK
+        working-directory: typescript-sdk
+        run: npm run build
+
+  vscode-extension:
+    name: VS Code extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.6.0"
+          cache: npm
+          cache-dependency-path: |
+            typescript-sdk/package-lock.json
+            editors/package-lock.json
+
+      - name: Install and build TypeScript SDK
+        working-directory: typescript-sdk
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Install editor workspace dependencies
+        working-directory: editors
+        run: npm ci --no-audit --no-fund
+
+      - name: Run VS Code extension tests
+        working-directory: editors
+        run: npm test
+
+      - name: Typecheck editor workspaces
+        working-directory: editors
+        run: npm run typecheck
+
+      - name: Build VS Code extension
+        working-directory: editors
+        run: npm run build

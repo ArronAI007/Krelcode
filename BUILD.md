@@ -228,10 +228,32 @@ report/tuning/candidate，不自动提交或替换 accepted baseline。
 建议再手动过一遍 REPL：流式渲染、`/model` 热切换、steering 插话、
 `/stop`、`/undo`、`/compact`、`/cost`、MCP 服务器（如有）。
 
-## 6. 已知边界与限制（诚实清单）
+## 6. 工程保障与 CI
+
+主 CI 位于 `.github/workflows/ci.yml`，面向每次 push、pull request 和手动触发运行：
+
+- Python 作业使用 3.11 / 3.12 × Linux / macOS / Windows 六格矩阵，依次执行
+  architecture tests、全量 pytest、sdist/wheel 构建和 wheel metadata 校验。
+  metadata 校验会拒绝意外进入普通安装的第三方运行时依赖。
+- 安装器作业在 Linux/macOS 上执行 `bash -n`、`install.sh --dry-run` 与安装器集成测试。
+- TypeScript SDK 与 VS Code extension 使用独立作业，按 `npm ci` 安装锁定依赖，并执行
+  test、typecheck、build；VS Code 作业会先构建 SDK 作为 workspace 依赖。
+- `pytest` 与 `mypy` 只声明在 `dev` optional dependency 中：
+  `python -m pip install -e ".[dev]"`。`project.dependencies` 继续为空。
+
+本地提交前的最小门禁：
+
+```bash
+PYTHONPATH=src python -m pytest -q tests/test_architecture.py tests/test_engineering_ci.py
+PYTHONPATH=src python -m pytest -q
+python -m compileall -q src/krelcode
+git diff --check
+```
+
+## 7. 已知边界与限制（诚实清单）
 
 - checkpoint 不追踪 run_command 造成的文件修改（命令内容不可静态分析）
-- Windows：进程组创建与 `taskkill /T` 树终止已统一并有注入平台单测；当前开发环境未做 Windows 真机 CI 矩阵，`static` 模式也没有内核级文件/网络隔离
+- Windows：进程组创建与 `taskkill /T` 树终止已统一，并由主 CI 的 Windows 真机矩阵持续验证；`static` 模式仍没有内核级文件/网络隔离
 - 默认 `[daemon] enabled=off` 仍使用进程内 manager；显式 auto/on 后，Job/Subagent 归 daemon 所有，客户端断开不影响运行，`run_command` 等前台命令仍属于当前 turn
 - daemon 崩溃后，旧 running Job 标记 `lost` 并保留日志/序列；不会按 PID 盲目终止，也无法恢复旧 stdout pipe。旧 running Subagent 标记 `lost`，sidechain/history 可审计，但不能原地恢复 Python coroutine
 - Subagent Definition 的角色提示是用户可信配置，仍需遵守审批、Sandbox 和工具 allowlist；daemon 重建使用当前 workspace 配置，不复制 REPL 内未持久化的临时 Prompt toggle

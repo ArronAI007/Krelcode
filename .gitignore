@@ -13,3 +13,11 @@ build/
 
 # 本机覆盖配置（不应提交）
 krelcode.local.toml
+
+# Node / TypeScript
+node_modules/
+*.tsbuildinfo
+npm-debug.log*
+
+# mypy
+.mypy_cache/

@@ -2199,6 +2199,9 @@ SecurityReviewReport
 | ui | （Step 8）喂录制事件流断言渲染 |
 
 测试统一用 `asyncio.run(...)` 驱动协程，不引入 pytest-asyncio（保持零依赖）。
+`pytest` 与 `mypy` 只通过 `dev` optional dependency 安装，普通 wheel 的运行时依赖仍为空。
+主 CI 使用 Python 3.11/3.12 × Linux/macOS/Windows 矩阵运行架构门禁与全量测试，并独立验证
+安装器、Python 包构建、TypeScript SDK 和 VS Code extension。
 
 ## Stream JSON 与 Python SDK（Step 73）
 

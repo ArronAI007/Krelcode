@@ -53,7 +53,7 @@ curl -fsSL https://raw.githubusercontent.com/ArronAI007/Krelcode/main/install.sh
 ./install.sh --tag v0.81.0
 ```
 
-对应环境变量为 `KRELCODE_PYTHON`、`KRELCODE_PYTHON_VERSION`、`KRELCODE_PYTHON_MIRROR`、`KRELCODE_INSTALL_ROOT` 和 `KRELCODE_BIN_DIR`。这些选项只用于 CI、离线或特殊网络环境；普通用户直接执行默认的一键安装即可。开发调试仍可使用 `pip install -e .`。
+对应环境变量为 `KRELCODE_PYTHON`、`KRELCODE_PYTHON_VERSION`、`KRELCODE_PYTHON_MIRROR`、`KRELCODE_INSTALL_ROOT` 和 `KRELCODE_BIN_DIR`。这些选项只用于 CI、离线或特殊网络环境；普通用户直接执行默认的一键安装即可。开发调试使用 `python -m pip install -e ".[dev]"` 安装测试与类型检查工具。
 
 </details>
 
@@ -96,29 +96,31 @@ Job/Agent metadata 原子写入 `.krelcode/daemon/`；输出使用带 sequence �
 自动回退权限隔离的 file RPC。daemon 崩溃后旧 running 状态标记 `lost`，保留日志/sidechain
 供审计，不会按可能复用的 PID 盲目终止进程。
 
-零第三方运行时依赖，Python ≥ 3.11（开发测试仅需 pytest）。
+零第三方运行时依赖，Python ≥ 3.11。`pytest` 与 `mypy` 位于独立的 `dev` optional dependency，不会进入普通安装或运行时环境。
 
 ## 快速开始（源码方式）
 
 ```bash
-# 运行全部测试（当前离线基线下 1674 通过；可选端口/grammar 测试自动跳过）
-# *真实 HTTP 集成测试（SSE/Streamable）需本地端口，沙箱环境自动跳过
-/opt/anaconda3/bin/pytest tests/ -v
+# 安装开发依赖；运行时仍保持零第三方依赖
+python -m pip install -e ".[dev]"
+
+# 运行全部测试；真实 HTTP 集成测试需要本地端口，受限环境会自动跳过
+PYTHONPATH=src python -m pytest -q
 
 # 离线体验 mock 模式：第一轮会演示完整 tool-call 循环（LLM→审批→执行get_time→回填→总结）
-PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --mock
+PYTHONPATH=src python -m krelcode --mock
 
 # DeepSeek（OpenAI 兼容端点）：
 export DEEPSEEK_API_KEY=sk-...
-PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider openai \
+PYTHONPATH=src python -m krelcode --provider openai \
   --base-url https://api.deepseek.com/v1 --model deepseek-flash
 # 建议写进 krelcode.toml（krelcode init 生成的模板里有现成注释示例），之后直接运行 krelcode
 # 配置按 user → project → local → managed 深合并；krelcode.local.toml 适合本机覆盖且默认不提交
 
 # 真实模式：统一 Provider 机制，--provider openai / anthropic / gemini
 export OPENAI_API_KEY=sk-...          # 或 ANTHROPIC_API_KEY / GEMINI_API_KEY
-PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider openai -m "现在纽约几点？"
-PYTHONPATH=src /opt/anaconda3/bin/python -m krelcode --provider anthropic --model claude-sonnet-4-5
+PYTHONPATH=src python -m krelcode --provider openai -m "现在纽约几点？"
+PYTHONPATH=src python -m krelcode --provider anthropic --model claude-sonnet-4-5
 
 # 也可以用分层 TOML 配置：~/.krelcode/config.toml → ./krelcode.toml → ./krelcode.local.toml → managed
 #   default_provider = "anthropic"
