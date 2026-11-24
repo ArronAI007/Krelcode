@@ -18,33 +18,29 @@ reason = "Benchmark runners still share report/session helpers in both direction
 max_unlisted_lines = 800
 
 [file_size.limits]
-"benchmarks/behavior.py" = 3397
-"session/memory.py" = 1808
-"benchmarks/prompt.py" = 1559
-"benchmarks/acceptance.py" = 1477
-"agent/prompt_assembler.py" = 1383
-"agent/prompt_release_pipeline.py" = 1376
-"session/memory_candidates.py" = 1157
-"plugins/manager.py" = 1069
-"agent/context_checkpoint.py" = 1043
-"agent/context_inspection.py" = 1030
-"subagent/manager.py" = 1019
-"agent/prompt_parity.py" = 1011
-"daemon/server.py" = 947
-"safety/sandbox.py" = 926
-"daemon/client.py" = 925
-"ui/diff_review.py" = 919
-"agent/working_context.py" = 863
-"tools/builtin/database_migration.py" = 892
-"agent/prompt_authoring.py" = 890
-"agent/fragments.py" = 882
-"agent/prompt_plan.py" = 881
-"agent/compression.py" = 864
 "agent/compact_summary.py" = 863
+"agent/compression.py" = 864
+"agent/context_checkpoint.py" = 1043
+"agent/context_turn.py" = 802
+"agent/fragments.py" = 882
+"agent/prompt_authoring.py" = 890
+"agent/prompt_parity.py" = 1011
+"agent/prompt_plan.py" = 881
+"agent/prompt_release_pipeline.py" = 1376
+"agent/working_context.py" = 863
+"benchmarks/acceptance.py" = 1477
+"benchmarks/behavior.py" = 3397
+"benchmarks/prompt.py" = 1559
 "browser/runtime.py" = 860
+"daemon/client.py" = 925
+"daemon/server.py" = 947
 "enterprise/auth.py" = 848
 "llm/base.py" = 817
-"agent/context_turn.py" = 802
+"safety/sandbox.py" = 926
+"session/memory_candidates.py" = 1157
+"tools/builtin/database_migration.py" = 892
+"ui/diff_review.py" = 919
+
 
 [loop_dynamic_access.limits."bootstrap/composition/daemon.py"]
 assignments = 1

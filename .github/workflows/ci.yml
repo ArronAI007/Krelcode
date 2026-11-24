@@ -35,12 +35,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+
+      - name: Check architecture ratchet
+        shell: bash
+        run: |
+          base_ref="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$base_ref" ] || ! git cat-file -e "$base_ref^{commit}" 2>/dev/null; then
+            base_ref="HEAD^"
+          fi
+          python scripts/check_architecture_ratchet.py --base-ref "$base_ref"
 
       - name: Install development dependencies
         run: |

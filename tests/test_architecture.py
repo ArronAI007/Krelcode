@@ -195,11 +195,25 @@ def test_oversized_files_match_the_frozen_baseline():
             continue
         relative = path.relative_to(ROOT).as_posix()
         current = len(path.read_text(encoding="utf-8").splitlines())
-        limit = int(limits.get(relative, unlisted_limit))
         if relative in limits:
             seen.add(relative)
-        if current > limit:
-            violations[relative] = {"current": current, "limit": limit}
+            limit = int(limits[relative])
+            if current != limit:
+                violations[relative] = {
+                    "current": current,
+                    "limit": limit,
+                    "action": (
+                        "remove stale baseline entry"
+                        if current <= unlisted_limit
+                        else "ratchet baseline to current size"
+                    ),
+                }
+        elif current > unlisted_limit:
+            violations[relative] = {
+                "current": current,
+                "limit": unlisted_limit,
+                "action": "split the file or add an explicitly reviewed baseline",
+            }
     missing = set(limits) - seen
     assert not violations, violations
     assert not missing, f"baseline references missing files: {sorted(missing)}"
