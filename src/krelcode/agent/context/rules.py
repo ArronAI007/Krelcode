@@ -1,4 +1,4 @@
-"""Rule loading facade backed by the compatibility-stable public module."""
+"""Compatibility facade for :mod:`krelcode.agent.rules`."""
 
 from __future__ import annotations
 

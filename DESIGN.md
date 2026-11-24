@@ -102,6 +102,10 @@ CLI 入口是唯一允许把 benchmark 命令接入进程的边界。
 测试会构建包级依赖图并用 Tarjan 算法拒绝任何强连通分量（SCC），同时禁止使用
 `tools.base` 作为跨层 DTO 入口。`bootstrap/`、`app.py` 与各 `__main__.py` 是
 组合根/进程边界；具体运行期装配由这些边界注入。`app.py` 不再持有装配实现。
+`app.py` 不再持有装配实现。兼容 Facade 的旧路径、新路径、弃用版本、
+计划删除版本和内部引用基线统一登记在 `architecture/compatibility_facades.toml`；
+Facade 仅允许 re-export，新生产代码只能使用 `new_imports`。详见
+`docs/compatibility-facades.md`。
 
 ## 四个核心端口（契约）
 

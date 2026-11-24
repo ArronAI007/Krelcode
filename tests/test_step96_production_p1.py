@@ -576,6 +576,7 @@ def test_subagent_definition_rejects_unknown_mcp_server(tmp_path):
 
 def test_subagent_model_resolver_reads_latest_parent_provider(monkeypatch):
     import krelcode.app as app_module
+    import krelcode.bootstrap.composition.subagents as resolver_module
 
     parent_state = SimpleNamespace(llm=CaptureProvider("first", "parent-1"))
     child = CaptureProvider("child", "model-x")
@@ -586,8 +587,9 @@ def test_subagent_model_resolver_reads_latest_parent_provider(monkeypatch):
         resolved.append((provider, model, base_url, config))
         return {"provider": provider, "model": model}
 
-    monkeypatch.setattr(app_module, "resolve_settings", resolve_settings)
-    monkeypatch.setattr(app_module, "create_provider", lambda _settings: child)
+    monkeypatch.setattr(resolver_module, "resolve_settings", resolve_settings)
+    monkeypatch.setattr(
+        resolver_module, "create_provider", lambda _settings: child)
     resolver = app_module.build_subagent_llm_resolver(
         SimpleNamespace(base_url="https://api.example.test", retries=0),
         {"providers": {}},

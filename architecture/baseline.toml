@@ -4,9 +4,8 @@ version = 1
 # architecture gate rather than being admitted into this baseline.
 [dynamic_import]
 # Dynamic loading bypasses static import analysis. Keep it visible and confined
-# to process dispatch, optional adapters, plugin loading and benchmark facades.
+# to process dispatch, optional adapters and plugin loading.
 allowed_files = [
-  "benchmarks/behavior.py",
   "browser/runtime.py",
   "entrypoints/cli.py",
   "plugins/loader.py",

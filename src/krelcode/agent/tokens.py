@@ -1,11 +1,11 @@
-"""Compatibility facade for :mod:`krelcode.agent.context.tokens`."""
+"""Compatibility facade for shared core token estimators."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from .context import tokens as _impl
-from .context.tokens import *  # noqa: F401,F403
+from ..core import tokens as _impl
+from ..core.tokens import *  # noqa: F401,F403
 
 
 def __getattr__(name: str) -> Any:
