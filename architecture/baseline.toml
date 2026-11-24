@@ -19,7 +19,7 @@ max_unlisted_lines = 800
 
 [file_size.limits]
 "agent/compact_summary.py" = 859
-"agent/compression.py" = 863
+"agent/compression.py" = 862
 "agent/context_checkpoint.py" = 1037
 "agent/fragments.py" = 881
 "agent/prompt_authoring.py" = 890
@@ -47,13 +47,18 @@ getattr = 1
 setattr = 0
 
 [loop_dynamic_access.limits."bootstrap/composition/runtime.py"]
-assignments = 41
+assignments = 35
 getattr = 4
 setattr = 0
 
+[loop_dynamic_access.limits."bootstrap/composition/services.py"]
+assignments = 11
+getattr = 1
+setattr = 0
+
 [loop_dynamic_access.limits."bootstrap/application.py"]
-assignments = 9
-getattr = 10
+assignments = 8
+getattr = 2
 setattr = 0
 
 [loop_dynamic_access.limits."session/commands/handlers/configuration_ops.py"]

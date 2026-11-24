@@ -38,7 +38,6 @@ from ..session.commands import (
 from ..session.elicitation_bridge import MCPElicitationBridge
 from ..session.input import InputProcessor
 from ..session.interactions import UserInputBroker
-from ..session.memory import sync_memory_fragment
 from ..session.restore import refresh_skill_system_prompt
 from ..session.runner import run_session
 from ..telemetry import build_telemetry_runtime
@@ -158,31 +157,11 @@ async def create_application(
         print(f"配置错误: {e}", file=sys.stderr)
         return 2
     custom_commands = loop.custom_command_manager
-    redactor = getattr(loop, "redactor", None) or SecretRedactor()
-    redactor.add(getattr(loop.llm, "api_key", None))
-    loop.redactor = redactor
-    if getattr(loop, "working_context_store", None) is not None:
-        loop.working_context_store.redactor = redactor
-    if getattr(loop, "context_manager", None) is not None:
-        loop.context_manager.redactor = redactor
-    if getattr(loop, "compact_checkpoint_store", None) is not None:
-        loop.compact_checkpoint_store.redactor = redactor
-    if getattr(loop, "memory_store", None) is not None:
-        loop.memory_store.redactor = redactor
-        sync_memory_fragment(loop, loop.memory_store)
-    if getattr(loop, "auto_memory", None) is not None:
-        loop.auto_memory.set_redactor(redactor)
-    subagents.redactor = redactor
-    subagents.sidechains.redactor = redactor
-    if getattr(loop, "context_checkpoint_store", None) is not None:
-        loop.context_checkpoint_store.redactor = redactor
-    if getattr(loop, "context_checkpoint_coordinator", None) is not None:
-        loop.context_checkpoint_coordinator.redactor = redactor
-    if getattr(loop.tool_context, "shell_jobs", None) is not None:
-        loop.tool_context.shell_jobs.redactor = redactor
+    binder = loop.runtime_service_binder
+    redactor = binder.redactor
+    binder.add_secret(getattr(loop.llm, "api_key", None))
     if sso_client is not None:
-        for secret in sso_client.redaction_secrets():
-            redactor.add(secret)
+        binder.add_secrets(sso_client.redaction_secrets())
     auditor = None
     if enterprise_policy.audit and bool(enterprise_policy.audit.get("enabled", False)):
         try:

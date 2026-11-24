@@ -13,6 +13,11 @@ from .extensions import (
 from .mcp import build_mcp_roots, build_mcp_sampler, compose_mcp_config
 from .memory import resolve_auto_memory_mode, resolve_auto_memory_thresholds
 from .providers import build_llm
+from .services import (
+    PersistenceServices,
+    RuntimeServiceBinder,
+    RuntimeServices,
+)
 from .security import (
     _configured_features,
     _disabled_tools,
@@ -49,11 +54,17 @@ async def build_loop(
     policy.validate_cli(args)
     if policy.require_sso and principal is None:
         raise PolicyViolation("企业策略要求 SSO，但当前没有有效身份")
+    bus = EventBus()
+    llm = build_llm(args, config, log=log)
+    policy.validate_provider(str(getattr(llm, "name", "") or ""))
+    redactor = SecretRedactor()
+    redactor.add(getattr(llm, "api_key", None))
     context_options = ContextOptions.from_config(config.get("context"))
     rule_loader = RuleLoader(
         workspace_root,
         limits=context_options.rule_limits(),
         imports_enabled=context_options.rules_imports,
+        redactor=redactor,
     )
     workspace_context = None
     if not args.no_context:
@@ -70,10 +81,7 @@ async def build_loop(
                 log(
                     f"[rules] 跳过 {issue.code}: {issue.path}: "
                     f"{issue.message}")
-    bus = EventBus()
     prompt_authoring_enabled = prompt_authoring_enabled_from_config(config)
-    llm = build_llm(args, config, log=log)
-    policy.validate_provider(str(getattr(llm, "name", "") or ""))
     prompt_profile_setting = prompt_profile_from_config(config)
     prompt_release_setting = prompt_release_id_from_config(config)
     prompt_calibrations = _load_prompt_calibrations(config, workspace_root)
@@ -84,7 +92,7 @@ async def build_loop(
         release_id=prompt_release_setting,
         calibrations=prompt_calibrations,
     )
-    memory_store = MemoryStore(workspace_root)
+    memory_store = MemoryStore(workspace_root, redactor=redactor)
     base_skill_paths = configured_skill_paths(args, config)
     custom_commands = build_custom_command_manager(config, workspace_root)
     try:
@@ -128,7 +136,8 @@ async def build_loop(
         context_budget = (args.context_tokens
                           or default_budget_for(getattr(llm, "model", None))
                           or DEFAULT_CONTEXT_BUDGET)
-        context_manager = ContextManager(llm, max_tokens=context_budget)
+        context_manager = ContextManager(
+            llm, max_tokens=context_budget, redactor=redactor)
     sandbox = build_execution_sandbox(args, config, workspace_root)
     if sandbox is not None:
         log(f"[sandbox] backend={sandbox.backend} "
@@ -152,6 +161,8 @@ async def build_loop(
                 frozenset(policy.disabled_tools)
                 if policy.disabled_tools else None),
         ),
+        enterprise_policy=policy,
+        principal=principal,
     )
     from ...daemon.options import resolve_daemon_options
 
@@ -166,10 +177,11 @@ async def build_loop(
             config_path=daemon_options.config_path,
             idle_timeout=daemon_options.idle_timeout,
             bus=bus,
+            redactor=redactor,
         )
     else:
-        shell_jobs = ShellJobManager(bus, workspace_root=workspace_root)
-    tool_context.shell_jobs = shell_jobs
+        shell_jobs = ShellJobManager(
+            bus, workspace_root=workspace_root, redactor=redactor)
     approval_policy = build_policy(
         args, workspace_root, bus, approver=approver, config=config,
         enterprise_policy=policy)
@@ -260,8 +272,6 @@ async def build_loop(
             + ", ".join(item.name for item in agent_definitions.list()))
     for issue in agent_definitions.issues:
         log(f"[agents] 跳过无效定义: {issue.path}: {issue.message}")
-    redactor = SecretRedactor()
-    redactor.add(getattr(llm, "api_key", None))
     def subagent_base_prompt(child_llm: LLMProvider) -> str:
         return build_subagent_system_prompt(
             profile=prompt_profile_setting,
@@ -298,6 +308,7 @@ async def build_loop(
             tool_context=tool_context,
             policy=approval_policy,
             bus=bus,
+            redactor=redactor,
             max_steps=args.max_steps,
             context_budget=context_budget,   # 子代理长任务同样受压缩保护
             # Keep the legacy composite view; new assembly splits base (L1) and
@@ -372,11 +383,14 @@ async def build_loop(
         and context_options.include_rules
         and context_options.include_directory_rules
     )
-    working_context_store = WorkingContextStore(workspace_root)
+    working_context_store = WorkingContextStore(
+        workspace_root, redactor=redactor.redact)
     compact_checkpoint_store = (
-        None if args.no_checkpoint else CompactCheckpointStore(workspace_root))
+        None if args.no_checkpoint else CompactCheckpointStore(
+            workspace_root, redactor=redactor))
     context_checkpoint_store = (
-        None if args.no_checkpoint else ContextCheckpointStore(workspace_root))
+        None if args.no_checkpoint else ContextCheckpointStore(
+            workspace_root, redactor=redactor))
     context_sources = default_context_sources(
         rule_loader if directory_rules_enabled else None,
         working_context_store=working_context_store,
@@ -406,14 +420,9 @@ async def build_loop(
         working_context_store=working_context_store,
         compact_checkpoint_store=compact_checkpoint_store,
     )
-    loop.enterprise_policy = policy
-    loop.principal = principal
-    loop.tool_context.enterprise_policy = policy
-    loop.tool_context.principal = principal
     if getattr(loop, "context_manager", None) is not None:
         loop.context_manager.prompt_surface_registry = (
             loop.prompt_surface_registry)
-    loop.redactor = redactor
     loop.prompt_release_pipeline = prompt_release_pipeline
     loop.prompt_release_approval_service = prompt_release_approval_service
     # fork_context 数据源：getter 形式，/resume 重绑定 loop.history 后依然正确
@@ -438,7 +447,6 @@ async def build_loop(
     loop.workspace_context = workspace_context
     loop.rule_loader = rule_loader
     loop.directory_rule_source = directory_rule_source
-    loop.memory_store = memory_store
     loop.lsp_manager = lsp_manager
     loop.output_style_manager = output_style_manager
     loop.web_runtime = web_runtime
@@ -447,18 +455,18 @@ async def build_loop(
     loop.migration_options = migration_options
     loop.status_line_renderer = StatusLineRenderer(
         StatusLineOptions.from_config(config.get("status_line")))
-    loop.context_checkpoint_store = context_checkpoint_store
     loop.sync_context_attachments(include_mcp=False)
+    context_coordinator = None
     if context_checkpoint_store is not None:
         context_coordinator = ContextCheckpointCoordinator(
             loop=loop,
             store=context_checkpoint_store,
             compact_store=compact_checkpoint_store,
             memory_store=memory_store,
+            redactor=redactor,
             log=log,
         )
         context_coordinator.attach(bus)
-        loop.context_checkpoint_coordinator = context_coordinator
     apply_prompt_snapshot(loop, prompt_snapshot)
     from ...review import review_prompt_surface
     from ...security_review.surfaces import security_review_prompt_surface
@@ -525,6 +533,25 @@ async def build_loop(
 
     loop.extension_refresh = refresh_extensions_basic
     loop.plugin_reload = reload_plugins
+    services = RuntimeServices(
+        redactor=redactor,
+        enterprise_policy=policy,
+        approval_policy=approval_policy,
+        principal=principal,
+        context_manager=context_manager,
+        persistence=PersistenceServices(
+            memory_store=memory_store,
+            working_context_store=working_context_store,
+            compact_checkpoint_store=compact_checkpoint_store,
+            context_checkpoint_store=context_checkpoint_store,
+            context_checkpoint_coordinator=context_coordinator,
+            sidechains=getattr(manager, "sidechains", None),
+            shell_jobs=shell_jobs,
+            auto_memory=auto_memory,
+        ),
+        rule_loader=rule_loader,
+    )
+    RuntimeServiceBinder(services).bind(loop=loop, subagents=manager)
     return loop, manager
 
 
