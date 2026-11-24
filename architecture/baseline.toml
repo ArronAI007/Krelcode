@@ -23,7 +23,6 @@ max_unlisted_lines = 800
 "agent/context/compression.py" = 871
 "agent/prompt/fragments.py" = 880
 "agent/prompt/prompt_authoring.py" = 890
-"agent/prompt/prompt_parity.py" = 1011
 "agent/prompt/prompt_plan.py" = 852
 "agent/context/working_context.py" = 863
 "browser/runtime.py" = 860
