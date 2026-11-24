@@ -8,14 +8,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ..agent.compression import ContextManager
-from ..agent.context import _git
 from ..agent.fragments import (
     PromptFragment,
     PromptFragmentRegistry,
@@ -24,11 +22,7 @@ from ..agent.fragments import (
 from ..agent.loop import DEFAULT_MAX_STEPS, AgentLoop
 from ..agent.tool_pool import normalize_tool_allowlist
 from ..agent.prompt_release import ModelProfileCalibration
-from ..agent.prompts import (
-    PROMPT_PROFILE_AUTO,
-    build_system_prompt,
-    resolve_prompt_profile,
-)
+from ..agent.prompts import PROMPT_PROFILE_AUTO, resolve_prompt_profile
 from ..agent.working_context import WorkingContextStore
 from ..core.events import (
     ContextAssembled,
@@ -58,7 +52,6 @@ from ..core.redact import SecretRedactor
 from ..llm.base import LLMProvider
 from ..safety.contract import narrow_permission_mode
 from ..safety.policy import AllowAllPolicy
-from ..core.git import ensure_local_exclude, git_is_repo
 from ..agent.context_checkpoint import (
     ContextCheckpointCoordinator,
     ContextCheckpointStore,
@@ -69,11 +62,25 @@ from .builtin_agents import DEFAULT_BUILTIN_SUBAGENT_NAME
 from .control import AgentControl
 from .definition import AgentDefinition, AgentDefinitionManager
 from .feed import AgentFeed, AgentFeedPage
+from .feed_projection import project_feed_event as _feed_event
 from .instructions import build_subagent_instructions, inherited_memory_fragment
-from .sidechain import (
-    AgentSidechainWriter,
-    SidechainStore,
-    read_sidechain,
+from .models import (
+    INTERRUPT_MARKER,
+    SUBAGENT_ROLE_PROMPT,
+    SUBAGENT_SYSTEM_PROMPT,
+    AgentHandle,
+    build_subagent_system_prompt,
+)
+from .presentation import (
+    format_definition_lines,
+    format_sidechain_lines,
+    format_status_lines,
+)
+from .sidechain import SidechainStore, read_sidechain
+from .tool_scope import (
+    mcp_server_name,
+    restrict_mcp_tools,
+    restrict_memory_tools,
 )
 from .contracts import (
     STATUS_CANCELLED,
@@ -82,74 +89,8 @@ from .contracts import (
     STATUS_KILLED,
     STATUS_PAUSED,
     STATUS_RUNNING,
-    TERMINAL_STATUSES,
 )
-
-SUBAGENT_ROLE_PROMPT = """\
-You are a Krelcode SUBAGENT working on a delegated subtask.
-- Focus strictly on the task you were given; do not ask the user questions.
-- Use tools to do the work and verify results when possible.
-- Your final text message is the report handed back to the parent agent: make it
-  dense and self-contained (what was done, key results, file paths, caveats)."""
-
-
-def build_subagent_system_prompt(
-    *,
-    profile: str = PROMPT_PROFILE_AUTO,
-    provider: object = "",
-    model: object = "",
-) -> str:
-    return build_system_prompt(
-        SUBAGENT_ROLE_PROMPT,
-        profile=profile,
-        provider=provider,
-        model=model,
-    )
-
-
-SUBAGENT_SYSTEM_PROMPT = build_subagent_system_prompt()
-
-PREVIEW_CHARS = 160
-
-INTERRUPT_MARKER = "\n[被打断，用户新指示] "
-
-
-@dataclass
-class AgentHandle:
-    id: str
-    task: str
-    loop: AgentLoop
-    started_at: float = field(default_factory=time.time)
-    status: str = STATUS_RUNNING
-    result: Optional[str] = None
-    error: Optional[str] = None
-    turns: int = 0
-    queue: List[str] = field(default_factory=list)
-    task_obj: Optional[asyncio.Task] = field(default=None, repr=False)
-    worktree: Optional[Path] = None
-    branch: Optional[str] = None
-    forked: bool = False
-    definition: str = ""
-    feed: Optional[AgentFeed] = field(default=None, repr=False)
-    control: AgentControl = field(default_factory=AgentControl, repr=False)
-    sidechain_path: Optional[Path] = None
-    sidechain: Optional[AgentSidechainWriter] = field(default=None, repr=False)
-    context_checkpoint_id: str = ""
-    inherited_memory_ids: Tuple[str, ...] = field(default_factory=tuple)
-    instruction_layers: Tuple[str, ...] = field(default_factory=tuple)
-    model: str = ""
-    provider: str = ""
-    prompt_profile: str = ""
-    permission_mode: str = ""
-    mcp_servers: Tuple[str, ...] = field(default_factory=tuple)
-    kill_requested: bool = field(default=False, repr=False)
-    cache_ledger_hash: str = ""
-
-    def preview(self) -> str:
-        text = self.result or self.error or ""
-        if len(text) > PREVIEW_CHARS:
-            text = text[:PREVIEW_CHARS] + "…"
-        return text.replace("\n", " ")
+from .worktrees import SubagentWorktreeManager
 
 
 class SubagentManager:
@@ -211,7 +152,7 @@ class SubagentManager:
         self.mcp_servers_provider = mcp_servers_provider
         self._handles: Dict[str, AgentHandle] = {}
         self._counter = 0
-        self._exclude_checked = False
+        self.worktrees = SubagentWorktreeManager(tool_context.workspace_root)
         self.get_parent_history: Optional[Callable[[], List[Message]]] = None
         self.cache_ledger_provider = cache_ledger_provider
         self._closed = False
@@ -237,11 +178,7 @@ class SubagentManager:
             raise RuntimeError("SubagentManager 已关闭")
         if self.sidechains.redactor is None and self.redactor is not None:
             self.sidechains.redactor = self.redactor
-        if not self._exclude_checked:
-            self._exclude_checked = True
-            if await git_is_repo(self.tool_context.workspace_root):
-                await ensure_local_exclude(
-                    self.tool_context.workspace_root, ".krelcode/")
+        await self.worktrees.ensure_workspace_ready()
         definition_name = str(definition or "").strip() or DEFAULT_BUILTIN_SUBAGENT_NAME
         try:
             definition_obj: Optional[AgentDefinition] = self.definitions.get(
@@ -268,7 +205,7 @@ class SubagentManager:
             available_mcp = set(self.mcp_servers_provider() if
                                 self.mcp_servers_provider is not None else ())
             available_mcp.update(
-                item for item in (_mcp_server_name(tool) for tool in tools) if item)
+                item for item in (mcp_server_name(tool) for tool in tools) if item)
             requested = set(definition_obj.mcp_servers)
             if "*" not in requested:
                 missing = sorted(requested - available_mcp)
@@ -279,10 +216,10 @@ class SubagentManager:
                 selected_mcp = requested
             elif requested == {"*"}:
                 selected_mcp = available_mcp
-            tools = _restrict_mcp_tools(tools, selected_mcp)
+            tools = restrict_mcp_tools(tools, selected_mcp)
         memory_entries = self._relevant_memory(task)
         memory_ids = tuple(str(entry.id) for entry in memory_entries)
-        tools = self._restrict_memory_tools(tools, memory_ids)
+        tools = restrict_memory_tools(tools, memory_ids)
         if definition_obj is not None and definition_obj.allowed_tools:
             available = {tool.name for tool in tools}
             allowed = normalize_tool_allowlist(definition_obj.allowed_tools)
@@ -320,7 +257,7 @@ class SubagentManager:
         ):
             effective_mcp_allowlist = (
                 effective_mcp_allowlist & parent_runtime.mcp_allowlist)
-            tools = _restrict_mcp_tools(tools, effective_mcp_allowlist)
+            tools = restrict_mcp_tools(tools, effective_mcp_allowlist)
         requested_tool_allowlist = (
             frozenset(normalize_tool_allowlist(definition_obj.allowed_tools))
             if definition_obj is not None and definition_obj.allowed_tools
@@ -362,7 +299,7 @@ class SubagentManager:
             abort=TurnAbortSignal(),
         )
         if isolated:
-            worktree_path, branch = await self._create_worktree(agent_id)
+            worktree_path, branch = await self.worktrees.create(agent_id)
             parent_sandbox = getattr(self.tool_context, "sandbox", None)
             tool_context = ToolContext(
                 workspace_root=worktree_path,
@@ -575,21 +512,6 @@ class SubagentManager:
         query = "\n".join(item for item in (parent_tail, task) if item)
         return self.memory_store.search(query, limit=8) if query else ()
 
-    @staticmethod
-    def _restrict_memory_tools(tools: List[Tool], memory_ids: Tuple[str, ...]) -> List[Tool]:
-        restricted = []
-        allowed = frozenset(memory_ids)
-        for tool in tools:
-            if tool.name != "memory_search":
-                restricted.append(tool)
-                continue
-            factory = getattr(tool, "restricted_to", None)
-            if callable(factory):
-                restricted.append(factory(allowed))
-            elif allowed:
-                restricted.append(tool)
-        return restricted
-
     def _fork_parent_history(self) -> Tuple[List[Message], Optional[str]]:
         source = self.get_parent_history() or []
         start = 1 if source and source[0].role == "system" else 0
@@ -650,43 +572,6 @@ class SubagentManager:
             await self.bus.emit(SubagentFeedUpdated(
                 handle.id, entry.sequence, entry.kind, entry.text, entry.data))
 
-    # -- git worktree 隔离 --------------------------------------------------------
-
-    async def _create_worktree(self, agent_id: str) -> Tuple[Path, str]:
-        ws = self.tool_context.workspace_root
-        if not await git_is_repo(ws):
-            raise ValueError(
-                "隔离子代理要求工作区是 git 仓库（先 git init，或不用 isolated）")
-        await ensure_local_exclude(ws, ".krelcode/")
-        branch = f"krelcode/agent-{agent_id}"
-        path = ws / ".krelcode" / "worktrees" / agent_id
-        path.parent.mkdir(parents=True, exist_ok=True)
-        out = await _git(ws, "worktree", "add", str(path), "-b", branch)
-        if out is None:
-            raise ValueError(f"git worktree 创建失败（分支 {branch} 可能已存在）")
-        return path, branch
-
-    async def _finalize_isolated(self, handle: AgentHandle) -> None:
-        wt = handle.worktree
-        if wt is None or not wt.is_dir():
-            return
-        status = await _git(wt, "status", "--porcelain")
-        if not status:
-            return
-        await _git(wt, "add", "-A")
-        label = handle.task.strip().replace("\n", " ")[:60]
-        await _git(wt,
-                   "-c", "user.name=krelcode",
-                   "-c", "user.email=agent@krelcode.local",
-                   "commit", "-m", f"krelcode({handle.id}): {label}")
-
-    async def _remove_worktree(self, handle: AgentHandle) -> None:
-        if handle.worktree is None:
-            return
-        ws = self.tool_context.workspace_root
-        await _git(ws, "worktree", "remove", "--force", str(handle.worktree))
-        await _git(ws, "worktree", "prune")
-
     # -- 运行状态机 ---------------------------------------------------------------
 
     async def _set_state(self, handle: AgentHandle, status: str, reason: str = "") -> None:
@@ -744,7 +629,7 @@ class SubagentManager:
                         "user", message, source="queue")
                 continue
             if handle.worktree is not None:
-                await self._finalize_isolated(handle)
+                await self.worktrees.finalize(handle)
             return
 
     def get(self, agent_id: str) -> Optional[AgentHandle]:
@@ -821,8 +706,8 @@ class SubagentManager:
         handle.task_obj.cancel()
         await asyncio.gather(handle.task_obj, return_exceptions=True)
         if handle.worktree is not None:
-            await self._finalize_isolated(handle)
-            await self._remove_worktree(handle)
+            await self.worktrees.finalize(handle)
+            await self.worktrees.remove(handle)
         return handle
 
     # -- 等待 ---------------------------------------------------------------------
@@ -860,8 +745,8 @@ class SubagentManager:
                 *(h.task_obj for h in active), return_exceptions=True)
         for handle in self._handles.values():
             if handle.worktree is not None:
-                await self._finalize_isolated(handle)
-                await self._remove_worktree(handle)
+                await self.worktrees.finalize(handle)
+                await self.worktrees.remove(handle)
             if handle.sidechain is not None:
                 handle.sidechain.append_state(
                     handle.status, reason="manager_shutdown",
@@ -881,18 +766,10 @@ class SubagentManager:
         return handle.feed.page(after_sequence, limit)
 
     def definition_lines(self) -> List[str]:
-        lines = list(self.definitions.status_lines())
-        lines.extend(
-            f"! 跳过无效定义 {issue.path}: {issue.message}"
-            for issue in self.definitions.issues)
-        return lines
+        return format_definition_lines(self.definitions)
 
     def sidechain_lines(self, limit: int = 50) -> List[str]:
-        return [
-            f"{info.agent_id} [{info.status or '-'}] run={info.run_id} "
-            f"records={info.records} · {info.task[:60]} · {info.path}"
-            for info in self.sidechains.list(limit=limit)
-        ]
+        return format_sidechain_lines(self.sidechains, limit=limit)
 
     def read_sidechain(self, value: str) -> Tuple[Path, Tuple[dict, ...]]:
         path = self.sidechains.resolve(value)
@@ -909,111 +786,8 @@ class SubagentManager:
         return handle
 
     def status_lines(self) -> List[str]:
-        lines = []
-        for handle in self._handles.values():
-            task_preview = handle.task
-            if len(task_preview) > 60:
-                task_preview = task_preview[:60] + "…"
-            queued = f" · 排队 {len(handle.queue)}" if handle.queue else ""
-            branch = f" · 分支 {handle.branch}" if handle.branch else ""
-            branch += " · 继承指令/Memory（非历史）" if handle.forked else ""
-            definition = f" · 定义 {handle.definition}" if handle.definition else ""
-            memory = (
-                f" · Memory {len(handle.inherited_memory_ids)}"
-                if handle.inherited_memory_ids else "")
-            sequence = f" · feed {handle.feed.latest_sequence}" if handle.feed else ""
-            runtime_parts = []
-            if handle.model:
-                runtime_parts.append(f"model={handle.model}")
-            if handle.permission_mode:
-                runtime_parts.append(f"permission={handle.permission_mode}")
-            if handle.mcp_servers:
-                runtime_parts.append(f"mcp={','.join(handle.mcp_servers)}")
-            runtime = " · " + " · ".join(runtime_parts) if runtime_parts else ""
-            line = (f"{handle.id} [{handle.status}] {handle.turns} 轮{queued}{branch}"
-                    f"{definition}{runtime}{memory}{sequence} · 任务: "
-                    f"{task_preview.replace(chr(10), ' ')}")
-            if handle.status in TERMINAL_STATUSES:
-                line += f" · 结果: {handle.preview()}"
-            lines.append(line)
-        return lines
+        return format_status_lines(self._handles.values())
 
     def build_tools(self) -> List[Tool]:
         from .tools import build_subagent_tools
         return build_subagent_tools(self)
-
-
-def _mcp_server_name(tool: Tool) -> str:
-    client = getattr(tool, "client", None)
-    return str(getattr(client, "name", "") or "")
-
-
-def _restrict_mcp_tools(tools: List[Tool], allowed: set[str]) -> List[Tool]:
-    restricted: List[Tool] = []
-    for tool in tools:
-        server = _mcp_server_name(tool)
-        if server and server not in allowed:
-            continue
-        restricted.append(tool)
-    return restricted
-
-
-def _feed_event(event) -> Optional[Tuple[str, str, Dict[str, object]]]:
-    if isinstance(event, RunStarted):
-        return "user_message", event.user_input, {
-            "turn_id": event.turn_id, "session_id": event.session_id}
-    if isinstance(event, StepStarted):
-        return "step_started", f"step {event.step}", {"step": event.step}
-    if isinstance(event, QueryPhaseChanged):
-        return "phase", event.detail or event.phase, {"phase": event.phase}
-    if isinstance(event, LLMStreamDelta):
-        return "assistant_delta", event.text, {}
-    if isinstance(event, LLMThinkingDelta):
-        return "thinking_delta", event.text, {}
-    if isinstance(event, ToolCallStarted):
-        args = json.dumps(event.tool_call.arguments, ensure_ascii=False, sort_keys=True)
-        return "tool_started", f"{event.tool_call.name} {args}", {
-            "tool_call_id": event.tool_call.id,
-            "tool_name": event.tool_call.name,
-            "arguments": event.tool_call.arguments,
-        }
-    if isinstance(event, ToolProgress):
-        return "tool_progress", event.message, {
-            "tool_call_id": event.tool_call_id,
-            "tool_name": event.tool_name,
-            **dict(event.data),
-        }
-    if isinstance(event, ToolOutputDelta):
-        return "tool_output", event.text, {
-            "tool_call_id": event.tool_call_id,
-            "tool_name": event.tool_name,
-            "stream": event.stream,
-        }
-    if isinstance(event, ToolCallCompleted):
-        return "tool_completed", event.content, {
-            "tool_call_id": event.tool_call.id,
-            "tool_name": event.tool_call.name,
-            "is_error": event.is_error,
-            **dict(event.data),
-        }
-    if isinstance(event, RunFinished):
-        return "run_finished", event.final_text, {"turn_id": event.turn_id}
-    if isinstance(event, RunCancelled):
-        return "run_cancelled", event.reason, {"turn_id": event.turn_id}
-    if isinstance(event, UserSteered):
-        return "user_steered", event.text, {}
-    if isinstance(event, ContextCompressed):
-        return "context_compressed", "history compressed", {
-            "before_tokens": event.before_tokens,
-            "after_tokens": event.after_tokens,
-            "strategy": event.strategy,
-            "summary_source": event.summary_source,
-            "generation": event.generation,
-            "high_watermark_tokens": event.high_watermark_tokens,
-            "low_watermark_tokens": event.low_watermark_tokens,
-            "source_savings": dict(event.source_savings),
-            "checkpoint_id": event.checkpoint_id,
-        }
-    if isinstance(event, ErrorOccurred):
-        return "error", event.error, {"context": event.context}
-    return None
