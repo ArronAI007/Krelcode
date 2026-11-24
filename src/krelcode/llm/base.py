@@ -55,6 +55,8 @@ SYSTEM_BLOCK_CHANNEL_EVIDENCE = "evidence"
 
 def supports_keyword_argument(callback: object, keyword: str) -> bool:
     """Return whether a callable can accept one named keyword safely."""
+    if not callable(callback):
+        return False
     try:
         parameters = inspect.signature(callback).parameters
     except (TypeError, ValueError):
@@ -222,7 +224,7 @@ class EvidenceChannel:
         if block.channel != SYSTEM_BLOCK_CHANNEL_EVIDENCE:
             raise ValueError(f"system block 不是 evidence channel: {block.id}")
         metadata = dict(block.metadata)
-        return cls(
+        return EvidenceBlock(
             id=block.id,
             text=block.text,
             source=block.source,
@@ -502,7 +504,7 @@ class LLMProvider(Protocol):
     model: str
     capabilities: ProviderCapabilities
 
-    async def stream(
+    def stream(
         self,
         messages: Sequence[Message],
         tools: Optional[Sequence[ToolSpec]] = None,
@@ -525,7 +527,7 @@ class PreparedLLMProvider(LLMProvider, Protocol):
     ) -> PreparedLLMRequest:
         ...
 
-    async def stream_prepared(
+    def stream_prepared(
         self,
         prepared: PreparedLLMRequest,
     ) -> AsyncIterator[LLMEvent]:

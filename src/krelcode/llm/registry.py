@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, cast
 
 from ..core.errors import ConfigError
 from .base import LLMProvider
@@ -24,11 +24,13 @@ from .providers.gemini import GeminiProvider
 from .providers.mock import MockProvider
 from .providers.openai import OpenAIProvider
 
-PROVIDERS: Dict[str, Callable[..., LLMProvider]] = {
-    "openai": OpenAIProvider,
-    "anthropic": AnthropicProvider,
-    "gemini": GeminiProvider,
-    "mock": MockProvider,
+ProviderFactory = Callable[..., LLMProvider]
+
+PROVIDERS: Dict[str, ProviderFactory] = {
+    "openai": cast(ProviderFactory, OpenAIProvider),
+    "anthropic": cast(ProviderFactory, AnthropicProvider),
+    "gemini": cast(ProviderFactory, GeminiProvider),
+    "mock": cast(ProviderFactory, MockProvider),
 }
 
 # 各 provider 的 api key 环境变量约定（Gemini 另有 GOOGLE_API_KEY 兜底，在 provider 内处理）
@@ -40,7 +42,7 @@ API_KEY_ENV: Dict[str, str] = {
 }
 
 
-def register(name: str, factory: Callable[..., LLMProvider]) -> None:
+def register(name: str, factory: ProviderFactory) -> None:
     """扩展点：注册新 provider。"""
     PROVIDERS[name] = factory
 
@@ -138,4 +140,4 @@ def create_provider(settings: ProviderSettings, **overrides: Any) -> LLMProvider
             if value is not None:
                 kwargs[key] = value
     kwargs.update(overrides)
-    return factory(**kwargs)  # type: ignore[operator]
+    return factory(**kwargs)

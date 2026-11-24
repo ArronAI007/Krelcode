@@ -11,6 +11,7 @@ import os
 from typing import Any, AsyncIterator, Dict, List, Optional, Sequence
 
 from ...core.errors import ConfigError, LLMHTTPError
+from ...core.context_usage import CacheSegmentSnapshot
 from ...core.messages import (
     INVALID_ARGUMENTS_KEY,
     ImageBlock,
@@ -19,6 +20,7 @@ from ...core.messages import (
     StructuredBlock,
     TextBlock,
     ToolCall,
+    ToolResultBlock,
 )
 from ..base import (
     FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, EvidenceChannel, LLMEvent,
@@ -104,7 +106,7 @@ def to_openai_messages(
     return wire
 
 
-def _tool_block(block) -> Dict[str, Any]:
+def _tool_block(block: ToolResultBlock) -> Dict[str, Any]:
     if isinstance(block, TextBlock):
         return {"type": "text", "text": block.text}
     if isinstance(block, ImageBlock):
@@ -259,6 +261,9 @@ class OpenAIProvider:
         payload = json.loads(request["body"].decode("utf-8"))
         blocks = resolve_system_prompt_blocks(messages)
         evidence_channel = resolve_evidence_channel(messages, evidence)
+        segments: Sequence[CacheSegmentSnapshot]
+        stable_chars: int
+        stable_hash: str
         if self.cache_negotiation.enabled:
             segments, stable_chars, stable_hash = _openai_cache_segments(
                 payload, blocks=blocks)
@@ -401,7 +406,7 @@ def _openai_cache_segments(
     payload: Dict[str, Any],
     *,
     blocks: Optional[SystemPromptBlocks] = None,
-):
+) -> tuple[list[CacheSegmentSnapshot], int, str]:
     """Describe OpenAI/DeepSeek implicit prefix-cache opportunities safely."""
     segments = []
     stable = blocks.stable_text if blocks is not None else ""

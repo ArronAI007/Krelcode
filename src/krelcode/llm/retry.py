@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import AsyncIterator, Awaitable, Callable, Optional, Sequence
+from typing import AsyncIterator, Awaitable, Callable, Optional, Sequence, cast
 
 from ..core.errors import LLMError, LLMHTTPError
 from .base import (
-    EvidenceChannel, LLMEvent, PreparedLLMRequest, ProviderCapabilities, ToolSpec,
+    EvidenceChannel, LLMEvent, LLMProvider, PreparedLLMProvider,
+    PreparedLLMRequest, ProviderCapabilities, ToolSpec,
     supports_keyword_argument,
 )
 from ..core.messages import Message
@@ -52,7 +53,7 @@ class RetryingProvider:
 
     def __init__(
         self,
-        inner,
+        inner: LLMProvider,
         policy: Optional[RetryPolicy] = None,
         sleep: Optional[Callable[[float], Awaitable[None]]] = None,
         on_retry: Optional[Callable[[int, float, BaseException], None]] = None,
@@ -70,14 +71,14 @@ class RetryingProvider:
 
     @property
     def model(self) -> str:
-        return getattr(self._inner, "model", "?")
+        return str(getattr(self._inner, "model", "?"))
 
     @property
     def capabilities(self) -> ProviderCapabilities:
         return self._inner.capabilities
 
     @property
-    def api_key(self):
+    def api_key(self) -> object:
         """透明暴露 inner 的 key：装饰器不应让脱敏层看不到真实凭据。"""
         return getattr(self._inner, "api_key", None)
 
@@ -88,7 +89,7 @@ class RetryingProvider:
             and callable(getattr(self._inner, "stream_prepared", None))
         )
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> object:
         """透明代理其余 provider 属性（base_url/generation/max_tokens 等）。
 
         仅在正常属性查找失败时调用。下划线属性不代理，既避免 __init__
@@ -107,13 +108,14 @@ class RetryingProvider:
     ) -> PreparedLLMRequest:
         if not self.supports_prepared_requests:
             raise TypeError(f"provider {self.name} 不支持 prepared requests")
+        provider = cast(PreparedLLMProvider, self._inner)
         if (
             evidence is not None
-            and supports_keyword_argument(self._inner.prepare_request, "evidence")
+            and supports_keyword_argument(provider.prepare_request, "evidence")
         ):
-            return self._inner.prepare_request(
+            return provider.prepare_request(
                 messages, tools, evidence=evidence)
-        return self._inner.prepare_request(messages, tools)
+        return provider.prepare_request(messages, tools)
 
     async def stream(
         self,
@@ -144,12 +146,16 @@ class RetryingProvider:
     ) -> AsyncIterator[LLMEvent]:
         if not self.supports_prepared_requests:
             raise TypeError(f"provider {self.name} 不支持 prepared requests")
+        provider = cast(PreparedLLMProvider, self._inner)
         async for event in self._stream_with_retry(
-            lambda: self._inner.stream_prepared(prepared)
+            lambda: provider.stream_prepared(prepared)
         ):
             yield event
 
-    async def _stream_with_retry(self, open_stream) -> AsyncIterator[LLMEvent]:
+    async def _stream_with_retry(
+        self,
+        open_stream: Callable[[], AsyncIterator[LLMEvent]],
+    ) -> AsyncIterator[LLMEvent]:
         attempt = 0
         emitted = False
         while True:

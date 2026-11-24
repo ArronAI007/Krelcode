@@ -11,7 +11,7 @@ import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, Iterator, Optional, Protocol
+from typing import Any, AsyncIterator, Dict, Iterator, Optional, Protocol, cast
 
 from ..core.errors import LLMError
 
@@ -50,7 +50,10 @@ class UrllibResponse:
 
     def read(self) -> bytes:
         try:
-            return self._resp.read()
+            data = self._resp.read()
+            if not isinstance(data, bytes):
+                raise TypeError("transport read() 必须返回 bytes")
+            return data
         finally:
             self.close()
 
@@ -72,7 +75,14 @@ class UrllibTransport:
     """默认传输：标准库 urllib。HTTP 错误(4xx/5xx)也作为响应返回，
     由 adapter 决定如何抛错（能读到错误响应体，便于诊断）。"""
 
-    def send(self, method, url, headers, body, timeout) -> TransportResponse:
+    def send(
+        self,
+        method: str,
+        url: str,
+        headers: Dict[str, str],
+        body: Optional[bytes],
+        timeout: float,
+    ) -> TransportResponse:
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
             resp = urllib.request.urlopen(req, timeout=timeout)
@@ -139,6 +149,8 @@ async def aiter_lines(resp: TransportResponse) -> AsyncIterator[bytes]:
         line = await asyncio.to_thread(next, it, _SENTINEL)
         if line is _SENTINEL:
             return
+        if not isinstance(line, bytes):
+            raise TypeError("transport iter_lines() 必须产出 bytes")
         yield line
 
 
@@ -158,7 +170,7 @@ async def sse_data_events(resp: TransportResponse) -> AsyncIterator[str]:
     - data: [DONE] → 结束
     - 非法 JSON 在这里统一抛 LLMError
     """
-    data_lines: list = []
+    data_lines: list[str] = []
     async for raw in aiter_lines(resp):
         line = raw.decode("utf-8", "replace").rstrip("\r\n")
         if line == "":
@@ -180,6 +192,9 @@ async def sse_data_events(resp: TransportResponse) -> AsyncIterator[str]:
 
 async def parse_json_event(data: str, provider: str) -> Dict[str, Any]:
     try:
-        return json.loads(data)
+        parsed = json.loads(data)
     except json.JSONDecodeError as e:
         raise LLMError(f"[{provider}] SSE data 非法 JSON: {data[:200]!r} ({e})") from e
+    if not isinstance(parsed, dict):
+        raise LLMError(f"[{provider}] SSE data 必须是 JSON object")
+    return cast(Dict[str, Any], parsed)

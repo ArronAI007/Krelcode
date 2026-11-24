@@ -37,7 +37,7 @@ class MockProvider:
         scripted: Optional[Sequence[ScriptItem]] = None,
         fallback: str = "[mock] 收到",
         chunk_size: int = 0,
-        usage: Optional[dict] = None,
+        usage: Optional[dict[str, int]] = None,
     ) -> None:
         self._scripted: List[ScriptItem] = list(scripted or [])
         self._fallback = fallback

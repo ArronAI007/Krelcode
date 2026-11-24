@@ -19,6 +19,7 @@ import os
 from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Tuple
 
 from ...core.errors import ConfigError, LLMHTTPError
+from ...core.context_usage import CacheSegmentSnapshot
 from ...core.messages import (
     INVALID_ARGUMENTS_KEY,
     ImageBlock,
@@ -31,8 +32,10 @@ from ...core.messages import (
     StructuredBlock,
     TextBlock,
     ToolCall,
+    ToolResultBlock,
 )
 from ..base import (
+    SystemPromptBlocks,
     FINISH_LENGTH, FINISH_STOP, FINISH_TOOLS, EvidenceChannel, LLMEvent,
     PreparedLLMRequest, ProviderCapabilities, StreamFinished, TextDelta,
     ToolCallArgumentsDelta, ToolCallReady, ToolCallStartedDelta, ToolSpec,
@@ -128,7 +131,7 @@ def _tool_response(message: Message) -> Dict[str, Any]:
     return response
 
 
-def _tool_response_block(block) -> Dict[str, Any]:
+def _tool_response_block(block: ToolResultBlock) -> Dict[str, Any]:
     if isinstance(block, TextBlock):
         return {"type": "text", "text": block.text}
     if isinstance(block, ImageBlock):
@@ -275,7 +278,7 @@ class GeminiProvider:
         generation = payload.get("generationConfig") or {}
         blocks = resolve_system_prompt_blocks(messages)
         evidence_channel = resolve_evidence_channel(messages, evidence)
-        segments = ()
+        segments: tuple[CacheSegmentSnapshot, ...] = ()
         if self.cache_negotiation.enabled:
             segments = _gemini_cache_segments(payload, blocks=blocks)
         return prepare_http_request(
@@ -370,11 +373,14 @@ class GeminiProvider:
                     if candidate.get("finishReason"):
                         finish_reason = candidate["finishReason"]
 
+            normalized: Optional[str]
             if tool_calls:
                 normalized = FINISH_TOOLS       # Gemini 带调用时 finishReason 也是 STOP
             else:
                 raw_finish = finish_reason or ""
-                normalized = _FINISH_MAP.get(raw_finish, raw_finish.lower() or None)
+                normalized = _FINISH_MAP.get(raw_finish)
+                if normalized is None:
+                    normalized = raw_finish.lower() or None
             message = Message.assistant(
                 "".join(content_parts) or None,
                 tool_calls=tool_calls or None,
@@ -387,8 +393,8 @@ class GeminiProvider:
 def _gemini_cache_segments(
     payload: Dict[str, Any],
     *,
-    blocks=None,
-):
+    blocks: Optional[SystemPromptBlocks] = None,
+) -> tuple[CacheSegmentSnapshot, ...]:
     """Describe Gemini's server-managed implicit prefix cache opportunity."""
     from ..base import cache_segment
 
