@@ -61,14 +61,22 @@ src/krelcode/
 │   │   └── handlers/  # 会话、上下文、Skill、MCP 等执行器
 │   ├── controller.py # SessionController：命令/任务/steering，不依赖终端
 │   ├── runner.py     # headless/REPL 运行策略，不导入具体 UI
+│   ├── envelope.py   # SessionEnvelope：session/turn/sequence + 轻量 payload
+│   ├── event_router.py # reducer、前台与观测 sink 的唯一事件分发点
 │   ├── restore.py    # 会话恢复
 │   └── recorder.py   # JSONL 持久化（事件总线订阅者）
 ├── ui/          # 终端交互：输入、渲染、展示型命令
-│   └── repl.py
-├── entrypoints/ # 进程入口：light cli fast-path → full main → lazy app
+│   ├── conversation_host.py  # 前台状态机、动作优先级、队列与 quick shell
+│   ├── terminal_presenter.py # 输入框、状态栏、面板、审批与 diff 展示
+│   └── repl.py     # 兼容入口；run_repl 仅构造 ConversationHost
+├── bootstrap/   # 具体对象装配与进程生命周期
+│   ├── composition.py # Provider/MCP/Hook/Tool/Runtime 具体工厂
+│   ├── application.py # BootstrappedApplication：可运行应用图 + 资源释放
+│   └── main.py        # AsyncMain：只负责 build→run→close
+├── entrypoints/ # 进程入口：light cli fast-path → full main → lazy bootstrap
 │   ├── cli.py   # --version 零配置/零 Agent 依赖；其余 argv 原样下发
 │   └── main.py  # 完整参数解析 + doctor/init/review/security-review/REPL 路由
-├── app.py       # 组装根(composition root)：唯一知道所有具体类的地方
+├── app.py       # 向后兼容 facade：重导出历史 app 符号
 └── __main__.py  # 与控制台脚本共用 entrypoints.cli:main
 ```
 
@@ -82,7 +90,8 @@ entrypoints → session/runner → session/controller → agent.runtime → port
 ui ──动作消费/事件总线/渲染──── AgentLoop ──────────────┘
 
 llm/tools/mcp/skills/safety/session persistence = 可替换适配器
-app.py = composition root，只负责创建与注入，不属于业务层
+bootstrap/ = composition root，只负责创建与注入，不属于业务层
+app.py = 向后兼容 facade；AsyncMain 只拥有进程生命周期
 ```
 
 跨层 DTO 统一由 `contracts/` 提供；`tools` 不得反向依赖 `agent/session`，`safety`
@@ -91,8 +100,8 @@ CLI 入口是唯一允许把 benchmark 命令接入进程的边界。
 
 所有顶层生产包必须在 `tests/test_architecture.py` 的依赖白名单中声明允许的边。
 测试会构建包级依赖图并用 Tarjan 算法拒绝任何强连通分量（SCC），同时禁止使用
-`tools.base` 作为跨层 DTO 入口。`app.py` 与各 `__main__.py` 是组合根/进程边界，
-不计入业务包依赖图；具体运行期装配由这些边界注入。
+`tools.base` 作为跨层 DTO 入口。`bootstrap/`、`app.py` 与各 `__main__.py` 是
+组合根/进程边界；具体运行期装配由这些边界注入。`app.py` 不再持有装配实现。
 
 ## 四个核心端口（契约）
 
@@ -419,7 +428,9 @@ version、commands、errors、handoff notes 或其他扩展字段。缺少字段
   （助手文本用 `⏺`，工具结果用 `⎿`）；工具活动/审批/压缩事件打断流式行后续接；
   RunFinished 兜底打印未经流式的系统消息（max_steps/卡死中止），并避免模型自带
   尾部换行时产生空行。write/color 可注入，测试无需终端
-- **REPL**（ui/repl.py）：输入先经 InputProcessor 分类，业务/UI/Control 命令同步分流，
+- **REPL**（ui/conversation_host.py + ui/terminal_presenter.py）：`run_repl` 仅构造
+  ConversationHost；Host 负责输入分类、业务/UI/Control 分流和前台状态机，Presenter
+  负责输入框、状态栏、面板、审批与 diff 渲染。输入先经 InputProcessor 分类，
   自然语言启动后台 turn；EventBus 将 LLM 文本、thinking、工具开始/完成等事件实时
   推给 StreamRenderer，REPL 本身不阻塞等待最终字符串。启动信息卡片展示 provider/模型/工作区/工具/会话；输入区
   用横跨终端的上下两条 `─` 边界包住提示符（pi 风格），空闲提示符 `❯`、运行中
@@ -662,7 +673,7 @@ version、commands、errors、handoff notes 或其他扩展字段。缺少字段
 
 ## 交互层增强（Step 22）
 
-- **输入历史导航**：`ui/repl.py` 的 `InputHistory` 只保存当前 REPL
+- **输入历史导航**：`ui/terminal_presenter.py` 使用的 `InputHistory` 只保存当前 REPL
   会话中非空、非斜杠命令的用户原始输入（连续重复去重，最多 200 条）；
   `TerminalLineEditor` 解析 `ESC[A/B` 与 `ESCOA/B`，`↑` 向旧浏览、`↓`
   向新浏览，越过最新项时恢复导航开始前的草稿。历史在进入 agent 前记录，
@@ -674,8 +685,8 @@ version、commands、errors、handoff notes 或其他扩展字段。缺少字段
 - **会话导出**（session/export.py）：history → Markdown（System/User/Assistant/
   Tool Result 分节，工具参数与长结果截断）；`/export [路径]`，缺省落
   `.krelcode/exports/session-<ts>.md`
-- **REPL 可测试化**：run_repl 增加 input_fn 注入点（默认仍是
-  asyncio.to_thread(input)）；ScriptedInput 驱动下全部 /命令均有自动化回归
+- **REPL 可测试化**：ConversationHost 接受 input_fn 注入（默认仍是终端行编辑器）；
+  ScriptedInput 驱动下全部 /命令均有自动化回归
   ——UI 层从「只能人工演示」变为与内核同级的测试覆盖
 
 ## Steering 与中止（Step 26）
@@ -1889,7 +1900,7 @@ raw input (terminal / API / IDE)
   文件正文写入输入历史。
 - `user_input` Hook 只在普通 prompt 上执行，prompt 作为 shell-quote 变量传入；
   超时、失败和空输出均不阻断消息。成功 stdout 以 `<hook_context>` 包裹并从
-  `app.py` 注入，业务层不感知 HookRunner。
+  `bootstrap/application.py` 注入，业务层不感知 HookRunner。
 - `SessionViewState` 只保存 REPL 观察面：phase、raw input、turn id、progress；
   AgentLoop 历史与 AgentRuntime 任务仍是各自的唯一事实源。
 
@@ -1948,8 +1959,9 @@ CommandSpec.kind
 | 执行推进层 | `agent.AgentRuntime/AgentLoop` + 能力适配器 | 统一 turn/cancel/reload/close；Provider/工具差异在适配器消化 |
 | 基础架构层 | `core`、配置、事件总线、JSONL、Sandbox、脱敏 | 提供无业务偏向的契约、持久化和安全边界 |
 
-`app.py` 横跨四层完成对象装配，但不拥有会话命令或执行流程。headless 与 REPL
-都通过 `AgentRuntime` 执行，因此未来增加 API/IDE 入口时可复用同一会话与执行门面。
+`bootstrap/` 横跨四层完成对象装配，但 `BootstrappedApplication` 只暴露 run/close，
+`AsyncMain` 只拥有进程生命周期。headless 与 REPL 都通过 `AgentRuntime` 执行，因此
+未来增加 API/IDE 入口时可复用同一会话、事件路由与执行门面。
 
 ## REPL 前台协调、审批与事件背压（Step 71）
 
@@ -2054,7 +2066,7 @@ argv
                 ├─ 完整 argparse/help
                 ├─ doctor / init → 仅加载命令所需模块
                 ├─ review → 延迟加载 review runner
-                └─ 对话 / -m → 最后才导入 app.py 组装 Provider/MCP/Sandbox/UI
+                └─ 对话 / -m → 最后才导入 bootstrap 组装 Provider/MCP/Sandbox/UI
 ```
 
 这里不做两套参数定义：fast-path 只识别无歧义的版本请求，所有正式参数语义仍由

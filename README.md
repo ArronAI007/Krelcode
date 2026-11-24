@@ -990,10 +990,11 @@ skills/  SKILL.md 发现/解析、渐进加载、资源、脚本、热重载
 subagent/ 独立 AgentLoop、Definition、实时 Feed、pause/resume/kill、sidechain
 plugins/ plugin.toml 发现、隔离加载、Tool 命名空间、热重载
 safety/  ApprovalPolicy 端口（Step 6 加沙箱）
-session/ InputProcessor + commands registry/handlers + SessionController + SessionViewState + runner/恢复/JSONL/检查点
-entrypoints/ 进程入口：cli 轻量 fast-path → main 完整参数路由 → app 按需启动
-ui/      终端 I/O、Markdown 渲染和展示型命令（不承担会话业务状态）
-app.py   组装根：只创建对象并选择运行策略，不实现会话/执行流程
+session/ InputProcessor + commands + SessionController + SessionViewState + runner/恢复/JSONL/检查点 + SessionEnvelope/EventRouter
+entrypoints/ 进程入口：cli 轻量 fast-path → main 完整参数路由 → bootstrap 按需启动
+bootstrap/ 具体装配：composition + BootstrappedApplication + AsyncMain 进程生命周期
+ui/      ConversationHost 前台状态机 + TerminalPresenter 终端渲染；repl.py 仅保留兼容入口
+app.py   向后兼容 facade：重导出历史公开符号，不再持有具体装配或进程生命周期
 ```
 
 ## P2-3 规模化 Benchmark 与隐私遥测

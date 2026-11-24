@@ -131,6 +131,11 @@ def test_relative_import_resolver_handles_parent_packages():
 # instead of silently growing another cycle.
 PACKAGE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "core": frozenset(),
+    "bootstrap": frozenset({
+        "agent", "browser", "contracts", "core", "daemon", "enterprise", "jobs",
+        "llm", "lsp", "mcp", "plugins", "safety", "security_review",
+        "session", "skills", "subagent", "telemetry", "tools", "ui", "web",
+    }),
     "contracts": frozenset({"core"}),
     "llm": frozenset({"core"}),
     "safety": frozenset({"core", "contracts"}),

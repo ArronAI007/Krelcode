@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Optional, Protocol, Sequence
 
 from ..agent.query import QuerySession
 from ..core.events import AgentEvent, PlanUpdated
+from ..core.redact import SecretRedactor
 from .controller import SessionController
+from .event_router import EnvelopeSink, SessionEventRouter
 from .interactions import InputResolution, UserInputBroker
 from .prompt_queue import PromptQueue
 from .state import SessionEventReducer, SessionViewState
@@ -90,6 +93,10 @@ class ReplSessionRunner:
         approval_broker: Optional[ApprovalBrokerPort] = None,
         input_broker: Optional[UserInputBroker] = None,
         reducer: Optional[SessionEventReducer] = None,
+        session_id: str = "",
+        redactor: Optional[SecretRedactor] = None,
+        event_router: Optional[SessionEventRouter] = None,
+        envelope_sink: Optional[EnvelopeSink] = None,
     ) -> None:
         self.controller = controller
         self.state = state
@@ -102,6 +109,19 @@ class ReplSessionRunner:
         self._on_notice = on_notice or (lambda _message: None)
         self._on_stream_end = on_stream_end or (lambda: None)
         self._reducer = reducer or SessionEventReducer()
+        active_session_path = getattr(controller, "session_path", None)
+        self.session_id = session_id or (
+            Path(str(active_session_path)).stem if active_session_path else "")
+        self.event_router = event_router or SessionEventRouter(
+            state,
+            session_id=self.session_id,
+            reducer=self._reducer,
+            redactor=redactor,
+        )
+        self.event_router.subscribe_query(self._handle_query_event)
+        if envelope_sink is not None:
+            self.event_router.subscribe_envelope(envelope_sink)
+        self.last_envelope = None
 
         self.queue: PromptQueue[SessionPrompt] = PromptQueue()
         self.active_query: Optional[QuerySession] = None
@@ -245,20 +265,22 @@ class ReplSessionRunner:
         self.arm_input_watcher()
         return query
 
+    def _handle_query_event(self, query_event) -> None:
+        event = query_event.event
+        if isinstance(event, PlanUpdated):
+            self.controller.record_plan(
+                event.items,
+                event.statuses,
+                active_index=event.active_index,
+                explanation=event.explanation,
+            )
+            self.state.plan_approval_status = (
+                self.controller.plan_manager.status.value)
+        self._on_event(event)
+
     async def _consume(self, query: QuerySession) -> None:
         async for item in query.events:
-            self._reducer.apply(item, self.state)
-            event = item.event
-            if isinstance(event, PlanUpdated):
-                self.controller.record_plan(
-                    event.items,
-                    event.statuses,
-                    active_index=event.active_index,
-                    explanation=event.explanation,
-                )
-                self.state.plan_approval_status = (
-                    self.controller.plan_manager.status.value)
-            self._on_event(event)
+            self.last_envelope = self.event_router.route(item)
             self._on_status(self.state)
 
     def queue_prompt(self, prompt: SessionPrompt) -> int:

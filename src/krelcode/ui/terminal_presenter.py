@@ -1,0 +1,380 @@
+"""Terminal presentation adapter for the conversation host.
+
+The presenter owns visual state, prompt rendering, panels, status lines, and
+review displays.  Conversation flow and session ownership remain in
+``ConversationHost`` so terminal rendering can be replaced independently.
+"""
+
+from __future__ import annotations
+
+import pathlib
+import threading
+import time
+from typing import Any, Callable, Optional
+
+from . import repl as ui
+
+
+class TerminalPresenter:
+    """Render one interactive conversation into a terminal."""
+
+    def __init__(
+        self,
+        loop,
+        *,
+        tool_names: Optional[list] = None,
+        session_path: Optional[str] = None,
+        input_fn: Optional[Callable] = None,
+        redactor=None,
+        history_path: Optional[pathlib.Path] = None,
+        persist_history: Optional[bool] = None,
+    ) -> None:
+        self.loop = loop
+        self.tool_names = tool_names
+        self.session_path = session_path
+        self.input_fn = input_fn
+        self.redactor = redactor
+        self.workspace_root = loop.tool_context.workspace_root
+        self.use_color = ui.auto_color()
+        self.prompt = ui.PromptWriter(color=self.use_color)
+        self.renderer = ui.StreamRenderer(
+            write=self._prompt_write, redactor=redactor)
+        self.input_ready = threading.Event()
+
+        explicit_history_path = history_path is not None
+        persistent_history = (
+            (input_fn is None or explicit_history_path)
+            if persist_history is None else persist_history
+        )
+        if history_path is None:
+            configured_history = ui.os.environ.get("KRELCODE_HISTORY_FILE")
+            history_path = (
+                pathlib.Path(configured_history).expanduser()
+                if configured_history
+                else pathlib.Path.home() / ".krelcode" / "history.jsonl"
+            )
+        history_redactor = getattr(redactor, "redact", None)
+        self.input_history = ui.InputHistory(
+            path=history_path if persistent_history else None,
+            redact=history_redactor,
+        )
+
+        self.controller: Any = None
+        self.state: Any = None
+        self.runner: Any = None
+        self.processor: Any = None
+        self.editor: Any = None
+        self.panel_controller = ui.PanelController()
+        self.quick_status = ""
+        self.review_pager: Optional[ui.DiffPager] = None
+        self.approval_review: Optional[ui.DiffReview] = None
+        self.git_review: Optional[ui.DiffReview] = None
+        self.memory_cache = None
+        self.status_cache = ""
+        self.last_status_draw = 0.0
+        self.status_renderer = getattr(loop, "status_line_renderer", None)
+        if not isinstance(self.status_renderer, ui.StatusLineRenderer):
+            self.status_renderer = ui.StatusLineRenderer()
+        self.status_branch = ui.read_git_branch(self.workspace_root)
+
+    def _prompt_write(self, text: str) -> None:
+        # Preserve the current draft while an asynchronous event writes output.
+        self.prompt.suspend()
+        ui._stdout_write(text)
+
+    @property
+    def prompt_text(self) -> str:
+        return self.styled_prompt(self.state.is_running if self.state else False)
+
+    def styled_prompt(self, running: bool) -> str:
+        text = ui.RUNNING_PROMPT if running else ui.IDLE_PROMPT
+        return f"{ui.CYAN}{text}{ui.RESET}" if self.use_color else text
+
+    def bind(self, controller, state, runner, processor, memory_store) -> None:
+        self.controller = controller
+        self.state = state
+        self.runner = runner
+        self.processor = processor
+        self.memory_cache = memory_store.dashboard_snapshot(limit=8)
+        self.editor = ui.TerminalLineEditor(
+            self.prompt,
+            self.suggest,
+            color=self.use_color,
+            history=self.input_history,
+            panels=self.panel_controller,
+            on_diff_pager_change=lambda: self.refresh_panels(
+                queue_size=len(self.runner.queue)),
+        )
+
+    def show_banner(self) -> None:
+        ui.print_banner(
+            self.loop, self.tool_names, session_path=self.session_path)
+
+    def suggest(self, text: str) -> list[tuple[str, str]]:
+        return ui.match_slash_commands(
+            text,
+            running=self.state.is_running,
+            registry=self.processor.command_registry,
+        )
+
+    def refresh_memory_cache(self) -> None:
+        memory_store = getattr(self.loop, "memory_store", None)
+        if memory_store is not None:
+            self.memory_cache = memory_store.dashboard_snapshot(limit=8)
+
+    def refresh_panels(self, *, queue_size: int = 0) -> None:
+        if self.state is None or self.processor is None:
+            return
+        snapshot = getattr(self.loop, "prompt_snapshot", None)
+        fragments = getattr(snapshot, "fragments", ())
+        cache = getattr(snapshot, "cache", None)
+        context_manager = getattr(self.loop, "context_manager", None)
+        terminal = ui.shutil.get_terminal_size((80, 24))
+        columns = max(1, terminal.columns - 1)
+        if self.review_pager is not None and self.review_pager.active:
+            overlay = self.review_pager.render(
+                columns, max(8, terminal.lines - 8), color=self.use_color)
+            self.prompt.set_panels(overlay)
+            return
+        panels = ui.build_panels(
+            self.state,
+            permission_mode=self.controller.permission_manager.mode.value,
+            queue_size=queue_size,
+            context_tokens=ui.estimate_history_tokens(self.loop.history),
+            context_budget=getattr(context_manager, "max_tokens", None),
+            fragment_count=len(fragments),
+            stable_fragments=len(getattr(cache, "stable_fragments", ())),
+            memory_entries=self.memory_cache.entries,
+            memory_total=self.memory_cache.total_entries,
+            memory_tokens=self.memory_cache.tokens,
+            quick_status=self.quick_status,
+            diff_review=self.approval_review or self.git_review,
+        )
+        self.panel_controller.set_panels(panels)
+        layout = self.panel_controller.render(columns)
+        self.prompt.set_panels(layout.lines)
+
+    def render_status(self, view) -> str:
+        """Build a status line without touching disk on every redraw."""
+        progress = view.status_text()
+        if self.review_pager is not None and self.review_pager.active:
+            mode = "待审批" if self.review_pager.can_decide else "只读"
+            progress = (
+                f"diff {mode} · {self.review_pager.review.stats} · "
+                "j/k 滚动 · y/n 决定 · q 返回")
+        elif not progress and self.controller.plan_manager.pending:
+            progress = "计划待确认 · /plan approve 执行"
+        tokens = ui.estimate_history_tokens(self.loop.history)
+        manager = getattr(self.loop, "context_manager", None)
+        budget = getattr(manager, "max_tokens", None)
+        context = f"ctx {tokens}/{budget}" if budget else f"ctx {tokens}"
+        provider = str(getattr(self.loop.llm, "name", "") or "")
+        model = str(getattr(self.loop.llm, "model", "") or "")
+        session = (
+            pathlib.Path(self.session_path).stem if self.session_path else "")
+        return self.status_renderer.render(
+            provider=provider,
+            model=model,
+            permission=(
+                f"权限 {self.controller.permission_manager.mode.value}"),
+            session=session,
+            cwd=str(self.workspace_root),
+            status=progress,
+            tokens=str(tokens),
+            context=context,
+            branch=self.status_branch,
+        )
+
+    def refresh_status(self, current=None, *, force: bool = False) -> None:
+        self.refresh_panels(queue_size=len(self.runner.queue))
+        now = time.monotonic()
+        if not force and now - self.last_status_draw < 0.15:
+            return
+        view = current or self.state
+        status = self.render_status(view)
+        if status != self.status_cache:
+            self.status_cache = status
+            self.prompt.set_status(status)
+        if view.is_running:
+            self.prompt.retarget_prompt(
+                self.styled_prompt(False), self.styled_prompt(True))
+            self.prompt.resume_or_show(self.prompt_text)
+        else:
+            self.prompt.retarget_prompt(
+                self.styled_prompt(True), self.styled_prompt(False))
+        self.last_status_draw = now
+
+    def restore_prompt(self) -> None:
+        self.refresh_panels(queue_size=len(self.runner.queue))
+        self.status_cache = self.render_status(self.state)
+        self.prompt.set_status(self.status_cache)
+        self.prompt.resume_or_show(self.prompt_text)
+        self.last_status_draw = time.monotonic()
+        self.input_ready.set()
+
+    def notice(self, message: str) -> None:
+        self.prompt.suspend()
+        ui._stdout_write(f"  {message}\n")
+        if self.state.is_running:
+            self.refresh_status(self.state, force=True)
+
+    def redact(self, value) -> str:
+        text = str(value)
+        return self.redactor.redact(text) if self.redactor is not None else text
+
+    def show_attachment_notes(self, action) -> None:
+        for note_text in action.notes:
+            print(f"  [@] {note_text}")
+
+    def mark_submitted(self) -> None:
+        self.prompt.submitted(raw=self.state.raw_input)
+
+    def hide(self) -> None:
+        self.prompt.hide()
+
+    def finish(self) -> None:
+        self.prompt.finish()
+
+    def on_session_event(self, event) -> None:
+        self.renderer(event)
+        if isinstance(event, ui.MemoryWritten):
+            self.refresh_memory_cache()
+            refresh = getattr(self, "refresh_status", None)
+            if refresh is not None:
+                refresh(self.state)
+
+    def end_stream(self) -> None:
+        self.renderer.end_stream()
+
+    def clear_review(self) -> None:
+        if self.review_pager is not None:
+            self.review_pager.active = False
+        self.review_pager = None
+        self.approval_review = None
+        if self.editor is not None:
+            self.editor.set_diff_pager(None)
+
+    def activate_review(self, review: ui.DiffReview, *, can_decide: bool) -> ui.DiffPager:
+        pager = ui.DiffPager(review, can_decide=can_decide, active=True)
+        self.review_pager = pager
+        self.editor.set_diff_pager(pager)
+        self.refresh_panels(queue_size=len(self.runner.queue))
+        return pager
+
+    def show_approval(self, request) -> None:
+        tool_call = request.tool_call
+        command = tool_call.arguments.get("command")
+        detail = command if command is not None else tool_call.arguments
+        self.prompt.suspend()
+        ui._stdout_write(f"  [审批] {tool_call.name}: {self.redact(detail)}\n")
+        ui._stdout_write(f"  原因: {self.redact(request.reason)}\n")
+
+        review = ui.build_tool_call_review(
+            tool_call, self.workspace_root, redactor=self.redactor)
+        self.approval_review = review
+        if review.has_changes:
+            ui._stdout_write(f"  差异审阅: {self.redact(review.stats)}\n")
+            for line in review.summary_lines(limit=4):
+                ui._stdout_write(f"    {self.redact(line)}\n")
+            for line in review.preview_lines(limit=7):
+                ui._stdout_write(f"    {self.redact(line)}\n")
+            self.activate_review(review, can_decide=True)
+            ui._stdout_write(
+                "  j/k 滚动 · PgUp/PgDn 翻页 · [/] 切换文件 · "
+                "y 允许 · n 拒绝 · q 返回\n")
+            return
+
+        if review.notice:
+            ui._stdout_write(f"  {self.redact(review.notice)}\n")
+        ui._stdout_write(
+            "  允许执行? [y]是 / [n]否 / [a]始终允许此命令（直接 Enter=否）\n")
+
+    async def handle_diff_command(self, arguments: str) -> bool:
+        """Open or navigate the current approval/Git diff review."""
+        try:
+            parts = ui.shlex.split(arguments) if arguments.strip() else []
+        except ValueError as exc:
+            print(f"  [diff] 参数解析失败: {exc}")
+            return True
+        operation = parts[0].lower() if parts else ""
+
+        if self.review_pager is None or not self.review_pager.active:
+            if operation == "close":
+                self.clear_review()
+                return True
+            if self.runner.pending is not None and self.approval_review is not None:
+                self.activate_review(self.approval_review, can_decide=True)
+            else:
+                staged = operation == "staged"
+                if operation not in {"", "staged", "refresh"}:
+                    print("  用法: /diff [staged|refresh|next|prev|file <n>|close]")
+                    return True
+                review = await ui.asyncio.to_thread(
+                    ui.collect_git_review,
+                    self.workspace_root,
+                    staged=staged,
+                    redactor=self.redactor,
+                )
+                self.git_review = review
+                if not review.files:
+                    print(f"  [diff] {review.notice or '没有可审阅差异'}")
+                    return True
+                self.activate_review(review, can_decide=False)
+
+        pager = self.review_pager
+        if pager is None:
+            return True
+        if operation in {"close", "q"}:
+            self.clear_review()
+            self.refresh_panels(queue_size=len(self.runner.queue))
+            return True
+        if operation == "next":
+            pager.switch_file(1)
+        elif operation == "prev":
+            pager.switch_file(-1)
+        elif operation == "file":
+            if len(parts) != 2:
+                print("  用法: /diff file <n>")
+                return True
+            try:
+                index = max(1, int(parts[1])) - 1
+            except ValueError:
+                print("  用法: /diff file <n>")
+                return True
+            pager.select_file(index)
+        elif operation == "top":
+            pager.go_start()
+        elif operation == "end":
+            pager.go_end()
+        elif operation == "numbers":
+            pager.toggle_line_numbers()
+        elif operation in {"staged", "refresh"} and self.runner.pending is not None:
+            pass
+        elif operation in {"", "staged", "refresh"}:
+            if operation != "":
+                staged = operation == "staged"
+                review = await ui.asyncio.to_thread(
+                    ui.collect_git_review,
+                    self.workspace_root,
+                    staged=staged,
+                    redactor=self.redactor,
+                )
+                self.git_review = review
+                if not review.files:
+                    print(f"  [diff] {review.notice or '没有可审阅差异'}")
+                    return True
+                self.activate_review(review, can_decide=False)
+                pager = self.review_pager
+        else:
+            print("  用法: /diff [staged|refresh|next|prev|file <n>|close]")
+            return True
+
+        if pager is not None:
+            self.refresh_panels(queue_size=len(self.runner.queue))
+            print(f"  [diff] {pager.review.stats}")
+            for line in pager.review.summary_lines(limit=4):
+                print(f"    {line}")
+        return True
+
+
+__all__ = ["TerminalPresenter"]
