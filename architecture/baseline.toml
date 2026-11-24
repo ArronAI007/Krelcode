@@ -47,7 +47,6 @@ max_unlisted_lines = 800
 "benchmarks/acceptance.py" = 1477
 "agent/prompt_assembler.py" = 1383
 "agent/prompt_release_pipeline.py" = 1376
-"bootstrap/composition.py" = 1281
 "ui/repl.py" = 1222
 "session/memory_candidates.py" = 1157
 "plugins/manager.py" = 1069
@@ -71,9 +70,14 @@ max_unlisted_lines = 800
 "llm/base.py" = 817
 "agent/context_turn.py" = 802
 
-[loop_dynamic_access.limits."bootstrap/composition.py"]
-assignments = 42
-getattr = 5
+[loop_dynamic_access.limits."bootstrap/composition/daemon.py"]
+assignments = 1
+getattr = 1
+setattr = 0
+
+[loop_dynamic_access.limits."bootstrap/composition/runtime.py"]
+assignments = 41
+getattr = 4
 setattr = 0
 
 [loop_dynamic_access.limits."bootstrap/application.py"]
