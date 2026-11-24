@@ -47,6 +47,8 @@ def resolve_daemon_options(
     idle = getattr(args, "daemon_idle_timeout", None)
     if idle is None:
         idle = section.get("idle_timeout", DEFAULT_IDLE_TIMEOUT)
+    if not isinstance(idle, (str, int, float)):
+        idle = DEFAULT_IDLE_TIMEOUT
     try:
         idle_timeout = max(0.0, float(idle))
     except (TypeError, ValueError):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from pathlib import Path
+from typing import Sequence
 
 from ..app import build_daemon_agent_runtime
 from .server import run_daemon
@@ -23,7 +24,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv=None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     asyncio.run(run_daemon(
         Path(args.workspace).expanduser().resolve(),

@@ -258,11 +258,10 @@ class ContextInspectionRuntimeMixin(ContextInspectionPromptMixin):
                 f" · priority={spec.priority} · {item.tokens} tokens"
                 f" · requested={str(item.requested).lower()}"
                 f" · reason={item.reason}")
-        for item in selection.excluded:
+        for excluded in selection.excluded:
             lines.append(
-                f"  [excluded] {item.id} · {item.reason}"
-                f" · source={item.source or '(unknown)'}"
-                f" · trigger={item.trigger or '(unknown)'}"
-                f" · {item.tokens} tokens")
+                f"  [excluded] {excluded.id} · {excluded.reason}"
+                f" · source={excluded.source or '(unknown)'}"
+                f" · trigger={excluded.trigger or '(unknown)'}"
+                f" · {excluded.tokens} tokens")
         return lines
-

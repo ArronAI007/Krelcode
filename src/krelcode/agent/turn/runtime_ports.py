@@ -201,6 +201,8 @@ class CompactSummaryResultPort(Protocol):
     @property
     def digest(self) -> str: ...
 
+    def as_dict(self) -> Mapping[str, object]: ...
+
 
 class ContextRestoreResultPort(Protocol):
     """Marker for checkpoint restore results projected onto turn state."""
@@ -222,6 +224,12 @@ class CompactCheckpointResultPort(Protocol):
 
     @property
     def summary(self) -> CompactSummaryResultPort: ...
+
+    @property
+    def before_tokens(self) -> int: ...
+
+    @property
+    def after_tokens(self) -> int: ...
 
 
 class CompactCheckpointStorePort(Protocol):

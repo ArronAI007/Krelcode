@@ -207,6 +207,7 @@ def probe_daemon(paths: DaemonPaths, *, timeout: float = 0.5) -> bool:
         request = RPCRequest.create("ping", {}, token=read_token(paths))
         payload = encode_message(request.to_dict())
         kind = str(endpoint.get("kind") or "")
+        raw: str | None = None
         if kind == "unix":
             path = str(endpoint.get("path") or "")
             if not path:
@@ -254,6 +255,8 @@ def probe_daemon(paths: DaemonPaths, *, timeout: float = 0.5) -> bool:
                 request_path.unlink(missing_ok=True)
                 return False
         else:
+            return False
+        if raw is None:
             return False
         response = RPCResponse.from_dict(json.loads(raw))
         result = response.result if isinstance(response.result, dict) else {}

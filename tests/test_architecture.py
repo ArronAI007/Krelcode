@@ -385,6 +385,38 @@ def test_loop_dynamic_access_is_forbidden():
     assert not missing, f"baseline references missing files: {sorted(missing)}"
 
 
+def test_runtime_state_groups_do_not_expose_any_typed_fields():
+    path = ROOT / "agent" / "turn" / "runtime_state.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    state_classes = {
+        "TurnRuntimeState",
+        "ContextRuntimeState",
+        "PromptRuntimeState",
+        "ExtensionRuntimeState",
+        "SessionRuntimeState",
+    }
+    violations: dict[str, str] = {}
+
+    def uses_any(annotation: ast.expr) -> bool:
+        return any(
+            (isinstance(item, ast.Name) and item.id == "Any")
+            or (isinstance(item, ast.Attribute) and item.attr == "Any")
+            for item in ast.walk(annotation)
+        )
+
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef) or node.name not in state_classes:
+            continue
+        for item in node.body:
+            if not isinstance(item, ast.AnnAssign):
+                continue
+            annotation = ast.unparse(item.annotation)
+            if uses_any(item.annotation):
+                field_name = ast.unparse(item.target)
+                violations[f"{node.name}.{field_name}"] = annotation
+    assert not violations, violations
+
+
 # ---------------------------------------------------------------------------
 # Package dependency contract
 # ---------------------------------------------------------------------------

@@ -37,24 +37,15 @@ class ContextInspectionCoreMixin:
 
     @property
     def snapshot(self) -> Optional[ContextUsageSnapshot]:
-        return cast(
-            Optional[ContextUsageSnapshot],
-            self._host.runtime_state.context.last_context_snapshot,
-        )
+        return self._host.runtime_state.context.last_context_snapshot
 
     @property
     def assembly(self) -> Optional[ContextAssembly]:
-        return cast(
-            Optional[ContextAssembly],
-            self._host.runtime_state.context.last_context_assembly,
-        )
+        return self._host.runtime_state.context.last_context_assembly
 
     @property
     def plan(self) -> Optional[ContextPlanSnapshot]:
-        return cast(
-            Optional[ContextPlanSnapshot],
-            self._host.runtime_state.context.last_context_plan,
-        )
+        return self._host.runtime_state.context.last_context_plan
 
     @property
     def prompt_plan(self) -> Optional[PromptPlanSnapshot]:
@@ -63,17 +54,11 @@ class ContextInspectionCoreMixin:
 
     @property
     def previous_snapshot(self) -> Optional[ContextUsageSnapshot]:
-        return cast(
-            Optional[ContextUsageSnapshot],
-            self._host.runtime_state.context.previous_context_snapshot,
-        )
+        return self._host.runtime_state.context.previous_context_snapshot
 
     @property
     def cache_ledger(self) -> Optional[ContextCacheLedger]:
-        ledger = cast(
-            Optional[ContextCacheLedger],
-            self._host.runtime_state.context.last_context_cache_ledger,
-        )
+        ledger = self._host.runtime_state.context.last_context_cache_ledger
         if ledger is not None:
             return ledger
         plan = self.plan
