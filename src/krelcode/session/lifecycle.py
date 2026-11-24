@@ -5,9 +5,13 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, List, Optional
 
-from .context_checkpoint import restore_context_checkpoint
+from ..agent.loop import AgentLoop
+from ..agent.runtime import AgentRuntime
+from ..core.messages import Message
+from ..core.redact import SecretRedactor
+from .context_checkpoint import ContextCheckpoint, restore_context_checkpoint
 from .memory import sync_memory_fragment
 from .manager import (
     SessionInfo,
@@ -43,12 +47,12 @@ class SessionLifecycle:
 
     def __init__(
         self,
-        loop,
+        loop: AgentLoop,
         sessions_dir: Optional[Path],
         session_path: Optional[str] = None,
         *,
-        runtime=None,
-        redactor=None,
+        runtime: Optional[AgentRuntime] = None,
+        redactor: Optional[SecretRedactor] = None,
     ) -> None:
         self.loop = loop
         self.sessions_dir = Path(sessions_dir) if sessions_dir else None
@@ -97,7 +101,7 @@ class SessionLifecycle:
         *,
         title: str,
         parent_id: str,
-        context_checkpoint=None,
+        context_checkpoint: Optional[ContextCheckpoint] = None,
     ) -> None:
         if self.sessions_dir is None:
             raise SessionLifecycleError("会话目录未知，无法切换会话")
@@ -139,7 +143,7 @@ class SessionLifecycle:
         self,
         title: str = "",
         *,
-        history: Optional[list] = None,
+        history: Optional[List[Message]] = None,
         context_checkpoint_id: str = "",
     ) -> Path:
         """建立独立会话；可指定历史边界，原会话与工作区保持不变。"""

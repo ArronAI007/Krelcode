@@ -18,40 +18,39 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Iterable, Mapping, Optional, Sequence
+from typing import Callable, Iterable, List, Mapping, Optional, Sequence, cast
 
+from ..agent.loop import AgentLoop
 from ..core.events import (
     AgentEvent,
+    EventBus,
     MemoryCandidateObserved,
     MemoryWritten,
     RunFinished,
     RunStarted,
 )
 from ..core.messages import Message
-from ..core.redact import SecretRedactor
-from .memory import (
-    MASK,
+from ..core.redact import MASK, SecretRedactor
+from .memory import MemoryStore
+from .memory_models import (
     MemoryEntry,
     MemoryKind,
     MemoryScope,
-    MemoryStore,
     MemoryType,
     coerce_memory_kind,
     coerce_memory_type,
+    validate_memory_structure,
+)
+from .memory_utils import (
     extract_test_command,
     memory_digest,
     memory_texts_conflict,
     normalize_memory_text,
     sanitize_memory_text,
-    validate_memory_structure,
 )
 
-MAX_CANDIDATES = 200
-MAX_CANDIDATE_CHARS = 1_000
-MAX_EVIDENCE_CHARS = 600
-DEFAULT_SUGGEST_THRESHOLD = 0.55
-DEFAULT_AUTO_THRESHOLD = 0.80
-EVIDENCE_CONFIDENCE_BOOST = 0.10
+MAX_CANDIDATES, MAX_CANDIDATE_CHARS, MAX_EVIDENCE_CHARS = 200, 1_000, 600
+DEFAULT_SUGGEST_THRESHOLD, DEFAULT_AUTO_THRESHOLD, EVIDENCE_CONFIDENCE_BOOST = 0.55, 0.80, 0.10
 
 
 class AutoMemoryMode(str, Enum):
@@ -270,11 +269,11 @@ class MemoryCandidate:
 
     @property
     def trigger_value(self) -> str:
-        return self.trigger.value
+        return cast(MemoryCandidateTrigger, self.trigger).value
 
     @property
     def status_value(self) -> str:
-        return self.status.value
+        return cast(MemoryCandidateStatus, self.status).value
 
     @property
     def memory_type_value(self) -> str:
@@ -293,18 +292,18 @@ class MemoryCandidate:
         return {
             "id": self.id,
             "text": self.text,
-            "trigger": self.trigger.value,
+            "trigger": self.trigger_value,
             "confidence": self.confidence,
             "digest": self.digest,
             "project_id": self.project_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
-            "scope": self.scope.value,
-            "kind": self.kind.value,
+            "scope": MemoryScope(self.scope).value,
+            "kind": coerce_memory_kind(self.kind).value,
             "memory_type": self.memory_type_value,
             "why": self.why,
             "how_to_apply": self.how_to_apply,
-            "status": self.status.value,
+            "status": self.status_value,
             "topic": self.topic,
             "evidence": [item.as_record() for item in self.evidence],
             "conflict_ids": list(self.conflict_ids),
@@ -370,11 +369,12 @@ class MemoryCandidateQueue:
                 tuple(str(item) for item in raw_conflicts if str(item).strip())
                 if isinstance(raw_conflicts, list) else ()
             )
+            confidence = float(str(payload.get("confidence") or 0.0))
             return MemoryCandidate(
                 id=str(payload.get("id") or f"memcand-{uuid.uuid4().hex[:12]}"),
                 text=text,
                 trigger=str(payload.get("trigger") or MemoryCandidateTrigger.EXPLICIT_REMEMBER.value),
-                confidence=float(payload.get("confidence") or 0.0),
+                confidence=confidence,
                 digest=memory_digest(text),
                 project_id=self.project_id,
                 created_at=str(payload.get("created_at") or _now()),
@@ -533,7 +533,7 @@ class MemoryCandidateQueue:
     def _reconcile_conflicts(
         self,
         records: Sequence[MemoryCandidate],
-    ) -> list[MemoryCandidate]:
+    ) -> List[MemoryCandidate]:
         conflicts: dict[str, set[str]] = {
             item.id: set(item.conflict_ids)
             for item in records
@@ -966,7 +966,7 @@ class AutoMemoryCoordinator:
 
     def __init__(
         self,
-        loop,
+        loop: AgentLoop,
         store: MemoryStore,
         *,
         mode: AutoMemoryMode | str = AutoMemoryMode.SUGGEST,
@@ -993,7 +993,7 @@ class AutoMemoryCoordinator:
         self._session_id = ""
         self._unsubscribe: Optional[Callable[[], None]] = None
 
-    def attach(self, bus) -> Callable[[], None]:
+    def attach(self, bus: EventBus) -> Callable[[], None]:
         if self._unsubscribe is not None:
             return self._unsubscribe
         self._unsubscribe = bus.subscribe(self.on_event)
@@ -1028,8 +1028,8 @@ class AutoMemoryCoordinator:
             for candidate in report.extracted:
                 await self.loop.bus.emit(MemoryCandidateObserved(
                     candidate_id=candidate.id,
-                    status=candidate.status.value,
-                    trigger=candidate.trigger.value,
+                    status=candidate.status_value,
+                    trigger=candidate.trigger_value,
                     confidence=candidate.confidence,
                     conflict_count=len(candidate.conflict_ids),
                     digest=candidate.digest,
@@ -1119,11 +1119,11 @@ class AutoMemoryCoordinator:
             topic=candidate.topic,
             why=candidate.why,
             how_to_apply=candidate.how_to_apply,
-            tags=("auto-memory", candidate.trigger.value),
+            tags=("auto-memory", candidate.trigger_value),
             source="auto-memory:review",
             metadata={
                 "candidate_id": candidate.id,
-                "trigger": candidate.trigger.value,
+                "trigger": candidate.trigger_value,
                 "confidence": candidate.confidence,
                 "digest": candidate.digest,
                 "project_id": candidate.project_id,

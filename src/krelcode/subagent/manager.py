@@ -10,8 +10,18 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import (
+    Callable,
+    cast,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from ..agent.compression import ContextManager
 from ..agent.fragments import (
@@ -25,6 +35,7 @@ from ..agent.prompt_release import ModelProfileCalibration
 from ..agent.prompts import PROMPT_PROFILE_AUTO, resolve_prompt_profile
 from ..agent.working_context import WorkingContextStore
 from ..core.events import (
+    AgentEvent,
     ContextAssembled,
     ContextCompressed,
     ContextCheckpointCreated,
@@ -47,21 +58,23 @@ from ..core.events import (
     ToolProgress,
     UserSteered,
 )
+from ..core.hooks import HookPort
 from ..core.messages import Message, sanitize_history
 from ..core.redact import SecretRedactor
 from ..llm.base import LLMProvider
 from ..safety.contract import narrow_permission_mode
-from ..safety.policy import AllowAllPolicy
+from ..safety.policy import AllowAllPolicy, ApprovalPolicy
 from ..agent.context_checkpoint import (
     ContextCheckpointCoordinator,
     ContextCheckpointStore,
 )
 from ..contracts.tool import PermissionMode, RunMode, Tool, ToolContext, TurnAbortSignal
+from ..contracts.service_ports import PromptFragmentRegistryPort
 from ..tools.registry import ToolRegistry
 from .builtin_agents import DEFAULT_BUILTIN_SUBAGENT_NAME
 from .control import AgentControl
 from .definition import AgentDefinition, AgentDefinitionManager
-from .feed import AgentFeed, AgentFeedPage
+from .feed import AgentFeed, AgentFeedEntry
 from .feed_projection import project_feed_event as _feed_event
 from .instructions import build_subagent_instructions, inherited_memory_fragment
 from .models import (
@@ -71,12 +84,8 @@ from .models import (
     AgentHandle,
     build_subagent_system_prompt,
 )
-from .presentation import (
-    format_definition_lines,
-    format_sidechain_lines,
-    format_status_lines,
-)
-from .sidechain import SidechainStore, read_sidechain
+from .manager_reads import MemoryStorePort, SubagentReadMixin
+from .sidechain import SidechainStore
 from .tool_scope import (
     mcp_server_name,
     restrict_mcp_tools,
@@ -93,24 +102,24 @@ from .contracts import (
 from .worktrees import SubagentWorktreeManager
 
 
-class SubagentManager:
+class SubagentManager(SubagentReadMixin):
     def __init__(
         self,
         llm: LLMProvider,
         tool_factory: Callable[[], List[Tool]],
         tool_context: ToolContext,
-        policy=None,
+        policy: Optional[ApprovalPolicy] = None,
         bus: Optional[EventBus] = None,
         max_steps: int = DEFAULT_MAX_STEPS,
         context_budget: Optional[int] = None,
         redactor: Optional[SecretRedactor] = None,
         system_prompt_provider: Optional[Callable[[], str]] = None,
-        hook_port=None,
+        hook_port: Optional[HookPort] = None,
         definitions: Optional[AgentDefinitionManager] = None,
         sidechain_store: Optional[SidechainStore] = None,
         feed_max_entries: int = 2_000,
         feed_max_entry_chars: int = 24_000,
-        memory_store=None,
+        memory_store: Optional[MemoryStorePort] = None,
         llm_resolver: Optional[Callable[[str], LLMProvider]] = None,
         mcp_servers_provider: Optional[Callable[[], Iterable[str]]] = None,
         base_prompt_provider: Optional[Callable[[], str]] = None,
@@ -216,7 +225,8 @@ class SubagentManager:
                 selected_mcp = requested
             elif requested == {"*"}:
                 selected_mcp = available_mcp
-            tools = restrict_mcp_tools(tools, selected_mcp)
+            if selected_mcp is not None:
+                tools = restrict_mcp_tools(tools, selected_mcp)
         memory_entries = self._relevant_memory(task)
         memory_ids = tuple(str(entry.id) for entry in memory_entries)
         tools = restrict_memory_tools(tools, memory_ids)
@@ -246,18 +256,16 @@ class SubagentManager:
         )
         permission_mode = narrow_permission_mode(
             parent_runtime.permission_mode, requested_permission)
-        effective_mcp_allowlist = (
-            frozenset(selected_mcp)
-            if selected_mcp is not None
-            else parent_runtime.mcp_allowlist
-        )
-        if (
-            selected_mcp is not None
-            and parent_runtime.mcp_allowlist is not None
-        ):
-            effective_mcp_allowlist = (
-                effective_mcp_allowlist & parent_runtime.mcp_allowlist)
-            tools = restrict_mcp_tools(tools, effective_mcp_allowlist)
+        parent_mcp_allowlist = parent_runtime.mcp_allowlist
+        effective_mcp_allowlist: Optional[frozenset[str]]
+        if selected_mcp is not None:
+            narrowed_mcp_allowlist = frozenset(selected_mcp)
+            if parent_mcp_allowlist is not None:
+                narrowed_mcp_allowlist &= parent_mcp_allowlist
+            effective_mcp_allowlist = narrowed_mcp_allowlist
+            tools = restrict_mcp_tools(tools, narrowed_mcp_allowlist)
+        else:
+            effective_mcp_allowlist = parent_mcp_allowlist
         requested_tool_allowlist = (
             frozenset(normalize_tool_allowlist(definition_obj.allowed_tools))
             if definition_obj is not None and definition_obj.allowed_tools
@@ -268,6 +276,7 @@ class SubagentManager:
             and definition_obj.allowed_tools
             and parent_runtime.tool_allowlist is not None
         ):
+            assert requested_tool_allowlist is not None
             requested_tool_allowlist = (
                 requested_tool_allowlist
                 & frozenset(normalize_tool_allowlist(
@@ -283,9 +292,8 @@ class SubagentManager:
             tool_allowlist=requested_tool_allowlist,
             permission_mode=permission_mode,
             alive_mcp_servers=(
-                effective_mcp_allowlist
-                if selected_mcp is not None
-                else parent_runtime.alive_mcp_servers
+                frozenset(effective_mcp_allowlist or ())
+                if selected_mcp is not None else parent_runtime.alive_mcp_servers
             ),
             mcp_health_known=(
                 True if selected_mcp is not None
@@ -371,9 +379,12 @@ class SubagentManager:
         # Each subagent gets its own Prompt Registry. Bind it to the child
         # execution context before constructing the loop so prompt_lab never
         # inspects the parent agent's registry or history.
-        tool_context.prompt_registry = prompt_registry
+        tool_context.prompt_registry = cast(
+            PromptFragmentRegistryPort, prompt_registry)
         own_working_context = WorkingContextStore(
-            tool_context.workspace_root, redactor=self.redactor)
+            tool_context.workspace_root,
+            redactor=self.redactor.redact if self.redactor is not None else None,
+        )
         loop = AgentLoop(
             llm=child_llm,
             registry=ToolRegistry(tools),
@@ -494,8 +505,7 @@ class SubagentManager:
             mcp_servers=mcp_servers,
         )
         self._handles[agent_id] = handle
-        child_bus.subscribe(
-            lambda event, current=handle: self._on_child_event(current, event))
+        child_bus.subscribe(partial(self._on_child_event, handle))
         sidechain.append_message("user", effective_task, source="initial_task")
         sidechain.append_state(STATUS_RUNNING, reason="spawn")
         handle.task_obj = asyncio.create_task(self._run(handle, effective_task))
@@ -503,38 +513,13 @@ class SubagentManager:
             agent_id, task, definition=handle.definition))
         return handle
 
-    def _relevant_memory(self, task: str):
-        if self.memory_store is None:
-            return ()
-        parent_tail = ""
-        if self.get_parent_history is not None:
-            for message in reversed(self.get_parent_history() or ()):
-                if message.role != "user" or not message.content:
-                    continue
-                text = " ".join(str(message.content).split())
-                if text.startswith("[上下文摘要]") or text.startswith("[用户插话]"):
-                    continue
-                parent_tail = text[:2_000]
-                break
-        query = "\n".join(item for item in (parent_tail, task) if item)
-        return self.memory_store.search(query, limit=8) if query else ()
-
-    def _fork_parent_history(self) -> Tuple[List[Message], Optional[str]]:
-        source = self.get_parent_history() or []
-        start = 1 if source and source[0].role == "system" else 0
-        forked = [
-            replace(m, tool_calls=list(m.tool_calls) if m.tool_calls else None)
-            for m in source[start:]
-        ]
-        sanitize_history(forked)
-        pending_user: Optional[str] = None
-        if forked and forked[-1].role == "user":
-            pending_user = forked.pop().content or ""
-        return forked, pending_user
-
     # -- child feed ---------------------------------------------------------------
 
-    async def _on_child_event(self, handle: AgentHandle, event) -> None:
+    async def _on_child_event(
+        self,
+        handle: AgentHandle,
+        event: AgentEvent,
+    ) -> None:
         if isinstance(event, ContextAssembled):
             ledger = getattr(handle.loop, "last_context_cache_ledger", None)
             if (
@@ -572,7 +557,11 @@ class SubagentManager:
         if entry is not None:
             await self._publish_feed_entries(handle, (entry,))
 
-    async def _publish_feed_entries(self, handle: AgentHandle, entries) -> None:
+    async def _publish_feed_entries(
+        self,
+        handle: AgentHandle,
+        entries: Iterable[AgentFeedEntry],
+    ) -> None:
         for entry in entries:
             if handle.sidechain is not None:
                 handle.sidechain.append_feed(entry)
@@ -670,8 +659,11 @@ class SubagentManager:
 
         if handle.control.paused:
             handle.control.resume()
-        handle.task_obj.cancel()
-        await asyncio.gather(handle.task_obj, return_exceptions=True)
+        running_task = handle.task_obj
+        if running_task is None:
+            raise RuntimeError(f"子代理 {agent_id} 缺少运行任务")
+        running_task.cancel()
+        await asyncio.gather(running_task, return_exceptions=True)
         sanitize_history(handle.loop.history)
         if handle.loop.history and handle.loop.history[-1].role == "user":
             first = ((handle.loop.history[-1].content or "")
@@ -744,12 +736,15 @@ class SubagentManager:
             return
         self._closed = True
         active = [h for h in self._handles.values() if self.is_running(h)]
+        active_tasks: List[asyncio.Task[None]] = []
         for handle in active:
-            assert handle.task_obj is not None
-            handle.task_obj.cancel()
-        if active:
-            await asyncio.gather(
-                *(h.task_obj for h in active), return_exceptions=True)
+            task = handle.task_obj
+            if task is None:
+                continue
+            task.cancel()
+            active_tasks.append(task)
+        if active_tasks:
+            await asyncio.gather(*active_tasks, return_exceptions=True)
         for handle in self._handles.values():
             if handle.worktree is not None:
                 await self.worktrees.finalize(handle)
@@ -762,38 +757,7 @@ class SubagentManager:
                     handle.loop.history, turn=handle.turns)
                 handle.sidechain.close()
 
-    # -- Feed / Definition / Sidechain --------------------------------------------
-
-    def feed(
-        self, agent_id: str, after_sequence: int = 0, limit: int = 200,
-    ) -> AgentFeedPage:
-        handle = self._require_handle(agent_id)
-        if handle.feed is None:
-            raise ValueError(f"子代理 {agent_id} 没有 feed")
-        return handle.feed.page(after_sequence, limit)
-
-    def definition_lines(self) -> List[str]:
-        return format_definition_lines(self.definitions)
-
-    def sidechain_lines(self, limit: int = 50) -> List[str]:
-        return format_sidechain_lines(self.sidechains, limit=limit)
-
-    def read_sidechain(self, value: str) -> Tuple[Path, Tuple[dict, ...]]:
-        path = self.sidechains.resolve(value)
-        if path is None:
-            raise ValueError(f"未找到 sidechain: {value}")
-        return path, read_sidechain(path)
-
-    # -- 观测 ---------------------------------------------------------------------
-
-    def _require_handle(self, agent_id: str) -> AgentHandle:
-        handle = self._handles.get(agent_id)
-        if handle is None:
-            raise KeyError(f"未知子代理: {agent_id}")
-        return handle
-
-    def status_lines(self) -> List[str]:
-        return format_status_lines(self._handles.values())
+    # -- 工具池 -------------------------------------------------------------------
 
     def build_tools(self) -> List[Tool]:
         from .tools import build_subagent_tools

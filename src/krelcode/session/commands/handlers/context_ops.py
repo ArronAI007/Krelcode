@@ -179,12 +179,20 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             if fragment is None:
                 continue
             metadata = fragment.metadata
+            raw_sources = metadata.get("rule_entry_sources", ())
+            source_names = (
+                ", ".join(str(item) for item in raw_sources)
+                if isinstance(raw_sources, (list, tuple, set))
+                else str(raw_sources or "")
+            )
+            raw_issues = metadata.get("rule_issues", ())
+            issue_total = len(raw_issues) if isinstance(raw_issues, (list, tuple, set)) else 0
             lines.append(
                 f"  [{metadata.get('rule_precedence', '?'):>2}] "
                 f"{fragment.id} · sources="
-                f"{', '.join(metadata.get('rule_entry_sources', ())) or '(none)'}"
+                f"{source_names or '(none)'}"
                 f" · imports={metadata.get('rule_import_count', 0)}"
-                f" · issues={len(metadata.get('rule_issues', ()))}")
+                f" · issues={issue_total}")
             for source in layer.bundle.sources:
                 imported = (
                     f" · import←{source.imported_by.name}"
@@ -231,11 +239,11 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         ]
         for item in fragments:
             state = "on " if registry.is_enabled(item) else "off"
-            cache = "cache" if item.cacheable else "dynamic"
+            cache_state = "cache" if item.cacheable else "dynamic"
             toggle = "" if item.toggleable else " · locked"
             lines.append(
                 f"  [{state}] {item.id} · {item.source} · {item.group}"
-                f" · {item.tokens} tokens · {cache}{toggle} · {item.title}")
+                f" · {item.tokens} tokens · {cache_state}{toggle} · {item.title}")
         if not fragments:
             lines.append("  （没有匹配的 fragment）")
         return _ok(*lines)
@@ -274,36 +282,38 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         context_plan = getattr(ctx.loop, "last_context_plan", None)
         plan = getattr(ctx.loop, "last_prompt_plan", None)
         if plan is not None and context_plan is None:
-            cache = plan.cache
+            cache_meta = plan.cache
             store = getattr(ctx.loop, "context_attachments", None)
             attachment_generation = (
                 store.snapshot().generation
                 if store is not None else 0
             )
             lines[0:0] = [
-                f"  [cache] prompt stable prefix {cache.offset} chars"
-                f" · {cache.stable_tokens} tokens"
+                f"  [cache] prompt stable prefix {cache_meta.offset} chars"
+                f" · {cache_meta.stable_tokens} tokens"
                 f" · generation {plan.generation}"
                 f" · attachment generation {attachment_generation}",
-                f"  stable fragments: {', '.join(cache.stable_fragments) or '(none)'}",
-                f"  volatile fragments: {', '.join(cache.volatile_fragments) or '(none)'}",
+                f"  stable fragments: {', '.join(cache_meta.stable_fragments) or '(none)'}",
+                f"  volatile fragments: {', '.join(cache_meta.volatile_fragments) or '(none)'}",
             ]
         elif registry is not None:
             snapshot = registry.snapshot()
-            cache = snapshot.cache
+            cache_meta = snapshot.cache
             lines[0:0] = [
-                f"  [cache] prompt stable prefix {cache.offset} chars"
-                f" · {cache.stable_tokens} tokens"
+                f"  [cache] prompt stable prefix {cache_meta.offset} chars"
+                f" · {cache_meta.stable_tokens} tokens"
                 f" · generation {snapshot.generation}",
-                f"  stable fragments: {', '.join(cache.stable_fragments) or '(none)'}",
-                f"  volatile fragments: {', '.join(cache.volatile_fragments) or '(none)'}",
+                f"  stable fragments: {', '.join(cache_meta.stable_fragments) or '(none)'}",
+                f"  volatile fragments: {', '.join(cache_meta.volatile_fragments) or '(none)'}",
             ]
         elif not lines:
             lines = ["  （Prompt Fragment Registry 与请求缓存均未启用）"]
         return _ok(*lines)
 
     if operation == "authoring" and len(parts) == 1:
-        fragment = registry.get(PROMPT_AUTHORING_FRAGMENT_ID) if registry else None
+        if registry is None:
+            return _ok("  （Prompt Fragment Registry 未启用）")
+        fragment = registry.get(PROMPT_AUTHORING_FRAGMENT_ID)
         configured = bool(getattr(ctx.loop, "prompt_authoring_enabled", False))
         if fragment is None:
             return _ok(
@@ -444,13 +454,15 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         return _ok(*lines)
 
     total = estimate_history_tokens(ctx.loop.history)
-    budget = (ctx.loop.context_manager.max_tokens
-              if ctx.loop.context_manager else "未启用压缩")
+    budget_text = (
+        str(ctx.loop.context_manager.max_tokens)
+        if ctx.loop.context_manager else "未启用压缩"
+    )
     tool_messages = sum(1 for message in ctx.loop.history if message.role == "tool")
     lines = [
         f"  [context] 历史 {len(ctx.loop.history)} 条消息"
         f"（含 {tool_messages} 条工具结果） · 估算 {total} tokens"
-        f" · 预算 {budget}",
+        f" · 预算 {budget_text}",
     ]
     bundle = getattr(ctx.loop, "workspace_context", None)
     if bundle is not None:
@@ -518,10 +530,10 @@ async def handle_compact(ctx: CommandContext) -> CommandResult:
     before = estimate_history_tokens(ctx.loop.history)
     done = await ctx.loop.compress_context(force=True, focus=focus)
     after = estimate_history_tokens(ctx.loop.history)
-    preview = getattr(manager, "last_compact_preview", None)
+    last_preview = getattr(manager, "last_compact_preview", None)
     details = (
-        preview.render(include_messages=False).splitlines()
-        if preview is not None else []
+        last_preview.render(include_messages=False).splitlines()
+        if last_preview is not None else []
     )
     if done:
         lines = [f"  [compact] 已压缩: {before} → {after} tokens"
@@ -533,5 +545,3 @@ async def handle_compact(ctx: CommandContext) -> CommandResult:
         lines = [f"  [compact] 未压缩（当前约 {before} tokens）"]
     lines.extend(f"  {line}" for line in details)
     return _ok(*lines)
-
-

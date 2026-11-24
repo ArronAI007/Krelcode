@@ -12,7 +12,8 @@ from __future__ import annotations
 import difflib
 from typing import Any, Dict, List
 
-from ..base import ToolContext, ToolResult
+from ...contracts.tool import ToolContext
+from ..base import ToolResult
 from ..paths import (
     FileChangedError,
     PathOutsideWorkspaceError,

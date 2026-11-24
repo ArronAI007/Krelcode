@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict
 
-from ..base import ToolContext, ToolResult
+from ...contracts.tool import ToolContext
+from ..base import ToolResult
 from ..paths import (
     FileChangedError,
     PathOutsideWorkspaceError,

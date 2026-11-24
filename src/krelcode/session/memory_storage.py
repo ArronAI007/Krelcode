@@ -9,9 +9,10 @@ import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Mapping, Optional
+from typing import Iterable, List, Mapping, Optional
 
 from ..core.redact import MASK, SecretRedactor
+from .memory_base import MemoryStoreBase
 from .memory_models import (
     INJECT_ENTRIES,
     MAX_ENTRIES,
@@ -39,7 +40,7 @@ from .memory_utils import (
     sanitize_memory_text,
 )
 
-class MemoryStoreStorageMixin:
+class MemoryStoreStorageMixin(MemoryStoreBase):
     """Manage user/project/session memory with common bounds and redaction."""
 
     def __init__(
@@ -268,9 +269,14 @@ class MemoryStoreStorageMixin:
                 if (tag := self._sanitize_tag(raw))
             )
             raw_metadata = payload.get("metadata")
-            metadata = (
+            sanitized_metadata = (
                 self._sanitize_metadata(raw_metadata)
                 if isinstance(raw_metadata, dict) else {}
+            )
+            metadata: Mapping[str, object] = (
+                sanitized_metadata
+                if isinstance(sanitized_metadata, Mapping)
+                else {}
             )
             try:
                 kind = coerce_memory_kind(payload.get("kind"))
@@ -631,7 +637,7 @@ class MemoryStoreStorageMixin:
         self._write_scope(path, entries)
 
     @staticmethod
-    def _bounded_entries(entries: Iterable[MemoryEntry]) -> list[MemoryEntry]:
+    def _bounded_entries(entries: Iterable[MemoryEntry]) -> List[MemoryEntry]:
         """Keep pinned entries while enforcing the per-scope record bound."""
         items = list(entries)
         pinned = [item for item in items if item.pinned]
@@ -674,4 +680,3 @@ class MemoryStoreStorageMixin:
                 temp.unlink()
             except OSError:
                 pass
-

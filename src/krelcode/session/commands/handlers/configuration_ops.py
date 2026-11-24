@@ -76,7 +76,11 @@ async def handle_web(ctx: CommandContext) -> CommandResult:
     if options is None or not options.enabled:
         browser_line = (
             "  Browser: disabled"
-            if browser_options is None or not browser_options.enabled
+            if (
+                browser is None
+                or browser_options is None
+                or not browser_options.enabled
+            )
             else f"  Browser: enabled · backend={browser.backend_name}"
         )
         return _ok(
@@ -85,7 +89,11 @@ async def handle_web(ctx: CommandContext) -> CommandResult:
         )
     key_env = getattr(options, "search_api_key_env", "")
     configured = bool(os.environ.get(key_env)) if key_env else False
-    if browser_options is None or not browser_options.enabled:
+    if (
+        browser is None
+        or browser_options is None
+        or not browser_options.enabled
+    ):
         browser_line = "  Browser: disabled"
     else:
         capabilities = ", ".join(sorted(browser.capabilities)) or "none"
@@ -160,7 +168,7 @@ async def handle_output_style(ctx: CommandContext) -> CommandResult:
 async def handle_model(ctx: CommandContext) -> CommandResult:
     if ctx.model_switch is None:
         return _ok("  （模型切换不可用）")
-    target = ctx.request.arguments or None
+    target = ctx.request.arguments.strip() or None
     return _ok(f"  [model] {ctx.model_switch(target)}")
 
 
@@ -282,5 +290,3 @@ async def handle_permissions(ctx: CommandContext) -> CommandResult:
 async def handle_cost(ctx: CommandContext) -> CommandResult:
     return _ok(f"  [cost] {ctx.usage.summary()}" if ctx.usage
                else "  （用量统计不可用）")
-
-

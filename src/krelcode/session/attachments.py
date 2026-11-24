@@ -17,7 +17,7 @@ from __future__ import annotations
 import base64
 import re
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from ..core.messages import ImageRef
 
@@ -126,7 +126,7 @@ def expand_at_files(
     return expanded, notes, images
 
 
-def _resolve_in_workspace(raw: str, root: Path):
+def _resolve_in_workspace(raw: str, root: Path) -> Optional[Path]:
     try:
         candidate = Path(raw).expanduser()
         if not candidate.is_absolute():

@@ -11,7 +11,7 @@ from ....security_review.prompt import (
 from ....security_review.tools import SECURITY_REVIEW_TOOL_NAMES
 from ..context import CommandContext
 from ..template import CommandTemplate
-from ..types import CommandResult
+from ..types import CommandResult, CommandSource
 
 
 def _parse_arguments(arguments: str) -> tuple[bool, str, str]:
@@ -61,7 +61,7 @@ async def handle_security_review(ctx: CommandContext) -> CommandResult:
         CommandTemplate.from_spec(spec)
         if spec is not None
         else CommandTemplate.for_source(
-            "builtin",
+            CommandSource.BUILTIN,
             allowed_tools=tuple(sorted(SECURITY_REVIEW_TOOL_NAMES)),
         )
     )

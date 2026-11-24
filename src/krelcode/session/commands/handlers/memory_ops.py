@@ -3,20 +3,26 @@
 from __future__ import annotations
 
 import shlex
+from typing import Iterable, Optional, Sequence, cast
 
 from ....agent.tokens import estimate_text_tokens
-from ....core.events import MemoryCandidateObserved, MemoryWritten
-from ....session.memory import (
-    SCOPE_LABELS,
-    MemoryEntry,
-    coerce_memory_scope,
-    coerce_memory_type,
-    sync_memory_fragment,
-)
+from ....core.events import AgentEvent, MemoryCandidateObserved, MemoryWritten
+from ....session.memory import MemoryStore, sync_memory_fragment
 from ....session.memory_candidates import (
     TRIGGER_LABELS,
+    AutoMemoryCoordinator,
     AutoMemoryMode,
+    MemoryCandidate,
+    MemoryCandidateQueue,
     MemoryCandidateStatus,
+    MemoryCandidateTrigger,
+)
+from ....session.memory_models import (
+    SCOPE_LABELS,
+    MemoryEntry,
+    MemoryScope,
+    coerce_memory_scope,
+    coerce_memory_type,
 )
 from ..context import CommandContext
 from ..types import CommandResult
@@ -33,7 +39,9 @@ def _parts(raw: str) -> list[str]:
         return raw.split()
 
 
-def _resolve_candidate(queue, token: str):
+def _resolve_candidate(
+    queue: MemoryCandidateQueue, token: str
+) -> Optional[MemoryCandidate]:
     candidate = queue.get(token)
     if candidate is not None:
         return candidate
@@ -41,7 +49,7 @@ def _resolve_candidate(queue, token: str):
     return matches[-1] if len(matches) == 1 else None
 
 
-def _resolve_entry(store, token: str) -> MemoryEntry | None:
+def _resolve_entry(store: MemoryStore, token: str) -> MemoryEntry | None:
     entries = store.list(limit=0)
     target = str(token or "").strip()
     if not target:
@@ -53,14 +61,16 @@ def _resolve_entry(store, token: str) -> MemoryEntry | None:
     return matches[-1] if len(matches) == 1 else None
 
 
-def _candidate_lines(candidates) -> list[str]:
+def _candidate_lines(candidates: Sequence[MemoryCandidate]) -> list[str]:
     lines = [f"  [memory review] {len(candidates)} 个候选"]
     for item in reversed(candidates):
-        trigger = TRIGGER_LABELS.get(item.trigger, item.trigger_value)
+        trigger = TRIGGER_LABELS.get(
+            cast(MemoryCandidateTrigger, item.trigger),
+            item.trigger_value)
         conflict = (
             f" · 冲突 {len(item.conflict_ids)}" if item.conflict_ids else "")
         lines.append(
-            f"  {item.id} · {item.status.value} · 置信度 {item.confidence:.2f}"
+            f"  {item.id} · {item.status_value} · 置信度 {item.confidence:.2f}"
             f" · {item.memory_type_value} · {trigger}"
             f" · 证据 {len(item.evidence)}{conflict}"
             + ("" if item.structurally_complete else " · 待补 Why/How"))
@@ -71,9 +81,9 @@ def _candidate_lines(candidates) -> list[str]:
     return lines
 
 
-def _entry_lines(entries) -> list[str]:
+def _entry_lines(entries: Iterable[MemoryEntry]) -> list[str]:
     lines: list[str] = []
-    for entry in reversed(entries):
+    for entry in reversed(tuple(entries)):
         scope = coerce_memory_scope(entry.scope)
         pinned = " · pinned" if entry.pinned else ""
         lines.append(
@@ -83,7 +93,7 @@ def _entry_lines(entries) -> list[str]:
     return lines
 
 
-async def _emit(ctx: CommandContext, event) -> None:
+async def _emit(ctx: CommandContext, event: AgentEvent) -> None:
     bus = getattr(ctx.loop, "bus", None)
     if bus is not None:
         await bus.emit(event)
@@ -109,7 +119,7 @@ async def _written(
     ))
 
 
-def _parse_add(rest: str) -> tuple[str, object, dict[str, str]]:
+def _parse_add(rest: str) -> tuple[str, MemoryScope, dict[str, str]]:
     tokens = _parts(rest)
     if not tokens:
         raise ValueError
@@ -166,10 +176,11 @@ def _parse_add(rest: str) -> tuple[str, object, dict[str, str]]:
 
 
 async def handle_memory(ctx: CommandContext) -> CommandResult:
-    store = getattr(ctx.loop, "memory_store", None)
+    store: Optional[MemoryStore] = getattr(ctx.loop, "memory_store", None)
     if store is None:
         return _ok("  （Memory 未启用）")
-    auto_memory = getattr(ctx.loop, "auto_memory", None)
+    auto_memory: Optional[AutoMemoryCoordinator] = getattr(
+        ctx.loop, "auto_memory", None)
     raw = ctx.request.arguments.strip()
     operation, _, rest = raw.partition(" ")
     operation = operation.lower() or "list"
@@ -205,10 +216,10 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
     if operation == "scopes":
         summary = store.scope_summary()
         lines = ["  [memory scopes]"]
-        for scope in ("user", "project", "session"):
-            item = summary[scope]
+        for scope_name in ("user", "project", "session"):
+            item = summary[scope_name]
             lines.append(
-                f"  {SCOPE_LABELS[coerce_memory_scope(scope)]} ({scope})"
+                f"  {SCOPE_LABELS[coerce_memory_scope(scope_name)]} ({scope_name})"
                 f" · {item['entries']} 条 · {item['path']}")
         if auto_memory is not None:
             lines.append(
@@ -296,13 +307,17 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
         entry_id = rest.split(maxsplit=1)[0] if rest else ""
         if not entry_id:
             return _ok(f"  用法: /memory {operation} <id>")
-        action = (
-            auto_memory.pin if operation == "pin" and auto_memory is not None
-            else auto_memory.unpin if auto_memory is not None
-            else store.pin if operation == "pin" else store.unpin
-        )
         try:
-            entry = action(entry_id)
+            if auto_memory is not None:
+                entry = (
+                    auto_memory.pin(entry_id)
+                    if operation == "pin" else auto_memory.unpin(entry_id)
+                )
+            else:
+                entry = (
+                    store.pin(entry_id)
+                    if operation == "pin" else store.unpin(entry_id)
+                )
         except OSError as exc:
             return _ok(f"  [memory] 更新失败: {exc}")
         if entry is None:
@@ -397,8 +412,8 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
             sync_memory_fragment(ctx.loop, store)
             await _emit(ctx, MemoryCandidateObserved(
                 candidate_id=accepted.id,
-                status=accepted.status.value,
-                trigger=accepted.trigger.value,
+                status=accepted.status_value,
+                trigger=accepted.trigger_value,
                 confidence=accepted.confidence,
                 conflict_count=len(accepted.conflict_ids),
                 digest=accepted.digest,
@@ -422,8 +437,8 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
             return _ok(f"  [memory] 未找到候选: {token}")
         await _emit(ctx, MemoryCandidateObserved(
             candidate_id=rejected.id,
-            status=rejected.status.value,
-            trigger=rejected.trigger.value,
+            status=rejected.status_value,
+            trigger=rejected.trigger_value,
             confidence=rejected.confidence,
             conflict_count=len(rejected.conflict_ids),
             digest=rejected.digest,
@@ -434,14 +449,14 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
         tokens = _parts(rest)
         if len(tokens) > 1:
             return _ok("  用法: /memory migrate [user|project|session]")
-        scope = "project"
+        migrate_scope: MemoryScope | str = MemoryScope.PROJECT
         if tokens:
             try:
-                scope = coerce_memory_scope(tokens[0])
+                migrate_scope = coerce_memory_scope(tokens[0])
             except ValueError as exc:
                 return _ok(f"  [memory] {exc}")
         try:
-            report = store.migrate(scope)
+            report = store.migrate(migrate_scope)
         except OSError as exc:
             return _ok(f"  [memory] 迁移失败: {exc}")
         sync_memory_fragment(ctx.loop, store)

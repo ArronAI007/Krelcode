@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
+from typing import Callable, Protocol, Sequence, Tuple, cast
+
 from ._deps import *  # noqa: F401,F403
+from ...agent.prompt.fragments import PromptFragment
+from ...agent.prompt.prompt_release import ModelProfileCalibration
+from ...contracts.service_ports import PromptFragmentRegistryPort, PromptReleasePipelinePort
+from ...core.hooks import HookPort
+from ...core.interactions import UserInputPort
+from ...extensions import ExtensionRecord
+from ...plugins import PluginRecord
+from ...subagent.sidechain import SidechainStore
 from .extensions import (
     build_custom_command_manager,
     build_plugin_manager,
@@ -29,17 +39,38 @@ from .security import (
 from .subagents import build_subagent_llm_resolver
 from .tools import default_tools
 
+class _SubagentManagerPort(Protocol):
+    """Common runtime surface shared by local and daemon-backed managers."""
+
+    llm: LLMProvider
+    prompt_profile: str
+    prompt_release_id: str
+    prompt_calibrations: Sequence[ModelProfileCalibration]
+    get_parent_history: Optional[Callable[[], List[Message]]]
+    cache_ledger_provider: Optional[Callable[[], object | None]]
+    hook_port: Optional[HookPort]
+    sidechains: object
+
+    def build_tools(self) -> List[Tool]: ...
+
+    async def shutdown(self) -> None: ...
+
+
+def _default_log(message: str) -> None:
+    print(message)
+
+
 
 async def build_loop(
     args: argparse.Namespace,
     config: Dict[str, Any],
     extra_tools: Optional[List[Tool]] = None,
-    log=print,
-    approver=None,
-    user_input_port=None,
+    log: Callable[[str], None] = _default_log,
+    approver: Optional[Approver] = None,
+    user_input_port: Optional[UserInputPort] = None,
     enterprise_policy: Optional[EnterprisePolicy] = None,
-    principal=None,
-):
+    principal: Optional[PrincipalPort] = None,
+) -> Tuple[AgentLoop, _SubagentManagerPort]:
     """返回 (AgentLoop, SubagentManager)。
 
     子代理共享 provider/工作区/审批策略，但工具集由 default_tools() 单独构建
@@ -118,8 +149,8 @@ async def build_loop(
             log("[skills] 已加载 "
                 + ", ".join(s.name for s in skill_manager.list())
                 + f"（{len(skill_manager.list())} 个）")
-        for issue in skill_manager.issues:
-            log(f"[skills] 跳过无效 skill: {issue.path}: {issue.message}")
+        for skill_issue in skill_manager.issues:
+            log(f"[skills] 跳过无效 skill: {skill_issue.path}: {skill_issue.message}")
     if plugin_manager.enabled:
         if plugin_manager.records():
             log("[plugins] 已发现 "
@@ -127,8 +158,8 @@ async def build_loop(
                     f"{record.name}@{record.version}[{record.status}]"
                     for record in plugin_manager.records())
                 + f"（{len(plugin_tools)} 个工具）")
-        for issue in plugin_manager.issues:
-            log(f"[plugins] 跳过问题: {issue.path}: {issue.message}")
+        for plugin_issue in plugin_manager.issues:
+            log(f"[plugins] 跳过问题: {plugin_issue.path}: {plugin_issue.message}")
     context_manager = None
     context_budget = None
     if not args.no_compress:
@@ -169,6 +200,7 @@ async def build_loop(
     daemon_options = resolve_daemon_options(args, config)
     daemon_owned = daemon_options.enabled and not bool(
         getattr(args, "daemon_worker", False))
+    shell_jobs: object
     if daemon_owned:
         from ...daemon.client import DaemonJobManager
 
@@ -270,8 +302,8 @@ async def build_loop(
     if agent_definitions.list():
         log("[agents] 已加载 Agent Definition: "
             + ", ".join(item.name for item in agent_definitions.list()))
-    for issue in agent_definitions.issues:
-        log(f"[agents] 跳过无效定义: {issue.path}: {issue.message}")
+    for agent_issue in agent_definitions.issues:
+        log(f"[agents] 跳过无效定义: {agent_issue.path}: {agent_issue.message}")
     def subagent_base_prompt(child_llm: LLMProvider) -> str:
         return build_subagent_system_prompt(
             profile=prompt_profile_setting,
@@ -279,8 +311,8 @@ async def build_loop(
             model=getattr(child_llm, "model", ""),
         )
 
-    def subagent_catalog_fragments():
-        fragments = []
+    def subagent_catalog_fragments() -> Tuple[PromptFragment, ...]:
+        fragments: List[PromptFragment] = []
         catalog = skills_fragment(skill_manager.prompt_index())
         if catalog is not None:
             fragments.append(catalog)
@@ -291,18 +323,19 @@ async def build_loop(
     if daemon_owned:
         from ...daemon.client import DaemonSubagentManager
 
-        manager = DaemonSubagentManager(
+        daemon_manager = DaemonSubagentManager(
             workspace_root,
             config_path=daemon_options.config_path,
             redactor=redactor,
             idle_timeout=daemon_options.idle_timeout,
         )
-        manager.llm = llm
-        manager.prompt_profile = prompt_profile_setting
-        manager.prompt_release_id = prompt_release_setting
-        manager.prompt_calibrations = tuple(prompt_calibrations)
+        daemon_manager.llm = llm
+        daemon_manager.prompt_profile = prompt_profile_setting
+        daemon_manager.prompt_release_id = prompt_release_setting
+        daemon_manager.prompt_calibrations = tuple(prompt_calibrations)
+        manager = cast(_SubagentManagerPort, daemon_manager)
     else:
-        manager = SubagentManager(
+        manager = cast(_SubagentManagerPort, SubagentManager(
             llm=llm,
             tool_factory=child_tool_factory,
             tool_context=tool_context,
@@ -329,7 +362,7 @@ async def build_loop(
             mcp_servers_provider=lambda: tuple(
                 compose_mcp_config(config, dict(plugin_manager.mcp_servers))
             ),
-        )
+        ))
     for tool in manager.build_tools():
         registry.register(
             tool, ToolDescriptor.from_tool(tool, source=ToolSource.SUBAGENT))
@@ -365,16 +398,19 @@ async def build_loop(
     # prompt_lab is a read-only execution tool and must inspect the same
     # per-agent Registry used by PromptAssembler. ToolContext is copied for
     # every tool call by AgentLoop, so assigning it here propagates naturally.
-    tool_context.prompt_registry = prompt_registry
-    prompt_release_pipeline = None
-    prompt_release_approval_service = None
+    tool_context.prompt_registry = cast(
+        PromptFragmentRegistryPort, prompt_registry)
+    prompt_release_pipeline: Optional[PromptReleasePipelinePort] = None
+    prompt_release_approval_service: Optional[PromptReleaseApprovalService] = None
     if prompt_authoring_enabled:
         release_store = PromptReleaseProposalStore(workspace_root)
-        prompt_release_pipeline = PromptReleasePipeline(
+        release_pipeline = PromptReleasePipeline(
             lambda: prompt_registry,
             isolation_context=tool_context,
             store=release_store,
         )
+        prompt_release_pipeline = cast(
+            PromptReleasePipelinePort, release_pipeline)
         prompt_release_approval_service = PromptReleaseApprovalService(
             release_store)
         tool_context.prompt_release_pipeline = prompt_release_pipeline
@@ -420,9 +456,8 @@ async def build_loop(
         working_context_store=working_context_store,
         compact_checkpoint_store=compact_checkpoint_store,
     )
-    if getattr(loop, "context_manager", None) is not None:
-        loop.context_manager.prompt_surface_registry = (
-            loop.prompt_surface_registry)
+    if context_manager is not None:
+        context_manager.prompt_surface_registry = loop.prompt_surface_registry
     # fork_context 数据源：getter 形式，/resume 重绑定 loop.history 后依然正确
     manager.get_parent_history = lambda: loop.history
     # Subagent instruction inheritance compares rule/policy hashes from the
@@ -498,7 +533,7 @@ async def build_loop(
     extension_registry = ExtensionRegistry()
     loop.update_runtime_state(extension_registry=extension_registry)
 
-    def refresh_extensions_basic():
+    def refresh_extensions_basic() -> Tuple[ExtensionRecord, ...]:
         result = replace_runtime_extensions(
             extension_registry,
             plugins=plugin_manager,
@@ -511,7 +546,7 @@ async def build_loop(
 
     refresh_extensions_basic()
 
-    async def reload_plugins():
+    async def reload_plugins() -> Tuple[PluginRecord, ...]:
         old_tool_names = {tool.name for tool in plugin_manager.tools}
         records = await plugin_manager.reload()
         for name in old_tool_names:
@@ -551,7 +586,8 @@ async def build_loop(
             compact_checkpoint_store=compact_checkpoint_store,
             context_checkpoint_store=context_checkpoint_store,
             context_checkpoint_coordinator=context_coordinator,
-            sidechains=getattr(manager, "sidechains", None),
+            sidechains=cast(
+                Optional[SidechainStore], getattr(manager, "sidechains", None)),
             shell_jobs=shell_jobs,
             auto_memory=auto_memory,
         ),
@@ -561,10 +597,15 @@ async def build_loop(
     return loop, manager
 
 
-def build_model_switcher(args: argparse.Namespace, config: Dict[str, Any],
-                         loop: AgentLoop, usage: UsageTracker, subagents=None,
-                         redactor: Optional[SecretRedactor] = None,
-                         enterprise_policy: Optional[EnterprisePolicy] = None):
+def build_model_switcher(
+    args: argparse.Namespace,
+    config: Dict[str, Any],
+    loop: AgentLoop,
+    usage: UsageTracker,
+    subagents: Optional[_SubagentManagerPort] = None,
+    redactor: Optional[SecretRedactor] = None,
+    enterprise_policy: Optional[EnterprisePolicy] = None,
+) -> Callable[[Optional[str]], str]:
     """/model 热切换：返回 callable(new_spec|None) -> 结果描述文本。
 
     new_spec 支持 "model"（沿用当前 provider）或 "provider/model"。
@@ -667,8 +708,11 @@ def build_model_switcher(args: argparse.Namespace, config: Dict[str, Any],
     return switch
 
 
-def _load_prompt_calibrations(config: Dict[str, Any], workspace: Path):
-    calibrations = []
+def _load_prompt_calibrations(
+    config: Dict[str, Any],
+    workspace: Path,
+) -> Tuple[ModelProfileCalibration, ...]:
+    calibrations: List[ModelProfileCalibration] = []
     for raw_path in prompt_calibration_paths_from_config(config):
         source = Path(raw_path).expanduser()
         if not source.is_absolute():

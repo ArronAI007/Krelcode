@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+from typing import Any, Awaitable, Callable, Mapping, Optional, Sequence
+
 from ._deps import *  # noqa: F401,F403
 
 
-def build_mcp_sampler(llm: LLMProvider):
+def build_mcp_sampler(
+    llm: LLMProvider,
+) -> Callable[
+    [Sequence[Mapping[str, Any]], Optional[Mapping[str, Any]]],
+    Awaitable[Dict[str, str]],
+]:
     """MCP sampling 回调：服务器请求 LLM 补全时，用当前 provider 完成。
 
     契约：async (messages, params) -> {"text": str, "model": str}
@@ -16,8 +23,11 @@ def build_mcp_sampler(llm: LLMProvider):
 
     model_name = getattr(llm, "model", "krelcode")
 
-    async def sampler(messages, params):
-        msgs = []
+    async def sampler(
+        messages: Sequence[Mapping[str, Any]],
+        params: Optional[Mapping[str, Any]],
+    ) -> Dict[str, str]:
+        msgs: List[Message] = []
         system_prompt = (params or {}).get("systemPrompt")
         if system_prompt:
             msgs.append(Msg.system(str(system_prompt)))

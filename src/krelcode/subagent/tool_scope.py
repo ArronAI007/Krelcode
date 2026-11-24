@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import AbstractSet, List, Tuple
 
 from ..contracts.tool import Tool
 
@@ -12,7 +12,10 @@ def mcp_server_name(tool: Tool) -> str:
     return str(getattr(client, "name", "") or "")
 
 
-def restrict_mcp_tools(tools: List[Tool], allowed: set[str]) -> List[Tool]:
+def restrict_mcp_tools(
+    tools: List[Tool],
+    allowed: AbstractSet[str],
+) -> List[Tool]:
     restricted: List[Tool] = []
     for tool in tools:
         server = mcp_server_name(tool)

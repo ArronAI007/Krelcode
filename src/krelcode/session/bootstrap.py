@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import argparse
 import time
 from pathlib import Path
+from typing import Callable, Optional
 
 from ..agent.loop import AgentLoop
+from ..core.redact import SecretRedactor
 from .context_checkpoint import restore_context_checkpoint
 from .memory import sync_memory_fragment
 from .recorder import SessionRecorder, latest_session, new_session_path
 from .restore import restore_session
 
 
-def setup_session(args, loop: AgentLoop, log=print, redactor=None):
+def setup_session(
+    args: argparse.Namespace,
+    loop: AgentLoop,
+    log: Callable[[str], None] = print,
+    redactor: Optional[SecretRedactor] = None,
+) -> Optional[Path]:
     """恢复历史（--resume）并挂载 JSONL 录制器；返回会话文件路径或 None。"""
     sessions_dir = loop.tool_context.workspace_root / ".krelcode" / "sessions"
     resumed_from = ""

@@ -92,7 +92,7 @@ def build_custom_command_manager(
 def compose_hook_specs(
     config: Dict[str, Any],
     plugin_hooks: tuple[Dict[str, Any], ...],
-):
+) -> List[HookSpec]:
     """Merge layered config hooks with plugin-provided hook declarations."""
     raw_hooks = config.get("hooks") or []
     if not isinstance(raw_hooks, list):

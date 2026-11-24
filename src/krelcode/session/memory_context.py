@@ -21,6 +21,7 @@ from ..core.evidence import (
     evidence_record_from_memory,
     render_evidence_set,
 )
+from .memory_base import MemoryStoreBase
 from .memory_models import (
     FRAGMENT_ID,
     INDEX_FRAGMENT_ID,
@@ -39,7 +40,7 @@ from .memory_models import (
 )
 from .memory_utils import _entry_topic_slug
 
-class MemoryStoreContextMixin:
+class MemoryStoreContextMixin(MemoryStoreBase):
     def refresh_index_views(self) -> None:
         """Refresh only MEMORY.md files; topic bodies are updated incrementally."""
         project_snapshot, user_snapshot = self._view_snapshots()
@@ -346,4 +347,3 @@ class MemoryStoreContextMixin:
             total_entries=len(entries),
             tokens=estimate_text_tokens(content) if content else 0,
         )
-

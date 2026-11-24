@@ -16,27 +16,50 @@ from .safety import SandboxPort
 
 @runtime_checkable
 class ShellJobStatusPort(Protocol):
-    value: str
+    @property
+    def value(self) -> str: ...
 
 
 @runtime_checkable
 class ShellJobPort(Protocol):
-    job_id: str
-    status: ShellJobStatusPort
-    pid: Optional[int]
-    cwd: str
-    log_path: Path
-    command: str
-    exit_code: Optional[int]
-    latest_sequence: int
-    running: bool
+    @property
+    def job_id(self) -> str: ...
+
+    @property
+    def status(self) -> ShellJobStatusPort: ...
+
+    @property
+    def pid(self) -> Optional[int]: ...
+
+    @property
+    def cwd(self) -> str: ...
+
+    @property
+    def log_path(self) -> Path: ...
+
+    @property
+    def command(self) -> str: ...
+
+    @property
+    def exit_code(self) -> Optional[int]: ...
+
+    @property
+    def latest_sequence(self) -> int: ...
+
+    @property
+    def running(self) -> bool: ...
 
 
 @runtime_checkable
 class ShellJobPagePort(Protocol):
-    job: ShellJobPort
-    next_sequence: int
-    truncated: bool
+    @property
+    def job(self) -> ShellJobPort: ...
+
+    @property
+    def next_sequence(self) -> int: ...
+
+    @property
+    def truncated(self) -> bool: ...
 
     def render(self) -> str: ...
 
@@ -66,13 +89,17 @@ class ShellJobManagerPort(Protocol):
 
 @runtime_checkable
 class PromptFragmentPort(Protocol):
-    id: str
-    source: str
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def source(self) -> str: ...
 
 
 @runtime_checkable
 class PromptFragmentRegistryPort(Protocol):
-    generation: int
+    @property
+    def generation(self) -> int: ...
 
     def get(self, fragment_id: str) -> Optional[PromptFragmentPort]: ...
 
@@ -127,12 +154,23 @@ class EnterprisePolicyPort(Protocol):
 
 @runtime_checkable
 class PrincipalPort(Protocol):
-    subject: str
-    issuer: str
-    display_name: str
-    email_hash: str
-    expires_at: float
-    auth_method: str
+    @property
+    def subject(self) -> str: ...
+
+    @property
+    def issuer(self) -> str: ...
+
+    @property
+    def display_name(self) -> str: ...
+
+    @property
+    def email_hash(self) -> str: ...
+
+    @property
+    def expires_at(self) -> float: ...
+
+    @property
+    def auth_method(self) -> str: ...
 
 
 __all__ = [

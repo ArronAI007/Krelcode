@@ -5,10 +5,8 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional, Union
 
 from ..core.evidence import evidence_record_from_memory, render_evidence_set
-from .memory import (
-    MemoryStore,
-    coerce_memory_scope,
-)
+from .memory import MemoryStore
+from .memory_models import coerce_memory_scope
 from ..contracts.tool import ToolContext, ToolResult, ToolTier
 from ..tools.prompt import ToolPromptExample
 

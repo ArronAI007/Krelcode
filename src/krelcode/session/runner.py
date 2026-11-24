@@ -6,16 +6,25 @@ UI 通过 ``repl_runner`` 注入，因此本模块不导入终端实现。依赖
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List
+from typing import Any, Awaitable, cast, Callable, List, Optional, TextIO
 
 from ..agent.runtime import AgentRuntime
-from ..core.events import PermissionDenied, ToolCallCompleted
+from ..agent.usage import UsageTracker
+from ..core.events import AgentEvent, PermissionDenied, ToolCallCompleted
+from ..core.redact import SecretRedactor
 from .bootstrap import setup_session
+from .commands.ports import (
+    ModelSwitchPort,
+    SkillReloadPort,
+    SubagentManagerCommandPort,
+)
 from .controller import SessionController
-from .input import InputEnvelope, InputKind
+from .input import InputEnvelope, InputKind, InputProcessor
+from .interactions import UserInputBroker
 
 
 class _RunSummary:
@@ -25,7 +34,7 @@ class _RunSummary:
         self.tools_used: List[str] = []
         self.denied = 0
 
-    def on_event(self, event) -> None:
+    def on_event(self, event: AgentEvent) -> None:
         if isinstance(event, ToolCallCompleted):
             self.tools_used.append(event.tool_call.name)
         elif isinstance(event, PermissionDenied):
@@ -33,23 +42,23 @@ class _RunSummary:
 
 
 async def run_session(
-    args,
+    args: argparse.Namespace,
     runtime: AgentRuntime,
     *,
-    supervisor,
-    checkpoints,
-    usage,
-    model_switch,
-    skills_reload,
-    redactor,
-    input_processor=None,
-    approval_broker=None,
-    user_input_broker=None,
-    hooks=None,
-    log=print,
-    repl_runner=None,
-    input_stream=None,
-    output_stream=None,
+    supervisor: Any,
+    checkpoints: Any,
+    usage: UsageTracker,
+    model_switch: Optional[ModelSwitchPort],
+    skills_reload: Optional[SkillReloadPort],
+    redactor: SecretRedactor,
+    input_processor: Optional[InputProcessor] = None,
+    approval_broker: Any = None,
+    user_input_broker: Optional[UserInputBroker] = None,
+    hooks: Any = None,
+    log: Callable[[str], None] = print,
+    repl_runner: Optional[Callable[..., Awaitable[int]]] = None,
+    input_stream: Optional[TextIO] = None,
+    output_stream: Optional[TextIO] = None,
 ) -> int:
     """按 CLI 参数运行 headless turn 或交互 REPL。"""
     loop = runtime.loop
@@ -100,7 +109,10 @@ async def run_session(
                         runtime,
                         mcp_supervisor=supervisor,
                         mcp_reload=runtime.mcp_reload,
-                        subagents=runtime.subagents,
+                        subagents=cast(
+                            Optional[SubagentManagerCommandPort],
+                            runtime.subagents,
+                        ),
                         checkpoints=checkpoints,
                         usage=usage,
                         model_switch=model_switch,

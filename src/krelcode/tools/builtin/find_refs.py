@@ -15,7 +15,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from ..base import ToolContext, ToolResult, ToolTier
+from ...contracts.tool import ToolContext
+from ..base import ToolResult, ToolTier
 from ..fsutils import is_hidden_file, is_pruned_dir
 from ..paths import (
     PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,

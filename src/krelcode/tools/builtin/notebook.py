@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 from ...core.redact import redact_obvious_secrets
-from ..base import ToolContext, ToolResult, ToolTier
+from ...contracts.tool import ToolContext
+from ..base import ToolResult, ToolTier
 from ..paths import (
     FileChangedError,
     FileSnapshot,

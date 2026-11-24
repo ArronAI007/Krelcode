@@ -100,8 +100,11 @@ async def handle_tools(ctx: CommandContext) -> CommandResult:
     pool = ctx.loop.current_tool_pool()
     output = ["  Tool catalogue（本轮权限/运行模式/MCP/功能开关过滤后）:"]
     for entry in pool.catalog_entries():
-        tier = entry.descriptor.tier.value
-        if entry.descriptor.tier.value == "core":
+        tier = (
+            entry.descriptor.tier.value
+            if entry.descriptor.tier is not None else "core"
+        )
+        if tier == "core":
             state = "core"
         elif pool.is_loaded(entry.name):
             state = f"loaded:{tier}"
@@ -366,5 +369,4 @@ async def handle_jobs(ctx: CommandContext) -> CommandResult:
     return _ok(
         "  用法: /jobs | /jobs list | /jobs output <id> [after] [--wait 秒] "
         "| /jobs kill <id>")
-
 

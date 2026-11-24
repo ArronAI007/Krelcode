@@ -8,7 +8,8 @@ from .builtin_agents import (
 from .control import AgentControl
 from .definition import AgentDefinition, AgentDefinitionManager
 from .feed import AgentFeed, AgentFeedEntry, AgentFeedPage
-from .manager import AgentHandle, SubagentManager
+from .manager import SubagentManager
+from .models import AgentHandle
 from .model_aliases import resolve_agent_model_spec
 from .prompt import build_spawn_agent_prompt
 from .sidechain import AgentSidechainWriter, SidechainStore

@@ -18,7 +18,7 @@ compatibility attributes consumed by commands and embedders.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from typing import Iterable, Optional, cast
 
 from ._deps import *  # noqa: F401,F403
 from ...subagent.sidechain import SidechainStore
@@ -45,7 +45,7 @@ class RuntimeServices:
     redactor: SecretRedactor
     enterprise_policy: EnterprisePolicy
     approval_policy: ApprovalPolicy
-    principal: object | None
+    principal: Optional[PrincipalPort]
     context_manager: Optional[ContextManager]
     persistence: PersistenceServices
     rule_loader: Optional[RuleLoader] = None
@@ -102,7 +102,8 @@ class RuntimeServiceBinder:
         # These are executor dependencies, not turn/session state.
         loop.working_context_store = persistence.working_context_store
         loop.compact_checkpoint_store = persistence.compact_checkpoint_store
-        loop.tool_context.shell_jobs = persistence.shell_jobs
+        loop.tool_context.shell_jobs = cast(
+            Optional[ShellJobManagerPort], persistence.shell_jobs)
 
     def _bind_redaction(
         self,
@@ -154,9 +155,9 @@ class RuntimeServiceBinder:
         if subagents is None:
             return
         if hasattr(subagents, "policy"):
-            subagents.policy = self.services.approval_policy
-        subagents.enterprise_policy = enterprise_policy
-        subagents.principal = principal
+            setattr(subagents, "policy", self.services.approval_policy)
+        setattr(subagents, "enterprise_policy", enterprise_policy)
+        setattr(subagents, "principal", principal)
 
 
 def _set_redactor(target: object, redactor: SecretRedactor) -> None:

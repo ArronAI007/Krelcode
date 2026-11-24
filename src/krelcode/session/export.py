@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
+from ..core.redact import SecretRedactor
 from ..core.messages import Message
 from .codec import history_to_dicts
 
@@ -48,7 +49,8 @@ def render_markdown(history: List[Message], title: str = "Krelcode 会话") -> s
 
 
 def export_session(history: List[Message], path: Optional[Path] = None,
-                   export_dir: Optional[Path] = None, *, redactor=None) -> Path:
+                   export_dir: Optional[Path] = None, *,
+                   redactor: Optional[SecretRedactor] = None) -> Path:
     """写出 Markdown；path 缺省时落到 export_dir/session-<ts>.md。"""
     if path is None:
         directory = Path(export_dir or Path("."))
@@ -70,7 +72,7 @@ def export_native_session(
     *,
     metadata: Optional[Mapping[str, Any]] = None,
     export_dir: Optional[Path] = None,
-    redactor=None,
+    redactor: Optional[SecretRedactor] = None,
 ) -> Path:
     """写出可重新导入的 JSON 快照（/resume 可直接加载）。"""
     if path is None:

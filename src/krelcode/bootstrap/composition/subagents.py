@@ -12,8 +12,8 @@ def build_subagent_llm_resolver(
     redactor: Optional[SecretRedactor] = None,
     enterprise_policy: Optional[EnterprisePolicy] = None,
     *,
-    settings_factory: Callable[..., Dict[str, Any]] | None = None,
-    provider_factory: Callable[[Dict[str, Any]], LLMProvider] | None = None,
+    settings_factory: Callable[..., ProviderSettings] | None = None,
+    provider_factory: Callable[[ProviderSettings], LLMProvider] | None = None,
 ) -> Callable[[str], LLMProvider]:
     """Resolve Definition.model without changing the parent's provider.
 

@@ -63,19 +63,12 @@ class RetryingProvider:
         self._sleep = sleep or asyncio.sleep
         self._on_retry = on_retry
         self.retry_count = 0  # 进程内累计（观测/测试用）
-
-    # 端口属性透传
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
-    @property
-    def model(self) -> str:
-        return str(getattr(self._inner, "model", "?"))
-
-    @property
-    def capabilities(self) -> ProviderCapabilities:
-        return self._inner.capabilities
+        # These are immutable provider identity values in practice. Keep them
+        # as writable protocol attributes so immutable/retry providers share the
+        # same structural contract.
+        self.name = inner.name
+        self.model = str(getattr(inner, "model", "?"))
+        self.capabilities = inner.capabilities
 
     @property
     def api_key(self) -> object:

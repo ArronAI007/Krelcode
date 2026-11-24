@@ -64,7 +64,11 @@ from krelcode.agent.turn.tool_pool import TurnToolPool
 from krelcode.agent.context.tool_microcompact import MicrocompactReport, ToolMicrocompactor
 from krelcode.agent.turn.tool_turn import ToolBatchExecutor
 from krelcode.agent.turn.runtime_ports import (
-    ContextManagerPort, ContextTurnHostPort, ModelTurnHostPort, ToolTurnHostPort,
+    CompactCheckpointStorePort,
+    ContextManagerPort,
+    ContextTurnHostPort,
+    ModelTurnHostPort,
+    ToolTurnHostPort,
 )
 from krelcode.agent.turn.runtime_state import AgentRuntimeState, RuntimeStateHost
 from krelcode.agent.context.working_context import WorkingContextSnapshot, WorkingContextStore
@@ -75,13 +79,6 @@ from krelcode.contracts.tool import RuntimeSnapshot, ToolContext, ToolResult, Tu
 from krelcode.tools.registry import ToolRegistry
 
 DEFAULT_MAX_STEPS = 64
-
-
-class CompactCheckpointPort(Protocol):
-    """Persistence boundary for pre-compact history checkpoints."""
-
-    def record(self, **kwargs: Any) -> Any:
-        ...
 
 
 def max_steps_reached_text(max_steps: int) -> str:
@@ -138,7 +135,7 @@ class AgentLoop(RuntimeStateHost):
         step_gate: Optional[Callable[[], Awaitable[None]]] = None,
         working_context_store: Optional[WorkingContextStore] = None,
         tool_microcompactor: Optional[ToolMicrocompactor] = None,
-        compact_checkpoint_store: Optional[CompactCheckpointPort] = None,
+        compact_checkpoint_store: Optional[CompactCheckpointStorePort] = None,
         today_provider: Optional[Callable[[], str]] = None,
         reminder_catalog: Optional[ReminderCatalog] = None,
     ) -> None:

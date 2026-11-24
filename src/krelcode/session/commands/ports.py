@@ -8,23 +8,36 @@ needs while leaving lifecycle and wire-level behavior in the owning modules.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Awaitable, Callable, Mapping, Optional, Protocol, Sequence, Tuple, runtime_checkable
+from typing import Any, Awaitable, Callable, Mapping, Optional, Protocol, Sequence, Tuple, runtime_checkable
 
+from ...contracts.service_ports import ShellJobPagePort, ShellJobPort
+from ...contracts.runtime import PermissionMode
+from ...contracts.tool import Tool, ToolDescriptor
 from ...core.messages import Message
 
 
 @runtime_checkable
 class ToolDescriptorPort(Protocol):
-    read_only: bool
-    source: object
-    tier: object
+    @property
+    def read_only(self) -> bool: ...
+
+    @property
+    def source(self) -> object: ...
+
+    @property
+    def tier(self) -> Optional[object]: ...
 
 
 @runtime_checkable
 class ToolEntryPort(Protocol):
-    name: str
-    tool: object
-    descriptor: ToolDescriptorPort
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def tool(self) -> Tool: ...
+
+    @property
+    def descriptor(self) -> ToolDescriptor: ...
 
 
 @runtime_checkable
@@ -37,23 +50,58 @@ class ToolPoolPort(Protocol):
 
 @runtime_checkable
 class ContextManagerPort(Protocol):
-    max_tokens: int
-    high_watermark_tokens: int
-    low_watermark_tokens: int
+    @property
+    def max_tokens(self) -> int: ...
+
+    @property
+    def high_watermark_tokens(self) -> int: ...
+
+    @property
+    def low_watermark_tokens(self) -> int: ...
+
+    def preview_compact(
+        self,
+        history: list[Message],
+        force: bool = False,
+        *,
+        current_turn_id: str = "",
+    ) -> "CompactPreviewPort": ...
+
+
+@runtime_checkable
+class CompactPreviewPort(Protocol):
+    def render(self, *, include_messages: bool = True) -> str: ...
 
 
 @runtime_checkable
 class CommandLoopPort(Protocol):
     """Runtime state and operations command handlers may touch directly."""
 
-    history: Sequence[Message]
-    policy: object
-    prompt_registry: object
-    workspace_context: object
-    context_manager: Optional[ContextManagerPort]
-    skill_manager: object
-    skill_base_prompt: object
+    @property
+    def history(self) -> list[Message]: ...
 
+    @property
+    def policy(self) -> object: ...
+
+    @property
+    def prompt_registry(self) -> Optional[Any]: ...
+
+    @property
+    def prompt_snapshot(self) -> Optional[Any]: ...
+
+    @property
+    def workspace_context(self) -> object: ...
+
+    @property
+    def context_manager(self) -> Optional[ContextManagerPort]: ...
+
+    @property
+    def skill_manager(self) -> Optional["SkillManagerPort"]: ...
+
+    @property
+    def skill_base_prompt(self) -> str: ...
+
+    def update_runtime_state(self, **values: object) -> None: ...
     def current_tool_pool(self) -> ToolPoolPort: ...
     def reset(self) -> None: ...
     async def compress_context(
@@ -74,7 +122,7 @@ class MCPSupervisorPort(Protocol):
         server: str,
         prompt_name: str,
         arguments: Mapping[str, str],
-    ) -> object: ...
+    ) -> Mapping[str, Any]: ...
 
 
 MCPReloadPort = Callable[[], Awaitable[Sequence[str]]]
@@ -82,8 +130,11 @@ MCPReloadPort = Callable[[], Awaitable[Sequence[str]]]
 
 @runtime_checkable
 class SubagentHandlePort(Protocol):
-    id: str
-    status: object
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def status(self) -> object: ...
 
 
 @runtime_checkable
@@ -115,9 +166,14 @@ class SubagentManagerCommandPort(Protocol):
 
 @runtime_checkable
 class CheckpointUndoResultPort(Protocol):
-    restored: Sequence[str]
-    deleted: Sequence[str]
-    label: str
+    @property
+    def restored(self) -> Sequence[str]: ...
+
+    @property
+    def deleted(self) -> Sequence[str]: ...
+
+    @property
+    def label(self) -> str: ...
 
 
 @runtime_checkable
@@ -131,7 +187,7 @@ class UsageTrackerPort(Protocol):
     def summary(self) -> str: ...
 
 
-ModelSwitchPort = Callable[[str], str]
+ModelSwitchPort = Callable[[Optional[str]], str]
 
 
 @runtime_checkable
@@ -185,6 +241,8 @@ class SkillManagerPort(Protocol):
     ) -> str: ...
     def user_prompt(self, name: str, arguments: str = "") -> str: ...
     def list_resources(self, name: str) -> Sequence[SkillResourcePort]: ...
+    def prompt_index(self) -> str: ...
+    def apply_to_prompt(self, prompt: str) -> str: ...
 
 
 SkillReloadPort = Callable[[], SkillReloadReportPort]
@@ -234,6 +292,7 @@ class PluginRecordPort(Protocol):
 class TrustedKeyPort(Protocol):
     registry: str
     key_id: str
+    fingerprint: str
 
 
 @runtime_checkable
@@ -258,6 +317,17 @@ class PluginManifestPort(Protocol):
 
 
 @runtime_checkable
+class PluginCommandPort(Protocol):
+    name: str
+    local_name: str
+    plugin_name: str
+    scope: str
+    prompt: str
+    allowed_tools: Sequence[str]
+    reminder_ids: Sequence[str]
+
+
+@runtime_checkable
 class PluginRegistryConfigPort(Protocol):
     name: str
     path: str
@@ -271,6 +341,7 @@ class PluginManagerPort(Protocol):
 
     def reload(self) -> object | Awaitable[object]: ...
     def records(self) -> Sequence[PluginRecordPort]: ...
+    def get_command(self, name: str) -> Optional[PluginCommandPort]: ...
     def status_lines(self) -> Sequence[str]: ...
     def registry_lines(self) -> Sequence[str]: ...
     def dependency_lines(self, name: Optional[str] = None) -> Sequence[str]: ...
@@ -324,14 +395,19 @@ class SessionMetadataPort(Protocol):
 
 @runtime_checkable
 class DeletedSessionPort(Protocol):
-    source: Path
-    archive_path: Path
+    @property
+    def source(self) -> Path: ...
+
+    @property
+    def archive_path(self) -> Path: ...
 
 
 @runtime_checkable
 class SessionLifecyclePort(Protocol):
     session_path: Optional[Path]
-    metadata: Optional[SessionMetadataPort]
+
+    @property
+    def metadata(self) -> Optional[Mapping[str, object]]: ...
 
     def resume(self, path: Path, *, log: Callable[[str], None]) -> bool: ...
     def fork(self, title: str = "") -> Path: ...
@@ -346,16 +422,21 @@ class PermissionRulesPort(Protocol):
 
 @runtime_checkable
 class PermissionManagerPort(Protocol):
-    mode: object
+    @property
+    def mode(self) -> PermissionMode: ...
 
     def mode_lines(self) -> Sequence[str]: ...
-    def set_mode(self, mode: object) -> None: ...
+    def set_mode(self, mode: PermissionMode | str) -> PermissionMode: ...
     def status_line(self) -> str: ...
 
 
 @runtime_checkable
 class PlanManagerPort(Protocol):
-    def on_mode_change(self, previous: object, current: object) -> None: ...
+    def on_mode_change(
+        self,
+        previous: PermissionMode,
+        current: PermissionMode,
+    ) -> None: ...
 
 
 @runtime_checkable
@@ -365,34 +446,74 @@ class RewindTimelinePort(Protocol):
 
 
 @runtime_checkable
+class RewindFilesPort(Protocol):
+    @property
+    def restored(self) -> Sequence[str]: ...
+
+    @property
+    def deleted(self) -> Sequence[str]: ...
+
+    @property
+    def groups(self) -> int: ...
+
+
+@runtime_checkable
 class RewindResultPort(Protocol):
-    source_turn: int
-    path: Path
-    target_index: int
-    label: str
-    removed_turns: int
-    files: object
+    @property
+    def target_index(self) -> int: ...
+
+    @property
+    def label(self) -> str: ...
+
+    @property
+    def removed_turns(self) -> int: ...
+
+    @property
+    def files(self) -> RewindFilesPort: ...
+
+
+@runtime_checkable
+class RewindForkResultPort(Protocol):
+    @property
+    def source_turn(self) -> int: ...
+
+    @property
+    def source_turn_id(self) -> str: ...
+
+    @property
+    def label(self) -> str: ...
+
+    @property
+    def path(self) -> Path: ...
+
+    @property
+    def context_checkpoint_id(self) -> str: ...
 
 
 @runtime_checkable
 class RewindPort(Protocol):
-    timeline: RewindTimelinePort
+    @property
+    def timeline(self) -> RewindTimelinePort: ...
 
-    def fork_turn(self, turn_index: int, title: str = "") -> RewindResultPort: ...
+    def fork_turn(
+        self,
+        turn_index: int,
+        title: str = "",
+    ) -> RewindForkResultPort: ...
     def rewind(self, turn_index: int) -> RewindResultPort: ...
 
 
 @runtime_checkable
 class ShellJobCommandPort(Protocol):
-    def list_jobs(self) -> Sequence[object]: ...
+    def list_jobs(self) -> Sequence[ShellJobPort]: ...
     async def output(
         self,
         job_id: str,
         *,
         after_sequence: int = 0,
         wait_seconds: float = 0,
-    ) -> object: ...
-    async def kill(self, job_id: str) -> object: ...
+    ) -> ShellJobPagePort: ...
+    async def kill(self, job_id: str) -> ShellJobPort: ...
 
 
 __all__ = [

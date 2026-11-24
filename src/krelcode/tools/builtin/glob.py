@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List
 
-from ..base import ToolContext, ToolResult
+from ...contracts.tool import ToolContext
+from ..base import ToolResult
 from ..fsutils import filter_pruned
 from ..paths import (
     PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,

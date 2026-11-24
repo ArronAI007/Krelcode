@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from ..base import ToolContext, ToolResult, ToolTier
+from ...contracts.tool import ToolContext
+from ..base import ToolResult, ToolTier
 from ..prompt import ToolPromptExample
 
 

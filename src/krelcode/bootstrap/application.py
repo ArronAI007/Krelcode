@@ -6,7 +6,7 @@ import argparse
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Tuple, cast
 
 from ..agent.prompt_surface_catalog import refresh_prompt_surfaces
 from ..agent.runtime import AgentRuntime
@@ -22,8 +22,8 @@ from ..enterprise.policy import (
     PolicyViolation,
     load_enterprise_policy,
 )
-from ..extensions import replace_runtime_extensions
-from ..hooks import HookRunner
+from ..extensions import ExtensionRecord, replace_runtime_extensions
+from ..hooks import HookRunner, HookSpec
 from ..llm.base import collect
 from ..mcp.supervisor import MCPSupervisor
 from ..safety.sandbox import SandboxError
@@ -35,11 +35,14 @@ from ..session.commands import (
     sync_plugin_commands,
     sync_skill_commands,
 )
+from ..plugins import PluginRecord
+from ..session.commands.custom import CustomCommandManager
 from ..session.elicitation_bridge import MCPElicitationBridge
 from ..session.input import InputProcessor
 from ..session.interactions import UserInputBroker
 from ..session.restore import refresh_skill_system_prompt
 from ..session.runner import run_session
+from ..skills import SkillReloadReport
 from ..telemetry import build_telemetry_runtime
 from ..ui.approval import ApprovalBroker
 from ..ui.repl import run_repl
@@ -84,7 +87,8 @@ async def create_application(
         args.message is not None
         and args.output_format in {"json", "stream-json"}
     ) or input_format == "stream-json"
-    note = (lambda msg: print(msg, file=sys.stderr)) if quiet else print
+    note: Callable[[str], None] = (
+        lambda msg: print(msg, file=sys.stderr) if quiet else print(msg))
     config_path = Path(args.config).expanduser() if args.config else None
     try:
         config_bundle = load_config_layers(
@@ -156,7 +160,7 @@ async def create_application(
     except ConfigError as e:
         print(f"配置错误: {e}", file=sys.stderr)
         return 2
-    custom_commands = loop.custom_command_manager
+    custom_commands = cast(CustomCommandManager, loop.custom_command_manager)
     binder = loop.runtime_service_binder
     redactor = binder.redactor
     binder.add_secret(getattr(loop.llm, "api_key", None))
@@ -199,7 +203,7 @@ async def create_application(
         await supervisor.sync(merged_mcp_config())
         loop.sync_context_attachments(include_mcp=True)
 
-    async def reload_mcp():
+    async def reload_mcp() -> Sequence[str]:
         """REPL /mcp reload：重读分层配置 → diff 同步 → 刷新 Prompt。"""
         nonlocal current_config
         new_bundle = load_config_layers(
@@ -232,14 +236,16 @@ async def create_application(
         args, config, loop, usage, subagents=subagents, redactor=redactor,
         enterprise_policy=enterprise_policy)
 
-    def merged_hook_specs(source: Optional[Dict[str, Any]] = None) -> list[Any]:
+    def merged_hook_specs(
+        source: Optional[Dict[str, Any]] = None,
+    ) -> list[HookSpec]:
         active = current_config if source is None else source
         return compose_hook_specs(
             active, loop.plugin_manager.hook_definitions)
 
-    hooks = None
+    hooks: Optional[HookRunner] = None
 
-    def ensure_hooks(specs: list[Any]) -> None:
+    def ensure_hooks(specs: list[HookSpec]) -> None:
         nonlocal hooks
         if hooks is None:
             hooks = HookRunner(
@@ -279,7 +285,7 @@ async def create_application(
     sync_skill_commands(input_processor.command_registry, loop.skill_manager)
     sync_mcp_prompt_commands(input_processor.command_registry, supervisor)
 
-    def refresh_extensions():
+    def refresh_extensions() -> Tuple[ExtensionRecord, ...]:
         result = replace_runtime_extensions(
             loop.extension_registry,
             plugins=loop.plugin_manager,
@@ -303,14 +309,14 @@ async def create_application(
     supervisor.on_prompts_changed = refresh_mcp_prompt_commands
     refresh_extensions()
 
-    def reload_skills():
-        report = loop.skill_manager.reload()
+    def reload_skills() -> SkillReloadReport:
+        report = cast(SkillReloadReport, loop.skill_manager.reload())
         refresh_skill_system_prompt(loop)
         sync_skill_commands(input_processor.command_registry, loop.skill_manager)
         refresh_extensions()
         return report
 
-    def reload_custom_commands():
+    def reload_custom_commands() -> CustomCommandManager:
         custom_commands.reload()
         sync_custom_commands(input_processor.command_registry, custom_commands)
         refresh_extensions()
@@ -318,9 +324,12 @@ async def create_application(
 
     loop.update_runtime_state(custom_commands_reload=reload_custom_commands)
 
-    base_plugin_reload = loop.plugin_reload
+    base_plugin_reload = cast(
+        Callable[[], Awaitable[Tuple[PluginRecord, ...]]],
+        loop.plugin_reload,
+    )
 
-    async def reload_plugins():
+    async def reload_plugins() -> Tuple[PluginRecord, ...]:
         records = await base_plugin_reload()
         ensure_hooks(merged_hook_specs())
         if not args.no_mcp:
@@ -388,12 +397,12 @@ class BootstrappedApplication:
 
     args: argparse.Namespace
     graph: RuntimeGraph
-    note: Any
+    note: Callable[[str], None]
     _closed: bool = False
 
     @property
     def runtime(self) -> AgentRuntime:
-        return self.graph.core.runtime
+        return cast(AgentRuntime, self.graph.core.runtime)
 
     @property
     def supervisor(self) -> Any:
@@ -401,7 +410,7 @@ class BootstrappedApplication:
 
     @property
     def checkpoints(self) -> Optional[CheckpointManager]:
-        return self.graph.core.checkpoints
+        return cast(Optional[CheckpointManager], self.graph.core.checkpoints)
 
     @property
     def usage(self) -> Any:
@@ -417,7 +426,7 @@ class BootstrappedApplication:
 
     @property
     def redactor(self) -> SecretRedactor:
-        return self.graph.core.redactor
+        return cast(SecretRedactor, self.graph.core.redactor)
 
     @property
     def input_processor(self) -> Any:
@@ -425,11 +434,11 @@ class BootstrappedApplication:
 
     @property
     def approval_broker(self) -> Optional[ApprovalBroker]:
-        return self.graph.core.approval_broker
+        return cast(Optional[ApprovalBroker], self.graph.core.approval_broker)
 
     @property
     def input_broker(self) -> Optional[UserInputBroker]:
-        return self.graph.core.input_broker
+        return cast(Optional[UserInputBroker], self.graph.core.input_broker)
 
     @property
     def hooks(self) -> Any:

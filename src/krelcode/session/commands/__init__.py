@@ -44,6 +44,7 @@ __all__ = [
     "CommandResult",
     "CommandSource",
     "CommandSpec",
+    "CommandTemplate",
     "builtin_command_registry",
     "builtin_command_specs",
     "custom_command_specs",

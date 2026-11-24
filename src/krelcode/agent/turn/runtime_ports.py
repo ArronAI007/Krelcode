@@ -166,14 +166,18 @@ class ToolMicrocompactorPort(Protocol):
 class CompactSummaryResultPort(Protocol):
     """Content-free summary identity exposed by a compact checkpoint."""
 
-    digest: str
+    @property
+    def digest(self) -> str: ...
 
 
 class CompactCheckpointResultPort(Protocol):
     """Checkpoint result needed by the context turn, without adapter imports."""
 
-    id: str
-    summary: CompactSummaryResultPort
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def summary(self) -> CompactSummaryResultPort: ...
 
 
 class CompactCheckpointStorePort(Protocol):

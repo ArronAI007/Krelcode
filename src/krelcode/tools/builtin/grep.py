@@ -11,7 +11,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict
 
-from ..base import ToolContext, ToolResult
+from ...contracts.tool import ToolContext
+from ..base import ToolResult
 from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
 from ..prompt import ToolPromptExample
 from ..workspace_search import WorkspaceSearcher

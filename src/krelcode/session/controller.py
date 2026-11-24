@@ -10,20 +10,26 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, cast, Optional, Sequence
 
 from ..agent.loop import AgentLoop
 from ..agent.runtime import AgentRuntime
+from ..agent.turn.query import QuerySession
+from ..contracts.runtime import PermissionMode
 from ..safety.runtime import PlanApprovalCoordinator, RuntimePermissionManager
-from ..contracts.tool import CommandDescriptor, ToolServices
+from ..contracts.tool import CommandDescriptor, ToolResult, ToolServices
+from ..core.messages import ImageRef, SteeringInput
 from .lifecycle import SessionLifecycle
 from .rewind import RewindCoordinator
+from .checkpoint import CheckpointManager
 from .commands import (
     CommandContext,
     CommandKind,
     CommandRegistry,
     CommandRequest,
     CommandResult,
+    CommandSource,
+    CommandSpec,
     CommandTemplate,
     builtin_command_registry,
     normalize_token,
@@ -34,6 +40,20 @@ from .commands import (
     sync_skill_commands,
 )
 from .commands.handlers import BUILTIN_HANDLERS, execute_prompt_command
+from .commands.ports import (
+    CheckpointManagerPort,
+    MCPReloadPort,
+    MCPSupervisorPort,
+    ModelSwitchPort,
+    PluginManagerPort,
+    PluginReloadPort,
+    RewindPort,
+    ShellJobCommandPort,
+    SkillManagerPort,
+    SkillReloadPort,
+    SubagentManagerCommandPort,
+    UsageTrackerPort,
+)
 
 HELP_TEXT = render_help(builtin_command_registry())
 
@@ -47,22 +67,22 @@ class SessionController:
         *,
         session_path: Optional[str] = None,
         sessions_dir: Optional[Path] = None,
-        mcp_supervisor=None,
-        mcp_reload=None,
-        subagents=None,
-        checkpoints=None,
-        usage=None,
-        model_switch=None,
-        skills=None,
-        skills_reload=None,
-        plugins=None,
-        plugins_reload=None,
+        mcp_supervisor: Optional[MCPSupervisorPort] = None,
+        mcp_reload: Optional[MCPReloadPort] = None,
+        subagents: Optional[SubagentManagerCommandPort] = None,
+        checkpoints: Optional[CheckpointManager] = None,
+        usage: Optional[UsageTrackerPort] = None,
+        model_switch: Optional[ModelSwitchPort] = None,
+        skills: Optional[SkillManagerPort] = None,
+        skills_reload: Optional[SkillReloadPort] = None,
+        plugins: Optional[PluginManagerPort] = None,
+        plugins_reload: Optional[PluginReloadPort] = None,
         workspace_root: Optional[Path] = None,
         command_registry: Optional[CommandRegistry] = None,
         permission_manager: Optional[RuntimePermissionManager] = None,
         plan_manager: Optional[PlanApprovalCoordinator] = None,
-        rewind=None,
-        jobs=None,
+        rewind: Optional[RewindPort] = None,
+        jobs: Optional[ShellJobCommandPort] = None,
     ) -> None:
         self.runtime = (runtime if isinstance(runtime, AgentRuntime)
                         else AgentRuntime(runtime))
@@ -127,7 +147,7 @@ class SessionController:
         self.refresh_tool_services()
 
     @property
-    def active_task(self) -> Optional[asyncio.Task]:
+    def active_task(self) -> Optional[asyncio.Task[str]]:
         return self.runtime.active_task
 
     @property
@@ -138,10 +158,10 @@ class SessionController:
         self,
         message: str,
         *,
-        images=None,
+        images: Optional[list[ImageRef]] = None,
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[list[str]] = None,
-    ):
+    ) -> QuerySession:
         """启动一轮查询并返回可消费事件的 QuerySession。"""
         if self.permission_manager.mode.value == "plan":
             message = self.plan_manager.wrap_request(message)
@@ -152,19 +172,29 @@ class SessionController:
             reminder_ids=reminder_ids,
         )
 
-    def start_run(self, message: str, *, images=None) -> asyncio.Task:
+    def start_run(
+        self,
+        message: str,
+        *,
+        images: Optional[list[ImageRef]] = None,
+    ) -> asyncio.Task[str]:
         """兼容入口：启动一轮 Agent 执行并返回 task。"""
         return self.runtime.start_turn(message, images=images)
 
-    def steer(self, message: str, *, images=None) -> str:
+    def steer(
+        self,
+        message: str,
+        *,
+        images: Optional[list[ImageRef]] = None,
+    ) -> str:
         """把运行中插话放入 runtime steering 队列，返回可见摘要。"""
         return self.runtime.steer(message, images=images)
 
-    def drain_steering(self) -> list[Any]:
+    def drain_steering(self) -> list[SteeringInput | str]:
         """任务结束后取出未送达插话，避免污染下一轮。"""
         return self.runtime.drain_steering()
 
-    async def execute_shell_shortcut(self, command: str):
+    async def execute_shell_shortcut(self, command: str) -> ToolResult:
         """Run a REPL ``!`` command through the guarded direct-tool path."""
         if self.is_running:
             raise RuntimeError("当前任务运行中，不能并发执行 Shell 快捷命令")
@@ -210,14 +240,17 @@ class SessionController:
         return self._enrich_command_result(result, spec)
 
     @staticmethod
-    def _enrich_command_result(result: CommandResult, spec) -> CommandResult:
+    def _enrich_command_result(
+        result: CommandResult,
+        spec: Optional[CommandSpec],
+    ) -> CommandResult:
         """Attach a uniform content-light contract to every prompt result."""
         if result.run_prompt is None:
             return result
         template = (
             CommandTemplate.from_spec(spec)
             if spec is not None
-            else CommandTemplate.for_source("builtin")
+            else CommandTemplate.for_source(CommandSource.BUILTIN)
         )
         reminder_ids = tuple(dict.fromkeys((
             *result.reminder_ids,
@@ -236,7 +269,10 @@ class SessionController:
             template_hash=result.template_hash or template.template_hash,
         )
 
-    def set_permission_mode(self, mode) -> tuple[str, str]:
+    def set_permission_mode(
+        self,
+        mode: PermissionMode | str,
+    ) -> tuple[str, str]:
         """切换模式并让 Plan 协调器同步处理待确认状态。"""
         previous = self.permission_manager.mode
         self.permission_manager.set_mode(mode)
@@ -252,8 +288,8 @@ class SessionController:
 
     def record_plan(
         self,
-        items,
-        statuses,
+        items: Sequence[str],
+        statuses: Sequence[str],
         active_index: int = -1,
         explanation: str = "",
     ) -> None:
@@ -273,10 +309,10 @@ class SessionController:
             )
             for spec in self.command_registry.specs
         )
-        mcp_servers = ()
+        mcp_servers: tuple[str, ...] = ()
         if self.mcp_supervisor is not None:
             mcp_servers = tuple(
-                item["name"] for item in self.mcp_supervisor.status())
+                str(item["name"]) for item in self.mcp_supervisor.status())
         self.loop.tool_context.services = ToolServices(
             commands=commands,
             mcp_servers=mcp_servers,
@@ -290,9 +326,11 @@ class SessionController:
             workspace_root=self.workspace_root,
             session_path=self.session_path,
             sessions_dir=self.sessions_dir,
-            mcp_supervisor=self.mcp_supervisor,
+            mcp_supervisor=cast(
+                Optional[MCPSupervisorPort], self.mcp_supervisor),
             mcp_reload=self.mcp_reload,
-            subagents=self.subagents,
+            subagents=cast(
+                Optional[SubagentManagerCommandPort], self.subagents),
             checkpoints=self.checkpoints,
             usage=self.usage,
             model_switch=self.model_switch,
@@ -304,5 +342,5 @@ class SessionController:
             permission_manager=self.permission_manager,
             plan_manager=self.plan_manager,
             rewind=self.rewind,
-            jobs=self.jobs,
+            jobs=cast(Optional[ShellJobCommandPort], self.jobs),
         )

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any, Callable, cast
 
-from ..agent.fragments import refresh_registry_snapshot, skills_fragment
-from ..agent.loop import AgentLoop
+from ..agent.fragments import PromptSnapshot, refresh_registry_snapshot, skills_fragment
+from ..agent.context.context_checkpoint_ports import CheckpointLoopPort
+from ..agent.prompt.prompt_snapshot_ports import PromptSnapshotHostPort
 from ..agent.prompts import build_system_prompt
 from ..agent.cyber_risk import prepend_cyber_risk_prompt
 from ..core.messages import Message
@@ -17,7 +19,7 @@ from .recorder import (
 )
 
 
-def refresh_skill_system_prompt(loop: AgentLoop) -> None:
+def refresh_skill_system_prompt(loop: CheckpointLoopPort) -> None:
     """热重载/恢复会话后，只替换受影响的 catalog attachment。"""
     manager = getattr(loop, "skill_manager", None)
     sync = getattr(loop, "sync_context_attachments", None)
@@ -38,7 +40,8 @@ def refresh_skill_system_prompt(loop: AgentLoop) -> None:
                 registry.remove("skills:index")
             else:
                 registry.upsert(fragment)
-        refresh_registry_snapshot(loop)
+        refresh_registry_snapshot(
+            cast(PromptSnapshotHostPort[PromptSnapshot, Any], loop))
         return
     # 兼容手工构造的旧 AgentLoop（没有 PromptFragmentRegistry）。
     if manager is None:
@@ -53,7 +56,11 @@ def refresh_skill_system_prompt(loop: AgentLoop) -> None:
         loop.history.append(Message.system(prompt))
 
 
-def restore_session(loop: AgentLoop, path: Path, log=print) -> bool:
+def restore_session(
+    loop: CheckpointLoopPort,
+    path: Path,
+    log: Callable[[str], None] = print,
+) -> bool:
     """Restore history and the latest full-context checkpoint when available.
 
     A legacy session without ContextCheckpoint still restores its last history
@@ -125,7 +132,7 @@ def restore_session(loop: AgentLoop, path: Path, log=print) -> bool:
     return True
 
 
-def _refresh_now_if_possible(loop: AgentLoop) -> None:
+def _refresh_now_if_possible(loop: CheckpointLoopPort) -> None:
     refresh = getattr(loop, "refresh_workspace_context", None)
     if not callable(refresh):
         loop.update_runtime_state(pending_context_refresh=False)

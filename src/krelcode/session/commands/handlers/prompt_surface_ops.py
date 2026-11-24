@@ -8,8 +8,11 @@ from pathlib import Path
 
 from ....agent.prompt_surface import (
     CORE_SURFACE_KINDS,
+    PromptSurfaceDescriptor,
     PromptSurfaceKind,
+    PromptSurfaceObservation,
     PromptSurfaceRegistry,
+    SourceRole,
 )
 from ....agent.prompt_surface_catalog import refresh_prompt_surfaces
 from ....tools.prompt_lint import lint_tool_registry
@@ -32,7 +35,20 @@ def _registry(ctx: CommandContext) -> PromptSurfaceRegistry:
         ctx.loop, mcp_supervisor=ctx.mcp_supervisor)
 
 
-def _surface_line(registry: PromptSurfaceRegistry, surface) -> str:
+def _surface_kind(surface: PromptSurfaceDescriptor) -> PromptSurfaceKind:
+    """Return the normalized runtime kind despite the relaxed constructor type."""
+    return PromptSurfaceKind(surface.kind)
+
+
+def _surface_role(surface: PromptSurfaceDescriptor) -> str:
+    role = surface.role
+    return str(role.value) if isinstance(role, SourceRole) else role
+
+
+def _surface_line(
+    registry: PromptSurfaceRegistry,
+    surface: PromptSurfaceDescriptor,
+) -> str:
     observation = registry.observation(surface.id)
     state = "unobserved"
     if observation is not None:
@@ -45,13 +61,16 @@ def _surface_line(registry: PromptSurfaceRegistry, surface) -> str:
         f"/{surface.contract.timeout_seconds:g}s"
         if surface.contract is not None else "")
     return (
-        f"  {surface.id} · {surface.kind.value}"
-        f" · {surface.role.value}/{surface.authority}"
+        f"  {surface.id} · {_surface_kind(surface).value}"
+        f" · {_surface_role(surface)}/{surface.authority}"
         f" · trust={surface.trust} · {surface.token_estimate}t"
         f" · {surface.content_hash[:12]} · {state}{contract}{available}")
 
 
-def _observation_line(registry: PromptSurfaceRegistry, observation) -> str:
+def _observation_line(
+    registry: PromptSurfaceRegistry,
+    observation: PromptSurfaceObservation,
+) -> str:
     surface = registry.get(observation.surface_id)
     current = bool(
         surface is not None
@@ -67,14 +86,14 @@ def _observation_line(registry: PromptSurfaceRegistry, observation) -> str:
         f" · rendered_hash={observation.last_content_hash[:12] or '(none)'}")
 
 
-def _matches_text(surface, selector: str) -> bool:
+def _matches_text(surface: PromptSurfaceDescriptor, selector: str) -> bool:
     if not selector:
         return True
     return any(
         selector.lower() in value.lower()
         for value in (
             surface.id,
-            surface.kind.value,
+            _surface_kind(surface).value,
             surface.source,
             surface.owner,
         )
@@ -213,28 +232,28 @@ async def handle_prompts(ctx: CommandContext) -> CommandResult:
     if operation == "list" and len(parts) <= 2:
         selector = parts[1] if len(parts) == 2 else ""
         kind = _kind_filter(selector)
+        surfaces: list[PromptSurfaceDescriptor]
         if kind is not None:
-            surfaces = registry.list(kind=kind)
+            surfaces = list(registry.list(kind=kind))
         elif selector.lower() in OBSERVATION_STATES:
             state = selector.lower()
             surfaces = []
-            for surface in registry.list():
-                observation = registry.observation(surface.id)
+            for listed_surface in registry.list():
+                observation = registry.observation(listed_surface.id)
                 if state == "observed" and observation is not None:
-                    surfaces.append(surface)
+                    surfaces.append(listed_surface)
                 elif state == "unobserved" and observation is None:
-                    surfaces.append(surface)
-                elif state == "unavailable" and not surface.available:
-                    surfaces.append(surface)
+                    surfaces.append(listed_surface)
+                elif state == "unavailable" and not listed_surface.available:
+                    surfaces.append(listed_surface)
                 elif (
                     state == "stale"
                     and observation is not None
-                    and not observation.is_current(surface.content_hash)
+                    and not observation.is_current(listed_surface.content_hash)
                 ):
-                    surfaces.append(surface)
-            surfaces = tuple(surfaces)
+                    surfaces.append(listed_surface)
         else:
-            surfaces = registry.list(query=selector)
+            surfaces = list(registry.list(query=selector))
         lines = [
             f"  [prompts] {len(surfaces)} surfaces"
             + (f" · filter={selector}" if selector else ""),
@@ -252,22 +271,23 @@ async def handle_prompts(ctx: CommandContext) -> CommandResult:
     if operation == "observations" and len(parts) <= 2:
         selector = parts[1] if len(parts) == 2 else ""
         kind = _kind_filter(selector)
-        observations = []
-        for observation in registry.observations():
-            surface = registry.get(observation.surface_id)
-            if surface is None:
+        selected_observations: list[PromptSurfaceObservation] = []
+        for rendered_observation in registry.observations():
+            observed_surface = registry.get(rendered_observation.surface_id)
+            if observed_surface is None:
                 continue
-            if kind is not None and surface.kind is not kind:
+            if kind is not None and _surface_kind(observed_surface) is not kind:
                 continue
-            if kind is None and not _matches_text(surface, selector):
+            if kind is None and not _matches_text(observed_surface, selector):
                 continue
-            observations.append(observation)
+            selected_observations.append(rendered_observation)
         lines = [
-            f"  [prompts observations] {len(observations)} rendered surfaces"
+            f"  [prompts observations] {len(selected_observations)} rendered surfaces"
             + (f" · filter={selector}" if selector else ""),
         ]
-        lines.extend(_observation_line(registry, item) for item in observations)
-        if not observations:
+        lines.extend(
+            _observation_line(registry, item) for item in selected_observations)
+        if not selected_observations:
             lines.append("  （当前进程还没有匹配的真实渲染观测）")
         return _ok(*lines)
 
@@ -280,19 +300,19 @@ async def handle_prompts(ctx: CommandContext) -> CommandResult:
         if not turn_id:
             observations = registry.observations()
             turn_id = observations[-1].last_turn_id if observations else ""
-        selected = []
+        active_observations: list[PromptSurfaceObservation] = []
         for observation in registry.observations_for_turn(turn_id):
-            surface = registry.get(observation.surface_id)
-            if surface is None:
+            observed_surface = registry.get(observation.surface_id)
+            if observed_surface is None:
                 continue
-            if kind is not None and surface.kind is not kind:
+            if kind is not None and _surface_kind(observed_surface) is not kind:
                 continue
-            if kind is None and not _matches_text(surface, selector):
+            if kind is None and not _matches_text(observed_surface, selector):
                 continue
-            selected.append(observation)
+            active_observations.append(observation)
         lines = [
             f"  [prompts active] turn={turn_id or '(none)'}"
-            f" · surfaces={len(selected)}"
+            f" · surfaces={len(active_observations)}"
             + (f" · filter={selector}" if selector else ""),
         ]
         if prompt_plan is not None:
@@ -303,35 +323,42 @@ async def handle_prompts(ctx: CommandContext) -> CommandResult:
                 f" · tools={prompt_plan.tool_count}"
                 f" · conflicts={prompt_plan.unresolved_conflict_count}"
                 f" · cache_boundary={prompt_plan.cache_boundary_chars}")
-        lines.extend(_observation_line(registry, item) for item in selected)
-        if not selected:
+        lines.extend(
+            _observation_line(registry, item) for item in active_observations)
+        if not active_observations:
             lines.append(
                 "  （该 turn 尚无真实渲染观测；先执行一轮 Agent 请求）")
         return _ok(*lines)
 
     if operation == "show" and len(parts) == 2:
-        surface = registry.get(parts[1])
-        if surface is None:
+        detail_surface = registry.get(parts[1])
+        if detail_surface is None:
             return _ok(f"  [prompts] 未找到: {parts[1]}")
-        observation = registry.observation(surface.id)
+        observation = registry.observation(detail_surface.id)
         metadata = json.dumps(
-            dict(surface.metadata), ensure_ascii=False, sort_keys=True)
+            dict(detail_surface.metadata), ensure_ascii=False, sort_keys=True)
         contract = (
             json.dumps(
-                surface.contract.as_record(), ensure_ascii=False, sort_keys=True)
-            if surface.contract is not None else "(none)")
+                detail_surface.contract.as_record(),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            if detail_surface.contract is not None else "(none)")
         lines = [
-            f"  [prompts] {surface.id}",
-            f"  kind={surface.kind.value} · collection={registry.collection_for(surface.id)}",
-            f"  source={surface.source} · owner={surface.owner}"
-            f" · version={surface.version or '(none)'}",
-            f"  role={surface.role.value}/{surface.authority}"
-            f" · trust={surface.trust} · stability={surface.stability}"
-            f" · scope={surface.scope}",
-            f"  hash={surface.content_hash} · tokens={surface.token_estimate}"
-            f" · available={str(surface.available).lower()}",
-            f"  capabilities={', '.join(surface.capabilities) or '(none)'}",
-            f"  description={surface.description or '(none)'}",
+            f"  [prompts] {detail_surface.id}",
+            f"  kind={_surface_kind(detail_surface).value}"
+            f" · collection={registry.collection_for(detail_surface.id)}",
+            f"  source={detail_surface.source} · owner={detail_surface.owner}"
+            f" · version={detail_surface.version or '(none)'}",
+            f"  role={_surface_role(detail_surface)}/{detail_surface.authority}"
+            f" · trust={detail_surface.trust}"
+            f" · stability={detail_surface.stability}"
+            f" · scope={detail_surface.scope}",
+            f"  hash={detail_surface.content_hash}"
+            f" · tokens={detail_surface.token_estimate}"
+            f" · available={str(detail_surface.available).lower()}",
+            f"  capabilities={', '.join(detail_surface.capabilities) or '(none)'}",
+            f"  description={detail_surface.description or '(none)'}",
             f"  metadata={metadata}",
             f"  contract={contract}",
         ]

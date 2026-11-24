@@ -24,6 +24,7 @@ from ....mcp.security import render_mcp_prompt_evidence
 from ....safety.runtime import parse_permission_mode
 from ....safety.rules import RuleDecision, RuleScope
 from ..context import CommandContext
+from ..ports import SkillManagerPort
 from ..sources import (
     sync_mcp_prompt_commands,
     sync_plugin_commands,
@@ -53,6 +54,7 @@ def _disabled_message() -> str:
 async def handle_skills(ctx: CommandContext) -> CommandResult:
     if _skills_disabled(ctx):
         return _ok(_disabled_message())
+    assert ctx.skills is not None
     output: list[str] = []
     parts = ctx.request.arguments.split(maxsplit=1)
     sub = parts[0].strip() if parts else ""
@@ -156,10 +158,12 @@ async def handle_plugins(ctx: CommandContext) -> CommandResult:
                 "[--scope user|project]")
         source = filtered[1]
         try:
-            action = (manager.update(source, scope=scope)
-                      if operation == "update"
-                      else manager.install(source, scope=scope))
-            result = await action
+            lifecycle_task = (
+                manager.update(source, scope=scope)
+                if operation == "update"
+                else manager.install(source, scope=scope)
+            )
+            result = await lifecycle_task
             await _refresh_plugin_runtime(ctx)
         except Exception as exc:
             return _ok(
@@ -173,12 +177,12 @@ async def handle_plugins(ctx: CommandContext) -> CommandResult:
                 "  /plugins registry remove <name>",
                 "  /plugins registry install <name> <plugin>[@约束] "
                 "[--scope user|project]")
-        action = parts[1].lower()
-        if action == "list":
+        registry_action = parts[1].lower()
+        if registry_action == "list":
             if len(parts) != 2:
                 return _ok("  用法: /plugins registry list")
             output.extend(manager.registry_lines())
-        elif action == "add":
+        elif registry_action == "add":
             if len(parts) != 4:
                 return _ok("  用法: /plugins registry add <name> <path>")
             try:
@@ -188,7 +192,7 @@ async def handle_plugins(ctx: CommandContext) -> CommandResult:
                     f"  [plugins] registry add 失败: {type(exc).__name__}: {exc}")
             output.append(
                 f"  [plugins] registry 已加入可信配置: {config.name} · {config.path}")
-        elif action == "remove":
+        elif registry_action == "remove":
             if len(parts) != 3:
                 return _ok("  用法: /plugins registry remove <name>")
             try:
@@ -198,7 +202,7 @@ async def handle_plugins(ctx: CommandContext) -> CommandResult:
                 return _ok(
                     f"  [plugins] registry remove 失败: {type(exc).__name__}: {exc}")
             output.append(f"  [plugins] registry 已移除: {config.name}")
-        elif action == "install":
+        elif registry_action == "install":
             try:
                 filtered, scope = _plugin_lifecycle_args(raw)
             except ValueError as exc:
@@ -240,10 +244,10 @@ async def handle_plugins(ctx: CommandContext) -> CommandResult:
                 "  /plugins trust add <registry> <key-id> <base64-public-key> "
                 "[--label <名称>]",
                 "  /plugins trust revoke <registry> <key-id>")
-        action = parts[1].lower()
-        if action == "list":
+        trust_action = parts[1].lower()
+        if trust_action == "list":
             output.extend(manager.trust_store.status_lines())
-        elif action == "add":
+        elif trust_action == "add":
             label = ""
             values = list(parts[2:])
             if "--label" in values:
@@ -266,7 +270,7 @@ async def handle_plugins(ctx: CommandContext) -> CommandResult:
             output.append(
                 f"  [plugins] trusted key: {key.registry}/{key.key_id} · "
                 f"sha256:{key.fingerprint}")
-        elif action == "revoke":
+        elif trust_action == "revoke":
             if len(parts) != 4:
                 return _ok("  用法: /plugins trust revoke <registry> <key-id>")
             try:
@@ -464,6 +468,7 @@ async def handle_custom_command(ctx: CommandContext) -> CommandResult:
 async def handle_skill(ctx: CommandContext) -> CommandResult:
     if _skills_disabled(ctx):
         return _ok(_disabled_message())
+    assert ctx.skills is not None
     parts = ctx.request.arguments.split(maxsplit=1)
     if not parts or not parts[0].strip():
         return _ok("  用法: /skill <name> [参数]")
@@ -495,6 +500,7 @@ async def handle_skill_command(ctx: CommandContext) -> CommandResult:
     """执行由 Skill 自动注册的 `/skill-name [args]`。"""
     if _skills_disabled(ctx):
         return _ok(_disabled_message())
+    assert ctx.skills is not None
     name = ctx.request.name
     try:
         prompt = ctx.skills.user_prompt(name, ctx.request.arguments)
@@ -582,7 +588,7 @@ async def handle_mcp_prompt_command(ctx: CommandContext) -> CommandResult:
 
 
 
-def _format_skill_details(skills, name: str) -> str:
+def _format_skill_details(skills: SkillManagerPort, name: str) -> str:
     """格式化 Skill 元数据、资源和完整说明。"""
     try:
         skill = skills.get(name)
@@ -614,5 +620,4 @@ def _format_skill_details(skills, name: str) -> str:
         return "\n".join(lines)
     except Exception as exc:
         return f"  [skill] {exc}"
-
 

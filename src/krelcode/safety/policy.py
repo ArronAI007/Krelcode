@@ -49,7 +49,8 @@ class ApprovalPolicy(Protocol):
 class ManagedPolicyPort(Protocol):
     """Enterprise policy surface enforced before local approval."""
 
-    allow_auto_approve: bool
+    @property
+    def allow_auto_approve(self) -> bool: ...
 
     def deny_tool_reason(
         self,

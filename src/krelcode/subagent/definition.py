@@ -221,6 +221,7 @@ class AgentDefinitionManager:
                 raise ValueError(
                     f"非法 permission-mode: {raw_permission!r}") from exc
         raw_mcp = metadata.get("mcp-servers", metadata.get("mcp_servers"))
+        mcp_servers: Optional[Tuple[str, ...]]
         if raw_mcp is None:
             mcp_servers = None
         elif str(raw_mcp).strip() == "*":

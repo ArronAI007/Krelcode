@@ -15,7 +15,8 @@ import codecs
 import os
 from typing import Any, Dict
 
-from ..base import ToolContext, ToolResult
+from ...contracts.tool import ToolContext
+from ..base import ToolResult
 from ..process import (
     process_isolation_kwargs,
     shell_argv,

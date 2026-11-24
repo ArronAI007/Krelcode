@@ -14,7 +14,7 @@ facade preserves the original API and the single ``MemoryStore`` entry point.
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 
 from ..agent.context import CONTEXT_ENGINE_V3
 from ..agent.fragments import PromptFragment, refresh_registry_snapshot
@@ -86,7 +86,9 @@ class MemoryStore(
     """Manage user/project/session memory with common bounds and redaction."""
 
 
-def sync_memory_fragment(loop, store: MemoryStore) -> Optional[PromptFragment]:
+def sync_memory_fragment(
+    loop: Any, store: MemoryStore
+) -> Optional[PromptFragment]:
     """Register/replace or remove the scoped-memory prompt fragment."""
     registry = getattr(loop, "prompt_registry", None)
     if registry is None:

@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from ...core.redact import redact_obvious_secrets
-from ..base import ToolContext, ToolResult, ToolTier
+from ...contracts.tool import ToolContext
+from ..base import ToolResult, ToolTier
 from ..paths import (
     FileChangedError,
     PathOutsideWorkspaceError,
@@ -401,7 +402,7 @@ def _discover(
 ) -> MigrationDiscovery:
     target = resolve_in_workspace(ctx, raw_path or ".")
     if target.is_file():
-        files = (target,)
+        files: tuple[Path, ...] = (target,)
         root = target.parent
     elif target.is_dir():
         root = target
@@ -881,7 +882,6 @@ def _positive_int(value: Any, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
-
 
 __all__ = [
     "MigrationCreateTool",

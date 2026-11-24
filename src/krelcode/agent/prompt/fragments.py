@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, cast
 
 from krelcode.core.messages import Message
 from krelcode.agent.context import ContextSection, WorkspaceContext
@@ -818,7 +818,7 @@ def _workspace_fragment(section: ContextSection) -> PromptFragment:
     )
 
 
-def apply_prompt_snapshot(loop: "PromptSnapshotHostPort[PromptSnapshot, RegistryT]", snapshot: PromptSnapshot) -> None:
+def apply_prompt_snapshot(loop: "PromptSnapshotHostPort[PromptSnapshot, Any]", snapshot: PromptSnapshot) -> None:
     """把 registry 快照写回 loop.history 的 system 消息。"""
     loop.update_runtime_state(prompt_snapshot=snapshot, skill_base_prompt=snapshot.text)
     message = snapshot.system_message()
@@ -826,7 +826,7 @@ def apply_prompt_snapshot(loop: "PromptSnapshotHostPort[PromptSnapshot, Registry
         loop.history[0] = message
     else:
         loop.history.insert(0, message)
-def refresh_registry_snapshot(loop: "PromptSnapshotHostPort[PromptSnapshot, RegistryT]") -> Optional[PromptSnapshot]:
+def refresh_registry_snapshot(loop: "PromptSnapshotHostPort[PromptSnapshot, Any]") -> Optional[PromptSnapshot]:
     registry = loop.prompt_registry
     if registry is None:
         return None

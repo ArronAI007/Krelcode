@@ -12,7 +12,7 @@ import importlib
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from ...agent.compression import DEFAULT_MAX_TOKENS as DEFAULT_CONTEXT_BUDGET
 from ...agent.compression import ContextManager
@@ -78,7 +78,7 @@ from ...enterprise.policy import (
     load_enterprise_policy,
 )
 from ...extensions import ExtensionRegistry, replace_runtime_extensions
-from ...hooks import HookRunner, parse_hooks
+from ...hooks import HookRunner, HookSpec, parse_hooks
 from ...lsp.manager import LSPManager, LSPOptions
 from ...lsp.tools import build_lsp_tools
 from ...output_styles import OutputStyleConfig, OutputStyleManager
@@ -87,7 +87,7 @@ from ...jobs import ShellJobManager
 from ...core.messages import Message, ToolCall
 from ...llm.base import LLMProvider, collect
 from ...llm.providers.mock import MockProvider
-from ...llm.registry import create_provider, resolve_settings
+from ...llm.registry import ProviderSettings, create_provider, resolve_settings
 from ...llm.retry import RetryPolicy, RetryingProvider
 from ...mcp.supervisor import MCPSupervisor
 from ...plugins import PluginManager
@@ -95,6 +95,8 @@ from ...plugins.signing import PluginSignatureError
 from ...plugins.trust import PluginTrustError, PluginTrustPolicy, PluginTrustStore
 from ...safety.policy import (
     AllowAllPolicy,
+    ApprovalPolicy,
+    Approver,
     EnterpriseGuardPolicy,
     SandboxPolicy,
 )
@@ -132,10 +134,8 @@ from ...session.runner import run_session
 from ...skills import BUILTIN_SKILL_ROOT, SkillManager, build_skill_tools
 from ...subagent.definition import AgentDefinitionManager
 from ...telemetry import build_telemetry_runtime
-from ...subagent.manager import (
-    SubagentManager,
-    build_subagent_system_prompt,
-)
+from ...subagent.manager import SubagentManager
+from ...subagent.models import build_subagent_system_prompt
 from ...subagent.model_aliases import resolve_agent_model_spec
 from ...contracts.tool import (
     PermissionMode,
@@ -146,6 +146,7 @@ from ...contracts.tool import (
     ToolDescriptor,
     ToolSource,
 )
+from ...contracts.service_ports import PrincipalPort, ShellJobManagerPort
 from ...tools.builtin.check_syntax import CheckSyntaxTool
 from ...tools.builtin.database_migration import (
     MigrationOptions,
@@ -176,6 +177,178 @@ from ...tools.registry import ToolRegistry
 from ...ui.approval import ApprovalBroker
 from ...ui.repl import run_repl
 from ...ui.status_line import StatusLineOptions, StatusLineRenderer
+
+__all__ = (
+    "AgentDefinitionManager",
+    "AgentLoop",
+    "AgentRuntime",
+    "AllowAllPolicy",
+    "Any",
+    "ApprovalBroker",
+    "AskUserTool",
+    "AuditError",
+    "AuthError",
+    "AutoCommitter",
+    "AutoMemoryCoordinator",
+    "AutoMemoryMode",
+    "BUILTIN_SKILL_ROOT",
+    "BrowserOptions",
+    "BrowserRuntime",
+    "CONTEXT_ENGINE_V3",
+    "Callable",
+    "CheckSyntaxTool",
+    "CheckpointManager",
+    "CompactCheckpointStore",
+    "ComplianceAuditor",
+    "ConfigError",
+    "ContextAssembler",
+    "ContextCheckpointCoordinator",
+    "ContextCheckpointStore",
+    "ContextManager",
+    "ContextOptions",
+    "CustomCommandManager",
+    "DEFAULT_AUTO_THRESHOLD",
+    "DEFAULT_CONTEXT_BUDGET",
+    "DEFAULT_SUGGEST_THRESHOLD",
+    "Dict",
+    "DirectoryRulesContextSource",
+    "EditFileTool",
+    "EnterpriseGuardPolicy",
+    "EnterprisePolicy",
+    "EnterprisePolicyError",
+    "EventBus",
+    "ExecutionSandbox",
+    "ExtensionRegistry",
+    "FindRefsTool",
+    "GetTimeTool",
+    "GlobTool",
+    "GrepTool",
+    "HookRunner",
+    "InputProcessor",
+    "JobKillTool",
+    "JobListTool",
+    "JobOutputTool",
+    "JobStartTool",
+    "LLMProvider",
+    "LSPManager",
+    "LSPOptions",
+    "List",
+    "MCPElicitationBridge",
+    "MCPSupervisor",
+    "MemorySearchTool",
+    "MemoryStore",
+    "Message",
+    "MigrationOptions",
+    "MockProvider",
+    "NotebookOptions",
+    "OIDCClient",
+    "Optional",
+    "OutputStyleConfig",
+    "OutputStyleManager",
+    "Path",
+    "PermissionMode",
+    "PluginManager",
+    "PluginSignatureError",
+    "PluginTrustError",
+    "PluginTrustPolicy",
+    "PluginTrustStore",
+    "PolicyViolation",
+    "PromptFragmentRegistry",
+    "PromptLabTool",
+    "PromptReleaseApprovalService",
+    "PromptReleasePipeline",
+    "PromptReleaseProposalStore",
+    "ReadFileTool",
+    "RepoMapTool",
+    "RetryPolicy",
+    "RetryingProvider",
+    "RuleLoader",
+    "RunCommandTool",
+    "RunMode",
+    "RuntimeSnapshot",
+    "SSOConfig",
+    "SandboxError",
+    "SandboxPolicy",
+    "SecretRedactor",
+    "ShellJobManager",
+    "SkillManager",
+    "StatusLineOptions",
+    "StatusLineRenderer",
+    "SubagentManager",
+    "Tool",
+    "ToolCall",
+    "ToolContext",
+    "ToolDescriptor",
+    "ToolRegistry",
+    "ToolSearchTool",
+    "ToolSource",
+    "UpdatePlanTool",
+    "UsageTracker",
+    "UserInputBroker",
+    "WebOptions",
+    "WebRuntime",
+    "WorkingContextStore",
+    "WriteFileTool",
+    "_restore_session",
+    "_restore_session",
+    "apply_prompt_snapshot",
+    "argparse",
+    "base_fragments",
+    "build_lsp_tools",
+    "build_migration_tools",
+    "build_notebook_tools",
+    "build_skill_tools",
+    "build_subagent_system_prompt",
+    "build_telemetry_runtime",
+    "build_workspace_context_bundle",
+    "coerce_auto_memory_mode",
+    "collect",
+    "create_provider",
+    "cyber_risk_fragment",
+    "default_budget_for",
+    "default_context_sources",
+    "effective_permission_mode",
+    "importlib",
+    "load_config_layers",
+    "load_enterprise_policy",
+    "load_managed_config",
+    "load_prompt_baseline",
+    "load_sso_config",
+    "memory_contract_fragment",
+    "parse_hooks",
+    "prompt_authoring_enabled_from_config",
+    "prompt_authoring_fragment",
+    "prompt_calibration_paths_from_config",
+    "prompt_profile_from_config",
+    "prompt_release_id_from_config",
+    "refresh_prompt_surfaces",
+    "refresh_registry_snapshot",
+    "refresh_skill_system_prompt",
+    "replace",
+    "replace_base_fragments",
+    "replace_runtime_extensions",
+    "resolve_agent_model_spec",
+    "resolve_prompt_profile",
+    "resolve_settings",
+    "restore_session",
+    "run_repl",
+    "run_session",
+    "skills_fragment",
+    "sync_custom_commands",
+    "sync_mcp_prompt_commands",
+    "sync_memory_fragment",
+    "sync_plugin_commands",
+    "sync_rule_fragments",
+    "sync_skill_commands",
+    "sys",
+    "ApprovalPolicy",
+    "Approver",
+    "HookSpec",
+    "PrincipalPort",
+    "ProviderSettings",
+    "Sequence",
+    "ShellJobManagerPort",
+)
 
 # Backward-compatible public re-export used by embedders and older tests.
 restore_session = _restore_session

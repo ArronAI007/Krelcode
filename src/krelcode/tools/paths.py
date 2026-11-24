@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..core.errors import KrelcodeError
-from .base import ToolContext
+from ..contracts.tool import ToolContext
 
 
 class PathOutsideWorkspaceError(KrelcodeError):

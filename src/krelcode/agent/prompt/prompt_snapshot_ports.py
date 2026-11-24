@@ -8,15 +8,22 @@ from krelcode.core.messages import Message
 
 
 
-SnapshotT = TypeVar("SnapshotT")
-RegistryT = TypeVar("RegistryT")
+SnapshotT = TypeVar("SnapshotT", covariant=True)
+RegistryT = TypeVar("RegistryT", covariant=True)
 
 
 class PromptSnapshotHostPort(Protocol, Generic[SnapshotT, RegistryT]):
-    history: list[Message]
-    prompt_snapshot: Optional[SnapshotT]
-    skill_base_prompt: str
-    prompt_registry: Optional[RegistryT]
+    @property
+    def history(self) -> list[Message]: ...
+
+    @property
+    def prompt_snapshot(self) -> Optional[SnapshotT]: ...
+
+    @property
+    def skill_base_prompt(self) -> str: ...
+
+    @property
+    def prompt_registry(self) -> Optional[RegistryT]: ...
 
     def update_runtime_state(self, **values: Any) -> None: ...
 

@@ -17,6 +17,7 @@ from ....agent.fragments import (
     workspace_fragments,
 )
 from ....agent.prompt_authoring import PROMPT_AUTHORING_FRAGMENT_ID
+from ....agent.prompt.prompt_release_pipeline import PromptReleaseProposal
 from ....agent.prompts import build_system_prompt
 from ....agent.tokens import estimate_history_tokens
 from ....core.messages import Message
@@ -54,7 +55,9 @@ def _prompt_release_actor() -> str:
     ).strip()
 
 
-def _prompt_release_lines(proposal, *, detailed: bool = False) -> list[str]:
+def _prompt_release_lines(
+    proposal: PromptReleaseProposal, *, detailed: bool = False
+) -> list[str]:
     lines = [
         f"  [prompt-release] {proposal.state.value} · {proposal.proposal_id}",
         f"  candidate={proposal.candidate_hash[:16]}"

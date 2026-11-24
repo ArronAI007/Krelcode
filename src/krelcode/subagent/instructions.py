@@ -62,8 +62,8 @@ class InstructionBundle:
         return "\n\n".join(
             layer.content for layer in self.layers if layer.content.strip())
 
-    def metadata(self) -> dict:
-        layer_records = []
+    def metadata(self) -> dict[str, object]:
+        layer_records: list[dict[str, object]] = []
         for layer in self.layers:
             trust = {
                 "managed": "managed",

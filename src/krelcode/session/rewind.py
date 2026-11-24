@@ -18,6 +18,9 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 from ..agent.context_plan import ContextPlanSnapshot
+from ..agent.context.context_checkpoint import ContextCheckpointStore
+from ..agent.loop import AgentLoop
+from ..agent.runtime import AgentRuntime
 from ..core.events import (
     AgentEvent,
     EventBus,
@@ -28,6 +31,7 @@ from ..core.events import (
 )
 from ..core.messages import Message
 from ..safety.runtime import (
+    PlanApprovalCoordinator,
     PlanApprovalStatus,
     PlanCheckpoint,
     PlanSnapshot,
@@ -39,7 +43,9 @@ from .checkpoint import (
     RestoreTurnsResult,
 )
 from .compact_checkpoint import restore_compact_checkpoint
+from .compact_checkpoint import CompactCheckpointStore
 from .context_checkpoint import restore_context_checkpoint
+from .lifecycle import SessionLifecycle
 
 
 class RewindError(RuntimeError):
@@ -81,9 +87,9 @@ class TurnTimeline:
         self,
         bus: EventBus,
         get_history: Callable[[], List[Message]],
-        plan_manager,
+        plan_manager: PlanApprovalCoordinator,
         checkpoints: Optional[CheckpointManager] = None,
-        context_checkpoints=None,
+        context_checkpoints: Optional[ContextCheckpointStore] = None,
     ) -> None:
         self.bus = bus
         self._get_history = get_history
@@ -256,14 +262,14 @@ class RewindCoordinator:
     def __init__(
         self,
         *,
-        runtime,
-        loop,
-        session_lifecycle,
-        plan_manager,
+        runtime: AgentRuntime,
+        loop: AgentLoop,
+        session_lifecycle: SessionLifecycle,
+        plan_manager: PlanApprovalCoordinator,
         checkpoints: Optional[CheckpointManager] = None,
-        compact_checkpoints=None,
-        context_checkpoints=None,
-        context_coordinator=None,
+        compact_checkpoints: Optional[CompactCheckpointStore] = None,
+        context_checkpoints: Optional[ContextCheckpointStore] = None,
+        context_coordinator: Optional[object] = None,
         timeline: Optional[TurnTimeline] = None,
     ) -> None:
         self.runtime = runtime

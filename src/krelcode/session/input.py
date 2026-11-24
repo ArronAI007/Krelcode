@@ -81,7 +81,9 @@ class InputProcessor:
         self,
         workspace_root: Path,
         *,
-        expander: Optional[Callable] = None,
+        expander: Optional[
+            Callable[[str, Path], tuple[str, list[str], list[ImageRef]]]
+        ] = None,
         hook_context_provider: Optional[
             Callable[[str], Awaitable[tuple[str, ...]]]
         ] = None,

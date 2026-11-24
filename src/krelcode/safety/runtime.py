@@ -49,7 +49,6 @@ class RuntimeLoopPort(Protocol):
 
     tool_context: ToolContext
     _turn_tool_context: ToolContext
-    _active_tool_pool: object | None
 
 
 def _update_loop_state(loop: object, **values: object) -> None:

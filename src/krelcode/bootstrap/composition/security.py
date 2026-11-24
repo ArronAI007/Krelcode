@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from ._deps import *  # noqa: F401,F403
 
 
@@ -10,10 +12,10 @@ def build_policy(
     workspace_root: Path,
     bus: EventBus,
     *,
-    approver=None,
+    approver: Optional[Approver] = None,
     config: Optional[Dict[str, Any]] = None,
     enterprise_policy: Optional[EnterprisePolicy] = None,
-):
+) -> ApprovalPolicy:
     """Build approval policy while preserving the managed security ceiling."""
     if enterprise_policy is None:
         # A direct embedder must not be able to convert project/user TOML
@@ -23,9 +25,12 @@ def build_policy(
     else:
         managed = enterprise_policy
     managed.validate_cli(args)
+    base: ApprovalPolicy
     if args.no_sandbox:
         base = AllowAllPolicy()
-        return EnterpriseGuardPolicy(base, managed) if managed.enabled else base
+        if managed.enabled:
+            return cast(ApprovalPolicy, EnterpriseGuardPolicy(base, managed))
+        return base
     ui_section = (config or {}).get("ui") or {}
     configured_review = (
         bool(ui_section.get("diff_review", True))
@@ -49,7 +54,9 @@ def build_policy(
         review_writes=review_writes,
         managed_policy=managed if managed.enabled else None,
     )
-    return EnterpriseGuardPolicy(base, managed) if managed.enabled else base
+    if managed.enabled:
+        return cast(ApprovalPolicy, EnterpriseGuardPolicy(base, managed))
+    return base
 
 
 def resolve_permission_mode(

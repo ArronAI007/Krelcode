@@ -14,7 +14,8 @@ import asyncio
 from pathlib import Path
 from typing import Any, Dict, List
 
-from ..base import ToolContext, ToolResult, ToolTier
+from ...contracts.tool import ToolContext
+from ..base import ToolResult, ToolTier
 from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
 from ..prompt import ToolPromptExample
 from ..repo_index import MAX_FILE_BYTES, RepoMapIndex

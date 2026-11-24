@@ -50,12 +50,16 @@ if TYPE_CHECKING:
 
 
 class _MemoryViewItem(Protocol):
-    id: str
-    scope: object
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def scope(self) -> object: ...
 
 
 class _MemoryTopic(Protocol):
-    relative_path: str
+    @property
+    def relative_path(self) -> str: ...
 
 
 class _MemoryStorePort(Protocol):

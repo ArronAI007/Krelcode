@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ._deps import *  # noqa: F401,F403
 from .mcp import build_mcp_roots, build_mcp_sampler, compose_mcp_config
 from ..parser import build_parser as _build_parser
 from .runtime import build_loop
+
+if TYPE_CHECKING:
+    from ...daemon.server import DaemonAgentRuntime, DaemonAgentRuntimeRequest
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -16,7 +21,9 @@ def build_parser() -> argparse.ArgumentParser:
     return _build_parser()
 
 
-async def build_daemon_agent_runtime(request):
+async def build_daemon_agent_runtime(
+    request: "DaemonAgentRuntimeRequest",
+) -> "DaemonAgentRuntime":
     """Composition-root factory for daemon-owned subagent runtimes."""
     from ...daemon.server import DaemonAgentRuntime
 

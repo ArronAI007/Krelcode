@@ -16,7 +16,7 @@ import os
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ..core.events import (
     AgentEvent,
@@ -57,7 +57,7 @@ class SessionRecorder:
     def __init__(
         self,
         path: Path,
-        get_history,
+        get_history: Callable[[], List[Message]],
         redactor: Optional[SecretRedactor] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -128,7 +128,7 @@ class SessionRecorder:
         self.metadata.update(metadata)
         self._write({"type": "session_meta", "ts": _now(), **metadata})
 
-    def record_context_checkpoint(self, record: dict) -> None:
+    def record_context_checkpoint(self, record: dict[str, Any]) -> None:
         """Append a content-light ContextCheckpoint reference to this session."""
         checkpoint_id = str(record.get("id", record.get("checkpoint_id", "")) or "")
         if not checkpoint_id:
@@ -144,7 +144,7 @@ class SessionRecorder:
         }
         self._write(payload)
 
-    def _event_record(self, event: AgentEvent) -> Optional[dict]:
+    def _event_record(self, event: AgentEvent) -> Optional[dict[str, Any]]:
         ts = _now()
         if isinstance(event, RunStarted):
             record = {"type": "user_input", "ts": ts, "content": event.user_input}
@@ -327,7 +327,7 @@ class SessionRecorder:
             return record
         return None  # 其余事件（delta 等）不落盘，避免文件爆炸
 
-    def _write(self, record: dict) -> None:
+    def _write(self, record: dict[str, Any]) -> None:
         try:
             line = json.dumps(record, ensure_ascii=False)
             if self._redactor is not None:

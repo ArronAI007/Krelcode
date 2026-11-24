@@ -13,6 +13,7 @@ from ...skills.parser import (
     split_allowed_tools,
 )
 from .template import CommandTemplate, split_reminder_ids
+from .types import CommandSource
 
 MAX_COMMAND_BYTES = 256_000
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -31,7 +32,7 @@ class CustomCommand:
 
     def template(self) -> CommandTemplate:
         return CommandTemplate.for_source(
-            "custom",
+            CommandSource.CUSTOM,
             scope=self.source,
             allowed_tools=self.allowed_tools,
             reminder_ids=self.reminder_ids,

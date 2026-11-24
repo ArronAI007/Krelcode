@@ -664,10 +664,10 @@ class DaemonSubagentManager:
         # Compatibility attributes assigned by the composition root.  They do
         # not control the remote manager; model changes require a daemon restart
         # until an explicit remote reconfigure RPC is introduced.
-        self.llm = None
+        self.llm: Optional[object] = None
         self.prompt_profile = ""
         self.prompt_release_id = ""
-        self.prompt_calibrations = ()
+        self.prompt_calibrations: Sequence[object] = ()
         self.hook_port = None
         self.get_parent_history = None
         self.cache_ledger_provider = None
@@ -846,10 +846,10 @@ class DaemonSubagentManager:
             raise ValueError(f"未找到 sidechain: {value}")
         return path, read_sidechain(path)
 
-    def build_tools(self):
+    def build_tools(self) -> List[object]:
         from ..subagent.tools import build_subagent_tools
 
-        return build_subagent_tools(self)
+        return cast(List[object], build_subagent_tools(self))
 
     async def shutdown(self) -> None:
         # Keep remote subagents alive when the REPL client exits.  They are

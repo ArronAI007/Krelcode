@@ -17,12 +17,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Protocol, Sequence
 
-from ..agent.query import QuerySession
+from ..agent.query import QueryEvent, QuerySession
 from ..core.events import AgentEvent, PlanUpdated
 from ..core.redact import SecretRedactor
 from .controller import SessionController
+from .envelope import SessionEnvelope
 from .event_router import EnvelopeSink, SessionEventRouter
-from .interactions import InputResolution, UserInputBroker
+from .interactions import InputResolution, UserInputBroker, UserInputRequest
 from .prompt_queue import PromptQueue
 from .state import SessionEventReducer, SessionViewState
 
@@ -121,14 +122,14 @@ class ReplSessionRunner:
         self.event_router.subscribe_event(self._handle_query_event)
         if envelope_sink is not None:
             self.event_router.subscribe_envelope(envelope_sink)
-        self.last_envelope = None
+        self.last_envelope: Optional[SessionEnvelope] = None
 
         self.queue: PromptQueue[SessionPrompt] = PromptQueue()
         self.active_query: Optional[QuerySession] = None
         self.active_prompt: Optional[SessionPrompt] = None
-        self.consumer_task: Optional[asyncio.Task] = None
-        self.approval_task: Optional[asyncio.Task] = None
-        self.input_task: Optional[asyncio.Task] = None
+        self.consumer_task: Optional[asyncio.Task[None]] = None
+        self.approval_task: Optional[asyncio.Task[Any]] = None
+        self.input_task: Optional[asyncio.Task[Optional[UserInputRequest]]] = None
         self.pending_approval: Optional[Any] = None
         self.pending_input: Optional[Any] = None
 
@@ -148,9 +149,9 @@ class ReplSessionRunner:
             or self.state.awaiting_user_input
         )
 
-    def wait_tasks(self) -> set[asyncio.Task]:
+    def wait_tasks(self) -> set[asyncio.Task[Any]]:
         """返回前台循环应等待的任务集合。"""
-        tasks: set[asyncio.Task] = set()
+        tasks: set[asyncio.Task[Any]] = set()
         if self.active_query is not None:
             tasks.add(self.active_query.task)
         if self.consumer_task is not None:
@@ -161,7 +162,7 @@ class ReplSessionRunner:
             tasks.add(self.input_task)
         return tasks
 
-    def arm_approval_watcher(self) -> Optional[asyncio.Task]:
+    def arm_approval_watcher(self) -> Optional[asyncio.Task[Any]]:
         """没有待展示审批时，常驻等待 broker 的下一个请求。"""
         if (self.approval_broker is None
                 or self.pending_approval is not None):
@@ -172,7 +173,9 @@ class ReplSessionRunner:
             self.approval_broker.next_request())
         return self.approval_task
 
-    def arm_input_watcher(self) -> Optional[asyncio.Task]:
+    def arm_input_watcher(
+        self,
+    ) -> Optional[asyncio.Task[Optional[UserInputRequest]]]:
         """没有待展示输入时，常驻等待 broker 的下一个请求。"""
         if self.input_broker is None or self.pending_input is not None:
             return None
@@ -182,39 +185,42 @@ class ReplSessionRunner:
             self.input_broker.next_request())
         return self.input_task
 
-    async def process_completed(self, done: set[asyncio.Task]) -> bool:
+    async def process_completed(
+        self,
+        done: set[asyncio.Task[Any]],
+    ) -> bool:
         """处理前台 ``asyncio.wait`` 的结果；返回是否发生了查询收尾。"""
         handled = False
         if self.input_task is not None and self.input_task in done:
             watcher = self.input_task
             self.input_task = None
-            request: Optional[Any] = None
+            input_request: Optional[UserInputRequest] = None
             try:
-                request = watcher.result()
+                input_request = watcher.result()
             except asyncio.CancelledError:
-                request = None
+                input_request = None
             except Exception as exc:
                 self._on_notice(
                     f"用户输入监听失败: {type(exc).__name__}: {exc}")
-            if request is not None:
-                self.pending_input = request
-                self._on_user_input(request)
+            if input_request is not None:
+                self.pending_input = input_request
+                self._on_user_input(input_request)
                 handled = True
 
         if self.approval_task is not None and self.approval_task in done:
             watcher = self.approval_task
             self.approval_task = None
-            request: Optional[Any] = None
+            approval_request: Optional[Any] = None
             try:
-                request = watcher.result()
+                approval_request = watcher.result()
             except asyncio.CancelledError:
-                request = None
+                approval_request = None
             except Exception as exc:  # broker/transport 故障必须可见
                 self._on_notice(
                     f"审批监听失败: {type(exc).__name__}: {exc}")
-            if request is not None:
-                self.pending_approval = request
-                self._on_approval(request)
+            if approval_request is not None:
+                self.pending_approval = approval_request
+                self._on_approval(approval_request)
                 handled = True
 
         if (self.pending_approval is not None
@@ -265,7 +271,7 @@ class ReplSessionRunner:
         self.arm_input_watcher()
         return query
 
-    def _handle_query_event(self, query_event) -> None:
+    def _handle_query_event(self, query_event: QueryEvent) -> None:
         event = query_event.event
         if isinstance(event, PlanUpdated):
             self.controller.record_plan(

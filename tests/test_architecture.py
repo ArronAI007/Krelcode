@@ -240,7 +240,8 @@ def test_ui_does_not_import_composition_root_or_entrypoints():
 
 def test_relative_import_resolver_handles_parent_packages():
     imports = imported_modules(ROOT / "session" / "restore.py")
-    assert "krelcode.agent.loop" in imports
+    assert "krelcode.agent.context.context_checkpoint_ports" in imports
+    assert "krelcode.agent.prompt.prompt_snapshot_ports" in imports
     assert "krelcode.session.recorder" in imports
 
 

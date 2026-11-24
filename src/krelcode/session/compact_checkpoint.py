@@ -13,11 +13,12 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 from ..agent.compact_summary import CompactSummary, summary_from_history
 from ..core.messages import Message
 from ..core.redact import SecretRedactor
+from ..contracts.tool import ToolContext
 from .codec import history_from_dicts, history_to_dicts
 from .context_checkpoint import (
     FileHash,
@@ -30,6 +31,13 @@ from .context_checkpoint import (
 COMPACT_CHECKPOINT_DIRNAME = Path(".krelcode") / "compact-checkpoints"
 COMPACT_CHECKPOINT_VERSION = 2
 _SUPPORTED_COMPACT_CHECKPOINT_VERSIONS = {1, COMPACT_CHECKPOINT_VERSION}
+
+
+class CompactCheckpointHostPort(Protocol):
+    history: list[Message]
+    tool_context: ToolContext
+
+    def update_runtime_state(self, **values: object) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -48,7 +56,7 @@ class CompactCheckpoint:
     file_hashes: Tuple[FileHash, ...] = ()
     pre_compact_history: Tuple[Message, ...] = ()
 
-    def record(self) -> dict:
+    def record(self) -> dict[str, object]:
         """Content-free metadata for events and session JSONL."""
         return {
             "id": self.id,
@@ -96,9 +104,9 @@ class CompactCheckpointStore:
         after_tokens: int,
         session_id: str = "",
         turn_id: str = "",
-        boundary: Optional[Dict[str, object]] = None,
-        source_savings: Optional[Dict[str, int]] = None,
-        working_context: Optional[Dict[str, object]] = None,
+        boundary: Optional[Mapping[str, object]] = None,
+        source_savings: Optional[Mapping[str, int]] = None,
+        working_context: Optional[Mapping[str, object]] = None,
         file_hashes: Optional[Sequence[FileHash]] = None,
         created_at: Optional[float] = None,
     ) -> Optional[CompactCheckpoint]:
@@ -169,7 +177,9 @@ class CompactCheckpointStore:
                 continue
             if checkpoint.created_at <= float(created_at):
                 candidates.append(checkpoint)
-        return max(candidates, key=lambda item: item.created_at, default=None)
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item.created_at)
 
     def find_matching_before(
         self,
@@ -199,9 +209,13 @@ class CompactCheckpointStore:
             return None
         return self._load_file(self.dir / f"{safe}.json")
 
-    def list(self, *, limit: int = 20) -> List[dict]:
-        records = [item.record() for item in self._load_all()]
-        return sorted(records, key=lambda item: item["created_at"], reverse=True)[:limit]
+    def list(self, *, limit: int = 20) -> List[dict[str, object]]:
+        checkpoints = sorted(
+            self._load_all(),
+            key=lambda item: item.created_at,
+            reverse=True,
+        )
+        return [item.record() for item in checkpoints[:limit]]
 
     def _next_id(self, timestamp: float) -> str:
         maximum = 0
@@ -276,7 +290,10 @@ class CompactCheckpointStore:
         )
 
 
-def restore_compact_checkpoint(loop, checkpoint: CompactCheckpoint) -> FileIntegrity:
+def restore_compact_checkpoint(
+    loop: CompactCheckpointHostPort,
+    checkpoint: CompactCheckpoint,
+) -> FileIntegrity:
     """Restore the exact pre-compact task scene and invalidate stale files."""
     loop.update_runtime_state(last_compact_checkpoint=checkpoint)
     store = getattr(loop, "working_context_store", None)

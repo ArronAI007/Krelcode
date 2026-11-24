@@ -17,16 +17,24 @@ from collections import deque
 from dataclasses import dataclass, field
 from itertools import count
 from pathlib import Path
-from typing import Any, Optional, Protocol, TextIO
+from typing import Any, cast, Callable, Iterator, Optional, Protocol, TextIO
 
 from ..agent.runtime import AgentRuntime
 from ..agent.usage import UsageTotals, UsageTracker
-from ..core.events import ShellJobFinished, ShellJobOutput, ShellJobStarted
+from ..core.events import (
+    AgentEvent,
+    ShellJobFinished,
+    ShellJobOutput,
+    ShellJobStarted,
+)
 from ..core.redact import SecretRedactor
-from ..agent.query import QueryEvent
+from ..core.session_events import SessionEventPayload, as_session_event_payload
+from ..agent.query import QueryEvent, QuerySession
 from .controller import SessionController
-from .input import InputEnvelope, InputKind, InputProcessor
+from .input import InputAction, InputEnvelope, InputKind, InputProcessor
 from .interactions import UserInputBroker
+from .commands.types import CommandResult
+from .commands.ports import MCPSupervisorPort, SubagentManagerCommandPort
 from .stream_json import (
     StreamControlMessage,
     StreamJsonEncoder,
@@ -80,7 +88,7 @@ async def run_stream_json_session(
     output_stream: Optional[TextIO] = None,
     approval_broker: Optional[_ApprovalBrokerPort] = None,
     user_input_broker: Optional[UserInputBroker] = None,
-    log=print,
+    log: Callable[[str], None] = print,
 ) -> int:
     """运行 stream-json 输入输出；返回进程退出码。"""
     input_stream = input_stream or sys.stdin
@@ -100,9 +108,11 @@ async def run_stream_json_session(
     writer.emit(encoder.init_message())
     controller = SessionController(
         runtime,
-        mcp_supervisor=runtime.mcp_supervisor,
+        mcp_supervisor=cast(
+            Optional[MCPSupervisorPort], runtime.mcp_supervisor),
         mcp_reload=runtime.mcp_reload,
-        subagents=runtime.subagents,
+        subagents=cast(
+            Optional[SubagentManagerCommandPort], runtime.subagents),
         usage=usage,
         skills=getattr(loop, "skill_manager", None),
         workspace_root=runtime.workspace_root,
@@ -112,7 +122,7 @@ async def run_stream_json_session(
     )
     command_counter = count(1)
 
-    def on_job_event(event) -> None:
+    def on_job_event(event: AgentEvent) -> None:
         if isinstance(event, (ShellJobStarted, ShellJobOutput, ShellJobFinished)):
             # 后台 job 独立于 turn；全局订阅保证 turn 结束后仍能实时输出。
             writer.emit(encoder.job_event_message(event))
@@ -189,16 +199,16 @@ async def _run_turn(
     runtime: AgentRuntime,
     message: StreamUserMessage,
     *,
-    input_queue: asyncio.Queue,
+    input_queue: asyncio.Queue[Any],
     input_processor: Optional[InputProcessor],
     usage: UsageTracker,
     writer: _JsonlWriter,
     encoder: StreamJsonEncoder,
     controller: SessionController,
-    command_counter,
+    command_counter: Iterator[int],
     approval_broker: Optional[_ApprovalBrokerPort],
     user_input_broker: Optional[UserInputBroker],
-    log,
+    log: Callable[[str], None],
 ) -> _TurnOutcome:
     """执行一个 turn；同时监听 interrupt/end，并保留后续 user 消息顺序。"""
     started = time.monotonic()
@@ -351,8 +361,8 @@ async def _run_turn(
 
 async def _monitor_during_turn(
     runtime: AgentRuntime,
-    query,
-    input_queue: asyncio.Queue,
+    query: QuerySession,
+    input_queue: asyncio.Queue[Any],
     outcome: _TurnOutcome,
     *,
     writer: _JsonlWriter,
@@ -468,7 +478,7 @@ def _emit_idle_interaction_response(
     })
 
 
-async def _read_inputs(stream: TextIO, queue: asyncio.Queue) -> None:
+async def _read_inputs(stream: TextIO, queue: asyncio.Queue[Any]) -> None:
     """逐行读取 stdin，不阻塞 Provider/MCP 等后台协程。"""
     try:
         while True:
@@ -490,7 +500,7 @@ async def _read_inputs(stream: TextIO, queue: asyncio.Queue) -> None:
             f"读取 stdin 失败: {type(exc).__name__}: {exc}"))
 
 
-async def _next_item(queue: asyncio.Queue, pending: deque[Any]) -> Any:
+async def _next_item(queue: asyncio.Queue[Any], pending: deque[Any]) -> Any:
     if pending:
         return pending.popleft()
     return await queue.get()
@@ -500,8 +510,8 @@ async def _prepare_input(
     processor: Optional[InputProcessor],
     raw_prompt: str,
     *,
-    log,
-):
+    log: Callable[[str], None],
+) -> Optional[InputAction]:
     if processor is None:
         return None
     action = await processor.process(
@@ -513,17 +523,17 @@ async def _prepare_input(
 
 async def _run_command_action(
     controller: SessionController,
-    action,
+    action: InputAction,
     message: StreamUserMessage,
     *,
     command_turn_id: str,
     writer: _JsonlWriter,
     encoder: StreamJsonEncoder,
-):
-    captured = []
+) -> tuple[CommandResult, int]:
+    captured: list[SessionEventPayload] = []
 
-    def capture(event) -> None:
-        captured.append(event)
+    def capture(event: AgentEvent) -> None:
+        captured.append(as_session_event_payload(event))
 
     unsubscribe = controller.loop.bus.subscribe(capture)
     try:

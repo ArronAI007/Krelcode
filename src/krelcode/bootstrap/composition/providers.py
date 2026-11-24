@@ -5,7 +5,15 @@ from __future__ import annotations
 from ._deps import *  # noqa: F401,F403
 
 
-def build_llm(args: argparse.Namespace, config: Dict[str, Any], log=print) -> LLMProvider:
+def _default_log(message: str) -> None:
+    print(message)
+
+
+def build_llm(
+    args: argparse.Namespace,
+    config: Dict[str, Any],
+    log: Callable[[str], None] = _default_log,
+) -> LLMProvider:
     if args.provider == "mock" or args.mock:
         # 演示脚本：第一轮 LLM 决定调用 get_time，拿到结果后给出最终回复
         return MockProvider(

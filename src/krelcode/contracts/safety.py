@@ -14,16 +14,11 @@ class SandboxPort(Protocol):
     implementation.
     """
 
-    backend: str
-    network: bool
-    enabled: bool
-    network_allowed: bool
-    network_controlled: bool
-    os_enforced: bool
-    shell_write_scope: str
-    file_write_scope: str
-    protected_paths_enforced: bool
-    sensitive_reads_protected: bool
+    @property
+    def backend(self) -> str: ...
+
+    @property
+    def network(self) -> bool: ...
 
     def audit_command(self, command: str, cwd: Path) -> str | None:
         ...

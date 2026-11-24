@@ -55,7 +55,7 @@ class AgentHandle:
     error: Optional[str] = None
     turns: int = 0
     queue: List[str] = field(default_factory=list)
-    task_obj: Optional[asyncio.Task] = field(default=None, repr=False)
+    task_obj: Optional[asyncio.Task[None]] = field(default=None, repr=False)
     worktree: Optional[Path] = None
     branch: Optional[str] = None
     forked: bool = False

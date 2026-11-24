@@ -281,7 +281,12 @@ def _json_type_matches(value: object, schema: Mapping[str, object]) -> bool:
     expected = schema.get("type")
     if expected is None:
         return True
-    allowed = (expected,) if isinstance(expected, str) else tuple(expected)
+    if isinstance(expected, str):
+        allowed = (expected,)
+    elif isinstance(expected, (list, tuple)):
+        allowed = tuple(expected)
+    else:
+        return False
     for item in allowed:
         if item == "null" and value is None:
             return True
@@ -335,14 +340,16 @@ def validate_stream_event(message: Mapping[str, object]) -> None:
     if not isinstance(subtype, str) or not subtype:
         raise StreamJsonSchemaError("stream event.subtype 必须是非空字符串")
 
+    schema: StreamJsonEventSchema
     if event_type == "event":
         schema = StreamJsonEventSchema(
             "event", subtype, (), envelope=_ENVELOPE)
     else:
-        schema = OUTPUT_EVENT_SCHEMAS.get((event_type, subtype))
-        if schema is None:
+        matched_schema = OUTPUT_EVENT_SCHEMAS.get((event_type, subtype))
+        if matched_schema is None:
             raise StreamJsonSchemaError(
                 f"未知 stream event: {event_type}/{subtype}")
+        schema = matched_schema
     _validate_required_fields(message, schema, include_subtype=True)
     _validate_known_field_types(message, schema)
     if event_type == "system" and subtype == "init":

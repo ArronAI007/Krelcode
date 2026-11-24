@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from .memory_base import MemoryStoreBase
 from .memory_models import (
     MEMORY_SCOPE_ORDER,
     MemoryEntry,
@@ -17,7 +18,7 @@ from .memory_models import (
 )
 from .memory_utils import memory_digest
 
-class MemoryStoreMigrationMixin:
+class MemoryStoreMigrationMixin(MemoryStoreBase):
     def migrate(
         self,
         scope: MemoryScope | str = MemoryScope.PROJECT,
@@ -107,12 +108,13 @@ class MemoryStoreMigrationMixin:
             backup_path: Optional[Path] = None
             if changed:
                 stamp = time.strftime("%Y%m%d-%H%M%S")
-                backup_path = path.with_name(f"{path.name}.bak-{stamp}")
+                candidate = path.with_name(f"{path.name}.bak-{stamp}")
                 suffix = 1
-                while backup_path.exists():
-                    backup_path = path.with_name(
+                while candidate.exists():
+                    candidate = path.with_name(
                         f"{path.name}.bak-{stamp}-{suffix}")
                     suffix += 1
+                backup_path = candidate
                 try:
                     shutil.copy2(path, backup_path)
                     self._write_scope(path, ordered)

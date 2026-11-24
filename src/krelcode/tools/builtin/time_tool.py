@@ -9,7 +9,8 @@ from datetime import datetime
 from typing import Any, Dict
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from ..base import ToolContext, ToolResult
+from ...contracts.tool import ToolContext
+from ..base import ToolResult
 from ..prompt import ToolPromptExample
 
 

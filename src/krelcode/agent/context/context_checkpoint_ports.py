@@ -46,7 +46,8 @@ class WorkingContextPort(Protocol):
 
 
 class MemoryEntryPort(Protocol):
-    id: str
+    @property
+    def id(self) -> str: ...
 
 
 class CompactStorePort(Protocol):
@@ -58,7 +59,9 @@ class MemoryStorePort(Protocol):
 
 
 class WorkingStorePort(Protocol):
-    def restore_snapshot(self, raw: object) -> WorkingContextPort: ...
+    def restore_snapshot(
+        self, raw: Mapping[str, object]
+    ) -> WorkingContextPort: ...
     def snapshot(self) -> WorkingContextPort: ...
     def invalidate_files(
         self, paths: Sequence[str], *, reason: str = "",
@@ -66,31 +69,69 @@ class WorkingStorePort(Protocol):
 
 
 class ContextManagerRestorePort(Protocol):
-    last_summary: object
-    last_summary_source: str
-    last_generation: int
+    @property
+    def last_summary(self) -> object: ...
+
+    @property
+    def last_summary_source(self) -> str: ...
+
+    @property
+    def last_generation(self) -> int: ...
 
     def rebuild_state(self, history: Sequence[Message]) -> object: ...
 
 
 class CheckpointLoopPort(Protocol):
-    history: list[Message]
-    tool_context: ToolContext
-    context_manager: Optional[ContextManagerRestorePort]
-    working_context_store: WorkingStorePort
-    last_compact_checkpoint: object
-    last_context_restore: Optional[object]
-    last_context_plan: Optional[ContextPlanPort]
-    last_context_cache_ledger: object
-    previous_context_cache_ledger: object
-    pending_context_refresh: bool
-    restored_memory_context: tuple[str, ...]
-    restored_relevant_memory_ids: tuple[str, ...]
-    restored_context_checkpoint_id: str
-    context_integrity: object
-    context_workspace_fingerprint: object
-    restored_workspace_fingerprint: object
-    bus: EventBus
+    @property
+    def history(self) -> list[Message]: ...
+
+    @property
+    def tool_context(self) -> ToolContext: ...
+
+    @property
+    def context_manager(self) -> Optional[ContextManagerRestorePort]: ...
+
+    @property
+    def working_context_store(self) -> WorkingStorePort: ...
+
+    @property
+    def last_compact_checkpoint(self) -> object: ...
+
+    @property
+    def last_context_restore(self) -> Optional[object]: ...
+
+    @property
+    def last_context_plan(self) -> Optional[ContextPlanPort]: ...
+
+    @property
+    def last_context_cache_ledger(self) -> object: ...
+
+    @property
+    def previous_context_cache_ledger(self) -> object: ...
+
+    @property
+    def pending_context_refresh(self) -> bool: ...
+
+    @property
+    def restored_memory_context(self) -> tuple[str, ...]: ...
+
+    @property
+    def restored_relevant_memory_ids(self) -> tuple[str, ...]: ...
+
+    @property
+    def restored_context_checkpoint_id(self) -> str: ...
+
+    @property
+    def context_integrity(self) -> object: ...
+
+    @property
+    def context_workspace_fingerprint(self) -> object: ...
+
+    @property
+    def restored_workspace_fingerprint(self) -> object: ...
+
+    @property
+    def bus(self) -> EventBus: ...
 
     def rebuild_working_context(self) -> WorkingContextPort: ...
     async def refresh_workspace_context(self) -> object: ...

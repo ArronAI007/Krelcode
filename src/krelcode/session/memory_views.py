@@ -7,12 +7,14 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Iterable, Optional
 
+from .memory_base import MemoryStoreBase
 from .memory_models import (
     MAX_INDEX_CHARS,
     MAX_INDEX_ENTRIES,
     MAX_INDEX_LINE_CHARS,
     STRUCTURED_MEMORY_TYPES,
     MemoryIndexSnapshot,
+    MemoryEntry,
     MemoryScope,
     MemoryTopic,
     coerce_memory_scope,
@@ -20,7 +22,7 @@ from .memory_models import (
 )
 from .memory_utils import _entry_topic_slug, _one_line, memory_topic_slug
 
-class MemoryStoreViewMixin:
+class MemoryStoreViewMixin(MemoryStoreBase):
     def memory_topics(
         self,
         *,
@@ -190,4 +192,3 @@ class MemoryStoreViewMixin:
             max_entries=MAX_INDEX_ENTRIES,
         )
         return project_snapshot, user_snapshot
-

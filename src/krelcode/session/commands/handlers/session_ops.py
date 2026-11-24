@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
+from ....agent.context.context_checkpoint_ports import CheckpointLoopPort
 from ...export import export_native_session, export_session
 from ...lifecycle import (
     SessionConfirmationRequired,
@@ -88,7 +90,8 @@ async def handle_resume(ctx: CommandContext) -> CommandResult:
     if ctx.session_lifecycle is not None:
         restored = ctx.session_lifecycle.resume(path, log=output.append)
     else:
-        restored = restore_session(ctx.loop, path, log=output.append)
+        restored = restore_session(
+            cast(CheckpointLoopPort, ctx.loop), path, log=output.append)
     return _ok(*output, clear_tool_outputs=restored)
 
 
@@ -109,11 +112,12 @@ async def handle_fork(ctx: CommandContext) -> CommandResult:
         except ValueError:
             return _ok("  turn 编号必须是正整数")
         try:
-            result = ctx.rewind.fork_turn(turn_index, title)
+            fork_result = ctx.rewind.fork_turn(turn_index, title)
         except RewindError as exc:
             return _ok(f"  [fork] {exc}")
         return _ok(
-            f"  [fork] 已从 turn {result.source_turn} 创建并切换到: {result.path}",
+            f"  [fork] 已从 turn {fork_result.source_turn}"
+            f" 创建并切换到: {fork_result.path}",
             "  仅分叉 history + plan；工作区文件保持当前状态",
             clear_tool_outputs=True,
         )
@@ -140,29 +144,30 @@ async def handle_rewind(ctx: CommandContext) -> CommandResult:
         except ValueError:
             return _ok("  turn 编号必须是正整数")
         try:
-            result = ctx.rewind.fork_turn(turn_index, title)
+            rewind_fork_result = ctx.rewind.fork_turn(turn_index, title)
         except RewindError as exc:
             return _ok(f"  [rewind fork] {exc}")
         return _ok(
-            f"  [rewind fork] 已从 turn {result.source_turn} 创建并切换到: {result.path}",
+            f"  [rewind fork] 已从 turn {rewind_fork_result.source_turn}"
+            f" 创建并切换到: {rewind_fork_result.path}",
             "  仅分叉 history + plan；工作区文件保持当前状态",
             clear_tool_outputs=True,
         )
     try:
         turn_index = int(arguments)
-        result = ctx.rewind.rewind(turn_index)
+        rewind_result = ctx.rewind.rewind(turn_index)
     except ValueError:
         return _ok(
             "  用法: /rewind [n|list] | /rewind fork <n> [名称]")
     except RewindError as exc:
         return _ok(f"  [rewind] {exc}")
-    files = result.files
+    files = rewind_result.files
     detail = (
         f"恢复 {len(files.restored)} 个文件、删除 {len(files.deleted)} 个新建文件"
         if files.groups else "该范围没有可恢复的文件 checkpoint")
     return _ok(
-        f"  [rewind] 已回到 turn {result.target_index} 开始前"
-        f"（{result.label}）；移除 {result.removed_turns} 轮",
+        f"  [rewind] 已回到 turn {rewind_result.target_index} 开始前"
+        f"（{rewind_result.label}）；移除 {rewind_result.removed_turns} 轮",
         f"  history + plan 已恢复；{detail}",
         "  注意：run_command 造成的文件修改不在 checkpoint 追踪范围",
         clear_tool_outputs=True,

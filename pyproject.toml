@@ -54,4 +54,7 @@ files = [
     "src/krelcode/llm",
     "src/krelcode/safety",
     "src/krelcode/agent",
+    "src/krelcode/session",
+    "src/krelcode/subagent",
+    "src/krelcode/bootstrap",
 ]
