@@ -8,20 +8,16 @@ import json
 import os
 import signal
 import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..config import load_config_layers
 from ..core.events import (
+    AgentEvent,
     EventBus,
     ShellJobFinished,
     ShellJobOutput,
     ShellJobStarted,
-    SubagentFeedUpdated,
-    SubagentFinished,
-    SubagentSpawned,
-    SubagentStateChanged,
 )
 from ..core.redact import SecretRedactor
 from ..jobs import ShellJobError, ShellJobManager, ShellJobNotFound, ShellJobStatus
@@ -47,6 +43,12 @@ from .protocol import (
     read_message,
     write_message,
 )
+from .server_agents import DaemonAgentService
+from .server_runtime import (
+    DaemonAgentRuntime,
+    DaemonAgentRuntimeFactory,
+    DaemonAgentRuntimeRequest,
+)
 from .storage import AgentRecordStore, DurableJobRecord, JobRecordStore
 from .transport import (
     DaemonEndpoint,
@@ -55,35 +57,6 @@ from .transport import (
 )
 
 DAEMON_IDLE_CHECK_SECONDS = 15.0
-
-
-@dataclass(frozen=True)
-class DaemonAgentRuntimeRequest:
-    """Inputs needed by the composition root to build daemon-owned agents."""
-
-    workspace_root: Path
-    config_path: Optional[Path]
-    config: Dict[str, Any]
-    no_sandbox: bool = False
-    sandbox_backend: Optional[str] = None
-    sandbox_network: Optional[bool] = None
-    auto_approve: bool = False
-    permission_mode: Optional[str] = None
-    log: Callable[[str], None] = print
-
-
-@dataclass(frozen=True)
-class DaemonAgentRuntime:
-    """Concrete agent runtime returned by an injected composition factory."""
-
-    loop: Any
-    agents: Any
-    mcp_supervisor: Any = None
-
-
-DaemonAgentRuntimeFactory = Callable[
-    [DaemonAgentRuntimeRequest], Awaitable[DaemonAgentRuntime]
-]
 
 
 class DaemonServer:
@@ -100,7 +73,7 @@ class DaemonServer:
         auto_approve: bool = False,
         permission_mode: Optional[str] = None,
         agent_runtime_factory: Optional[DaemonAgentRuntimeFactory] = None,
-        log=print,
+        log: Callable[[str], None] = print,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.paths = DaemonPaths(self.workspace_root).ensure()
@@ -127,17 +100,29 @@ class DaemonServer:
         self._server: Optional[asyncio.AbstractServer] = None
         self._endpoint: Optional[DaemonEndpoint] = None
         self._stop_event = asyncio.Event()
-        self._serve_task: Optional[asyncio.Task] = None
-        self._idle_task: Optional[asyncio.Task] = None
-        self._file_task: Optional[asyncio.Task] = None
-        self._file_workers: set[asyncio.Task] = set()
+        self._serve_task: Optional[asyncio.Task[None]] = None
+        self._idle_task: Optional[asyncio.Task[None]] = None
+        self._file_task: Optional[asyncio.Task[None]] = None
+        self._file_workers: set[asyncio.Task[None]] = set()
         self._last_activity = time.monotonic()
-        self._agent_loop = None
-        self._agent_mcp_supervisor = None
-        self._agents = None
-        self._agent_lock = asyncio.Lock()
         self._closed = False
         self._started = False
+        self.agent_service = DaemonAgentService(
+            workspace_root=self.workspace_root,
+            config_path=self.config_path,
+            config=self.config,
+            no_sandbox=self.no_sandbox,
+            sandbox_backend=self.sandbox_backend,
+            sandbox_network=self.sandbox_network,
+            auto_approve=self.auto_approve,
+            permission_mode=self.permission_mode,
+            runtime_factory=self.agent_runtime_factory,
+            agent_store=self.agent_store,
+            job_manager=self.jobs,
+            redactor=self.redactor,
+            instance_id=self.instance_id,
+            log=self.log,
+        )
         self.bus.subscribe(self._on_job_event)
 
     # -- lifecycle -------------------------------------------------------------
@@ -245,24 +230,7 @@ class DaemonServer:
                 task.cancel()
             await asyncio.gather(*self._file_workers, return_exceptions=True)
             self._file_workers.clear()
-        if self._agents is not None:
-            try:
-                await self._agents.shutdown()
-            except Exception:
-                pass
-        if self._agent_mcp_supervisor is not None:
-            try:
-                await self._agent_mcp_supervisor.close_all()
-            except Exception:
-                pass
-            self._agent_mcp_supervisor = None
-        if self._agent_loop is not None:
-            lsp_manager = getattr(self._agent_loop, "lsp_manager", None)
-            if lsp_manager is not None:
-                try:
-                    await lsp_manager.close()
-                except Exception:
-                    pass
+        await self.agent_service.shutdown()
         try:
             await self.jobs.shutdown()
         finally:
@@ -379,14 +347,7 @@ class DaemonServer:
     def _has_active_work(self) -> bool:
         if any(job.running for job in self.jobs.list_jobs()):
             return True
-        if self._agents is not None:
-            try:
-                if any(self._agents.is_running(handle)
-                       for handle in self._agents._handles.values()):
-                    return True
-            except Exception:
-                pass
-        return False
+        return self.agent_service.has_active_work()
 
     def _touch(self) -> None:
         self._last_activity = time.monotonic()
@@ -448,12 +409,23 @@ class DaemonServer:
         if op.startswith("job."):
             return await self._dispatch_job(op[4:], params)
         if op.startswith("agent."):
-            return await self._dispatch_agent(op[6:], params)
+            return await self.agent_service.dispatch(op[6:], params)
         raise RPCError(f"未知 daemon operation: {op}", code="unknown_operation")
 
     async def _delayed_stop(self) -> None:
         await asyncio.sleep(0.1)
         await self.stop()
+
+    # Compatibility wrappers for callers that used the historical private
+    # methods before agent runtime management became a composed service.
+    async def _ensure_agent_runtime(self) -> Tuple[Any, Any]:
+        return await self.agent_service._ensure_runtime()
+
+    async def _dispatch_agent(self, operation: str, params: Dict[str, Any]) -> Any:
+        return await self.agent_service.dispatch(operation, params)
+
+    async def _on_agent_event(self, event: AgentEvent) -> None:
+        await self.agent_service.on_event(event)
 
     def status(self) -> Dict[str, Any]:
         durable_jobs = self.job_store.list()
@@ -468,13 +440,13 @@ class DaemonServer:
             "active_jobs": sum(job.running for job in self.jobs.list_jobs()),
             "durable_jobs": len(durable_jobs),
             "agents": len(self.agent_store.list()),
-            "agent_runtime_loaded": self._agents is not None,
+            "agent_runtime_loaded": self.agent_service.runtime_loaded,
             "issues": [*self.job_store.issues[-10:], *self.agent_store.issues[-10:]],
         }
 
     # -- jobs ------------------------------------------------------------------
 
-    async def _on_job_event(self, event) -> None:
+    async def _on_job_event(self, event: AgentEvent) -> None:
         try:
             if isinstance(event, ShellJobStarted):
                 info = self.jobs.get(event.job_id)
@@ -535,18 +507,18 @@ class DaemonServer:
                     "truncated": page.truncated,
                 }
             except ShellJobNotFound:
-                page = self.job_store.output(
+                durable_page = self.job_store.output(
                     job_id,
                     after_sequence=int(params.get("after_sequence") or 0),
                     max_chars=int(params.get("max_chars") or 30_000),
                 )
-                if page is None:
+                if durable_page is None:
                     raise
                 return {
-                    "job": _job_info_dict(page.job),
-                    "text": page.text,
-                    "next_sequence": page.next_sequence,
-                    "truncated": page.truncated,
+                    "job": _job_info_dict(durable_page.job),
+                    "text": durable_page.text,
+                    "next_sequence": durable_page.next_sequence,
+                    "truncated": durable_page.truncated,
                 }
         if operation == "kill":
             job_id = _required(params, "job_id")
@@ -605,219 +577,6 @@ class DaemonServer:
         return ExecutionSandbox(
             self.workspace_root, backend=str(backend), network=network)
 
-    # -- subagents -------------------------------------------------------------
-
-    async def _ensure_agent_runtime(self) -> Tuple[Any, Any]:
-        async with self._agent_lock:
-            if self._agents is not None:
-                return self._agent_loop, self._agents
-            if self.agent_runtime_factory is None:
-                raise RuntimeError(
-                    "daemon agent runtime 未配置；请由组合根注入 "
-                    "agent_runtime_factory")
-            runtime = await self.agent_runtime_factory(DaemonAgentRuntimeRequest(
-                workspace_root=self.workspace_root,
-                config_path=self.config_path,
-                config=dict(self.config),
-                no_sandbox=self.no_sandbox,
-                sandbox_backend=self.sandbox_backend,
-                sandbox_network=self.sandbox_network,
-                auto_approve=self.auto_approve,
-                permission_mode=self.permission_mode,
-                log=lambda text: self.log(f"[daemon:agent] {text}"),
-            ))
-            loop = runtime.loop
-            agents = runtime.agents
-            self._agent_mcp_supervisor = runtime.mcp_supervisor
-            redactor = loop.services.core.redactor or self.redactor
-            agents.redactor = redactor
-            agents.sidechains.redactor = redactor
-            # Child tools use the daemon's durable job manager, so jobs started
-            # by subagents remain controllable after the spawning client leaves.
-            loop.services.core.tool_context.shell_jobs = self.jobs
-            if getattr(agents, "tool_context", None) is not None:
-                agents.tool_context.shell_jobs = self.jobs
-            agents.bus.subscribe(self._on_agent_event)
-            self._agent_loop = loop
-            self._agents = agents
-            return loop, agents
-
-    async def _on_agent_event(self, event) -> None:
-        try:
-            if isinstance(event, SubagentSpawned):
-                handle = self._agents.get(event.agent_id) if self._agents else None
-                if handle is not None:
-                    await asyncio.to_thread(
-                        self.agent_store.upsert,
-                        handle.id,
-                        _agent_record(handle, self.instance_id),
-                    )
-                return
-            agent_id = getattr(event, "agent_id", "")
-            if not agent_id or self._agents is None:
-                return
-            handle = self._agents.get(agent_id)
-            if handle is None:
-                return
-            values = _agent_record(handle, self.instance_id)
-            if isinstance(event, SubagentStateChanged):
-                values["reason"] = event.reason
-            elif isinstance(event, SubagentFeedUpdated):
-                values["latest_sequence"] = event.sequence
-            elif isinstance(event, SubagentFinished):
-                values["result"] = handle.result
-                values["error"] = handle.error
-            await asyncio.to_thread(self.agent_store.upsert, agent_id, values)
-        except Exception as exc:
-            self.agent_store.issues.append(f"agent event 持久化失败: {exc}")
-
-    async def _dispatch_agent(self, operation: str, params: Dict[str, Any]) -> Any:
-        if operation == "list":
-            return self._merged_agents()
-        if operation == "definitions":
-            _, manager = await self._ensure_agent_runtime()
-            return {"lines": manager.definition_lines()}
-        if operation == "sidechains":
-            _, manager = await self._ensure_agent_runtime()
-            return {"lines": manager.sidechain_lines(limit=int(params.get("limit") or 50))}
-        if operation == "sidechain":
-            _, manager = await self._ensure_agent_runtime()
-            path, records = manager.read_sidechain(_required(params, "agent_id"))
-            return {"path": str(path), "records": list(records)}
-        if operation == "spawn":
-            _, manager = await self._ensure_agent_runtime()
-            handle = await manager.spawn(
-                _required(params, "task"),
-                isolated=_optional_bool(params.get("isolated")),
-                fork_context=_optional_bool(params.get("fork_context")),
-                definition=(str(params.get("definition") or "").strip() or None),
-            )
-            await asyncio.to_thread(
-                self.agent_store.upsert,
-                handle.id,
-                _agent_record(handle, self.instance_id),
-            )
-            return _handle_dict(handle)
-        if operation in {"wait", "feed", "send_input", "pause", "resume", "kill"}:
-            agent_id = _required(params, "agent_id")
-            durable = self.agent_store.load(agent_id)
-            if operation == "feed" and (
-                    durable is not None
-                    and durable.get("status") not in {"running", "paused", "queued"}):
-                return self._durable_agent_feed(
-                    agent_id,
-                    after_sequence=int(params.get("after_sequence") or 0),
-                    limit=int(params.get("limit") or 200),
-                )
-            if operation == "wait" and (
-                    durable is not None
-                    and durable.get("status") not in {"running", "paused", "queued"}):
-                return durable
-            _, manager = await self._ensure_agent_runtime()
-            if operation == "wait":
-                handle = await manager.wait(
-                    agent_id, timeout=float(params.get("timeout") or 60.0))
-                await asyncio.to_thread(
-                    self.agent_store.upsert,
-                    handle.id,
-                    _agent_record(handle, self.instance_id),
-                )
-                return _handle_dict(handle)
-            if operation == "feed":
-                page = manager.feed(
-                    agent_id,
-                    after_sequence=int(params.get("after_sequence") or 0),
-                    limit=int(params.get("limit") or 200),
-                )
-                return {
-                    "agent_id": page.agent_id,
-                    "after_sequence": page.after_sequence,
-                    "latest_sequence": page.latest_sequence,
-                    "next_sequence": page.next_sequence,
-                    "dropped_through": page.dropped_through,
-                    "entries": [
-                        {
-                            "agent_id": entry.agent_id,
-                            "sequence": entry.sequence,
-                            "kind": entry.kind,
-                            "text": entry.text,
-                            "ts": entry.ts,
-                            "data": entry.data,
-                        }
-                        for entry in page.entries
-                    ],
-                }
-            if operation == "send_input":
-                handle, action = await manager.send_input(
-                    agent_id,
-                    _required(params, "message"),
-                    interrupt=bool(params.get("interrupt")),
-                )
-            elif operation == "pause":
-                handle = await manager.pause(agent_id)
-                action = "paused"
-            elif operation == "resume":
-                handle = await manager.resume(agent_id)
-                action = "resumed"
-            else:
-                handle = await manager.kill(agent_id)
-                action = "killed"
-            await asyncio.to_thread(
-                self.agent_store.upsert,
-                handle.id,
-                _agent_record(handle, self.instance_id),
-            )
-            return {"action": action, "agent": _handle_dict(handle)}
-        raise RPCError(f"未知 agent operation: {operation}", code="unknown_operation")
-
-    def _durable_agent_feed(
-        self, agent_id: str, *, after_sequence: int, limit: int,
-    ) -> Dict[str, Any]:
-        from ..subagent.sidechain import SidechainStore, read_sidechain
-
-        store = SidechainStore(self.workspace_root, redactor=self.redactor)
-        path = store.resolve(agent_id)
-        if path is None:
-            raise RPCError(f"未找到子代理 sidechain: {agent_id}", code="not_found")
-        records = read_sidechain(path)
-        entries = [
-            {
-                "agent_id": agent_id,
-                "sequence": int(item.get("sequence") or 0),
-                "kind": str(item.get("kind") or "event"),
-                "text": str(item.get("text") or ""),
-                "ts": float(item.get("ts") or 0.0),
-                "data": dict(item.get("data") or {}),
-            }
-            for item in records
-            if item.get("type") == "feed"
-            and int(item.get("sequence") or 0) > max(0, int(after_sequence))
-        ]
-        entries = entries[:max(1, min(int(limit), 1_000))]
-        latest = max(
-            [int(item.get("sequence") or 0) for item in records
-             if item.get("type") == "feed"] or [0])
-        return {
-            "agent_id": agent_id,
-            "after_sequence": max(0, int(after_sequence)),
-            "latest_sequence": latest,
-            "next_sequence": entries[-1]["sequence"] if entries else max(0, int(after_sequence)),
-            "dropped_through": 0,
-            "entries": entries,
-        }
-
-    def _merged_agents(self) -> List[Dict[str, Any]]:
-        records = {str(item.get("agent_id")): item for item in self.agent_store.list()}
-        if self._agents is not None:
-            for handle in self._agents._handles.values():
-                records[handle.id] = _agent_record(handle, self.instance_id)
-        ordered = sorted(
-            records.values(),
-            key=lambda item: float(item.get("updated_at") or item.get("started_at") or 0),
-            reverse=True,
-        )
-        return ordered
-
 
 def _required(params: Dict[str, Any], key: str) -> str:
     value = str(params.get(key) or "").strip()
@@ -826,11 +585,8 @@ def _required(params: Dict[str, Any], key: str) -> str:
     return value
 
 
-def _optional_bool(value: Any) -> Optional[bool]:
-    return None if value is None else bool(value)
 
-
-def _job_info_dict(info) -> Dict[str, Any]:
+def _job_info_dict(info: Any) -> Dict[str, Any]:
     return {
         "job_id": info.job_id,
         "command": info.command,
@@ -844,52 +600,6 @@ def _job_info_dict(info) -> Dict[str, Any]:
         "log_path": info.log_path,
     }
 
-
-def _agent_record(handle, instance_id: str) -> Dict[str, Any]:
-    return {
-        "agent_id": handle.id,
-        "daemon_instance_id": instance_id,
-        "task": handle.task,
-        "definition": handle.definition,
-        "status": handle.status,
-        "turns": handle.turns,
-        "result": handle.result,
-        "error": handle.error,
-        "worktree": str(handle.worktree) if handle.worktree else "",
-        "branch": handle.branch or "",
-        "forked": bool(handle.forked),
-        "sidechain_path": str(handle.sidechain_path or ""),
-        "model": handle.model,
-        "provider": handle.provider,
-        "permission_mode": handle.permission_mode,
-        "mcp_servers": list(handle.mcp_servers),
-        "latest_sequence": handle.feed.latest_sequence if handle.feed else 0,
-        "queue": list(handle.queue),
-        "started_at": getattr(handle, "started_at", None) or time.time(),
-    }
-
-
-def _handle_dict(handle) -> Dict[str, Any]:
-    return {
-        "agent_id": handle.id,
-        "task": handle.task,
-        "definition": handle.definition,
-        "status": handle.status,
-        "turns": handle.turns,
-        "result": handle.result,
-        "error": handle.error,
-        "preview": handle.preview(),
-        "worktree": str(handle.worktree) if handle.worktree else "",
-        "branch": handle.branch or "",
-        "forked": bool(handle.forked),
-        "sidechain_path": str(handle.sidechain_path or ""),
-        "model": handle.model,
-        "provider": handle.provider,
-        "permission_mode": handle.permission_mode,
-        "mcp_servers": list(handle.mcp_servers),
-        "queue": list(handle.queue),
-        "latest_sequence": handle.feed.latest_sequence if handle.feed else 0,
-    }
 
 
 async def run_daemon(
