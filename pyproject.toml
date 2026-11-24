@@ -44,3 +44,11 @@ krelcode = ["builtin_skills/**/SKILL.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = [
+    "src/krelcode/core",
+    "src/krelcode/contracts",
+]

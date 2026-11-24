@@ -235,6 +235,11 @@ report/tuning/candidate，不自动提交或替换 accepted baseline。
 - Python 作业使用 3.11 / 3.12 × Linux / macOS / Windows 六格矩阵，依次执行
   architecture tests、全量 pytest、sdist/wheel 构建和 wheel metadata 校验。
   metadata 校验会拒绝意外进入普通安装的第三方运行时依赖。
+- Architecture gate 同时覆盖顶层包与根级模块依赖策略、精确模块循环基线、超大文件上限，
+  以及 `loop.xxx = ...` / `getattr(loop, ...)` / `setattr(loop, ...)` 动态访问基线。
+  现有债务冻结在 `architecture/baseline.toml`，只能缩小，不能继续增长。
+- `core` 与 `contracts` 通过 mypy strict 门禁；CI 在 architecture tests 后执行
+  `python -m mypy`。
 - 安装器作业在 Linux/macOS 上执行 `bash -n`、`install.sh --dry-run` 与安装器集成测试。
 - TypeScript SDK 与 VS Code extension 使用独立作业，按 `npm ci` 安装锁定依赖，并执行
   test、typecheck、build；VS Code 作业会先构建 SDK 作为 workspace 依赖。
@@ -245,6 +250,7 @@ report/tuning/candidate，不自动提交或替换 accepted baseline。
 
 ```bash
 PYTHONPATH=src python -m pytest -q tests/test_architecture.py tests/test_engineering_ci.py
+PYTHONPATH=src python -m mypy
 PYTHONPATH=src python -m pytest -q
 python -m compileall -q src/krelcode
 git diff --check

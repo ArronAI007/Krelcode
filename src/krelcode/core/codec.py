@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from .messages import (
     ImageBlock,
@@ -14,6 +14,7 @@ from .messages import (
     StructuredBlock,
     TextBlock,
     ToolCall,
+    ToolResultBlock,
 )
 
 
@@ -53,11 +54,12 @@ def message_from_dict(d: Dict[str, Any]) -> Message:
             ToolCall(
                 id=tc.get("id", ""),
                 name=tc.get("name", ""),
-                arguments=dict(tc.get("arguments") or {}),
+                arguments=dict(cast(Dict[str, Any], tc.get("arguments") or {})),
             )
             for tc in d["tool_calls"]
         ]
     meta = d.get("provider_meta")
+    tool_meta = d.get("tool_meta")
     return Message(
         role=d.get("role", "assistant"),
         content=d.get("content"),
@@ -72,8 +74,8 @@ def message_from_dict(d: Dict[str, Any]) -> Message:
             if d.get("tool_is_error") is not None else None
         ),
         tool_meta=(
-            dict(d.get("tool_meta"))
-            if isinstance(d.get("tool_meta"), dict) else None
+            dict(tool_meta)
+            if isinstance(tool_meta, dict) else None
         ),
     )
 
@@ -112,7 +114,7 @@ def history_from_dicts(raw: List[Dict[str, Any]]) -> List[Message]:
     return [message_from_dict(d) for d in raw]
 
 
-def _block_to_dict(block) -> Dict[str, Any]:
+def _block_to_dict(block: ToolResultBlock) -> Dict[str, Any]:
     if isinstance(block, TextBlock):
         return {"type": "text", "text": block.text}
     if isinstance(block, ImageBlock):
@@ -136,10 +138,10 @@ def _block_to_dict(block) -> Dict[str, Any]:
     return {"type": "text", "text": str(block)}
 
 
-def _blocks_from_dict(raw: Any):
+def _blocks_from_dict(raw: Any) -> Optional[List[ToolResultBlock]]:
     if not isinstance(raw, list):
         return None
-    blocks = []
+    blocks: List[ToolResultBlock] = []
     for item in raw:
         if not isinstance(item, dict):
             continue

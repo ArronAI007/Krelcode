@@ -1,0 +1,227 @@
+version = 1
+
+# Existing intra-package cycles are frozen here. New cycles fail the architecture
+# gate; remove entries as the corresponding modules are decoupled.
+[[cycles]]
+modules = [
+  "benchmarks.acceptance",
+  "benchmarks.behavior",
+  "benchmarks.prompt",
+  "benchmarks.report_store",
+  "benchmarks.tuning",
+]
+reason = "Benchmark runners still share report/session helpers in both directions."
+
+[[cycles]]
+modules = [
+  "ui.conversation_host",
+  "ui.repl",
+  "ui.terminal_presenter",
+]
+reason = "Conversation host, terminal presenter and REPL primitives share one module surface."
+
+[[cycles]]
+modules = [
+  "agent.context_source",
+  "agent.working_context",
+]
+reason = "Working Context projection is currently defined next to its store."
+
+[[cycles]]
+modules = [
+  "subagent.manager",
+  "subagent.tools",
+]
+reason = "Subagent tool adapters currently depend on the concrete manager."
+
+[file_size]
+# New production files may not exceed this limit. Files already above it are
+# capped at their current size and may only shrink.
+max_unlisted_lines = 800
+
+[file_size.limits]
+"benchmarks/behavior.py" = 3397
+"session/commands/handlers/runtime_ops.py" = 1889
+"session/memory.py" = 1808
+"benchmarks/prompt.py" = 1559
+"benchmarks/acceptance.py" = 1477
+"agent/prompt_assembler.py" = 1383
+"agent/prompt_release_pipeline.py" = 1376
+"bootstrap/composition.py" = 1281
+"ui/repl.py" = 1222
+"session/memory_candidates.py" = 1157
+"plugins/manager.py" = 1069
+"agent/context_checkpoint.py" = 1043
+"agent/context_inspection.py" = 1030
+"subagent/manager.py" = 1021
+"agent/prompt_parity.py" = 1011
+"daemon/server.py" = 947
+"safety/sandbox.py" = 926
+"daemon/client.py" = 925
+"ui/diff_review.py" = 919
+"agent/working_context.py" = 919
+"tools/builtin/database_migration.py" = 892
+"agent/prompt_authoring.py" = 890
+"agent/fragments.py" = 882
+"agent/prompt_plan.py" = 881
+"agent/compression.py" = 864
+"agent/compact_summary.py" = 863
+"browser/runtime.py" = 860
+"enterprise/auth.py" = 848
+"llm/base.py" = 817
+"agent/context_turn.py" = 802
+
+[loop_dynamic_access.limits."bootstrap/composition.py"]
+assignments = 42
+getattr = 5
+setattr = 0
+
+[loop_dynamic_access.limits."bootstrap/application.py"]
+assignments = 9
+getattr = 10
+setattr = 0
+
+[loop_dynamic_access.limits."session/commands/handlers/runtime_ops.py"]
+assignments = 3
+getattr = 43
+setattr = 0
+
+[loop_dynamic_access.limits."agent/context_checkpoint.py"]
+assignments = 17
+getattr = 15
+setattr = 0
+
+[loop_dynamic_access.limits."session/restore.py"]
+assignments = 5
+getattr = 11
+setattr = 0
+
+[loop_dynamic_access.limits."session/lifecycle.py"]
+assignments = 2
+getattr = 11
+setattr = 0
+
+[loop_dynamic_access.limits."ui/terminal_presenter.py"]
+assignments = 0
+getattr = 5
+setattr = 0
+
+[loop_dynamic_access.limits."ui/conversation_host.py"]
+assignments = 2
+getattr = 1
+setattr = 0
+
+[loop_dynamic_access.limits."agent/prompt_surface_catalog.py"]
+assignments = 0
+getattr = 19
+setattr = 1
+
+[loop_dynamic_access.limits."agent/context_inspection.py"]
+assignments = 0
+getattr = 11
+setattr = 0
+
+[loop_dynamic_access.limits."session/controller.py"]
+assignments = 0
+getattr = 7
+setattr = 0
+
+[loop_dynamic_access.limits."session/rewind.py"]
+assignments = 3
+getattr = 4
+setattr = 0
+
+[loop_dynamic_access.limits."session/compact_checkpoint.py"]
+assignments = 3
+getattr = 3
+setattr = 0
+
+[loop_dynamic_access.limits."session/runner.py"]
+assignments = 1
+getattr = 3
+setattr = 0
+
+[loop_dynamic_access.limits."session/bootstrap.py"]
+assignments = 1
+getattr = 3
+setattr = 0
+
+[loop_dynamic_access.limits."session/memory_candidates.py"]
+assignments = 0
+getattr = 2
+setattr = 0
+
+[loop_dynamic_access.limits."session/memory.py"]
+assignments = 0
+getattr = 2
+setattr = 0
+
+[loop_dynamic_access.limits."session/commands/handlers/memory_ops.py"]
+assignments = 0
+getattr = 3
+setattr = 0
+
+[loop_dynamic_access.limits."session/commands/handlers/prompt_surface_ops.py"]
+assignments = 0
+getattr = 2
+setattr = 0
+
+[loop_dynamic_access.limits."session/commands/handlers/security_ops.py"]
+assignments = 0
+getattr = 1
+setattr = 0
+
+[loop_dynamic_access.limits."session/commands/handlers/session_ops.py"]
+assignments = 0
+getattr = 1
+setattr = 0
+
+[loop_dynamic_access.limits."session/stream_json_runner.py"]
+assignments = 0
+getattr = 1
+setattr = 0
+
+[loop_dynamic_access.limits."subagent/manager.py"]
+assignments = 12
+getattr = 1
+setattr = 0
+
+[loop_dynamic_access.limits."agent/fragments.py"]
+assignments = 2
+getattr = 1
+setattr = 0
+
+[loop_dynamic_access.limits."agent/runtime.py"]
+assignments = 1
+getattr = 0
+setattr = 0
+
+[loop_dynamic_access.limits."safety/runtime.py"]
+assignments = 2
+getattr = 2
+setattr = 0
+
+[loop_dynamic_access.limits."security_review/runner.py"]
+assignments = 2
+getattr = 0
+setattr = 0
+
+[loop_dynamic_access.limits."review.py"]
+assignments = 2
+getattr = 0
+setattr = 0
+
+[loop_dynamic_access.limits."daemon/server.py"]
+assignments = 0
+getattr = 2
+setattr = 0
+
+[loop_dynamic_access.limits."benchmarks/behavior.py"]
+assignments = 1
+getattr = 1
+setattr = 14
+
+[loop_dynamic_access.limits."benchmarks/prompt.py"]
+assignments = 12
+getattr = 0
+setattr = 0

@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import ast
+import tomllib
+from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
-ROOT = Path(__file__).parent.parent / "src" / "krelcode"
+PROJECT_ROOT = Path(__file__).parent.parent
+ROOT = PROJECT_ROOT / "src" / "krelcode"
+BASELINE_PATH = PROJECT_ROOT / "architecture" / "baseline.toml"
 
 
+@lru_cache(maxsize=None)
 def imported_modules(path: Path) -> set[str]:
     """返回 Python 文件中的静态 import 及相对 import 的完整模块名。"""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -30,7 +36,45 @@ def imported_modules(path: Path) -> set[str]:
                 imported = node.module or ""
             if imported:
                 found.add(imported)
+                # ``from . import repl`` carries the imported module in the
+                # alias, not in ``node.module``. Preserve those edges so the
+                # module graph and cycle gate see real imports.
+                if node.module is None:
+                    found.update(f"{imported}.{alias.name}" for alias in node.names)
     return found
+
+
+@lru_cache(maxsize=1)
+def architecture_baseline() -> dict[str, Any]:
+    return tomllib.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+
+
+@lru_cache(maxsize=1)
+def production_modules() -> dict[str, Path]:
+    """Return every production module keyed by import name."""
+    modules: dict[str, Path] = {}
+    for path in ROOT.rglob("*.py"):
+        if "__pycache__" in path.parts:
+            continue
+        parts = list(path.relative_to(ROOT.parent).with_suffix("").parts)
+        if parts[-1] == "__init__":
+            parts.pop()
+        modules[".".join(parts)] = path
+    return modules
+
+
+@lru_cache(maxsize=1)
+def imported_module_dependencies() -> dict[str, set[str]]:
+    """Build the exact module graph, including root-level modules."""
+    modules = production_modules()
+    graph = {name: set() for name in modules}
+    for name, path in modules.items():
+        graph[name].update(
+            target
+            for target in imported_modules(path)
+            if target in modules and target != name
+        )
+    return graph
 
 
 def modules_under(package: str) -> list[Path]:
@@ -122,6 +166,105 @@ def test_relative_import_resolver_handles_parent_packages():
     assert "krelcode.session.recorder" in imports
 
 
+def test_module_cycles_match_the_frozen_baseline():
+    assert architecture_baseline()["version"] == 1
+    graph = imported_module_dependencies()
+    actual = {
+        tuple(module.removeprefix("krelcode.") for module in component)
+        for component in strongly_connected_components(graph)
+        if len(component) > 1
+    }
+    expected = {
+        tuple(sorted(cycle["modules"]))
+        for cycle in architecture_baseline().get("cycles", [])
+    }
+    assert actual == expected, {
+        "new_cycles": sorted(actual - expected),
+        "stale_baseline": sorted(expected - actual),
+    }
+
+
+def test_oversized_files_match_the_frozen_baseline():
+    baseline = architecture_baseline()["file_size"]
+    limits = baseline["limits"]
+    unlisted_limit = int(baseline["max_unlisted_lines"])
+    violations: dict[str, dict[str, int]] = {}
+    seen: set[str] = set()
+    for path in sorted(ROOT.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        relative = path.relative_to(ROOT).as_posix()
+        current = len(path.read_text(encoding="utf-8").splitlines())
+        limit = int(limits.get(relative, unlisted_limit))
+        if relative in limits:
+            seen.add(relative)
+        if current > limit:
+            violations[relative] = {"current": current, "limit": limit}
+    missing = set(limits) - seen
+    assert not violations, violations
+    assert not missing, f"baseline references missing files: {sorted(missing)}"
+
+
+def _ends_in_loop(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Name) and node.id == "loop"
+    ) or (
+        isinstance(node, ast.Attribute) and node.attr == "loop"
+    )
+
+
+def _assigns_loop_attribute(target: ast.AST) -> bool:
+    if isinstance(target, ast.Attribute):
+        return _ends_in_loop(target.value)
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_assigns_loop_attribute(item) for item in target.elts)
+    return False
+
+
+def loop_dynamic_access_counts(path: Path) -> dict[str, int]:
+    counts = {"assignments": 0, "getattr": 0, "setattr": 0}
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(_assigns_loop_attribute(target) for target in targets):
+                counts["assignments"] += 1
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        if not _ends_in_loop(node.args[0]):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id == "getattr":
+            counts["getattr"] += 1
+        elif isinstance(node.func, ast.Name) and node.func.id == "setattr":
+            counts["setattr"] += 1
+    return counts
+
+
+def test_loop_dynamic_access_does_not_grow_beyond_baseline():
+    limits = architecture_baseline()["loop_dynamic_access"]["limits"]
+    violations: dict[str, dict[str, int]] = {}
+    seen: set[str] = set()
+    for path in sorted(ROOT.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        relative = path.relative_to(ROOT).as_posix()
+        if relative in limits:
+            seen.add(relative)
+        actual = loop_dynamic_access_counts(path)
+        allowed = {
+            key: int(limits.get(relative, {}).get(key, 0))
+            for key in actual
+        }
+        if any(actual[key] > allowed[key] for key in actual):
+            violations[relative] = {
+                "actual": actual,
+                "allowed": allowed,
+            }
+    missing = set(limits) - seen
+    assert not violations, violations
+    assert not missing, f"baseline references missing files: {sorted(missing)}"
+
+
 # ---------------------------------------------------------------------------
 # Package dependency contract
 # ---------------------------------------------------------------------------
@@ -132,8 +275,9 @@ def test_relative_import_resolver_handles_parent_packages():
 PACKAGE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "core": frozenset(),
     "bootstrap": frozenset({
-        "agent", "browser", "contracts", "core", "daemon", "enterprise", "jobs",
-        "llm", "lsp", "mcp", "plugins", "safety", "security_review",
+        "agent", "browser", "config", "contracts", "core", "daemon",
+        "enterprise", "extensions", "hooks", "jobs", "llm", "lsp", "mcp",
+        "output_styles", "plugins", "review", "safety", "security_review",
         "session", "skills", "subagent", "telemetry", "tools", "ui", "web",
     }),
     "contracts": frozenset({"core"}),
@@ -151,7 +295,7 @@ PACKAGE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "enterprise": frozenset({"contracts", "core"}),
     "agent": frozenset({"contracts", "core", "llm", "safety", "tools"}),
     "security_review": frozenset(
-        {"agent", "contracts", "core", "llm", "safety", "tools"}),
+        {"agent", "config", "contracts", "core", "llm", "safety", "tools"}),
     "subagent": frozenset(
         {"agent", "contracts", "core", "llm", "safety", "skills", "tools"}),
     "session": frozenset({
@@ -159,21 +303,48 @@ PACKAGE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
         "skills", "tools",
     }),
     "ui": frozenset({"agent", "core", "safety", "session"}),
-    "daemon": frozenset({"core", "jobs", "safety", "subagent"}),
+    "daemon": frozenset({"app", "config", "core", "jobs", "safety", "subagent"}),
     "telemetry": frozenset({"core"}),
     "benchmarks": frozenset({
-        "agent", "contracts", "core", "llm", "safety", "session",
-        "subagent", "tools",
+        "agent", "app", "config", "contracts", "core", "extensions", "llm",
+        "safety", "sdk", "session", "subagent", "tools",
     }),
     "entrypoints": frozenset({
-        "agent", "benchmarks", "core", "daemon", "enterprise", "jobs",
-        "security_review", "telemetry",
+        "agent", "app", "benchmarks", "config", "core", "daemon", "doctor",
+        "enterprise", "jobs", "review", "scaffold", "security_review",
+        "telemetry",
     }),
+}
+
+# Root-level modules are production components too. Keeping this list explicit
+# prevents configuration, hooks, SDK facades or new top-level modules from
+# bypassing the dependency contract simply by living outside a package.
+ROOT_MODULE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
+    "__main__": frozenset({"entrypoints"}),
+    "app": frozenset({"bootstrap", "core", "enterprise", "entrypoints", "llm"}),
+    "config": frozenset({"core"}),
+    "doctor": frozenset({
+        "agent", "config", "core", "enterprise", "llm", "safety", "telemetry",
+    }),
+    "extensions": frozenset(),
+    "hooks": frozenset({"agent", "core", "safety"}),
+    "output_styles": frozenset({"agent"}),
+    "review": frozenset({
+        "agent", "config", "contracts", "core", "llm", "safety", "tools",
+    }),
+    "scaffold": frozenset(),
+    "sdk": frozenset({"core"}),
+}
+
+COMPONENT_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
+    **PACKAGE_ALLOWED_DEPENDENCIES,
+    **ROOT_MODULE_ALLOWED_DEPENDENCIES,
 }
 
 BENCHMARK_IMPORT_BOUNDARY = frozenset({"benchmarks", "entrypoints"})
 
 
+@lru_cache(maxsize=1)
 def production_packages() -> set[str]:
     """Return importable top-level production packages."""
     return {
@@ -183,13 +354,36 @@ def production_packages() -> set[str]:
     }
 
 
-def imported_package_dependencies() -> dict[str, set[str]]:
-    """Build the package graph from static imports, excluding composition files."""
+@lru_cache(maxsize=1)
+def production_root_modules() -> set[str]:
+    """Return governed top-level modules, excluding the package initializer."""
+    return {
+        path.stem
+        for path in ROOT.glob("*.py")
+        if path.stem != "__init__"
+    }
+
+
+@lru_cache(maxsize=1)
+def production_components() -> set[str]:
+    return production_packages() | production_root_modules()
+
+
+@lru_cache(maxsize=1)
+def imported_component_dependencies() -> dict[str, set[str]]:
+    """Build the package + root-module graph from static imports."""
     packages = production_packages()
-    known = {f"krelcode.{package}" for package in packages}
-    dependencies: dict[str, set[str]] = {package: set() for package in packages}
-    for package in packages:
-        for path in modules_under(package):
+    components = production_components()
+    dependencies: dict[str, set[str]] = {
+        component: set() for component in components
+    }
+    for component in components:
+        paths = (
+            modules_under(component)
+            if component in packages
+            else [ROOT / f"{component}.py"]
+        )
+        for path in paths:
             imports = imported_modules(path)
             targets = {
                 name.split(".", 2)[1]
@@ -197,11 +391,23 @@ def imported_package_dependencies() -> dict[str, set[str]]:
                 for name in imports
                 if name != "krelcode"
             }
-            for target in targets:
-                full_target = f"krelcode.{target}"
-                if full_target in known and target != package:
-                    dependencies[package].add(target)
+            dependencies[component].update(
+                target
+                for target in targets
+                if target in components and target != component
+            )
     return dependencies
+
+
+@lru_cache(maxsize=1)
+def imported_package_dependencies() -> dict[str, set[str]]:
+    """Project the component graph onto package-only edges."""
+    packages = production_packages()
+    return {
+        package: dependencies & packages
+        for package, dependencies in imported_component_dependencies().items()
+        if package in packages
+    }
 
 
 def strongly_connected_components(
@@ -250,12 +456,34 @@ def test_every_production_package_has_an_explicit_dependency_policy():
     assert set(PACKAGE_ALLOWED_DEPENDENCIES) == packages
 
 
+def test_every_root_module_has_an_explicit_dependency_policy():
+    root_modules = production_root_modules()
+    assert set(ROOT_MODULE_ALLOWED_DEPENDENCIES) == root_modules
+
+
+def test_every_production_component_has_a_dependency_policy():
+    components = production_components()
+    assert set(COMPONENT_ALLOWED_DEPENDENCIES) == components
+
+
+def test_component_dependencies_are_whitelisted():
+    actual = imported_component_dependencies()
+    violations = {
+        component: sorted(dependencies - COMPONENT_ALLOWED_DEPENDENCIES[component])
+        for component, dependencies in actual.items()
+        if dependencies - COMPONENT_ALLOWED_DEPENDENCIES[component]
+    }
+    assert not violations
+
+
 def test_package_dependencies_are_whitelisted():
     actual = imported_package_dependencies()
+    packages = production_packages()
     violations = {
-        package: sorted(dependencies - PACKAGE_ALLOWED_DEPENDENCIES[package])
+        package: sorted(
+            dependencies - (PACKAGE_ALLOWED_DEPENDENCIES[package] & packages))
         for package, dependencies in actual.items()
-        if dependencies - PACKAGE_ALLOWED_DEPENDENCIES[package]
+        if dependencies - (PACKAGE_ALLOWED_DEPENDENCIES[package] & packages)
     }
     assert not violations
 
@@ -270,9 +498,23 @@ def test_production_package_graph_has_no_strongly_connected_components():
 
 
 def test_dependency_whitelist_itself_is_acyclic():
+    packages = production_packages()
     whitelist = {
-        package: set(dependencies)
+        package: set(dependencies) & packages
         for package, dependencies in PACKAGE_ALLOWED_DEPENDENCIES.items()
+    }
+    cycles = [
+        component for component in strongly_connected_components(whitelist)
+        if len(component) > 1
+    ]
+    assert not cycles
+
+
+def test_root_module_dependency_whitelist_is_acyclic():
+    root_modules = production_root_modules()
+    whitelist = {
+        module: set(dependencies) & root_modules
+        for module, dependencies in ROOT_MODULE_ALLOWED_DEPENDENCIES.items()
     }
     cycles = [
         component for component in strongly_connected_components(whitelist)

@@ -55,7 +55,10 @@ BLOCK_PATH_PREFIXES = (
 )
 
 
-def classify_secret_path(path, workspace_root) -> Optional[str]:
+def classify_secret_path(
+    path: str | Path,
+    workspace_root: str | Path,
+) -> Optional[str]:
     """判定工作区内路径是否敏感；返回 "block"/"redact_env"/"redact_toml" 或 None。"""
     root = Path(workspace_root)
     candidate = Path(path).expanduser()

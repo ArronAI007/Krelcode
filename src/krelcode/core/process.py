@@ -21,11 +21,16 @@ import signal
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Mapping, Optional
+from typing import Callable, Mapping, Optional, TypedDict
 
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
 _WINDOWS_TASKKILL_TIMEOUT = 5.0
 _TASKKILL_SUCCESS_CODES = frozenset({0, 128})
+
+
+class ProcessIsolationKwargs(TypedDict, total=False):
+    creationflags: int
+    start_new_session: bool
 
 
 @dataclass(frozen=True)
@@ -45,7 +50,7 @@ class ProcessPlatform:
     def shell_argv(self, command: str) -> list[str]:
         return [self.shell, *self.shell_args, command]
 
-    def subprocess_kwargs(self) -> dict[str, object]:
+    def subprocess_kwargs(self) -> ProcessIsolationKwargs:
         """Return isolation flags accepted by asyncio subprocess APIs."""
         if self.windows:
             return {"creationflags": _CREATE_NEW_PROCESS_GROUP}
@@ -57,7 +62,7 @@ def detect_process_platform(
     os_name: Optional[str] = None,
     sys_platform: Optional[str] = None,
     environ: Optional[Mapping[str, str]] = None,
-    which=shutil.which,
+    which: Callable[[str], Optional[str]] = shutil.which,
 ) -> ProcessPlatform:
     """Resolve process semantics with injectable inputs for cross-platform tests."""
     os_name = os.name if os_name is None else os_name
@@ -100,7 +105,7 @@ def shell_argv(command: str) -> list[str]:
     return current_process_platform().shell_argv(command)
 
 
-def process_isolation_kwargs() -> dict[str, object]:
+def process_isolation_kwargs() -> ProcessIsolationKwargs:
     return current_process_platform().subprocess_kwargs()
 
 
@@ -139,7 +144,7 @@ def terminate_process_tree(
     if getattr(proc, "returncode", None) is not None:
         return True
     if resolved.family == "posix":
-        target_signal = signal.SIGKILL if force else signal.SIGTERM
+        target_signal: int = signal.SIGKILL if force else signal.SIGTERM
         if sig is not None:
             target_signal = sig
         try:
@@ -201,18 +206,17 @@ def _terminate_windows_tree(pid: int, *, force: bool) -> bool:
     command = [executable, "/PID", str(int(pid)), "/T"]
     if force:
         command.append("/F")
-    kwargs: dict[str, object] = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-        "timeout": _WINDOWS_TASKKILL_TIMEOUT,
-        "check": False,
-    }
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    if creationflags:
-        kwargs["creationflags"] = creationflags
     try:
-        completed = subprocess.run(command, **kwargs)
+        completed = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=_WINDOWS_TASKKILL_TIMEOUT,
+            check=False,
+            creationflags=creationflags,
+        )
         return completed.returncode in _TASKKILL_SUCCESS_CODES
     except (OSError, subprocess.SubprocessError):
         return False
@@ -220,6 +224,7 @@ def _terminate_windows_tree(pid: int, *, force: bool) -> bool:
 
 __all__ = [
     "ProcessPlatform",
+    "ProcessIsolationKwargs",
     "current_process_platform",
     "detect_process_platform",
     "process_isolation_kwargs",

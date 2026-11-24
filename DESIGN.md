@@ -2202,6 +2202,8 @@ SecurityReviewReport
 `pytest` 与 `mypy` 只通过 `dev` optional dependency 安装，普通 wheel 的运行时依赖仍为空。
 主 CI 使用 Python 3.11/3.12 × Linux/macOS/Windows 矩阵运行架构门禁与全量测试，并独立验证
 安装器、Python 包构建、TypeScript SDK 和 VS Code extension。
+架构门禁以 `architecture/baseline.toml` 冻结现有模块循环、超大文件和 AgentLoop 动态属性
+访问债务；新代码不得增加这些模式。`core` 与 `contracts` 使用 mypy strict，运行时依赖仍为空。
 
 ## Stream JSON 与 Python SDK（Step 73）
 

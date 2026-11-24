@@ -128,7 +128,9 @@ class EvidenceRecord:
 
     @property
     def source_value(self) -> str:
-        return self.source.value
+        if isinstance(self.source, EvidenceSource):
+            return self.source.value
+        return EvidenceSource(self.source).value
 
 
 def render_evidence_set(

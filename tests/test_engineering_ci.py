@@ -7,10 +7,17 @@ ROOT = Path(__file__).parent.parent
 
 
 def test_runtime_stays_dependency_free_and_dev_extra_is_explicit():
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    project = pyproject["project"]
 
     assert project["dependencies"] == []
     assert set(project["optional-dependencies"]["dev"]) == {"pytest", "mypy"}
+    mypy = pyproject["tool"]["mypy"]
+    assert mypy["strict"] is True
+    assert mypy["files"] == [
+        "src/krelcode/core",
+        "src/krelcode/contracts",
+    ]
 
 
 def test_primary_ci_covers_required_platforms_and_guarantees():
@@ -23,6 +30,7 @@ def test_primary_ci_covers_required_platforms_and_guarantees():
         '"3.11"',
         '"3.12"',
         "tests/test_architecture.py",
+        "python -m mypy",
         "python -m pytest -q",
         "python -m build",
     ):
