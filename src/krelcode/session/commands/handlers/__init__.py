@@ -9,34 +9,36 @@ from ..types import CommandResult, CommandSource
 from .memory_ops import handle_memory
 from .prompt_surface_ops import handle_prompts
 from .security_ops import handle_security_review
-from .runtime_ops import (
+from .command_ops import (
     handle_agents,
-    handle_allow,
     handle_commands,
-    handle_compact,
-    handle_context,
-    handle_custom_command,
-    handle_cost,
-    handle_extensions,
+    handle_jobs,
     handle_mcp,
-    handle_mcp_prompt_command,
-    handle_plugin_command,
+    handle_statusline,
+    handle_tools,
+)
+from .configuration_ops import (
+    handle_allow,
+    handle_cost,
+    handle_lsp,
     handle_model,
     handle_output_style,
     handle_permissions,
-    handle_jobs,
-    handle_lsp,
-    handle_plugins,
-    handle_prompt_release,
-    handle_skill,
-    handle_skill_command,
-    handle_skills,
-    handle_statusline,
-    handle_telemetry,
-    handle_tools,
     handle_undo,
     handle_web,
 )
+from .context_ops import handle_compact, handle_context
+from .extension_ops import (
+    handle_custom_command,
+    handle_extensions,
+    handle_mcp_prompt_command,
+    handle_plugin_command,
+    handle_plugins,
+    handle_skill,
+    handle_skill_command,
+    handle_skills,
+)
+from .prompt_release_ops import handle_prompt_release, handle_telemetry
 from .session_ops import (
     handle_delete,
     handle_export,

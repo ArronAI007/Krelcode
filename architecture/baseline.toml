@@ -19,7 +19,6 @@ max_unlisted_lines = 800
 
 [file_size.limits]
 "benchmarks/behavior.py" = 3397
-"session/commands/handlers/runtime_ops.py" = 1889
 "session/memory.py" = 1808
 "benchmarks/prompt.py" = 1559
 "benchmarks/acceptance.py" = 1477
@@ -62,9 +61,24 @@ assignments = 9
 getattr = 10
 setattr = 0
 
-[loop_dynamic_access.limits."session/commands/handlers/runtime_ops.py"]
+[loop_dynamic_access.limits."session/commands/handlers/configuration_ops.py"]
+assignments = 0
+getattr = 4
+setattr = 0
+
+[loop_dynamic_access.limits."session/commands/handlers/context_ops.py"]
 assignments = 3
-getattr = 43
+getattr = 33
+setattr = 0
+
+[loop_dynamic_access.limits."session/commands/handlers/extension_ops.py"]
+assignments = 0
+getattr = 3
+setattr = 0
+
+[loop_dynamic_access.limits."session/commands/handlers/prompt_release_ops.py"]
+assignments = 0
+getattr = 3
 setattr = 0
 
 [loop_dynamic_access.limits."agent/context_checkpoint.py"]
