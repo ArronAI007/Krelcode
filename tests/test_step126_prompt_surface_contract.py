@@ -244,6 +244,7 @@ def test_mcp_prompt_contract_redacts_arguments_and_rejects_bad_outputs():
         client = MCPClient(
             MCPServerConfig(name="docs", command="unused", timeout=1.0),
             transport=DummyTransport(),
+            prompt_surface_executor=PromptSurfaceExecutor(),
         )
         client._started = True
 

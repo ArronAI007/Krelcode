@@ -19,7 +19,10 @@ import re
 from functools import partial
 from typing import Any, Callable, Dict, List, Optional
 
-from ..agent.prompt_surface_contract import MCP_INSTRUCTIONS_SURFACE_CONTRACT
+from ..contracts.prompt_surface import (
+    MCP_INSTRUCTIONS_SURFACE_CONTRACT,
+    PromptSurfaceExecutorPort,
+)
 from ..contracts.json import JsonObject
 from ..contracts.tool import ToolDescriptor, ToolSource
 from ..tools.registry import ToolRegistry
@@ -82,6 +85,7 @@ class MCPSupervisor:
         elicitor: Optional[Any] = None,
         redactor: Optional[Any] = None,
         prompt_surface_registry: Optional[Any] = None,
+        prompt_surface_executor: Optional[PromptSurfaceExecutorPort] = None,
     ) -> None:
         self.registry = registry
         self._log = log
@@ -90,6 +94,7 @@ class MCPSupervisor:
         self._elicitor = elicitor
         self._redactor = redactor
         self._prompt_surface_registry = prompt_surface_registry
+        self._prompt_surface_executor = prompt_surface_executor
         self.clients: Dict[str, MCPClient] = {}
         self.configs: Dict[str, MCPServerConfig] = {}
         self.prompts: Dict[str, tuple[JsonObject, ...]] = {}
@@ -135,6 +140,7 @@ class MCPSupervisor:
             log=self._log,
             redactor=self._redactor,
             prompt_surface_registry=self._prompt_surface_registry,
+            prompt_surface_executor=self._prompt_surface_executor,
         )
         try:
             await client.start()
@@ -285,6 +291,7 @@ class MCPSupervisor:
             log=self._log,
             redactor=self._redactor,
             prompt_surface_registry=self._prompt_surface_registry,
+            prompt_surface_executor=self._prompt_surface_executor,
         )
         if client.oauth is None:
             raise ValueError(f"MCP 服务器 {name!r} 的 OAuth 配置不可用")

@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from krelcode.mcp.client import MCPClient, MCPServerConfig
+from krelcode.agent.prompt_surface_contract import PromptSurfaceExecutor
+from krelcode.mcp.client import MCPClient, MCPError, MCPServerConfig
 from krelcode.mcp.supervisor import MCPSupervisor
 from krelcode.mcp.tools import discover_tools
 from krelcode.tools.base import ToolContext
@@ -21,8 +22,11 @@ def run(coro):
 
 
 async def stub_client():
-    client = MCPClient(MCPServerConfig(
-        name="stub", command=sys.executable, args=[str(STUB)], timeout=15.0))
+    client = MCPClient(
+        MCPServerConfig(
+            name="stub", command=sys.executable, args=[str(STUB)], timeout=15.0),
+        prompt_surface_executor=PromptSurfaceExecutor(),
+    )
     await client.start()
     return client
 
@@ -68,7 +72,11 @@ def test_discover_all_capabilities():
 def test_supervisor_registers_capability_tools():
     async def go():
         registry = ToolRegistry()
-        sup = MCPSupervisor(registry, log=lambda _: None)
+        sup = MCPSupervisor(
+            registry,
+            log=lambda _: None,
+            prompt_surface_executor=PromptSurfaceExecutor(),
+        )
         await sup.sync({"stub": {"command": sys.executable, "args": [str(STUB)]}})
         try:
             names = registry.names()
@@ -105,6 +113,16 @@ def test_resource_tools_end_to_end():
             assert bad_arg.is_error and "uri" in bad_arg.content
         finally:
             await client.close()
+    run(go())
+
+
+def test_mcp_prompt_fails_closed_without_injected_executor():
+    async def go():
+        client = MCPClient(MCPServerConfig(name="stub", command="unused"))
+        with pytest.raises(MCPError, match="executor 未配置"):
+            await client.get_prompt("review", {})
+        await client.close()
+
     run(go())
 
 

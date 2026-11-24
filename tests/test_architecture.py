@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import ast
+import os
+import subprocess
+import sys
 import tomllib
 from functools import lru_cache
 from pathlib import Path
@@ -405,8 +408,7 @@ PACKAGE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "web": frozenset({"contracts", "tools"}),
     "browser": frozenset({"contracts", "core", "tools", "web"}),
     "lsp": frozenset({"contracts", "core", "tools"}),
-    "mcp": frozenset(
-        {"agent", "contracts", "core", "safety", "tools"}),
+    "mcp": frozenset({"contracts", "core", "safety", "tools"}),
     "skills": frozenset({"contracts", "core", "safety", "tools"}),
     "plugins": frozenset({"contracts", "skills"}),
     "enterprise": frozenset({"contracts", "core"}),
@@ -603,6 +605,42 @@ def test_package_dependencies_are_whitelisted():
         if dependencies - (PACKAGE_ALLOWED_DEPENDENCIES[package] & packages)
     }
     assert not violations
+
+
+def test_mcp_does_not_depend_on_agent_prompt_surface():
+    violations: dict[str, list[str]] = {}
+    for path in modules_under("mcp"):
+        dependencies = {
+            module for module in imported_modules(path)
+            if module == "krelcode.agent"
+            or module.startswith("krelcode.agent.")
+        }
+        if dependencies:
+            violations[str(path.relative_to(ROOT))] = sorted(dependencies)
+    assert not violations, violations
+
+
+def test_mcp_package_imports_without_loading_agent_modules():
+    code = (
+        "import sys; import krelcode.mcp.client; "
+        "loaded = sorted(name for name in sys.modules "
+        "if name == 'krelcode.agent' or name.startswith('krelcode.agent.')); "
+        "assert not loaded, loaded"
+    )
+    env = dict(os.environ)
+    python_path = str(PROJECT_ROOT / "src")
+    if env.get("PYTHONPATH"):
+        python_path += os.pathsep + env["PYTHONPATH"]
+    env["PYTHONPATH"] = python_path
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_production_package_graph_has_no_strongly_connected_components():

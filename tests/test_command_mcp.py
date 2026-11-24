@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from krelcode.agent.loop import AgentLoop
+from krelcode.agent.prompt_surface_contract import PromptSurfaceExecutor
 from krelcode.llm.providers.mock import MockProvider
 from krelcode.mcp.supervisor import MCPSupervisor
 from krelcode.safety.policy import AllowAllPolicy
@@ -36,7 +37,11 @@ def make_loop(tmp_path):
 
 def test_supervisor_exposes_namespaced_prompt_records():
     async def go():
-        supervisor = MCPSupervisor(ToolRegistry(), log=lambda _: None)
+        supervisor = MCPSupervisor(
+            ToolRegistry(),
+            log=lambda _: None,
+            prompt_surface_executor=PromptSurfaceExecutor(),
+        )
         await supervisor.sync({"stub": STUB_SPEC})
         try:
             records = supervisor.prompt_records()
@@ -61,7 +66,11 @@ def test_supervisor_exposes_namespaced_prompt_records():
 def test_mcp_prompt_command_renders_prompt_for_agent(tmp_path):
     async def go():
         loop = make_loop(tmp_path)
-        supervisor = MCPSupervisor(loop.registry, log=lambda _: None)
+        supervisor = MCPSupervisor(
+            loop.registry,
+            log=lambda _: None,
+            prompt_surface_executor=PromptSurfaceExecutor(),
+        )
         await supervisor.sync({"stub": STUB_SPEC})
         try:
             registry = builtin_command_registry()
@@ -103,7 +112,11 @@ def test_mcp_prompt_command_renders_prompt_for_agent(tmp_path):
 def test_mcp_reload_refreshes_prompt_catalog(tmp_path):
     async def go():
         loop = make_loop(tmp_path)
-        supervisor = MCPSupervisor(loop.registry, log=lambda _: None)
+        supervisor = MCPSupervisor(
+            loop.registry,
+            log=lambda _: None,
+            prompt_surface_executor=PromptSurfaceExecutor(),
+        )
         await supervisor.sync({"stub": STUB_SPEC})
         try:
             registry = builtin_command_registry()
@@ -141,7 +154,11 @@ def test_mcp_reload_refreshes_prompt_catalog(tmp_path):
 def test_repl_mcp_prompt_enters_agent_history(tmp_path):
     async def go():
         loop = make_loop(tmp_path)
-        supervisor = MCPSupervisor(loop.registry, log=lambda _: None)
+        supervisor = MCPSupervisor(
+            loop.registry,
+            log=lambda _: None,
+            prompt_surface_executor=PromptSurfaceExecutor(),
+        )
         await supervisor.sync({"stub": STUB_SPEC})
         try:
             lines = ["/mcp__stub__review path=src/app.py", "/exit"]

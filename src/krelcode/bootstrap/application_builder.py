@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Tuple, cast
 
 from ..agent.prompt_surface_catalog import refresh_prompt_surfaces
+from ..agent.prompt_surface_contract import PromptSurfaceExecutor
 from ..agent.runtime import AgentRuntime
 from ..agent.usage import UsageTracker
 from ..config import load_config_layers, load_managed_config
@@ -193,7 +194,8 @@ async def build_application(
         roots=build_mcp_roots(loop.tool_context.workspace_root),
         elicitor=elicitor,
         redactor=redactor,
-        prompt_surface_registry=loop.prompt_surface_registry)
+        prompt_surface_registry=loop.prompt_surface_registry,
+        prompt_surface_executor=PromptSurfaceExecutor())
     loop.update_runtime_state(mcp_supervisor=supervisor)
     def merged_mcp_config(source: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         active = current_config if source is None else source

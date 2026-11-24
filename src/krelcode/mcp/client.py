@@ -16,10 +16,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .. import __version__
-from ..agent.prompt_surface_contract import (
+from ..contracts.prompt_surface import (
     MCP_PROMPT_SURFACE_CONTRACT,
     PromptSurfaceContract,
-    PromptSurfaceExecutor,
+    PromptSurfaceExecutorPort,
     PromptSurfaceResult,
     observe_surface_result,
 )
@@ -108,6 +108,7 @@ class MCPClient:
         log: Optional[Callable[[str], None]] = None,
         redactor: Optional[SecretRedactor] = None,
         prompt_surface_registry: Optional[Any] = None,
+        prompt_surface_executor: Optional[PromptSurfaceExecutorPort] = None,
     ) -> None:
         """sampler: async (messages, params) -> {"text": str, "model": str}，
         服务器发起 sampling/createMessage 时回调（通常由共享 LLM 实现）；
@@ -129,7 +130,7 @@ class MCPClient:
         self._prompt_contract: PromptSurfaceContract = (
             MCP_PROMPT_SURFACE_CONTRACT.with_limits(
                 timeout_seconds=self.config.timeout))
-        self._surface_executor = PromptSurfaceExecutor()
+        self._surface_executor = prompt_surface_executor
         self._next_id = 0
         self._pending: Dict[int, asyncio.Future[JsonValue]] = {}
         self._started = False
@@ -533,6 +534,10 @@ class MCPClient:
     async def get_prompt(
         self, name: str, arguments: Optional[JsonObject] = None,
     ) -> JsonObject:
+        if self._surface_executor is None:
+            raise MCPError(
+                "MCP Prompt Surface executor 未配置；composition root 必须注入 "
+                "PromptSurfaceExecutorPort")
         safe_arguments: JsonObject = arguments if isinstance(arguments, dict) else {}
 
         async def run_surface(safe_input: object) -> object:

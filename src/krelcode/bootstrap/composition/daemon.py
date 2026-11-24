@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ._deps import *  # noqa: F401,F403
+from ...agent.prompt_surface_contract import PromptSurfaceExecutor
 from .mcp import build_mcp_roots, build_mcp_sampler, compose_mcp_config
 from ..parser import build_parser as _build_parser
 from .runtime import build_loop
@@ -57,6 +58,7 @@ async def build_daemon_agent_runtime(
             roots=build_mcp_roots(loop.services.core.tool_context.workspace_root),
             redactor=redactor,
             prompt_surface_registry=loop.services.prompt.surface_registry,
+            prompt_surface_executor=PromptSurfaceExecutor(),
         )
         plugins = loop.services.extensions.plugins
         if plugins is None:
