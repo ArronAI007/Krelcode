@@ -45,8 +45,8 @@ getattr = 1
 setattr = 0
 
 [loop_dynamic_access.limits."bootstrap/composition/runtime.py"]
-assignments = 1
-getattr = 4
+assignments = 0
+getattr = 0
 setattr = 0
 
 [loop_dynamic_access.limits."bootstrap/composition/services.py"]
@@ -55,8 +55,8 @@ getattr = 1
 setattr = 0
 
 [loop_dynamic_access.limits."bootstrap/application.py"]
-assignments = 1
-getattr = 2
+assignments = 0
+getattr = 1
 setattr = 0
 
 [loop_dynamic_access.limits."session/commands/handlers/configuration_ops.py"]

@@ -793,3 +793,7 @@ class AgentLoop(RuntimeStateHost):
                 "post_tool_use", True, hook_result.blocked, tool_call.name,
                 hook_result.reason, hook_result.system_message))
         return hook_result
+
+    def set_llm(self, llm: LLMProvider) -> None:
+        """Replace the provider through an explicit runtime-owned mutation."""
+        self.llm = llm

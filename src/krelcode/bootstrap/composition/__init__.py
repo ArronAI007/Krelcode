@@ -15,8 +15,9 @@ from .extensions import (
 )
 from .mcp import build_mcp_roots, build_mcp_sampler, compose_mcp_config
 from .memory import resolve_auto_memory_mode, resolve_auto_memory_thresholds
+from .model_switcher import build_model_switcher
 from .providers import build_llm
-from .runtime import build_loop, build_model_switcher
+from .runtime import build_loop
 from .services import (
     PersistenceServices,
     RuntimeServiceBinder,

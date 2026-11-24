@@ -2,64 +2,32 @@
 
 from __future__ import annotations
 
-from typing import Callable, Protocol, Sequence, Tuple, cast
+from typing import Callable, Tuple, cast
 
 from ._deps import *  # noqa: F401,F403
 from ...agent.prompt.fragments import PromptFragment
-from ...agent.prompt.prompt_release import ModelProfileCalibration
 from ...contracts.service_ports import PromptFragmentRegistryPort, PromptReleasePipelinePort
-from ...core.hooks import HookPort
 from ...core.interactions import UserInputPort
 from ...extensions import ExtensionRecord
 from ...plugins import PluginRecord
 from ...subagent.sidechain import SidechainStore
-from .extensions import (
-    build_custom_command_manager,
-    build_plugin_manager,
-    build_skill_manager,
-    compose_hook_specs,
-    configured_skill_paths,
-)
-from .mcp import build_mcp_roots, build_mcp_sampler, compose_mcp_config
+from .foundation import build_runtime_foundation
+from .mcp import compose_mcp_config
 from .memory import resolve_auto_memory_mode, resolve_auto_memory_thresholds
-from .providers import build_llm
+from .model_switcher import (
+    SubagentManagerPort as _SubagentManagerPort,
+)
 from .services import (
     PersistenceServices,
     RuntimeServiceBinder,
     RuntimeServices,
 )
-from .security import (
-    _configured_features,
-    _disabled_tools,
-    build_execution_sandbox,
-    build_policy,
-    resolve_permission_mode,
-    resolve_run_mode,
-)
 from .subagents import build_subagent_llm_resolver
 from .tools import default_tools
-
-class _SubagentManagerPort(Protocol):
-    """Common runtime surface shared by local and daemon-backed managers."""
-
-    llm: LLMProvider
-    prompt_profile: str
-    prompt_release_id: str
-    prompt_calibrations: Sequence[ModelProfileCalibration]
-    get_parent_history: Optional[Callable[[], List[Message]]]
-    cache_ledger_provider: Optional[Callable[[], object | None]]
-    hook_port: Optional[HookPort]
-    sidechains: object
-
-    def build_tools(self) -> List[Tool]: ...
-
-    async def shutdown(self) -> None: ...
 
 
 def _default_log(message: str) -> None:
     print(message)
-
-
 
 async def build_loop(
     args: argparse.Namespace,
@@ -76,175 +44,47 @@ async def build_loop(
     子代理共享 provider/工作区/审批策略，但工具集由 default_tools() 单独构建
     （不含 spawn 系工具 → 防递归），历史与总线各自独立。
     """
-    workspace_root = Path(args.workspace).resolve()
-    if enterprise_policy is None:
-        policy = load_enterprise_policy(
-            load_managed_config(workspace=workspace_root))
-    else:
-        policy = enterprise_policy
-    policy.validate_cli(args)
-    if policy.require_sso and principal is None:
-        raise PolicyViolation("企业策略要求 SSO，但当前没有有效身份")
-    bus = EventBus()
-    llm = build_llm(args, config, log=log)
-    policy.validate_provider(str(getattr(llm, "name", "") or ""))
-    redactor = SecretRedactor()
-    redactor.add(getattr(llm, "api_key", None))
-    context_options = ContextOptions.from_config(config.get("context"))
-    rule_loader = RuleLoader(
-        workspace_root,
-        limits=context_options.rule_limits(),
-        imports_enabled=context_options.rules_imports,
-        redactor=redactor,
-    )
-    workspace_context = None
-    if not args.no_context:
-        workspace_context = await build_workspace_context_bundle(
-            workspace_root, options=context_options, rule_loader=rule_loader)
-        if workspace_context.rule_bundle is not None:
-            rule_bundle = workspace_context.rule_bundle
-            if rule_bundle.content:
-                log(
-                    f"[rules] 已加载 {rule_bundle.entry_count} 个入口"
-                    f" / {rule_bundle.import_count} 个导入"
-                    f"（{rule_bundle.chars} chars）")
-            for issue in rule_bundle.issues:
-                log(
-                    f"[rules] 跳过 {issue.code}: {issue.path}: "
-                    f"{issue.message}")
-    prompt_authoring_enabled = prompt_authoring_enabled_from_config(config)
-    prompt_profile_setting = prompt_profile_from_config(config)
-    prompt_release_setting = prompt_release_id_from_config(config)
-    prompt_calibrations = _load_prompt_calibrations(config, workspace_root)
-    prompt_profile_resolution = resolve_prompt_profile(
-        llm,
-        getattr(llm, "model", ""),
-        configured=prompt_profile_setting,
-        release_id=prompt_release_setting,
-        calibrations=prompt_calibrations,
-    )
-    memory_store = MemoryStore(workspace_root, redactor=redactor)
-    base_skill_paths = configured_skill_paths(args, config)
-    custom_commands = build_custom_command_manager(config, workspace_root)
-    try:
-        plugin_manager = build_plugin_manager(
-            args, config, workspace_root, enterprise_policy=policy)
-        await plugin_manager.load()
-    except (PluginTrustError, PluginSignatureError) as exc:
-        # Trust metadata is security-sensitive: a malformed store disables the
-        # plugin plane for this process instead of silently loading untrusted code.
-        empty_store = PluginTrustStore(
-            workspace_root / ".krelcode" / ".plugin-trust-disabled.json",
-            load=False,
-        )
-        plugin_manager = PluginManager(
-            workspace_root, enabled=False, trust_store=empty_store)
-        log(f"[plugins] 信任库无效，插件系统已 fail-closed 禁用: {exc}")
-    plugin_tools = list(plugin_manager.tools)
-    skill_manager = build_skill_manager(
-        args, config, plugin_paths=list(plugin_manager.skill_paths))
-    skill_tools = build_skill_tools(skill_manager) if skill_manager.enabled else []
-    if skill_manager.enabled:
-        if skill_manager.list():
-            log("[skills] 已加载 "
-                + ", ".join(s.name for s in skill_manager.list())
-                + f"（{len(skill_manager.list())} 个）")
-        for skill_issue in skill_manager.issues:
-            log(f"[skills] 跳过无效 skill: {skill_issue.path}: {skill_issue.message}")
-    if plugin_manager.enabled:
-        if plugin_manager.records():
-            log("[plugins] 已发现 "
-                + ", ".join(
-                    f"{record.name}@{record.version}[{record.status}]"
-                    for record in plugin_manager.records())
-                + f"（{len(plugin_tools)} 个工具）")
-        for plugin_issue in plugin_manager.issues:
-            log(f"[plugins] 跳过问题: {plugin_issue.path}: {plugin_issue.message}")
-    context_manager = None
-    context_budget = None
-    if not args.no_compress:
-        # 预算优先级：显式 --context-tokens > 模型目录推导（窗口×75%）> 兜底默认
-        context_budget = (args.context_tokens
-                          or default_budget_for(getattr(llm, "model", None))
-                          or DEFAULT_CONTEXT_BUDGET)
-        context_manager = ContextManager(
-            llm, max_tokens=context_budget, redactor=redactor)
-    sandbox = build_execution_sandbox(args, config, workspace_root)
-    if sandbox is not None:
-        log(f"[sandbox] backend={sandbox.backend} "
-            f"network={'on' if sandbox.network else 'off'}")
-        if sandbox.backend == "static":
-            log("[sandbox] 警告：OS 隔离后端不可用，当前为静态护栏模式"
-                "（无法抵御解释器中的动态绕过）")
-    tool_context = ToolContext(
-        workspace_root=workspace_root,
-        sandbox=sandbox,
-        sandbox_enabled=sandbox is not None,
-        runtime=RuntimeSnapshot(
-            run_mode=resolve_run_mode(args),
-            permission_mode=resolve_permission_mode(args, config, policy),
-            features=_configured_features(config),
-            disabled_tools=_disabled_tools(config),
-            managed_tool_allowlist=(
-                frozenset(policy.allowed_tools)
-                if policy.allowed_tools else None),
-            managed_tool_denylist=(
-                frozenset(policy.disabled_tools)
-                if policy.disabled_tools else None),
-        ),
-        enterprise_policy=policy,
+    foundation = await build_runtime_foundation(
+        args,
+        config,
+        log=log,
+        approver=approver,
         principal=principal,
+        enterprise_policy=enterprise_policy,
     )
-    from ...daemon.options import resolve_daemon_options
-
-    daemon_options = resolve_daemon_options(args, config)
-    daemon_owned = daemon_options.enabled and not bool(
-        getattr(args, "daemon_worker", False))
-    shell_jobs: object
-    if daemon_owned:
-        from ...daemon.client import DaemonJobManager
-
-        shell_jobs = DaemonJobManager(
-            workspace_root,
-            config_path=daemon_options.config_path,
-            idle_timeout=daemon_options.idle_timeout,
-            bus=bus,
-            redactor=redactor,
-        )
-    else:
-        shell_jobs = ShellJobManager(
-            bus, workspace_root=workspace_root, redactor=redactor)
-    approval_policy = build_policy(
-        args, workspace_root, bus, approver=approver, config=config,
-        enterprise_policy=policy)
-    lsp_manager = LSPManager(
-        workspace_root, options=LSPOptions.from_config(config.get("lsp")))
-    web_options = WebOptions.from_config(
-        config.get("web"), config.get("web_search"))
-    if getattr(args, "no_web", False):
-        web_options = WebOptions(
-            enabled=False, search_enabled=False,
-            max_bytes=web_options.max_bytes, timeout=web_options.timeout,
-            max_redirects=web_options.max_redirects,
-            max_chars=web_options.max_chars,
-            allowed_ports=web_options.allowed_ports,
-            allow_private=web_options.allow_private,
-            search_provider=web_options.search_provider,
-            search_api_key_env=web_options.search_api_key_env,
-            search_endpoint=web_options.search_endpoint,
-            search_max_results=web_options.search_max_results,
-        )
-    web_runtime = WebRuntime.from_options(web_options)
-    browser_options = BrowserOptions.from_config(config.get("browser"))
-    if getattr(args, "no_web", False) or getattr(args, "no_browser", False):
-        browser_options = replace(browser_options, enabled=False)
-    browser_runtime = BrowserRuntime.from_options(browser_options)
-    notebook_options = NotebookOptions.from_config(config.get("notebook"))
-    if getattr(args, "no_notebook", False):
-        notebook_options = replace(notebook_options, enabled=False)
-    migration_options = MigrationOptions.from_config(config.get("database"))
-    if getattr(args, "no_database", False):
-        migration_options = replace(migration_options, enabled=False)
+    workspace_root = foundation.workspace_root
+    policy = foundation.enterprise_policy
+    bus = foundation.bus
+    llm = foundation.llm
+    redactor = foundation.redactor
+    context_options = foundation.context_options
+    rule_loader = foundation.rule_loader
+    workspace_context = foundation.workspace_context
+    prompt_authoring_enabled = foundation.prompt_authoring_enabled
+    prompt_profile_setting = foundation.prompt_profile_setting
+    prompt_release_setting = foundation.prompt_release_setting
+    prompt_calibrations = foundation.prompt_calibrations
+    prompt_profile_resolution = foundation.prompt_profile_resolution
+    memory_store = foundation.memory_store
+    base_skill_paths = foundation.base_skill_paths
+    custom_commands = foundation.custom_commands
+    plugin_manager = foundation.plugin_manager
+    plugin_tools = foundation.plugin_tools
+    skill_manager = foundation.skill_manager
+    skill_tools = foundation.skill_tools
+    context_manager = foundation.context_manager
+    context_budget = foundation.context_budget
+    sandbox = foundation.sandbox
+    tool_context = foundation.tool_context
+    daemon_options = foundation.daemon_options
+    daemon_owned = foundation.daemon_owned
+    shell_jobs = foundation.shell_jobs
+    approval_policy = foundation.approval_policy
+    lsp_manager = foundation.lsp_manager
+    web_runtime = foundation.web_runtime
+    browser_runtime = foundation.browser_runtime
+    notebook_options = foundation.notebook_options
+    migration_options = foundation.migration_options
     builtin_tools = default_tools(
         memory_store,
         lsp_manager=lsp_manager,
@@ -595,132 +435,3 @@ async def build_loop(
     )
     RuntimeServiceBinder(services).bind(loop=loop, subagents=manager)
     return loop, manager
-
-
-def build_model_switcher(
-    args: argparse.Namespace,
-    config: Dict[str, Any],
-    loop: AgentLoop,
-    usage: UsageTracker,
-    subagents: Optional[_SubagentManagerPort] = None,
-    redactor: Optional[SecretRedactor] = None,
-    enterprise_policy: Optional[EnterprisePolicy] = None,
-) -> Callable[[Optional[str]], str]:
-    """/model 热切换：返回 callable(new_spec|None) -> 结果描述文本。
-
-    new_spec 支持 "model"（沿用当前 provider）或 "provider/model"。
-    切换动作：重建 provider（含重试包装）→ 替换 loop.llm 与压缩器 llm →
-    同步 usage.model（成本核算）→ 预算未显式指定时按新模型窗口自适应。
-    """
-    def current_base() -> str:
-        return getattr(loop.llm, "name", "?")
-
-    def switch(new_spec: Optional[str]) -> str:
-        if not new_spec:
-            model = getattr(loop.llm, "model", "?")
-            profile = getattr(loop, "prompt_profile_name", "") or "unknown"
-            return (
-                f"当前: {current_base()} / {model} · prompt {profile}"
-                "（/model <名称> 或 <provider>/<名称> 切换）"
-            )
-        if "/" in new_spec:
-            provider_name, model_name = new_spec.split("/", 1)
-        else:
-            provider_name, model_name = current_base(), new_spec
-        if provider_name == "mock":
-            return ("mock 模式请显式指定目标 provider，如: /model openai/gpt-4o-mini")
-        try:
-            if enterprise_policy is not None:
-                enterprise_policy.validate_provider(provider_name)
-            settings = resolve_settings(
-                provider=provider_name, model=model_name,
-                base_url=args.base_url, config=config)
-            inner = create_provider(settings)
-            if getattr(inner, "api_key", None) is None:
-                return f"切换失败: {provider_name} 缺少 API key（设置对应环境变量后重试）"
-            provider: LLMProvider = inner
-            if args.retries > 0:
-                provider = RetryingProvider(
-                    inner, RetryPolicy(max_retries=args.retries),
-                    on_retry=lambda a, d, e: print(
-                        f"[retry] LLM 调用失败（{type(e).__name__}），第 {a} 次重试，{d:g}s 后…"))
-        except Exception as e:
-            return f"切换失败: {type(e).__name__}: {e}"
-
-        try:
-            calibration_workspace = loop.tool_context.workspace_root
-            calibration_records = _load_prompt_calibrations(
-                config, calibration_workspace)
-            profile_resolution = resolve_prompt_profile(
-                inner,
-                getattr(inner, "model", ""),
-                configured=prompt_profile_from_config(config),
-                release_id=prompt_release_id_from_config(config),
-                calibrations=calibration_records,
-            )
-        except ConfigError as exc:
-            return f"切换失败: {exc}"
-        loop.llm = provider
-        if subagents is not None:
-            subagents.llm = provider   # 之后 spawn 的子代理用新模型
-            subagents.prompt_profile = prompt_profile_from_config(config)
-            subagents.prompt_release_id = prompt_release_id_from_config(config)
-            subagents.prompt_calibrations = calibration_records
-        loop.update_runtime_state(
-            prompt_profile=profile_resolution.profile,
-            prompt_profile_resolution=profile_resolution,
-            prompt_profile_name=profile_resolution.name,
-        )
-        prompt_note = ""
-        registry = getattr(loop, "prompt_registry", None)
-        if registry is not None:
-            replace_base_fragments(
-                registry,
-                profile_resolution,
-                provider=inner,
-                model=getattr(inner, "model", ""),
-            )
-            refresh_registry_snapshot(loop)
-            prompt_note = f"，prompt {profile_resolution.name}"
-        budget_note = ""
-        if loop.context_manager is not None:
-            loop.context_manager.llm = provider
-            if args.context_tokens is None:
-                new_budget = (default_budget_for(getattr(inner, "model", None))
-                              or DEFAULT_CONTEXT_BUDGET)
-                loop.context_manager.max_tokens = new_budget
-                budget_note = f"，压缩预算 {new_budget}"
-        usage.model = getattr(inner, "model", None)
-        telemetry_runtime = getattr(loop, "telemetry", None)
-        if telemetry_runtime is not None:
-            telemetry_runtime.set_identity(
-                str(provider.name or ""),
-                str(getattr(inner, "model", "") or ""),
-            )
-        # 新 provider 的 key 也纳入脱敏集合（旧 key 保留，避免历史旧内容漏网）
-        if redactor is not None:
-            redactor.add(getattr(inner, "api_key", None))
-        return (
-            f"已切换: {provider.name} / {getattr(inner, 'model', '?')}"
-            f"{budget_note}{prompt_note}"
-        )
-
-    return switch
-
-
-def _load_prompt_calibrations(
-    config: Dict[str, Any],
-    workspace: Path,
-) -> Tuple[ModelProfileCalibration, ...]:
-    calibrations: List[ModelProfileCalibration] = []
-    for raw_path in prompt_calibration_paths_from_config(config):
-        source = Path(raw_path).expanduser()
-        if not source.is_absolute():
-            source = Path(workspace).expanduser().resolve() / source
-        try:
-            baseline = load_prompt_baseline(source)
-        except ValueError as exc:
-            raise ConfigError(f"Prompt calibration 加载失败: {source}: {exc}") from exc
-        calibrations.append(baseline.calibration)
-    return tuple(calibrations)
-

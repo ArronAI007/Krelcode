@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from pathlib import Path
 
 import krelcode.app as app
 from krelcode.bootstrap import main as bootstrap_main
@@ -15,6 +16,36 @@ def test_app_facade_preserves_public_composition_symbols():
     assert callable(app.async_main)
     assert callable(app.build_parser)
     assert callable(app.default_tools)
+
+
+def test_bootstrap_has_explicit_build_phases_and_thin_host():
+    from krelcode.bootstrap.application import create_application
+    from krelcode.bootstrap.application_builder import (
+        BuiltRuntime,
+        build_application,
+    )
+    from krelcode.bootstrap.composition.foundation import (
+        RuntimeFoundation,
+        build_runtime_foundation,
+    )
+    from krelcode.bootstrap.composition.model_switcher import (
+        build_model_switcher,
+    )
+
+    assert callable(create_application)
+    assert callable(build_application)
+    assert callable(build_runtime_foundation)
+    assert callable(build_model_switcher)
+    assert BuiltRuntime.__dataclass_fields__
+    assert RuntimeFoundation.__dataclass_fields__
+    application_source = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "krelcode"
+        / "bootstrap"
+        / "application.py"
+    )
+    assert len(application_source.read_text(encoding="utf-8").splitlines()) < 200
 
 
 def test_async_main_owns_only_build_run_close(monkeypatch):

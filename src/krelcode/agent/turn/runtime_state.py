@@ -12,7 +12,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from itertools import count
-from typing import Any, cast
+from typing import Any, Optional, cast
+
+from ...core.hooks import HookPort
 
 
 class StateGroup:
@@ -361,6 +363,7 @@ class RuntimeStateHost:
     """Compatibility view that routes legacy loop attributes to grouped state."""
 
     _DEPENDENCY_ATTRS: frozenset[str] = frozenset()
+    hook_port: Optional[HookPort]
 
     def __setattr__(self, name: str, value: Any) -> None:
         state = self.__dict__.get("_runtime_state")
@@ -386,3 +389,7 @@ class RuntimeStateHost:
     def update_runtime_state(self, **values: Any) -> None:
         """Update named state through the explicit ownership boundary."""
         self._runtime_state.update(**values)
+
+    def set_hook_port(self, hook_port: Optional[HookPort]) -> None:
+        """Bind or replace a dependency-owner hook without direct caller writes."""
+        self.hook_port = hook_port
