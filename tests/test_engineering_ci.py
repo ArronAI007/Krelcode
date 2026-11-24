@@ -17,6 +17,9 @@ def test_runtime_stays_dependency_free_and_dev_extra_is_explicit():
     assert mypy["files"] == [
         "src/krelcode/core",
         "src/krelcode/contracts",
+        "src/krelcode/llm",
+        "src/krelcode/safety",
+        "src/krelcode/agent",
     ]
 
 
