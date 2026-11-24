@@ -12,6 +12,7 @@ from krelcode.agent.prompt.prompt_release_pipeline import (
     PromptPipelineRequest,
 )
 from krelcode.contracts.tool import ToolContext, ToolResult, ToolTier
+from krelcode.contracts.json import ensure_json_object
 from krelcode.tools.prompt import ToolPromptExample
 
 
@@ -295,7 +296,10 @@ class PromptLabTool:
                 is_error=True,
                 data={"action": action, "error": type(exc).__name__},
             )
-        return ToolResult(content=content, data=result)
+        return ToolResult(
+            content=content,
+            data=ensure_json_object(result, path="prompt_lab.data"),
+        )
 
     @staticmethod
     def _render_inspect(result: Dict[str, Any]) -> str:

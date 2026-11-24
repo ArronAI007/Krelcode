@@ -20,6 +20,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable, Dict, Iterator, Optional, Protocol, Tuple
 
+from ..contracts.json import JsonObject, JsonValueError, ensure_json_object
 from .sseparse import SSEEventParser
 from .transport import MCPAuthRequired, MCPError
 
@@ -112,7 +113,11 @@ class SSETransport:
 
     # -- MCPTransport 端口 ------------------------------------------------------
 
-    async def connect(self, on_message, on_disconnect) -> None:
+    async def connect(
+        self,
+        on_message: Callable[[JsonObject], None],
+        on_disconnect: Callable[[str], None],
+    ) -> None:
         self._loop = asyncio.get_running_loop()
         status, _, lines = await asyncio.to_thread(
             self._connector.open_stream, self.url, self.headers, self.timeout)
@@ -126,7 +131,7 @@ class SSETransport:
             daemon=True, name="krelcode-sse-reader")
         self._reader_thread.start()
 
-    async def send(self, payload: Dict[str, Any]) -> None:
+    async def send(self, payload: JsonObject) -> None:
         if self._closed or self._disconnected:
             raise MCPError(f"SSE 传输不可用（{self._disconnect_reason or '已关闭'}）")
         if not await asyncio.to_thread(self._endpoint_ready.wait, self.timeout):
@@ -160,7 +165,12 @@ class SSETransport:
 
     # -- reader 线程 --------------------------------------------------------------
 
-    def _reader(self, lines, on_message, on_disconnect) -> None:
+    def _reader(
+        self,
+        lines: Iterator[bytes],
+        on_message: Callable[[JsonObject], None],
+        on_disconnect: Callable[[str], None],
+    ) -> None:
         parser = SSEEventParser()
         try:
             for raw in lines:
@@ -181,18 +191,31 @@ class SSETransport:
         if not self._closed and self._loop is not None:
             self._safe_call(on_disconnect, reason)
 
-    def _handle_event(self, event_name: str, data: str, on_message) -> None:
+    def _handle_event(
+        self,
+        event_name: str,
+        data: str,
+        on_message: Callable[[JsonObject], None],
+    ) -> None:
         if event_name == "endpoint":
             self._endpoint = urllib.parse.urljoin(self.url, data.strip())
             self._endpoint_ready.set()
             return
         # message（或无 event 字段）事件：JSON-RPC 消息
         try:
-            msg = json.loads(data)
-        except json.JSONDecodeError:
+            decoded = json.loads(data)
+            if isinstance(decoded, list):
+                messages = [
+                    ensure_json_object(item, path=f"sse.message[{index}]")
+                    for index, item in enumerate(decoded)
+                ]
+            else:
+                messages = [ensure_json_object(decoded, path="sse.message")]
+        except (json.JSONDecodeError, JsonValueError):
             return
         if self._loop is not None:
-            self._safe_call(on_message, msg)
+            for msg in messages:
+                self._safe_call(on_message, msg)
 
     def _safe_call(self, fn: Callable, *args) -> None:
         """reader 线程 → 事件循环线程安全回投。"""

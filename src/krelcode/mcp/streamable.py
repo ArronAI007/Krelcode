@@ -24,8 +24,9 @@ import asyncio
 import json
 import threading
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Callable, Dict, Optional
 
+from ..contracts.json import JsonObject, JsonValueError, ensure_json_object
 from .http_connector import HTTPConnector, UrllibHTTPConnector
 from .sseparse import SSEEventParser
 from .transport import MCPAuthRequired, MCPError
@@ -55,7 +56,7 @@ class StreamableHTTPTransport:
         self.listener_retries = max(0, int(listener_retries))
         self.listener_retry_delay = max(0.0, float(listener_retry_delay))
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._on_message: Optional[Callable[[Dict[str, Any]], None]] = None
+        self._on_message: Optional[Callable[[JsonObject], None]] = None
         self._on_disconnect: Optional[Callable[[str], None]] = None
         self._session_id: Optional[str] = None
         self._last_event_id: Optional[str] = None
@@ -66,13 +67,17 @@ class StreamableHTTPTransport:
 
     # -- MCPTransport 端口 -----------------------------------------------------------
 
-    async def connect(self, on_message, on_disconnect) -> None:
+    async def connect(
+        self,
+        on_message: Callable[[JsonObject], None],
+        on_disconnect: Callable[[str], None],
+    ) -> None:
         # Streamable HTTP 无需预建连接（POST 惰性发起）；只记录回调与事件循环
         self._loop = asyncio.get_running_loop()
         self._on_message = on_message
         self._on_disconnect = on_disconnect
 
-    async def send(self, payload: Dict[str, Any]) -> None:
+    async def send(self, payload: JsonObject) -> None:
         if self._closed:
             raise MCPError("streamable-http 传输已关闭")
         if self._expired:
@@ -118,7 +123,7 @@ class StreamableHTTPTransport:
 
     # -- POST 往返（线程内） -------------------------------------------------------------
 
-    def _sync_roundtrip(self, payload: Dict[str, Any]) -> None:
+    def _sync_roundtrip(self, payload: JsonObject) -> None:
         is_notification = "id" not in payload
         headers = self._request_headers(accept=ACCEPT_BOTH)
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -195,18 +200,26 @@ class StreamableHTTPTransport:
 
     # -- 消息分发与服务器请求应答 ----------------------------------------------------------
 
-    def _dispatch_incoming(self, msg: Any) -> None:
+    def _dispatch_incoming(self, raw: object) -> None:
         # 全部消息（含服务器主动请求）统一上抛 MCPClient：
         # sampling/roots/ping 由 client._handle_server_request 应答
-        if isinstance(msg, list):
+        if isinstance(raw, list):
             # 2025-03-26 允许 JSON-RPC batch 响应（2025-06-18 移除，仍兼容）
-            for item in msg:
-                if isinstance(item, dict):
-                    self._emit_message(item)
-        elif isinstance(msg, dict):
-            self._emit_message(msg)
+            for index, item in enumerate(raw):
+                try:
+                    msg = ensure_json_object(
+                        item, path=f"streamable.batch[{index}]")
+                except JsonValueError as exc:
+                    raise MCPError(f"streamable-http batch 消息非法: {exc}") from exc
+                self._emit_message(msg)
+            return
+        try:
+            msg = ensure_json_object(raw, path="streamable.message")
+        except JsonValueError as exc:
+            raise MCPError(f"streamable-http 消息非法: {exc}") from exc
+        self._emit_message(msg)
 
-    def _emit_message(self, msg: Dict[str, Any]) -> None:
+    def _emit_message(self, msg: JsonObject) -> None:
         if self._on_message is None:
             return
         loop = self._loop

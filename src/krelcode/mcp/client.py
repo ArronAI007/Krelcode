@@ -23,6 +23,13 @@ from ..agent.prompt_surface_contract import (
     observe_surface_result,
 )
 from ..core.redact import SecretRedactor
+from ..contracts.json import (
+    JsonObject,
+    JsonValue,
+    JsonValueError,
+    ensure_json_object,
+    ensure_json_value,
+)
 from .stdio_transport import StdioTransport
 from .sse_transport import SSETransport
 from .streamable import StreamableHTTPTransport
@@ -91,10 +98,10 @@ class MCPClient:
         config: MCPServerConfig,
         transport: Optional[MCPTransport] = None,
         sampler: Optional[Any] = None,
-        roots: Optional[List[Dict[str, Any]]] = None,
+        roots: Optional[List[JsonObject]] = None,
         elicitor: Optional[Elicitor] = None,
         on_notification: Optional[
-            Callable[[str, Dict[str, Any]], Any]
+            Callable[[str, JsonObject], Any]
         ] = None,
         oauth_token_path: Optional[Path] = None,
         log: Optional[Callable[[str], None]] = None,
@@ -123,16 +130,16 @@ class MCPClient:
                 timeout_seconds=self.config.timeout))
         self._surface_executor = PromptSurfaceExecutor()
         self._next_id = 0
-        self._pending: Dict[int, asyncio.Future] = {}
+        self._pending: Dict[int, asyncio.Future[JsonValue]] = {}
         self._started = False
         self._closed = False
         self._disconnect_reason = ""
-        self.server_info: Dict[str, Any] = {}
-        self.capabilities: Dict[str, Any] = {}
+        self.server_info: JsonObject = {}
+        self.capabilities: JsonObject = {}
         self.instructions: str = ""
         self.server_protocol_version: Optional[str] = None
         self.requested_protocol_version = PROTOCOL_VERSION
-        self.client_capabilities: Dict[str, Any] = {}
+        self.client_capabilities: JsonObject = {}
         self.oauth: Optional[OAuthTokenManager] = None
         if self.config.url and self.config.oauth:
             candidate = OAuthTokenManager(
@@ -151,7 +158,7 @@ class MCPClient:
         await self._apply_auth_headers()
         await self._transport.connect(self._dispatch, self._on_disconnect)
         self._started = True
-        client_caps: Dict[str, Any] = {}
+        client_caps: JsonObject = {}
         if self._sampler is not None:
             client_caps["sampling"] = {}
         if self._roots:
@@ -165,10 +172,17 @@ class MCPClient:
             "clientInfo": {"name": "krelcode", "version": __version__},
         })
         if isinstance(result, dict):
-            self.server_info = result.get("serverInfo", {}) or {}
-            self.capabilities = result.get("capabilities", {}) or {}
+            raw_info = result.get("serverInfo", {})
+            raw_caps = result.get("capabilities", {})
+            self.server_info = ensure_json_object(
+                raw_info or {}, path="initialize.serverInfo")
+            self.capabilities = ensure_json_object(
+                raw_caps or {}, path="initialize.capabilities")
             self.instructions = str(result.get("instructions") or "")
-            self.server_protocol_version = result.get("protocolVersion")
+            protocol_version = result.get("protocolVersion")
+            self.server_protocol_version = (
+                protocol_version
+                if isinstance(protocol_version, str) else None)
             # 后续 HTTP 请求用协商版本填充 MCP-Protocol-Version（streamable）
             setter = getattr(self._transport, "set_protocol_version", None)
             if setter is not None and self.server_protocol_version:
@@ -204,7 +218,9 @@ class MCPClient:
             raise MCPError("当前 MCP 传输不支持 OAuth Header")
         setter(headers)
 
-    async def _request(self, method: str, params: Optional[dict] = None) -> Any:
+    async def _request(
+        self, method: str, params: Optional[JsonObject] = None,
+    ) -> JsonValue:
         if self._closed or not self._started:
             raise MCPError(f"MCP 服务器 {self.name!r} 未连接")
         if not self._transport.alive:
@@ -214,9 +230,10 @@ class MCPClient:
         while True:
             self._next_id += 1
             rid = self._next_id
-            future: asyncio.Future = asyncio.get_running_loop().create_future()
+            future: asyncio.Future[JsonValue] = (
+                asyncio.get_running_loop().create_future())
             self._pending[rid] = future
-            payload = {
+            payload: JsonObject = {
                 "jsonrpc": "2.0", "id": rid, "method": method,
                 "params": params or {},
             }
@@ -251,7 +268,9 @@ class MCPClient:
                     f"（{self.config.timeout:g}s, method={method}）"
                 ) from None
 
-    async def _notify(self, method: str, params: Optional[dict] = None) -> None:
+    async def _notify(
+        self, method: str, params: Optional[JsonObject] = None,
+    ) -> None:
         """发送通知并等待写盘完成。
 
         必须 await（而非 create_task fire-and-forget）：MCP 规范要求
@@ -260,13 +279,14 @@ class MCPClient:
         """
         if self._closed or not self._transport.alive:
             return
-        payload = {"jsonrpc": "2.0", "method": method, "params": params or {}}
+        payload: JsonObject = {
+            "jsonrpc": "2.0", "method": method, "params": params or {}}
         try:
             await self._transport.send(payload)
         except MCPError:
             pass  # 通知失败不致命
 
-    def _dispatch(self, msg: Dict[str, Any]) -> None:
+    def _dispatch(self, msg: JsonObject) -> None:
         method = msg.get("method")
         rid = msg.get("id")
         if method is not None and rid is not None:
@@ -279,23 +299,31 @@ class MCPClient:
             return
         if rid is None:
             if method is not None:
+                raw_params = msg.get("params")
+                params = (
+                    raw_params if isinstance(raw_params, dict) else {})
                 try:
                     asyncio.get_running_loop().create_task(
-                        self._handle_notification(str(method), msg.get("params") or {}))
+                        self._handle_notification(str(method), params))
                 except RuntimeError:
                     pass
+            return
+        if not isinstance(rid, int) or isinstance(rid, bool):
             return
         future = self._pending.pop(rid, None)
         if future is None or future.done():
             return
         if "error" in msg:
-            err = msg["error"] or {}
+            raw_error = msg["error"]
+            err = raw_error if isinstance(raw_error, dict) else {}
             future.set_exception(
                 MCPError(f"MCP {self.name!r} 错误 {err.get('code')}: {err.get('message')}"))
         else:
             future.set_result(msg.get("result"))
 
-    async def _handle_notification(self, method: str, params: Dict[str, Any]) -> None:
+    async def _handle_notification(
+        self, method: str, params: JsonObject,
+    ) -> None:
         if self._on_notification is None:
             return
         try:
@@ -309,10 +337,11 @@ class MCPClient:
 
     # -- 服务器 → 客户端 请求处理 -------------------------------------------------
 
-    async def _handle_server_request(self, msg: Dict[str, Any]) -> None:
+    async def _handle_server_request(self, msg: JsonObject) -> None:
         method = str(msg.get("method"))
         mid = msg.get("id")
-        params = msg.get("params") or {}
+        raw_params = msg.get("params")
+        params = raw_params if isinstance(raw_params, dict) else {}
         if method == "sampling/createMessage":
             await self._handle_sampling(mid, params)
         elif method == "roots/list":
@@ -326,15 +355,16 @@ class MCPClient:
                 mid, error={"code": -32601,
                             "message": f"method not supported by krelcode: {method}"})
 
-    async def _handle_sampling(self, mid: Any, params: Dict[str, Any]) -> None:
+    async def _handle_sampling(self, mid: JsonValue, params: JsonObject) -> None:
         if self._sampler is None:
             await self._send_response(
                 mid, error={"code": -32601, "message": "sampling not supported"})
             return
         try:
             out = await self._sampler(params.get("messages") or [], params)
-            text = (out or {}).get("text", "")
-            model = (out or {}).get("model", "")
+            observed = out if isinstance(out, dict) else {}
+            text = observed.get("text", "")
+            model = observed.get("model", "")
         except Exception as e:
             await self._send_response(
                 mid, error={"code": -32603, "message": f"sampling failed: {e}"})
@@ -347,8 +377,8 @@ class MCPClient:
 
     async def _handle_elicitation(
         self,
-        mid: Any,
-        params: Dict[str, Any],
+        mid: JsonValue,
+        params: JsonObject,
     ) -> None:
         version = self.server_protocol_version or ""
         if _protocol_less_than(version, ELICITATION_MIN_PROTOCOL_VERSION):
@@ -412,13 +442,19 @@ class MCPClient:
         self._elicitation_recent.append(now)
         return True
 
-    async def _send_response(self, mid: Any, result: Any = None,
-                             error: Optional[Dict[str, Any]] = None) -> None:
-        payload: Dict[str, Any] = {"jsonrpc": "2.0", "id": mid}
+    async def _send_response(
+        self,
+        mid: JsonValue,
+        result: object = None,
+        error: Optional[object] = None,
+    ) -> None:
+        payload: JsonObject = {"jsonrpc": "2.0", "id": mid}
         if error is not None:
-            payload["error"] = error
+            payload["error"] = ensure_json_value(
+                error, path="MCP response.error")
         else:
-            payload["result"] = result if result is not None else {}
+            payload["result"] = ensure_json_value(
+                result if result is not None else {}, path="MCP response.result")
         try:
             await self._transport.send(payload)
         except MCPError:
@@ -436,18 +472,24 @@ class MCPClient:
 
     # -- MCP 高层 API --------------------------------------------------------------
 
-    async def _list_paginated(self, method: str, key: str) -> List[Dict[str, Any]]:
-        items: List[Dict[str, Any]] = []
+    async def _list_paginated(
+        self, method: str, key: str,
+    ) -> List[JsonObject]:
+        items: List[JsonObject] = []
         cursor: Optional[str] = None
         seen: set[str] = set()
         for _ in range(MAX_LIST_PAGES):
-            params = {"cursor": cursor} if cursor else {}
+            params: JsonObject = {"cursor": cursor} if cursor else {}
             result = await self._request(method, params)
-            if result is not None and not isinstance(result, dict):
+            if result is None:
+                payload: JsonObject = {}
+            elif isinstance(result, dict):
+                payload = result
+            else:
                 raise MCPError(
                     f"MCP 服务器 {self.name!r} 返回了非法 {method} 结果")
-            payload = result or {}
-            items.extend(_as_list(payload.get(key), self.name, key))
+            items.extend(_as_list(
+                payload.get(key), self.name, key))
             raw_cursor = payload.get("nextCursor")
             if raw_cursor in (None, ""):
                 return items
@@ -460,33 +502,37 @@ class MCPClient:
         raise MCPError(
             f"MCP 服务器 {self.name!r} 的 {method} 超过 {MAX_LIST_PAGES} 页")
 
-    async def list_tools(self) -> List[Dict[str, Any]]:
+    async def list_tools(self) -> List[JsonObject]:
         return await self._list_paginated("tools/list", "tools")
 
-    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    async def call_tool(
+        self, name: str, arguments: JsonObject,
+    ) -> JsonObject:
         result = await self._request("tools/call", {"name": name, "arguments": arguments})
         if not isinstance(result, dict):
             raise MCPError(f"MCP 服务器 {self.name!r} 返回了非法 tools/call 结果")
-        return result
+        return ensure_json_object(result, path="tools/call")
 
-    async def list_resources(self) -> List[Dict[str, Any]]:
+    async def list_resources(self) -> List[JsonObject]:
         return await self._list_paginated("resources/list", "resources")
 
-    async def list_resource_templates(self) -> List[Dict[str, Any]]:
+    async def list_resource_templates(self) -> List[JsonObject]:
         return await self._list_paginated(
             "resources/templates/list", "resourceTemplates")
 
-    async def read_resource(self, uri: str) -> Dict[str, Any]:
+    async def read_resource(self, uri: str) -> JsonObject:
         result = await self._request("resources/read", {"uri": uri})
         if not isinstance(result, dict):
             raise MCPError(f"MCP 服务器 {self.name!r} 返回了非法 resources/read 结果")
-        return result
+        return ensure_json_object(result, path="resources/read")
 
-    async def list_prompts(self) -> List[Dict[str, Any]]:
+    async def list_prompts(self) -> List[JsonObject]:
         return await self._list_paginated("prompts/list", "prompts")
 
-    async def get_prompt(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        safe_arguments = arguments if isinstance(arguments, dict) else {}
+    async def get_prompt(
+        self, name: str, arguments: Optional[JsonObject] = None,
+    ) -> JsonObject:
+        safe_arguments: JsonObject = arguments if isinstance(arguments, dict) else {}
 
         async def run_surface(safe_input: object) -> object:
             data = safe_input if isinstance(safe_input, dict) else {}
@@ -514,8 +560,11 @@ class MCPClient:
         # projection additionally removes control/bidi characters, neutralizes
         # instruction-shaped descriptions and bounds every model-visible text
         # field without changing the prompts/get wire shape.
-        return sanitize_mcp_prompt_result(
-            surface.value, redactor=self._redactor)
+        return ensure_json_object(
+            sanitize_mcp_prompt_result(
+                surface.value, redactor=self._redactor),
+            path=f"prompts/get:{name}",
+        )
 
 
 def _protocol_less_than(version: str, minimum: str) -> bool:
@@ -527,9 +576,18 @@ def _protocol_less_than(version: str, minimum: str) -> bool:
     return current < floor
 
 
-def _as_list(value: Any, server: str, what: str) -> List[Dict[str, Any]]:
+def _as_list(value: object, server: str, what: str) -> List[JsonObject]:
     if value is None:
         return []
     if not isinstance(value, list):
         raise MCPError(f"MCP 服务器 {server!r} 返回了非法 {what} 结构")
-    return value
+    output: List[JsonObject] = []
+    for index, item in enumerate(value):
+        try:
+            output.append(ensure_json_object(
+                item, path=f"{what}[{index}]"))
+        except JsonValueError as exc:
+            raise MCPError(
+                f"MCP 服务器 {server!r} 返回了非法 {what}[{index}] 条目: {exc}"
+            ) from exc
+    return output

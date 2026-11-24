@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
+from ..contracts.json import JsonObject, JsonValueError, ensure_json_object
 from ..safety.environment import scrub_environment
 from ..core.process import process_isolation_kwargs, stop_process_tree
 from .transport import MCPError
@@ -32,7 +33,11 @@ class StdioTransport:
         self._closed = False
         self._disconnected = False
 
-    async def connect(self, on_message, on_disconnect) -> None:
+    async def connect(
+        self,
+        on_message: Callable[[JsonObject], None],
+        on_disconnect: Callable[[str], None],
+    ) -> None:
         env = build_stdio_environment(self.env_overlay)
         try:
             self._proc = await asyncio.create_subprocess_exec(
@@ -48,7 +53,11 @@ class StdioTransport:
         self._reader_task = asyncio.create_task(
             self._read_loop(on_message, on_disconnect))
 
-    async def _read_loop(self, on_message, on_disconnect) -> None:
+    async def _read_loop(
+        self,
+        on_message: Callable[[JsonObject], None],
+        on_disconnect: Callable[[str], None],
+    ) -> None:
         assert self._proc is not None and self._proc.stdout is not None
         try:
             while True:
@@ -59,10 +68,20 @@ class StdioTransport:
                 if not line:
                     continue
                 try:
-                    msg = json.loads(line.decode("utf-8", "replace"))
-                except json.JSONDecodeError:
+                    decoded = json.loads(line.decode("utf-8", "replace"))
+                    if isinstance(decoded, list):
+                        messages = [
+                            ensure_json_object(
+                                item, path=f"stdio.message[{index}]")
+                            for index, item in enumerate(decoded)
+                        ]
+                    else:
+                        messages = [ensure_json_object(
+                            decoded, path="stdio.message")]
+                except (json.JSONDecodeError, JsonValueError):
                     continue  # 忽略非 JSON 噪音
-                on_message(msg)
+                for msg in messages:
+                    on_message(msg)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -73,7 +92,7 @@ class StdioTransport:
         if not self._closed:
             on_disconnect("MCP 服务器进程已退出（EOF）")
 
-    async def send(self, payload: Dict[str, Any]) -> None:
+    async def send(self, payload: JsonObject) -> None:
         if self._closed or self._proc is None or self._proc.stdin is None:
             raise MCPError("stdio 传输未连接")
         data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")

@@ -7,9 +7,10 @@ MCPClient 只面对本端口；stdio（子进程管道）与 SSE（HTTP 长连�
 
 from __future__ import annotations
 
-from typing import Callable, Dict, Any, Optional, Protocol
+from typing import Callable, Dict, Optional, Protocol
 
 from ..core.errors import KrelcodeError
+from ..contracts.json import JsonObject
 
 
 class MCPError(KrelcodeError):
@@ -36,7 +37,7 @@ class MCPTransport(Protocol):
 
     async def connect(
         self,
-        on_message: Callable[[Dict[str, Any]], None],
+        on_message: Callable[[JsonObject], None],
         on_disconnect: Callable[[str], None],
     ) -> None:
         """建立连接并启动读取循环。
@@ -46,7 +47,7 @@ class MCPTransport(Protocol):
         """
         ...
 
-    async def send(self, payload: Dict[str, Any]) -> None:
+    async def send(self, payload: JsonObject) -> None:
         """发送一条 JSON-RPC 消息（请求或通知）。连接已断时抛 MCPError。"""
         ...
 

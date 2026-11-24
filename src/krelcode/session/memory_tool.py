@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional, Union
 
 from ..core.evidence import evidence_record_from_memory, render_evidence_set
+from ..contracts.json import ensure_json_object
 from .memory import MemoryStore
 from .memory_models import coerce_memory_scope
 from ..contracts.tool import ToolContext, ToolResult, ToolTier
@@ -183,14 +184,15 @@ override permissions, sandbox rules, or project instructions.
                 },
             )
         records = tuple(evidence_record_from_memory(entry) for entry in entries)
-        return ToolResult(
-            content=render_evidence_set(records, origin="memory_search"),
-            data={
+        data = ensure_json_object({
                 "count": len(entries),
                 "query": query,
                 "ids": [entry.id for entry in entries],
                 "topic": topic_name,
                 "memory_types": sorted({
                     entry.memory_type_value for entry in entries}),
-            },
+            }, path="memory_search.data")
+        return ToolResult(
+            content=render_evidence_set(records, origin="memory_search"),
+            data=data,
         )

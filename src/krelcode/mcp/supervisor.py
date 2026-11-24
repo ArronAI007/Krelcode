@@ -19,6 +19,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from ..agent.prompt_surface_contract import MCP_INSTRUCTIONS_SURFACE_CONTRACT
+from ..contracts.json import JsonObject
 from ..contracts.tool import ToolDescriptor, ToolSource
 from ..tools.registry import ToolRegistry
 from .client import MCPClient, MCPServerConfig
@@ -90,9 +91,9 @@ class MCPSupervisor:
         self._prompt_surface_registry = prompt_surface_registry
         self.clients: Dict[str, MCPClient] = {}
         self.configs: Dict[str, MCPServerConfig] = {}
-        self.prompts: Dict[str, tuple[Dict[str, Any], ...]] = {}
-        self.resources: Dict[str, tuple[Dict[str, Any], ...]] = {}
-        self.resource_templates: Dict[str, tuple[Dict[str, Any], ...]] = {}
+        self.prompts: Dict[str, tuple[JsonObject, ...]] = {}
+        self.resources: Dict[str, tuple[JsonObject, ...]] = {}
+        self.resource_templates: Dict[str, tuple[JsonObject, ...]] = {}
         self.on_prompts_changed: Optional[Callable[[], Any]] = None
         self._refresh_locks: Dict[str, asyncio.Lock] = {}
 
@@ -299,7 +300,7 @@ class MCPSupervisor:
 
     async def _load_prompts(
         self, name: str, client: MCPClient,
-    ) -> tuple[Dict[str, Any], ...]:
+    ) -> tuple[JsonObject, ...]:
         if not client.supports("prompts"):
             return ()
         try:
@@ -312,7 +313,7 @@ class MCPSupervisor:
 
     async def _load_resources(
         self, name: str, client: MCPClient,
-    ) -> tuple[Dict[str, Any], ...]:
+    ) -> tuple[JsonObject, ...]:
         if not client.supports("resources"):
             return ()
         try:
@@ -325,7 +326,7 @@ class MCPSupervisor:
 
     async def _load_resource_templates(
         self, name: str, client: MCPClient,
-    ) -> tuple[Dict[str, Any], ...]:
+    ) -> tuple[JsonObject, ...]:
         if not client.supports("resources"):
             return ()
         try:
@@ -371,8 +372,8 @@ class MCPSupervisor:
         return records
 
     async def get_prompt(
-        self, server: str, name: str, arguments: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        self, server: str, name: str, arguments: JsonObject,
+    ) -> JsonObject:
         client = self.clients.get(server)
         if client is None:
             raise RuntimeError(f"MCP 服务器 {server!r} 未连接")

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import (
-    Any, Awaitable, Callable, Dict, FrozenSet, Optional, Protocol, Sequence,
+    Awaitable, Callable, Dict, FrozenSet, Optional, Protocol, Sequence,
     Tuple, Union,
 )
 
@@ -20,6 +20,11 @@ from ..core.messages import (
     ToolResultBlock,
 )
 from .runtime import PermissionMode, RunMode, RuntimeSnapshot
+from .json import (
+    JsonObject,
+    ToolExecutionData,
+    ensure_json_object,
+)
 from .safety import SandboxPort
 from .service_ports import (
     EnterprisePolicyPort,
@@ -37,7 +42,7 @@ class ToolResult:
 
     content: str
     is_error: bool = False
-    data: Dict[str, Any] = field(default_factory=dict)
+    data: ToolExecutionData = field(default_factory=dict)
     blocks: Tuple[ToolResultBlock, ...] = ()
 
     @classmethod
@@ -46,7 +51,7 @@ class ToolResult:
         blocks: Tuple[ToolResultBlock, ...] | list[ToolResultBlock],
         *,
         is_error: bool = False,
-        data: Optional[Dict[str, Any]] = None,
+        data: Optional[ToolExecutionData] = None,
     ) -> "ToolResult":
         normalized = tuple(blocks)
         text_parts = []
@@ -71,6 +76,10 @@ class ToolResult:
             data=dict(data or {}),
             blocks=normalized,
         )
+
+    def __post_init__(self) -> None:
+        self.data = ensure_json_object(
+            self.data, path="ToolResult.data")
 
 
 class ToolTier(str, Enum):
@@ -238,9 +247,9 @@ class ToolContext:
 class Tool(Protocol):
     name: str
     description: str
-    parameters: Dict[str, Any]
+    parameters: JsonObject
 
-    async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
+    async def execute(self, args: JsonObject, ctx: ToolContext) -> ToolResult:
         ...
 
 
