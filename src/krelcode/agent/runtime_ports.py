@@ -252,7 +252,7 @@ class ContextTurnHostPort(_EventHostPort, _ToolPoolHostPort, Protocol):
     last_mode_permission_contract: Optional["ModePermissionContract"]
     last_microcompact_report: Optional["MicrocompactReport"]
     last_compact_checkpoint: Optional["CompactCheckpointResultPort"]
-    workspace_context: "WorkspaceContext"
+    workspace_context: Optional["WorkspaceContext"]
 
     async def run_lifecycle_hook(
         self,

@@ -8,7 +8,7 @@ soon as their arguments are complete, and returns a completed turn result.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, cast
 
 from ..core.events import (
     LLMResponseReceived,
@@ -20,6 +20,7 @@ from ..contracts.tool import ToolResult
 from ..llm.base import (
     FINISH_LENGTH,
     FINISH_TOOLS,
+    PreparedLLMProvider,
     StreamFinished,
     TextDelta,
     ThinkingDelta,
@@ -96,7 +97,8 @@ class ModelTurnExecutor:
         finished: Optional[StreamFinished] = None
         executor = self.tools.streaming_executor(tool_pool)
         if request.prepared is not None:
-            stream = deps.llm.stream_prepared(request.prepared)
+            provider = cast(PreparedLLMProvider, deps.llm)
+            stream = provider.stream_prepared(request.prepared)
         else:
             capabilities = getattr(deps.llm, "capabilities", None)
             if (

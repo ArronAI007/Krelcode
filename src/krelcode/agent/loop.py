@@ -13,12 +13,14 @@ import asyncio
 from dataclasses import replace
 from itertools import count
 from typing import (
-    Any, Awaitable, Callable, Dict, Iterable, List, Optional, Protocol,
+    Any, Awaitable, Callable, Dict, Iterable, Iterator, List, Optional,
+    Protocol, Sequence, cast,
 )
 
 from ..core.hooks import HookPort, HookResult
 from ..core.interactions import UserInputPort
 from ..core.redact import SecretRedactor
+from ..core.context_usage import ContextUsageSnapshot
 from ..core.events import (
     AgentEvent,
     ErrorOccurred,
@@ -31,16 +33,20 @@ from ..core.events import (
     StepStarted,
     UserSteered,
 )
-from ..core.messages import Message, SteeringInput, ToolCall
-from ..llm.base import LLMProvider
+from ..core.messages import ImageRef, Message, SteeringInput, ToolCall, ToolResultBlock
+from ..llm.base import LLMProvider, PreparedLLMRequest, ToolSpec
+from .attachments import ContextAttachment, ContextAttachmentDiff, ContextAttachmentKind
 from .compression import ContextManager
 from .context_assembler import ContextAssembler
+from .context import WorkspaceContext
 from .context_source import (
     RetrievedMemoryContextSource,
     default_context_sources,
 )
 from .dependencies import AgentDependencies
+from .context_cache_ledger import ContextCacheLedger
 from .context_turn import ContextTurnCoordinator
+from .context_source import ContextAssembly
 from .intent import TurnIntent, infer_turn_intent
 from .model_turn import (
     LLMTurnResult,
@@ -57,7 +63,10 @@ from .reminders import (
 from .tool_pool import TurnToolPool
 from .tool_microcompact import MicrocompactReport, ToolMicrocompactor
 from .tool_turn import ToolBatchExecutor
-from .working_context import WorkingContextStore
+from .runtime_ports import (
+    ContextManagerPort, ContextTurnHostPort, ModelTurnHostPort, ToolTurnHostPort,
+)
+from .working_context import WorkingContextSnapshot, WorkingContextStore
 from .working_context_source import WorkingContextSource
 from .workflows import TaskWorkflowSelection, select_task_workflow
 from ..safety.policy import ApprovalPolicy
@@ -153,11 +162,11 @@ class AgentLoop:
             working_context_store
             or WorkingContextStore(
                 tool_context.workspace_root,
-                redactor=redactor,
+                redactor=redactor.redact if redactor is not None else None,
             )
         )
         if self.working_context_store.redactor is None and redactor is not None:
-            self.working_context_store.redactor = redactor
+            self.working_context_store.redactor = redactor.redact
         if tool_microcompactor is not None and context_manager is not None:
             context_manager.microcompactor = tool_microcompactor
         if context_manager is not None:
@@ -218,9 +227,11 @@ class AgentLoop:
         self._turn_counter = count(1)
         self._direct_counter = count(1)
         self._current_turn_id = ""
-        self._input_counter = count(1)
+        self._input_counter: Iterator[int] = count(1)
         self._turn_prepared = False
-        self.steering_queue: asyncio.Queue = asyncio.Queue()
+        self.pending_context_refresh = False
+        self.workspace_context: Optional[WorkspaceContext] = None
+        self.steering_queue: asyncio.Queue[SteeringInput | str] = asyncio.Queue()
         self.history: List[Message] = (
             [Message.system(system_prompt)] if system_prompt else []
         )
@@ -230,7 +241,7 @@ class AgentLoop:
             registry=self.registry,
             tool_context=self.tool_context,
             bus=self.bus,
-            context_manager=self.context_manager,
+            context_manager=cast(ContextManagerPort, self.context_manager),
             context_assembler=self.context_assembler,
             prompt_assembler=self.prompt_assembler,
             working_context_store=self.working_context_store,
@@ -250,10 +261,11 @@ class AgentLoop:
             token_budget=self.token_budget,
         )
         self.context_coordinator = ContextTurnCoordinator(
-            self, self.dependencies)
-        self.tool_executor = ToolBatchExecutor(self, self.dependencies)
+            cast(ContextTurnHostPort, self), self.dependencies)
+        self.tool_executor = ToolBatchExecutor(
+            cast(ToolTurnHostPort, self), self.dependencies)
         self.model_executor = ModelTurnExecutor(
-            self,
+            cast(ModelTurnHostPort, self),
             self.dependencies,
             self.context_coordinator,
             self.tool_executor,
@@ -280,14 +292,14 @@ class AgentLoop:
         self.context_coordinator.reset()
         self.working_context_store.clear()
 
-    def rebuild_working_context(self):
+    def rebuild_working_context(self) -> WorkingContextSnapshot:
         """Rebuild session-scoped working facts after resume/fork/rewind."""
         snapshot = self.working_context_store.rebuild_from_history(self.history)
         if self.context_manager is not None:
             self.context_manager.rebuild_state(self.history)
         return snapshot
 
-    async def refresh_workspace_context(self):
+    async def refresh_workspace_context(self) -> WorkspaceContext:
         return await self.context_coordinator.refresh_workspace_context()
 
     def sync_context_attachments(
@@ -298,7 +310,7 @@ class AgentLoop:
         include_mcp: bool = True,
         include_contract: bool = True,
         include_reminders: bool = True,
-    ):
+    ) -> ContextAttachmentDiff:
         return self.context_coordinator.sync_context_attachments(
             include_environment=include_environment,
             include_catalogs=include_catalogs,
@@ -310,7 +322,14 @@ class AgentLoop:
     def _sync_mode_permission_contract(self) -> None:
         self.context_coordinator.sync_mode_permission_contract()
 
-    def _sync_catalog_attachment(self, kind, manager, builder) -> None:
+    def _sync_catalog_attachment(
+        self,
+        kind: ContextAttachmentKind,
+        manager: object | None,
+        builder: Callable[
+            [object, Optional[ContextAttachment]], Optional[ContextAttachment]
+        ],
+    ) -> None:
         self.context_coordinator._sync_catalog_attachment(kind, manager, builder)
 
     def add_runtime_context(self, contents: Iterable[str], source: str = "hook") -> int:
@@ -333,7 +352,7 @@ class AgentLoop:
     async def run_turn(
         self,
         user_input: str,
-        images: Optional[list] = None,
+        images: Optional[list[ImageRef]] = None,
         *,
         turn_id: Optional[str] = None,
         tool_allowlist: Optional[list[str]] = None,
@@ -404,7 +423,7 @@ class AgentLoop:
     async def run(
         self,
         user_input: str,
-        images: Optional[list] = None,
+        images: Optional[list[ImageRef]] = None,
         *,
         turn_id: Optional[str] = None,
         tool_allowlist: Optional[list[str]] = None,
@@ -625,10 +644,10 @@ class AgentLoop:
         self,
         *,
         step: int,
-        prompt_specs: list,
-        specs: list,
-        tools,
-    ):
+        prompt_specs: Sequence[object],
+        specs: Sequence[ToolSpec],
+        tools: Optional[Sequence[ToolSpec]],
+    ) -> tuple[List[Message], ContextAssembly, Optional[PreparedLLMRequest]]:
         return await self.context_coordinator.build_llm_request(
             step=step,
             prompt_specs=prompt_specs,
@@ -636,7 +655,9 @@ class AgentLoop:
             tools=tools,
         )
 
-    def _finalize_context_cache_ledger(self, context_snapshot):
+    def _finalize_context_cache_ledger(
+        self, context_snapshot: ContextUsageSnapshot,
+    ) -> Optional[ContextCacheLedger]:
         return self.context_coordinator.finalize_context_cache_ledger(
             context_snapshot)
 
@@ -644,11 +665,11 @@ class AgentLoop:
         self,
         *,
         step: int,
-        specs: list,
+        specs: Sequence[ToolSpec],
         messages: List[Message],
-        context_assembly,
-        prepared,
-    ):
+        context_assembly: ContextAssembly,
+        prepared: Optional[PreparedLLMRequest],
+    ) -> ContextUsageSnapshot:
         return self.context_coordinator.request_snapshot(
             step=step,
             specs=specs,
@@ -714,7 +735,7 @@ class AgentLoop:
     ) -> None:
         await self.tool_executor.publish_tool_result(tool_call, result)
 
-    def _redact_tool_block(self, block):
+    def _redact_tool_block(self, block: ToolResultBlock) -> ToolResultBlock:
         return self.tool_executor._redact_tool_block(block)
 
     def _persist_large_output(self, tool_call: ToolCall, content: str) -> str:

@@ -31,11 +31,7 @@ from .commands import (
     FIND_ACTION_OPTIONS, REDIRECTS, SEPARATORS, _tokenize, _tokenize_cmd,
 )
 from .environment import scrub_environment
-from ..core.process import (
-    ProcessIsolationKwargs,
-    ProcessPlatform,
-    current_process_platform,
-)
+from ..core.process import ProcessIsolationKwargs, ProcessPlatform, current_process_platform
 from ..core.secret_guard import classify_secret_path
 
 SYSTEM_READ_ROOTS = (
@@ -76,8 +72,7 @@ class SandboxedCommand:
     argv: List[str]
     env: dict[str, str]
     backend: str
-    process_kwargs: ProcessIsolationKwargs = field(
-        default_factory=lambda: cast(ProcessIsolationKwargs, {}))
+    process_kwargs: ProcessIsolationKwargs = field(default_factory=lambda: cast(ProcessIsolationKwargs, {}))
 
 
 @dataclass(frozen=True)

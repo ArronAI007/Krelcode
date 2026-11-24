@@ -55,16 +55,13 @@ SYSTEM_BLOCK_CHANNEL_EVIDENCE = "evidence"
 
 def supports_keyword_argument(callback: object, keyword: str) -> bool:
     """Return whether a callable can accept one named keyword safely."""
-    if not callable(callback):
-        return False
+    if not callable(callback): return False
     try:
         parameters = inspect.signature(callback).parameters
     except (TypeError, ValueError):
         return False
     return keyword in parameters or any(
-        parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters.values()
-    )
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values())
 
 
 @dataclass(frozen=True)

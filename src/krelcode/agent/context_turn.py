@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import List, Optional
+from typing import Callable, List, Mapping, Optional, Sequence, cast
 
 from ..core.context_usage import ContextUsageSnapshot
 from ..core.events import (
@@ -22,8 +22,9 @@ from ..core.events import (
     MemoryLoaded,
 )
 from ..core.messages import Message, sanitize_history
-from ..llm.base import PreparedLLMRequest, supports_keyword_argument
+from ..llm.base import PreparedLLMRequest, ToolSpec, supports_keyword_argument
 from .attachments import (
+    ContextAttachment,
     ContextAttachmentDiff,
     ContextAttachmentKind,
     ContextAttachmentStore,
@@ -36,11 +37,13 @@ from .attachments import (
     skill_catalog_attachment,
     token_budget_reminder_attachment,
 )
-from .context import build_workspace_context_bundle
+from .context import WorkspaceContext, build_workspace_context_bundle
 from .context_cache_ledger import ContextCacheLedger
 from .context_plan import ContextPlanSnapshot, history_digest
 from .context_source import ContextAssembly, ContextRequest, MemoryContextSource
+from .context_turn_observability import dropped_context_items, memory_selection
 from .context_usage import build_context_usage_snapshot
+from .compression import CompactResult
 from .dependencies import AgentDependencies
 from .fragments import (
     is_rule_fragment,
@@ -50,6 +53,7 @@ from .fragments import (
 )
 from .pricing import match_context_window
 from .prompt_assembler import PromptAssemblyRequest
+from .prompt_models import PromptPlan
 from .prompt_plan import PromptPlanSnapshot
 from .prompt_surface import PromptSurfaceRegistry, prompt_content_hash, update_observation
 from .runtime_ports import ContextTurnHostPort
@@ -124,7 +128,7 @@ class ContextTurnCoordinator:
         host.context_attachments.clear()
         host.last_attachment_diff = ContextAttachmentDiff(0, 0)
 
-    async def refresh_workspace_context(self):
+    async def refresh_workspace_context(self) -> WorkspaceContext:
         """Reload rules and replace only changed environment attachments."""
         host = self.host
         options = getattr(host, "context_options", None)
@@ -170,7 +174,7 @@ class ContextTurnCoordinator:
 
         if include_environment:
             try:
-                bundle = getattr(host, "workspace_context", None)
+                bundle = host.workspace_context
                 environment_ids = {
                     attachment_id(ContextAttachmentKind.ENVIRONMENT_SNAPSHOT),
                     attachment_id(ContextAttachmentKind.ENVIRONMENT_DELTA),
@@ -179,7 +183,7 @@ class ContextTurnCoordinator:
                     bundle is not None
                     and any(section.name != "rules" for section in bundle.sections)
                 )
-                if has_environment:
+                if has_environment and bundle is not None:
                     snapshot_id = attachment_id(
                         ContextAttachmentKind.ENVIRONMENT_SNAPSHOT)
                     changed = environment_attachments(
@@ -264,7 +268,14 @@ class ContextTurnCoordinator:
         host.context_attachments.remove(
             attachment_id(ContextAttachmentKind.MODE_REMINDER))
 
-    def _sync_catalog_attachment(self, kind, manager, builder) -> None:
+    def _sync_catalog_attachment(
+        self,
+        kind: ContextAttachmentKind,
+        manager: object | None,
+        builder: Callable[
+            [object, Optional[ContextAttachment]], Optional[ContextAttachment]
+        ],
+    ) -> None:
         host = self.host
         item_id = attachment_id(kind)
         if manager is None:
@@ -361,7 +372,7 @@ class ContextTurnCoordinator:
         if not changed:
             return False
         after = estimate_history_tokens(host.history) + extra_tokens
-        result = manager.last_compact_result
+        result = cast(Optional[CompactResult], manager.last_compact_result)
         checkpoint = None
         store = self.dependencies.compact_checkpoint_store
         if result is not None and store is not None:
@@ -464,8 +475,8 @@ class ContextTurnCoordinator:
 
     def observe_prompt_surfaces(
         self,
-        prompt_plan,
-        tool_specs: tuple[object, ...],
+        prompt_plan: PromptPlan,
+        tool_specs: Sequence[object],
         step: int,
     ) -> None:
         """Record content-light actual renders without changing the request."""
@@ -515,10 +526,10 @@ class ContextTurnCoordinator:
         self,
         *,
         step: int,
-        prompt_specs: list,
-        specs: list,
-        tools,
-    ):
+        prompt_specs: Sequence[object],
+        specs: Sequence[ToolSpec],
+        tools: Optional[Sequence[ToolSpec]],
+    ) -> tuple[List[Message], ContextAssembly, Optional[PreparedLLMRequest]]:
         host = self.host
         deps = self.dependencies
         self.sync_context_attachments()
@@ -579,7 +590,7 @@ class ContextTurnCoordinator:
             step=step,
             history_digest=history_digest(host.history),
             tools=tuple(prompt_specs or ()),
-            dropped_items=_context_dropped_items(host),
+            dropped_items=dropped_context_items(host),
             previous=previous_prompt_plan,
         )
         host.last_prompt_plan = prompt_plan
@@ -617,7 +628,9 @@ class ContextTurnCoordinator:
                 prepared = prepare(messages, tools)
         return messages, context_assembly, prepared
 
-    def finalize_context_cache_ledger(self, context_snapshot):
+    def finalize_context_cache_ledger(
+        self, context_snapshot: ContextUsageSnapshot,
+    ) -> Optional[ContextCacheLedger]:
         """Bind the final, actually-sent request to one content-free ledger."""
         host = self.host
         context_plan = host.last_context_plan
@@ -651,11 +664,11 @@ class ContextTurnCoordinator:
         self,
         *,
         step: int,
-        specs: list,
+        specs: Sequence[ToolSpec],
         messages: List[Message],
         context_assembly: ContextAssembly,
         prepared: Optional[PreparedLLMRequest],
-    ):
+    ) -> ContextUsageSnapshot:
         host = self.host
         manager = self.dependencies.context_manager
         return build_context_usage_snapshot(
@@ -670,16 +683,16 @@ class ContextTurnCoordinator:
             prepared_request=prepared,
             provider_name=str(
                 getattr(self.dependencies.llm, "name", "") or ""),
-            dropped_items=_context_dropped_items(host),
+            dropped_items=dropped_context_items(host),
         )
 
     async def prepare_model_request(
         self,
         *,
         step: int,
-        prompt_specs: list,
-        specs: list,
-        tools,
+        prompt_specs: Sequence[object],
+        specs: Sequence[ToolSpec],
+        tools: Optional[Sequence[ToolSpec]],
     ) -> ContextTurnRequest:
         """Assemble and budget one exact request, including fallback compaction."""
         d = self.dependencies
@@ -749,7 +762,7 @@ class ContextTurnCoordinator:
                 items=tuple(context_snapshot.dropped_items),
                 reason="budget",
             ))
-        memory_ids, memory_scopes, memory_tokens = _memory_selection(
+        memory_ids, memory_scopes, memory_tokens = memory_selection(
             context_assembly)
         if memory_ids or memory_scopes or memory_tokens:
             await host._emit(MemoryLoaded(
@@ -764,33 +777,6 @@ class ContextTurnCoordinator:
             prepared=prepared,
         )
 
-
-def _context_dropped_items(host: ContextTurnHostPort) -> tuple[str, ...]:
-    workspace = getattr(host, "workspace_context", None)
-    items = [
-        f"workspace:{item}"
-        for item in (getattr(workspace, "omitted", ()) or ())
-    ]
-    return tuple(dict.fromkeys(items))
-
-
-def _memory_selection(
-    assembly,
-) -> tuple[tuple[str, ...], dict[str, int], int]:
-    for layer in getattr(assembly, "layers", ()) or ():
-        metadata = getattr(layer, "metadata", {}) or {}
-        raw_ids = metadata.get("memory_entry_ids", ())
-        ids = tuple(str(item) for item in raw_ids) if isinstance(
-            raw_ids, (list, tuple, set)) else ()
-        raw_scopes = metadata.get("memory_scope_counts", {})
-        scopes = {
-            str(key): max(0, int(value))
-            for key, value in dict(raw_scopes).items()
-        } if isinstance(raw_scopes, dict) else {}
-        tokens = max(0, int(metadata.get("memory_tokens", 0) or 0))
-        if ids or scopes or tokens:
-            return ids, scopes, tokens
-    return (), {}, 0
 
 
 __all__ = ["ContextTurnCoordinator", "ContextTurnRequest", "INTERRUPTED_NOTE"]

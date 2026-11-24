@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import replace
-from typing import Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, cast
 
 from ..core.events import (
     ErrorOccurred,
@@ -31,6 +31,7 @@ from ..core.messages import (
     StructuredBlock,
     TextBlock,
     ToolCall,
+    ToolResultBlock,
 )
 from ..core.textutil import truncate_middle
 from ..contracts.tool import ToolResult
@@ -125,7 +126,8 @@ class ToolBatchExecutor:
         if redactor is not None:
             result.blocks = tuple(
                 self._redact_tool_block(block) for block in result.blocks)
-            result.data = _redact_json(result.data, redactor.redact)
+            result.data = cast(
+                Dict[str, Any], _redact_json(result.data, redactor.redact))
         await self.host._emit(
             ToolCallCompleted(
                 tool_call,
@@ -136,8 +138,11 @@ class ToolBatchExecutor:
             )
         )
 
-    def _redact_tool_block(self, block):
-        redact = self.dependencies.redactor.redact
+    def _redact_tool_block(self, block: ToolResultBlock) -> ToolResultBlock:
+        redactor = self.dependencies.redactor
+        if redactor is None:
+            return block
+        redact = redactor.redact
         if isinstance(block, TextBlock):
             return TextBlock(redact(block.text))
         if isinstance(block, ImageBlock):
@@ -151,7 +156,8 @@ class ToolBatchExecutor:
                 blob=block.blob,
             )
         if isinstance(block, StructuredBlock):
-            return StructuredBlock(_redact_json(block.data, redact))
+            return StructuredBlock(cast(
+                Dict[str, Any], _redact_json(block.data, redact)))
         return block
 
     def persist_large_output(self, tool_call: ToolCall, content: str) -> str:
@@ -208,7 +214,7 @@ class ToolBatchExecutor:
             redactor = deps.redactor
             safe_message = redactor.redact(message) if redactor else message
             safe_data = (
-                _redact_json(data, redactor.redact)
+                cast(Dict[str, object], _redact_json(data, redactor.redact))
                 if redactor is not None else data)
             await host._emit(ToolProgress(
                 tool_call.id, tool_call.name, safe_message, safe_data))
@@ -264,7 +270,10 @@ class ToolBatchExecutor:
             explanation: str,
         ) -> None:
             redactor = deps.redactor
-            redact = redactor.redact if redactor else (lambda text: text)
+            if redactor is not None:
+                redact: Callable[[str], str] = redactor.redact
+            else:
+                redact = lambda text: text
             deps.working_context_store.record_plan(
                 items,
                 statuses,
@@ -367,7 +376,9 @@ def _call_signature(tool_call: ToolCall) -> str:
     return f"{tool_call.name}({args})"
 
 
-def _redact_json(value, redact):
+def _redact_json(
+    value: object, redact: Callable[[str], str],
+) -> object:
     if isinstance(value, str):
         return redact(value)
     if isinstance(value, list):
