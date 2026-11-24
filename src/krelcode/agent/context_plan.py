@@ -11,11 +11,14 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass, field, replace
-from typing import Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Iterable, Mapping, Sequence, cast
 
 from ..core.messages import Message
 from .context_cache_ledger import ContextCacheLedger
 from .prompt_plan import PromptPlanSnapshot
+
+if TYPE_CHECKING:
+    from .context_source import ContextAssembly
 
 
 def history_digest(history: Iterable[Message]) -> str:
@@ -78,7 +81,7 @@ class ContextPlanSnapshot:
     @classmethod
     def from_assembly(
         cls,
-        assembly,
+        assembly: "ContextAssembly",
         *,
         history: Sequence[Message],
         turn_id: str,
@@ -147,7 +150,7 @@ class ContextPlanSnapshot:
             cache_ledger=ledger,
         )
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         return {
             "turn_id": self.turn_id,
             "step": self.step,
@@ -177,14 +180,27 @@ class ContextPlanSnapshot:
             if not isinstance(value, (list, tuple)):
                 return ()
             return tuple(str(item) for item in value if str(item))
+        def numeric_int(key: str) -> int:
+            value = raw.get(key, 0)
+            if not isinstance(value, (int, float, str, bytes, bytearray)):
+                return 0
+            try:
+                return max(0, int(value))
+            except (TypeError, ValueError, OverflowError):
+                return 0
+
+        created_value = raw.get("created_at", 0.0)
         try:
-            step = max(0, int(raw.get("step", 0) or 0))
-            token_count = max(0, int(raw.get("token_count", 0) or 0))
-            sequence = max(0, int(raw.get("working_context_sequence", 0) or 0))
-            created_at = float(raw.get("created_at", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            step = token_count = sequence = 0
+            created_at = (
+                max(0.0, float(created_value))
+                if isinstance(created_value, (int, float, str, bytes))
+                else 0.0
+            )
+        except (TypeError, ValueError, OverflowError):
             created_at = 0.0
+        step = numeric_int("step")
+        token_count = numeric_int("token_count")
+        sequence = numeric_int("working_context_sequence")
         return cls(
             turn_id=str(raw.get("turn_id", "") or ""),
             step=step,
@@ -202,11 +218,11 @@ class ContextPlanSnapshot:
             created_at=created_at,
             restored_from=str(raw.get("restored_from", "") or ""),
             prompt_plan=PromptPlanSnapshot.from_dict(
-                raw.get("prompt_plan")
+                cast(Mapping[str, object], raw["prompt_plan"])
                 if isinstance(raw.get("prompt_plan"), Mapping)
                 else None),
             cache_ledger=ContextCacheLedger.from_dict(
-                raw.get("cache_ledger")
+                cast(Mapping[str, object], raw["cache_ledger"])
                 if isinstance(raw.get("cache_ledger"), Mapping)
                 else None),
         )

@@ -117,7 +117,7 @@ class PromptAssembler:
             snapshot, context_request, omitted)
         tool_prompt_specs = self.tool_playbook_catalog.resolve_prompt_specs(
             _normalize_tool_prompt_specs(request.tools))
-        workflow_fragments = ()
+        workflow_fragments: tuple[PromptFragment, ...] = ()
         if context_request.task_workflow is not None:
             workflow_fragments = (self.task_workflow_catalog.fragment(
                 context_request.task_workflow),)

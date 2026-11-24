@@ -8,6 +8,7 @@ mutate Prompt content.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
@@ -100,8 +101,10 @@ def tool_prompt_surfaces(tools: object) -> tuple[PromptSurfaceDescriptor, ...]:
         values = tuple(entries())
         candidates = tuple(
             (tool, descriptor, spec) for tool, descriptor, spec in values)
-    else:
+    elif isinstance(tools, Iterable):
         candidates = tuple((None, None, spec) for spec in tools)
+    else:
+        return ()
     surfaces: list[PromptSurfaceDescriptor] = []
     for tool, runtime_descriptor, spec in candidates:
         source = str(getattr(runtime_descriptor, "source", "") or "builtin")

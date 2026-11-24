@@ -11,9 +11,13 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field, replace
-from typing import Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Mapping, Optional, Sequence, cast
 
 from ..tools.prompt import ToolPromptSpec
+from .prompt_omission import PromptOmissionSnapshot
+
+if TYPE_CHECKING:
+    from .prompt_models import PromptPlan
 
 
 _MEMORY_LAYER = "L7_MEMORY_EVIDENCE"
@@ -28,9 +32,11 @@ def _text(value: object, limit: int = 500) -> str:
 
 
 def _integer(value: object) -> int:
+    if not isinstance(value, (int, float, str, bytes, bytearray)):
+        return 0
     try:
-        return max(0, int(value or 0))
-    except (TypeError, ValueError):
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -111,7 +117,7 @@ class PromptFragmentSnapshot:
     content_hash: str
     provenance: Mapping[str, object] = field(default_factory=dict)
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         return {
             "id": self.id,
             "source": self.source,
@@ -144,45 +150,6 @@ class PromptFragmentSnapshot:
 
 
 @dataclass(frozen=True)
-class PromptOmissionSnapshot:
-    """A bounded explanation for content excluded from the provider request."""
-
-    id: str
-    source: str = ""
-    scope: str = ""
-    layer: str = ""
-    stability: str = ""
-    trust: str = ""
-    tokens: int = 0
-    reason: str = ""
-
-    def as_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "source": self.source,
-            "scope": self.scope,
-            "layer": self.layer,
-            "stability": self.stability,
-            "trust": self.trust,
-            "tokens": self.tokens,
-            "reason": self.reason,
-        }
-
-    @classmethod
-    def from_dict(cls, raw: Mapping[str, object]) -> "PromptOmissionSnapshot":
-        return cls(
-            id=_text(raw.get("id")),
-            source=_text(raw.get("source")),
-            scope=_text(raw.get("scope")),
-            layer=_text(raw.get("layer")),
-            stability=_text(raw.get("stability")),
-            trust=_text(raw.get("trust")),
-            tokens=_integer(raw.get("tokens")),
-            reason=_text(raw.get("reason")),
-        )
-
-
-@dataclass(frozen=True)
 class PromptMemoryHitSnapshot:
     """One memory entry selected into the current request."""
 
@@ -193,7 +160,7 @@ class PromptMemoryHitSnapshot:
     origin: str = ""
     tokens: int = 0
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         return {
             "id": self.id,
             "source": self.source,
@@ -259,7 +226,7 @@ class PromptPlanDiff:
             self.fragment_token_delta,
         ))
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         return {
             "previous_turn_id": self.previous_turn_id,
             "previous_step": self.previous_step,
@@ -285,9 +252,12 @@ class PromptPlanDiff:
             return cls()
 
         def signed_integer(key: str) -> int:
+            value = raw.get(key, 0)
+            if not isinstance(value, (int, float, str, bytes, bytearray)):
+                return 0
             try:
-                return int(raw.get(key, 0) or 0)
-            except (TypeError, ValueError):
+                return int(value)
+            except (TypeError, ValueError, OverflowError):
                 return 0
 
         return cls(
@@ -355,7 +325,7 @@ class PromptPlanSnapshot:
     @classmethod
     def from_prompt_plan(
         cls,
-        plan,
+        plan: "PromptPlan",
         *,
         turn_id: str,
         step: int,
@@ -465,7 +435,7 @@ class PromptPlanSnapshot:
         )
         return _with_diff(snapshot, previous)
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         return {
             "turn_id": self.turn_id,
             "step": self.step,
@@ -574,7 +544,8 @@ class PromptPlanSnapshot:
                 for item in mappings("memory_hits")
             ),
             diff=PromptPlanDiff.from_dict(
-                raw.get("diff") if isinstance(raw.get("diff"), Mapping) else None),
+                cast(Mapping[str, object], raw["diff"])
+                if isinstance(raw.get("diff"), Mapping) else None),
         )
 
 

@@ -7,15 +7,17 @@ import inspect
 from collections import defaultdict
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-from .context_source import (
+from .context_contracts import (
     CATEGORY_ORDER,
     CONTEXT_TRUST_LEVELS,
-    ContextAssembly,
     ContextLayer,
+    ContextTokenContribution,
+)
+from .context_source import (
+    ContextAssembly,
     ContextRequest,
     ContextSource,
     ContextSourceIssue,
-    ContextTokenContribution,
 )
 
 
@@ -113,8 +115,12 @@ class ContextAssembler:
         else:
             provider_meta.pop("prompt_cache_boundaries", None)
         fragment_count = sum(
-            max(0, int(layer.metadata.get("fragment_count", 0) or 0))
+            max(0, int(value))
             for layer in ordered_layers
+            if isinstance(
+                (value := layer.metadata.get("fragment_count", 0)),
+                (int, float, str, bytes, bytearray),
+            )
         )
         return ContextAssembly(
             text=text,

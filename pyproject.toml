@@ -53,11 +53,5 @@ files = [
     "src/krelcode/contracts",
     "src/krelcode/llm",
     "src/krelcode/safety",
-    "src/krelcode/agent/runtime_ports.py",
-    "src/krelcode/agent/dependencies.py",
-    "src/krelcode/agent/context_turn.py",
-    "src/krelcode/agent/context_turn_observability.py",
-    "src/krelcode/agent/model_turn.py",
-    "src/krelcode/agent/tool_turn.py",
-    "src/krelcode/agent/loop.py",
+    "src/krelcode/agent",
 ]

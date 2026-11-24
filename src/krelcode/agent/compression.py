@@ -21,11 +21,12 @@ import json
 import time
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
-from ..core.messages import Message
-from ..core.redact import redact_obvious_secrets
+from ..core.messages import Message, ToolCall
+from ..core.redact import SecretRedactor, redact_obvious_secrets
 from ..llm.base import LLMProvider, collect
+from .value_utils import short_json
 from .compact_summary import (
     CompactFile,
     CompactSummary,
@@ -202,9 +203,9 @@ class ContextManager:
         *,
         low_watermark_ratio: float = DEFAULT_LOW_WATERMARK_RATIO,
         working_context_provider: Optional[Callable[[], object]] = None,
-        redactor=None,
+        redactor: Optional[SecretRedactor] = None,
         surface_contract: PromptSurfaceContract = COMPACT_SURFACE_CONTRACT,
-        prompt_surface_registry=None,
+        prompt_surface_registry: Optional[object] = None,
     ) -> None:
         self.llm = llm
         self.max_tokens = max_tokens
@@ -599,14 +600,16 @@ class ContextManager:
             )
             return str(finished.message.content or "")
 
+        def observe(_surface_id: str, result: PromptSurfaceResult) -> None:
+            observe_surface_result(self.prompt_surface_registry, result)
+
         surface_result = await PromptSurfaceExecutor().execute(
             "aux:compact",
             self.surface_contract,
             prompt,
             run_surface,
             redactor=self.redactor,
-            observer=lambda _surface_id, result: observe_surface_result(
-                self.prompt_surface_registry, result),
+            observer=observe,
         )
         self.last_surface_result = surface_result
         model_summary: Optional[CompactSummary] = None
@@ -655,7 +658,10 @@ class ContextManager:
         return merged
 
 
-def _redact_compact_summary(summary: CompactSummary, redact=None) -> CompactSummary:
+def _redact_compact_summary(
+    summary: CompactSummary,
+    redact: Optional[Callable[[str], str]] = None,
+) -> CompactSummary:
     """Redact every persisted summary field without parsing rendered JSON."""
 
     def clean(value: object) -> str:
@@ -849,16 +855,8 @@ def render_messages(messages: List[Message], max_chars: int = MAX_MESSAGE_RENDER
                 content = content[:max_chars] + f"…[截断，原长 {len(m.content)}]"
             parts.append(content)
         if m.tool_calls:
-            calls = ", ".join(f"{tc.name}({_short_args(tc)})" for tc in m.tool_calls)
+            calls = ", ".join(
+                f"{tc.name}({short_json(tc.arguments)})" for tc in m.tool_calls)
             parts.append(f"调用工具: {calls}")
         lines.append(" ".join(parts))
     return "\n".join(lines)
-
-
-def _short_args(tc, limit: int = 200) -> str:
-    import json
-    try:
-        raw = json.dumps(tc.arguments, ensure_ascii=False, sort_keys=True)
-    except (TypeError, ValueError):
-        raw = repr(tc.arguments)
-    return raw if len(raw) <= limit else raw[:limit] + "…"

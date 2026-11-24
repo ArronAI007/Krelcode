@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, cast
 
+from ..core.context_usage import ContextUsageSnapshot
+from .context_cache_ledger import ContextCacheLedger
 from .context_source import ContextAssembly
 from .context_plan import ContextPlanSnapshot
 from .inspection_helpers import (
+    _bounded,
     _layer_memory_metadata,
     _short_hash,
 )
@@ -14,17 +17,28 @@ from .prompt_plan import PromptPlanSnapshot
 from .tokens import estimate_history_tokens
 
 class ContextInspectionCoreMixin:
+    loop: object
+
     @property
-    def snapshot(self):
-        return getattr(self.loop, "last_context_snapshot", None)
+    def snapshot(self) -> Optional[ContextUsageSnapshot]:
+        return cast(
+            Optional[ContextUsageSnapshot],
+            getattr(self.loop, "last_context_snapshot", None),
+        )
 
     @property
     def assembly(self) -> Optional[ContextAssembly]:
-        return getattr(self.loop, "last_context_assembly", None)
+        return cast(
+            Optional[ContextAssembly],
+            getattr(self.loop, "last_context_assembly", None),
+        )
 
     @property
     def plan(self) -> Optional[ContextPlanSnapshot]:
-        return getattr(self.loop, "last_context_plan", None)
+        return cast(
+            Optional[ContextPlanSnapshot],
+            getattr(self.loop, "last_context_plan", None),
+        )
 
     @property
     def prompt_plan(self) -> Optional[PromptPlanSnapshot]:
@@ -32,17 +46,23 @@ class ContextInspectionCoreMixin:
         return plan.prompt_plan if plan is not None else None
 
     @property
-    def previous_snapshot(self):
-        return getattr(self.loop, "previous_context_snapshot", None)
+    def previous_snapshot(self) -> Optional[ContextUsageSnapshot]:
+        return cast(
+            Optional[ContextUsageSnapshot],
+            getattr(self.loop, "previous_context_snapshot", None),
+        )
 
     @property
-    def cache_ledger(self):
-        ledger = getattr(self.loop, "last_context_cache_ledger", None)
+    def cache_ledger(self) -> Optional[ContextCacheLedger]:
+        ledger = cast(
+            Optional[ContextCacheLedger],
+            getattr(self.loop, "last_context_cache_ledger", None),
+        )
         if ledger is not None:
             return ledger
         plan = self.plan
-        ledger = getattr(plan, "cache_ledger", None) if plan is not None else None
-        return ledger if getattr(ledger, "has_request_identity", False) else None
+        ledger = plan.cache_ledger if plan is not None else None
+        return ledger if ledger is not None and ledger.has_request_identity else None
 
     @property
     def dropped_items(self) -> tuple[str, ...]:

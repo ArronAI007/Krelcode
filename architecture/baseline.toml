@@ -18,13 +18,13 @@ reason = "Benchmark runners still share report/session helpers in both direction
 max_unlisted_lines = 800
 
 [file_size.limits]
-"agent/compact_summary.py" = 863
-"agent/compression.py" = 864
-"agent/context_checkpoint.py" = 1043
-"agent/fragments.py" = 882
+"agent/compact_summary.py" = 859
+"agent/compression.py" = 863
+"agent/context_checkpoint.py" = 1037
+"agent/fragments.py" = 881
 "agent/prompt_authoring.py" = 890
 "agent/prompt_parity.py" = 1011
-"agent/prompt_plan.py" = 881
+"agent/prompt_plan.py" = 852
 "agent/prompt_release_pipeline.py" = 1376
 "agent/working_context.py" = 863
 "benchmarks/acceptance.py" = 1477

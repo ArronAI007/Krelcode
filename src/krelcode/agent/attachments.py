@@ -15,7 +15,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date as local_date
 from enum import Enum
 from types import MappingProxyType
-from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Dict, Iterable, Mapping, Optional, Protocol, Sequence, Tuple
 
 from .context import WorkspaceContext
 from .evidence import (
@@ -46,6 +46,25 @@ from .fragments import (
 )
 from .tokens import estimate_text_tokens
 from ..safety.contract import ModePermissionContract
+
+
+class _CatalogItem(Protocol):
+    name: str
+
+
+class _SkillCatalogManager(Protocol):
+    def list(self, *, model_invocable_only: bool = False) -> Sequence[_CatalogItem]: ...
+    def prompt_index(self) -> str: ...
+
+
+class _AgentCatalogItem(Protocol):
+    name: str
+    source: str
+    description: str
+
+
+class _AgentCatalogManager(Protocol):
+    def list(self) -> Sequence[_AgentCatalogItem]: ...
 
 
 class ContextAttachmentKind(str, Enum):
@@ -507,7 +526,7 @@ def environment_attachments(
 
 
 def skill_catalog_attachment(
-    manager: object,
+    manager: _SkillCatalogManager,
     previous: Optional[ContextAttachment] = None,
 ) -> Optional[ContextAttachment]:
     items = tuple(manager.list(model_invocable_only=True))
@@ -526,7 +545,7 @@ def skill_catalog_attachment(
 
 
 def agent_catalog_attachment(
-    manager: Optional[object],
+    manager: Optional[_AgentCatalogManager],
     previous: Optional[ContextAttachment] = None,
 ) -> Optional[ContextAttachment]:
     if manager is None:
@@ -709,7 +728,7 @@ def _metadata_string_sequence(
     return tuple(str(item) for item in raw)
 
 
-def _attachment_sort_key(item: ContextAttachment) -> tuple:
+def _attachment_sort_key(item: ContextAttachment) -> Tuple[int, str]:
     try:
         kind_index = ATTACHMENT_KIND_ORDER.index(item.kind)
     except ValueError:

@@ -8,7 +8,7 @@ input_tokens/output_tokens/total_tokens；provider 拿不到时为空 dict，
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Dict, Optional
 
 from ..core.events import AgentEvent, EventBus, LLMResponseReceived, RunStarted
 from .pricing import estimate_cost, match_pricing
@@ -24,7 +24,7 @@ class UsageTotals:
     cache_creation: int = 0
     cost: float = 0.0        # USD，估算
 
-    def add(self, usage: dict) -> None:
+    def add(self, usage: Dict[str, int]) -> None:
         self.calls += 1
         self.input += int(usage.get("input_tokens", 0) or 0)
         self.output += int(usage.get("output_tokens", 0) or 0)

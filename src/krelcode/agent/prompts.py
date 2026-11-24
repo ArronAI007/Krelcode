@@ -440,11 +440,12 @@ def resolve_prompt_profile(
     if requested == PROMPT_PROFILE_AUTO:
         profile, matched_by, _ = _match_profile(provider_name, model_name)
     else:
-        profile = PROMPT_PROFILE_BY_NAME.get(requested)
-        if profile is None:
+        configured_profile = PROMPT_PROFILE_BY_NAME.get(requested)
+        if configured_profile is None:
             raise ConfigError(
                 "未知 prompt profile: "
                 f"{requested}（可用: auto, {', '.join(available_prompt_profiles())}）")
+        profile = configured_profile
         matched_by = "configured"
     release = select_prompt_release(release_id)
     try:

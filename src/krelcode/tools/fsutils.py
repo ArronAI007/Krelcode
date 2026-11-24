@@ -41,4 +41,4 @@ def filter_pruned(paths: Iterable[Path], base: Path) -> List[Path]:
 
 
 # truncate_middle 已上移至 core.textutil（agent 层也复用）；此处 re-export 保持兼容
-from ..core.textutil import truncate_middle  # noqa: E402,F401
+from ..core.textutil import truncate_middle as truncate_middle  # noqa: E402

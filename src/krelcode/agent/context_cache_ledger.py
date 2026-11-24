@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field, replace
-from typing import Mapping, Sequence
+from typing import Mapping, Sequence, cast
 
 
 LEDGER_SCHEMA_VERSION = 1
@@ -30,9 +30,11 @@ def _text(value: object, limit: int = 500) -> str:
 
 
 def _integer(value: object) -> int:
+    if not isinstance(value, (int, float, str, bytes, bytearray)):
+        return 0
     try:
-        return max(0, int(value or 0))
-    except (TypeError, ValueError):
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -192,7 +194,7 @@ class ContextCacheLedgerDiff:
     def prefix_cache_miss(self) -> bool:
         return self.stable_changed or self.provider_changed
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         return {
             "previous_turn_id": self.previous_turn_id,
             "previous_step": self.previous_step,
@@ -435,7 +437,7 @@ class ContextCacheLedger:
                 (*self.resume_invalidations, *invalidations))),
         )
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         return {
             "schema_version": self.schema_version,
             "owner": self.owner,
@@ -517,7 +519,8 @@ class ContextCacheLedger:
                 raw.get("restored_from_checkpoint_id")),
             resume_invalidations=_strings(raw.get("resume_invalidations")),
             diff=ContextCacheLedgerDiff.from_dict(
-                raw.get("diff") if isinstance(raw.get("diff"), Mapping) else None),
+                cast(Mapping[str, object], raw["diff"])
+                if isinstance(raw.get("diff"), Mapping) else None),
         )
 
 

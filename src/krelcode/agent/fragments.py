@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, cast
 
 from ..core.messages import Message
 from .context import ContextSection, WorkspaceContext
@@ -25,6 +25,8 @@ from .prompts import (
 )
 from .rules import RuleLayer, RuleScope
 from .tokens import estimate_text_tokens
+
+if TYPE_CHECKING: from .prompt_snapshot_ports import PromptSnapshotHostPort, RegistryT
 
 GROUP_SYSTEM = "system"
 GROUP_WORKSPACE = "workspace_context"
@@ -816,7 +818,7 @@ def _workspace_fragment(section: ContextSection) -> PromptFragment:
     )
 
 
-def apply_prompt_snapshot(loop, snapshot: PromptSnapshot) -> None:
+def apply_prompt_snapshot(loop: "PromptSnapshotHostPort[PromptSnapshot, RegistryT]", snapshot: PromptSnapshot) -> None:
     """把 registry 快照写回 loop.history 的 system 消息。"""
     loop.prompt_snapshot = snapshot
     loop.skill_base_prompt = snapshot.text
@@ -825,17 +827,14 @@ def apply_prompt_snapshot(loop, snapshot: PromptSnapshot) -> None:
         loop.history[0] = message
     else:
         loop.history.insert(0, message)
-
-
-def refresh_registry_snapshot(loop) -> Optional[PromptSnapshot]:
-    registry = getattr(loop, "prompt_registry", None)
+def refresh_registry_snapshot(loop: "PromptSnapshotHostPort[PromptSnapshot, RegistryT]") -> Optional[PromptSnapshot]:
+    registry = loop.prompt_registry
     if registry is None:
         return None
-    snapshot = registry.snapshot()
+    snapshot_method = getattr(registry, "snapshot")
+    snapshot = cast(PromptSnapshot, snapshot_method())
     apply_prompt_snapshot(loop, snapshot)
     return snapshot
-
-
 def _render_fragments(fragments: Sequence[PromptFragment]) -> Tuple[str, int]:
     text = ""
     boundary: Optional[int] = None

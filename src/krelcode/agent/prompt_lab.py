@@ -26,6 +26,7 @@ from .fragments import (
 from .prompt_authoring import (
     PROMPT_AUTHORING_FRAGMENT_ID,
     PromptAuthoringItem,
+    PromptAuthoringReport,
     PromptAuthoringRequest,
     PromptAuthoringTool,
     PromptAuthoringValidationCase,
@@ -145,7 +146,7 @@ def _list(value: object, field: str, *, limit: int = 100) -> Tuple[object, ...]:
 def _fragment_record(
     fragment: PromptFragment,
     registry: PromptFragmentRegistry,
-    conflict_ids: Mapping[str, Tuple[str, ...]],
+    conflict_ids: Mapping[str, Sequence[str]],
 ) -> dict[str, object]:
     return {
         "id": fragment.id,
@@ -369,7 +370,7 @@ class PromptLabService:
     def _evaluate_candidate(
         self,
         candidate: PromptCandidate,
-    ) -> tuple[object, CandidateIsolationReport]:
+    ) -> Tuple[PromptAuthoringReport, CandidateIsolationReport]:
         registry = self._registry_provider()
         target = registry.get(candidate.target_fragment) \
             if registry is not None else None
@@ -383,7 +384,10 @@ class PromptLabService:
         return report, isolation
 
     @staticmethod
-    def _evaluation_record(report, isolation: CandidateIsolationReport):
+    def _evaluation_record(
+        report: PromptAuthoringReport,
+        isolation: CandidateIsolationReport,
+    ) -> dict[str, object]:
         record = report.as_dict()
         review_allowed = bool(report.passed and isolation.passed)
         record.update({

@@ -29,10 +29,10 @@ class StreamingToolExecutor:
         self._pool = pool
         self._runner = runner
         self._ready: Dict[int, ToolCall] = {}
-        self._tasks: Dict[int, asyncio.Task] = {}
+        self._tasks: Dict[int, asyncio.Task[ToolResult]] = {}
         self._next_index = 0
-        self._reader_tasks: List[asyncio.Task] = []
-        self._barrier_task: Optional[asyncio.Task] = None
+        self._reader_tasks: List[asyncio.Task[ToolResult]] = []
+        self._barrier_task: Optional[asyncio.Task[ToolResult]] = None
         self._closed = False
 
     @property
@@ -76,7 +76,7 @@ class StreamingToolExecutor:
             descriptor = self._pool.descriptor(tool_call.name)
             read_only = descriptor is not None and descriptor.read_only
 
-            waits: List[asyncio.Task] = []
+            waits: List[asyncio.Task[ToolResult]] = []
             if read_only:
                 if self._barrier_task is not None:
                     waits.append(self._barrier_task)
@@ -102,7 +102,7 @@ class StreamingToolExecutor:
 
     async def _run_after(
         self,
-        waits: tuple[asyncio.Task, ...],
+        waits: tuple[asyncio.Task[ToolResult], ...],
         index: int,
         tool_call: ToolCall,
     ) -> ToolResult:

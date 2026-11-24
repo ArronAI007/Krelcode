@@ -14,16 +14,18 @@ from .attachments import (
     ContextAttachmentKind,
     context_attachment_fragments,
 )
-from .context_source import (
+from .context_contracts import (
     CATEGORY_MEMORY,
     CATEGORY_RUNTIME,
     CATEGORY_SYSTEM,
     CATEGORY_WORKSPACE,
     TRUST_SYSTEM,
-    ContextAssembly,
     ContextLayer,
-    ContextRequest,
     ContextTokenContribution,
+)
+from .context_source import (
+    ContextAssembly,
+    ContextRequest,
     prompt_fragment_omission_reason,
 )
 from .evidence import EvidenceSource, SourceRole, instruction_source_for
@@ -469,7 +471,9 @@ def _ordered_fragments(
     return tuple(sorted(deduplicated, key=_fragment_plan_sort_key))
 
 
-def _fragment_plan_sort_key(fragment: PromptFragment) -> tuple:
+def _fragment_plan_sort_key(
+    fragment: PromptFragment,
+) -> Tuple[int, int, int, str, str]:
     return (
         LAYER_ORDER.get(fragment.layer, len(PROMPT_LAYERS)),
         STABILITY_ORDER.get(fragment.stability, len(STABILITY_ORDER)),

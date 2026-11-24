@@ -272,9 +272,7 @@ class ContextTurnCoordinator:
         self,
         kind: ContextAttachmentKind,
         manager: object | None,
-        builder: Callable[
-            [object, Optional[ContextAttachment]], Optional[ContextAttachment]
-        ],
+        builder: Callable[..., Optional[ContextAttachment]],
     ) -> None:
         host = self.host
         item_id = attachment_id(kind)

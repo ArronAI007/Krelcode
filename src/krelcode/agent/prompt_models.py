@@ -15,15 +15,15 @@ from ..llm.base import (
 )
 from ..tools.prompt import ToolPromptSpec
 from .attachments import ContextAttachment
+from .context_contracts import ContextTokenContribution
 from .context_source import (
     ContextAssembly,
     ContextRequest,
     ContextSourceIssue,
-    ContextTokenContribution,
 )
 from .fragments import PromptCacheBoundary, PromptFragment, PromptSnapshot
 from .prompt_conflicts import PromptConflictReport
-from .prompt_plan import PromptOmissionSnapshot
+from .prompt_omission import PromptOmissionSnapshot
 from .reminders import SelectedReminder
 
 

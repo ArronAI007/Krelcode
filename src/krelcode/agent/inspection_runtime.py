@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .inspection_prompt import ContextInspectionPromptMixin
 from .inspection_helpers import (
     _bounded,
     _ids,
@@ -10,7 +11,7 @@ from .inspection_helpers import (
     _yes_no,
 )
 
-class ContextInspectionRuntimeMixin:
+class ContextInspectionRuntimeMixin(ContextInspectionPromptMixin):
     def sources_lines(self, *, limit: int = 100) -> list[str]:
         assembly = self.assembly
         if assembly is None:
@@ -214,7 +215,7 @@ class ContextInspectionRuntimeMixin:
                 f"  … 另有 {len(snapshot.cache_segments) - 30} 个 segment")
         ledger = self.cache_ledger
         if ledger is not None:
-            diff = ledger.diff
+            ledger_diff = ledger.diff
             lines.append(
                 f"  [ledger] {ledger.owner or 'main'}"
                 f" · complete {_short_hash(ledger.complete_request_hash)}"
@@ -222,9 +223,9 @@ class ContextInspectionRuntimeMixin:
                 f" · compact {ledger.compact_checkpoint_id or '(none)'}"
                 f" · working sequence {ledger.working_context_sequence}")
             lines.append(
-                f"  [ledger/cache miss] {_yes_no(diff.cache_miss)}"
+                f"  [ledger/cache miss] {_yes_no(ledger_diff.cache_miss)}"
                 f" · reasons "
-                f"{', '.join(diff.reasons) if diff.reasons else '(none)'}")
+                f"{', '.join(ledger_diff.reasons) if ledger_diff.reasons else '(none)'}")
         return lines
 
     def reminder_lines(self) -> list[str]:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Sequence, cast
 
 from .messages import (
     ImageBlock,
@@ -106,7 +106,7 @@ def _reload_images(raw: Any) -> Optional[List[ImageRef]]:
     return images or None
 
 
-def history_to_dicts(history: List[Message]) -> List[Dict[str, Any]]:
+def history_to_dicts(history: Sequence[Message]) -> List[Dict[str, Any]]:
     return [message_to_dict(m) for m in history]
 
 

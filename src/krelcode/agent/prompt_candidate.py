@@ -12,7 +12,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from enum import Enum
-from typing import Mapping, Tuple
+from typing import Mapping, Tuple, cast
 
 from .evidence import InstructionSource, instruction_source_for
 from .fragments import (
@@ -278,22 +278,23 @@ class PromptCandidate:
         if not isinstance(raw_cases, (list, tuple)):
             raise PromptCandidateError("evaluation_cases 必须是数组")
         return cls(
-            target_fragment=value.get("target_fragment"),
-            objective=value.get("objective"),
-            proposed_prompt=value.get("proposed_prompt"),
-            constraints=value.get("constraints"),
-            expected_behavior=value.get("expected_behavior"),
-            risk=value.get("risk"),
+            target_fragment=cast(str, value.get("target_fragment")),
+            objective=cast(str, value.get("objective")),
+            proposed_prompt=cast(str, value.get("proposed_prompt")),
+            constraints=cast(Tuple[str, ...], value.get("constraints")),
+            expected_behavior=cast(
+                Tuple[str, ...], value.get("expected_behavior")),
+            risk=cast(PromptCandidateRisk | str, value.get("risk")),
             evaluation_cases=tuple(
                 _validation_case(case, index=index)
                 for index, case in enumerate(raw_cases)
             ),
-            rollback_plan=value.get("rollback_plan"),
+            rollback_plan=cast(str, value.get("rollback_plan")),
         )
 
     @property
     def risk_value(self) -> str:
-        return self.risk.value
+        return _risk(self.risk).value
 
     @property
     def candidate_hash(self) -> str:

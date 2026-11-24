@@ -31,6 +31,15 @@ class ProfileCalibrationStatus(str, Enum):
     STALE = "stale"
 
 
+def _non_negative_int(value: object) -> int:
+    if not isinstance(value, (int, float, str, bytes, bytearray)):
+        return 0
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def _canonical_json(payload: Mapping[str, object]) -> str:
     return json.dumps(
         payload,
@@ -410,7 +419,7 @@ class ModelProfileCalibration:
         ):
             raise ValueError("calibration patterns 必须是数组")
         calibration = cls(
-            schema_version=int(raw.get("schema_version", 0) or 0),
+            schema_version=_non_negative_int(raw.get("schema_version")),
             calibration_id=str(raw.get("calibration_id", "") or ""),
             profile_name=str(raw.get("profile_name", "") or ""),
             profile_hash=str(raw.get("profile_hash", "") or ""),
@@ -418,13 +427,13 @@ class ModelProfileCalibration:
             release_hash=str(raw.get("release_hash", "") or ""),
             contract_version=str(raw.get("contract_version", "") or ""),
             contract_hash=str(raw.get("contract_hash", "") or ""),
-            benchmark_schema_version=int(
-                raw.get("benchmark_schema_version", 0) or 0),
+            benchmark_schema_version=_non_negative_int(
+                raw.get("benchmark_schema_version")),
             suite_hash=str(raw.get("suite_hash", "") or ""),
             provider=str(raw.get("provider", "") or ""),
             model=str(raw.get("model", "") or ""),
             verified_at=str(raw.get("verified_at", "") or ""),
-            trials=int(raw.get("trials", 0) or 0),
+            trials=_non_negative_int(raw.get("trials")),
             provider_patterns=tuple(str(item) for item in provider_patterns),
             model_patterns=tuple(str(item) for item in model_patterns),
             verified=bool(raw.get("verified", False)),

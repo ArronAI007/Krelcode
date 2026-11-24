@@ -18,11 +18,12 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence, cast
 
 from .prompt_parity import (
     FROZEN_PROMPT_PARITY_SUITE_HASH,
     PROMPT_PARITY_CONTRACT,
+    PromptParityGateResult,
     evaluate_prompt_parity,
 )
 from .fragments import PromptFragmentRegistry
@@ -30,6 +31,7 @@ from .prompt_authoring import PromptAuthoringValidator
 from .prompt_candidate import PromptCandidate
 from .prompt_conflicts import PromptConflictAnalyzer
 from .prompt_isolation import CandidateIsolationReport, PromptCandidateIsolator
+from .prompt_release_support import case_summary, integer, mapping, mapping_items
 from .prompt_release import (
     MODEL_PROFILE_CALIBRATION_SCHEMA_VERSION,
     ModelProfileCalibration,
@@ -165,11 +167,15 @@ class PromptPipelineRequest:
         object.__setattr__(self, "run_offline", bool(self.run_offline))
         object.__setattr__(self, "run_live", bool(self.run_live))
 
+    @property
+    def normalized_candidate(self) -> PromptCandidate:
+        return cast(PromptCandidate, self.candidate)
+
 
 @dataclass(frozen=True)
 class PromptPipelineStage:
     id: str
-    status: PromptPipelineStageStatus | str
+    status: PromptPipelineStageStatus
     evidence_hash: str = ""
     details: Mapping[str, object] = field(default_factory=dict)
 
@@ -192,9 +198,10 @@ class PromptPipelineStage:
     def from_dict(cls, raw: Mapping[str, object]) -> "PromptPipelineStage":
         return cls(
             id=str(raw.get("id", "") or ""),
-            status=str(raw.get("status", "") or PromptPipelineStageStatus.PENDING.value),
+            status=PromptPipelineStageStatus(
+                str(raw.get("status", "") or PromptPipelineStageStatus.PENDING.value)),
             evidence_hash=str(raw.get("evidence_hash", "") or ""),
-            details=dict(raw.get("details", {}) or {}),
+            details=mapping(raw.get("details")),
         )
 
 
@@ -222,7 +229,7 @@ class PromptReleaseProposal:
     suite_hash: str
     calibration: ModelProfileCalibration | None
     stages: tuple[PromptPipelineStage, ...]
-    state: PromptProposalState | str
+    state: PromptProposalState
     requested_by: str
     skill_name: str
     approval_required: bool = True
@@ -336,7 +343,7 @@ class PromptReleaseProposal:
         if not isinstance(candidate, Mapping):
             raise PromptPipelineError("proposal candidate 必须是 object")
         proposal = cls(
-            schema_version=int(raw.get("schema_version", 0) or 0),
+            schema_version=integer(raw.get("schema_version")),
             proposal_id=str(raw.get("proposal_id", "") or ""),
             created_at=str(raw.get("created_at", "") or ""),
             candidate_hash=str(raw.get("candidate_hash", "") or ""),
@@ -355,8 +362,11 @@ class PromptReleaseProposal:
             contract_hash=str(raw.get("contract_hash", "") or ""),
             suite_hash=str(raw.get("suite_hash", "") or ""),
             calibration=calibration,
-            stages=tuple(PromptPipelineStage.from_dict(item) for item in stages_raw),
-            state=str(raw.get("state", "") or PromptProposalState.STALE.value),
+            stages=tuple(
+                PromptPipelineStage.from_dict(item)
+                for item in stages_raw if isinstance(item, Mapping)),
+            state=PromptProposalState(
+                str(raw.get("state", "") or PromptProposalState.STALE.value)),
             requested_by=str(raw.get("requested_by", "") or ""),
             skill_name=str(raw.get("skill_name", "") or ""),
             approval_required=bool(raw.get("approval_required", True)),
@@ -419,7 +429,7 @@ class PromptHumanApproval:
     @classmethod
     def from_dict(cls, raw: Mapping[str, object]) -> "PromptHumanApproval":
         return cls(
-            schema_version=int(raw.get("schema_version", 0) or 0),
+            schema_version=integer(raw.get("schema_version")),
             kind=str(raw.get("kind", "") or ""),
             proposal_id=str(raw.get("proposal_id", "") or ""),
             proposal_hash=str(raw.get("proposal_hash", "") or ""),
@@ -570,7 +580,7 @@ class PromptReleasePipeline:
         offline_runner: object | None = None,
         offline_runner_factory: Callable[[], object] | None = None,
         live_runner: object | None = None,
-        parity_evaluator: Callable[..., object] = evaluate_prompt_parity,
+        parity_evaluator: Callable[..., PromptParityGateResult] = evaluate_prompt_parity,
         store: PromptReleaseProposalStore | None = None,
         clock: Callable[[], str] = _now,
     ) -> None:
@@ -602,7 +612,7 @@ class PromptReleasePipeline:
         registry = self.registry_provider()
         if registry is None:
             raise PromptPipelineError("Prompt Fragment Registry 未配置")
-        candidate = request.candidate
+        candidate = request.normalized_candidate
         target = registry.get(candidate.target_fragment)
         authoring_request = candidate.to_authoring_request(target)
         authoring = self.authoring_validator.validate(
@@ -719,7 +729,7 @@ class PromptReleasePipeline:
 
         conflict_report = isolation.conflict_report
         blocking_conflicts = tuple(
-            item for item in conflict_report.get("conflicts", ())
+            item for item in mapping_items(conflict_report, "conflicts")
             if (
                 candidate.target_fragment in {
                     item.get("left_fragment_id", ""),
@@ -742,9 +752,9 @@ class PromptReleasePipeline:
             ),
             conflict_hash,
             {
-                "conflict_count": int(conflict_report.get("conflict_count", 0) or 0),
-                "unresolved_count": int(
-                    conflict_report.get("unresolved_count", 0) or 0),
+                "conflict_count": integer(conflict_report.get("conflict_count", 0)),
+                "unresolved_count": integer(
+                    conflict_report.get("unresolved_count", 0)),
                 "blocking_conflict_ids": [
                     str(item.get("id", "")) for item in blocking_conflicts],
                 "contains_prompt_content": False,
@@ -901,11 +911,8 @@ class PromptReleasePipeline:
                 trials=max(
                     1,
                     max((
-                        int(value.get("trials", 0) or 0)
-                        for value in (
-                            live_report.case_summary().values()
-                            if hasattr(live_report, "case_summary") else ()
-                        )
+                        integer(value.get("trials", 0))
+                        for value in case_summary(live_report).values()
                     ), default=1),
                 ),
             )
@@ -980,19 +987,13 @@ class PromptReleasePipeline:
     def _benchmark_summary(
         self, report: object, *, kind: str,
     ) -> dict[str, object]:
-        summary: Mapping[str, object] = {}
-        summary_method = getattr(report, "case_summary", None)
-        if callable(summary_method):
-            value = summary_method()
-            if isinstance(value, Mapping):
-                summary = value
+        summary = case_summary(report)
         errors = getattr(report, "error_summary", None)
         error_summary = errors() if callable(errors) else {}
         cases = len(summary)
         trials = sum(
-            int(item.get("trials", 0) or 0)
+            integer(item.get("trials", 0))
             for item in summary.values()
-            if isinstance(item, Mapping)
         )
         return {
             "kind": kind,
@@ -1004,8 +1005,7 @@ class PromptReleasePipeline:
             "trials": trials,
             "failed_cases": sum(
                 1 for item in summary.values()
-                if isinstance(item, Mapping)
-                and int(item.get("failed", 0) or 0) > 0),
+                if integer(item.get("failed", 0)) > 0),
             "error_count": (
                 sum(int(value or 0) for value in error_summary.values())
                 if isinstance(error_summary, Mapping) else 0),

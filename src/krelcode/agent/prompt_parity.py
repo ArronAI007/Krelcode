@@ -24,10 +24,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from .prompt_release_support import BehaviorReportPort
 from .prompt_release import ModelProfileCalibration
 
 
 PROMPT_PARITY_SCHEMA_VERSION = 1
+
+
 PROMPT_BASELINE_SCHEMA_VERSION = 2
 PROMPT_PARITY_CONTRACT_VERSION = "1"
 PROMPT_PARITY_MINIMUM_TRIALS = 3
@@ -556,7 +559,7 @@ class PromptParityBaseline:
     @classmethod
     def from_report(
         cls,
-        report,
+        report: BehaviorReportPort,
         contract: PromptParityContract = PROMPT_PARITY_CONTRACT,
     ) -> "PromptParityBaseline":
         if not bool(getattr(report, "passed", False)):
@@ -574,7 +577,7 @@ class PromptParityBaseline:
             raise ValueError("baseline 必须来自完整 case manifest: " + " ".join(detail))
         under_sampled = sorted(
             case_id for case_id, value in summary.items()
-            if int(value.get("trials", 0) or 0) < contract.minimum_trials
+            if _as_int(value.get("trials", 0)) < contract.minimum_trials
         )
         if under_sampled:
             raise ValueError(
@@ -583,10 +586,10 @@ class PromptParityBaseline:
             )
         cases = tuple(BaselineCaseResult(
             case_id=case_id,
-            trials=int(summary[case_id].get("trials", 0) or 0),
-            passed=int(summary[case_id].get("passed", 0) or 0),
-            failed=int(summary[case_id].get("failed", 0) or 0),
-            pass_rate=float(summary[case_id].get("pass_rate", 0.0) or 0.0),
+            trials=_as_int(summary[case_id].get("trials", 0)),
+            passed=_as_int(summary[case_id].get("passed", 0)),
+            failed=_as_int(summary[case_id].get("failed", 0)),
+            pass_rate=_as_float(summary[case_id].get("pass_rate", 0.0)),
             stable=bool(summary[case_id].get("stable", False)),
         ) for case_id in contract.required_case_ids)
         profile = dict(getattr(report, "profile", {}) or {})
@@ -757,11 +760,8 @@ def _gate_check(check_id: str, passed: bool, detail: str) -> ParityGateCheck:
     return ParityGateCheck(check_id, bool(passed), detail)
 
 
-def evaluate_prompt_parity(
-    report,
-    baseline: PromptParityBaseline,
-    contract: PromptParityContract = PROMPT_PARITY_CONTRACT,
-) -> PromptParityGateResult:
+def evaluate_prompt_parity(report: BehaviorReportPort, baseline: PromptParityBaseline,
+                           contract: PromptParityContract = PROMPT_PARITY_CONTRACT) -> PromptParityGateResult:
     """Evaluate a live report against the frozen contract and accepted baseline."""
     checks: list[ParityGateCheck] = []
     report_profile = dict(getattr(report, "profile", {}) or {})
@@ -904,7 +904,7 @@ def evaluate_prompt_parity(
     ))
 
     trial_floor = all(
-        int(case_summary.get(case_id, {}).get("trials", 0) or 0)
+        _as_int(case_summary.get(case_id, {}).get("trials", 0))
         >= contract.minimum_trials
         for case_id in contract.required_case_ids
     )
@@ -921,7 +921,7 @@ def evaluate_prompt_parity(
         if current is None or accepted is None:
             regressions.append(case_id)
             continue
-        current_rate = float(current.get("pass_rate", 0.0) or 0.0)
+        current_rate = _as_float(current.get("pass_rate", 0.0))
         if (
             not bool(current.get("stable", False))
             or not bool(current.get("pass_at_k", False))

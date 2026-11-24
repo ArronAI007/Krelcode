@@ -9,8 +9,10 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from ..core.context_usage import ContextUsageSnapshot
 from ..core.messages import Message
 from ..llm.base import PreparedLLMRequest
-from .context_assembler import ContextAssembly
-from .fragments import GROUP_RUNTIME, GROUP_WORKSPACE, PromptSnapshot
+from .context_source import ContextAssembly
+from .fragments import (
+    GROUP_RUNTIME, GROUP_WORKSPACE, PromptFragment, PromptSnapshot,
+)
 from .tokens import (
     estimate_history_tokens,
     estimate_text_tokens,
@@ -280,7 +282,7 @@ def build_context_usage_snapshot(
     )
 
 
-def _fragment_category(fragment) -> str:
+def _fragment_category(fragment: PromptFragment) -> str:
     if fragment.group == GROUP_WORKSPACE:
         return "workspace"
     if fragment.source == "memory" or fragment.id.startswith("memory:"):

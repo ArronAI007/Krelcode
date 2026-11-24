@@ -610,10 +610,10 @@ class WorkingContextStore:
             )
             return
         if lower == "update_plan":
-            items = meta.get("items") if isinstance(meta.get("items"), list) else []
-            statuses = (
-                meta.get("statuses") if isinstance(meta.get("statuses"), list)
-                else [])
+            raw_items = meta.get("items")
+            raw_statuses = meta.get("statuses")
+            items = raw_items if isinstance(raw_items, list) else []
+            statuses = raw_statuses if isinstance(raw_statuses, list) else []
             if items:
                 self.record_plan(
                     [str(item) for item in items],
@@ -854,7 +854,7 @@ __all__ = [
 
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> object:
     """Keep the historical import path without restoring the module cycle."""
     if name == "WorkingContextSource":
         from .working_context_source import WorkingContextSource

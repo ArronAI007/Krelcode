@@ -12,7 +12,7 @@ DeepSeek 现价分 peak/off-peak（peak=2×off-peak），上表取 off-peak 基�
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Mapping, Optional, Tuple, TypeVar
 
 # model → (input USD/1M, output USD/1M)，近似参考值，按需更新
 PRICING: Dict[str, Tuple[float, float]] = {
@@ -65,8 +65,10 @@ CONTEXT_WINDOWS: Dict[str, int] = {
 # 自适应预算比例：留 25% 给输出与安全余量
 BUDGET_RATIO = 0.75
 
+_T = TypeVar("_T")
 
-def _match_model(model: Optional[str], table: Dict):
+
+def _match_model(model: Optional[str], table: Mapping[str, _T]) -> Optional[_T]:
     """精确 → 最长前缀匹配（gpt-4o-mini-2024-07-18 → gpt-4o-mini 而非 gpt-4o）。"""
     if not model:
         return None

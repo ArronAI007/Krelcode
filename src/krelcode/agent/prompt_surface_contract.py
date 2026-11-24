@@ -14,11 +14,12 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass, replace
-from typing import Any, Awaitable, Callable, Mapping, Optional
+from typing import Any, Awaitable, Callable, Mapping, Optional, cast
 
 from ..core.redact import MASK, SecretRedactor, redact_obvious_secrets
 from .compact_summary import COMPACT_SUMMARY_JSON_SCHEMA
 from .tokens import estimate_text_tokens
+from .value_utils import value_or
 
 
 PROMPT_SURFACE_CONTRACT_VERSION = "prompt-surface-contract-v1"
@@ -41,7 +42,6 @@ _SENSITIVE_KEYS = frozenset({
     "credentials", "private_key", "access_key", "secret_access_key",
     "cookie", "set_cookie", "authorization", "proxy_authorization",
 })
-
 
 class PromptSurfaceContractError(RuntimeError):
     """Base error for a rejected auxiliary Prompt Surface execution."""
@@ -318,8 +318,29 @@ class PromptSurfaceContract:
         object.__setattr__(self, "input_schema", dict(self.input_schema))
         object.__setattr__(self, "output_schema", dict(self.output_schema))
 
-    def with_limits(self, **changes: object) -> "PromptSurfaceContract":
-        return replace(self, **changes)
+    def with_limits(
+        self,
+        *,
+        timeout_seconds: Optional[float] = None,
+        max_input_chars: Optional[int] = None,
+        max_output_chars: Optional[int] = None,
+        output_mode: Optional[str] = None,
+        limit_strategy: Optional[str] = None,
+        redact_input: Optional[bool] = None,
+        redact_output: Optional[bool] = None,
+    ) -> "PromptSurfaceContract":
+        return PromptSurfaceContract(
+            input_schema=self.input_schema,
+            output_schema=self.output_schema,
+            timeout_seconds=value_or(timeout_seconds, self.timeout_seconds),
+            max_input_chars=value_or(max_input_chars, self.max_input_chars),
+            max_output_chars=value_or(max_output_chars, self.max_output_chars),
+            output_mode=value_or(output_mode, self.output_mode),
+            limit_strategy=value_or(limit_strategy, self.limit_strategy),
+            redact_input=value_or(redact_input, self.redact_input),
+            redact_output=value_or(redact_output, self.redact_output),
+            version=self.version,
+        )
 
     @property
     def input_schema_hash(self) -> str:
@@ -357,14 +378,26 @@ class PromptSurfaceContract:
     def from_dict(cls, raw: Mapping[str, object]) -> "PromptSurfaceContract":
         input_schema = raw.get("input_schema")
         output_schema = raw.get("output_schema")
+        timeout_value = raw.get("timeout_seconds")
+        input_limit = raw.get("max_input_chars")
+        output_limit = raw.get("max_output_chars")
         return cls(
             input_schema=(
                 input_schema if isinstance(input_schema, Mapping) else {}),
             output_schema=(
                 output_schema if isinstance(output_schema, Mapping) else {}),
-            timeout_seconds=float(raw.get("timeout_seconds", 30.0) or 30.0),
-            max_input_chars=int(raw.get("max_input_chars", 1) or 1),
-            max_output_chars=int(raw.get("max_output_chars", 1) or 1),
+            timeout_seconds=(
+                float(timeout_value)
+                if isinstance(timeout_value, (int, float, str, bytes))
+                else 30.0),
+            max_input_chars=(
+                int(input_limit)
+                if isinstance(input_limit, (int, float, str, bytes))
+                else 1),
+            max_output_chars=(
+                int(output_limit)
+                if isinstance(output_limit, (int, float, str, bytes))
+                else 1),
             output_mode=str(raw.get("output_mode", OUTPUT_MODE_TEXT) or OUTPUT_MODE_TEXT),
             limit_strategy=str(
                 raw.get("limit_strategy", LIMIT_STRATEGY_TRUNCATE)
@@ -421,8 +454,9 @@ class PromptSurfaceExecutor:
         observer: Optional[SurfaceObserver] = None,
     ) -> PromptSurfaceResult:
         started = time.monotonic()
-        redact = lambda text: redact_obvious_secrets(
-            redactor.redact(text) if redactor is not None else text)
+        def redact(text: str) -> str:
+            return redact_obvious_secrets(
+                redactor.redact(text) if redactor is not None else text)
         safe_value = _redact_value(value, redact) if contract.redact_input else value
         original_input_text = _value_text(value)
         input_text = _value_text(safe_value)

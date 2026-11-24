@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
-from .prompt_candidate import PROMPT_CANDIDATE_SCHEMA
+from .prompt_candidate import PROMPT_CANDIDATE_SCHEMA, PromptCandidate
 from .prompt_lab import PromptLabError, PromptLabService
 from .prompt_release_pipeline import (
     PromptPipelineError,
@@ -254,8 +254,11 @@ class PromptLabTool:
                 run_offline = args.get("run_offline", True)
                 if not isinstance(run_offline, bool):
                     raise PromptLabError("run_offline 必须是布尔值")
+                candidate_spec = args.get("spec")
+                if not isinstance(candidate_spec, (PromptCandidate, Mapping)):
+                    raise PromptLabError("spec 必须是 PromptCandidate 或对象")
                 proposal = await pipeline.prepare_async(PromptPipelineRequest(
-                    candidate=args.get("spec"),
+                    candidate=candidate_spec,
                     skill_name=str(
                         args.get("skill_name") or "prompt-authoring"),
                     requested_by="agent",

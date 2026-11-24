@@ -131,9 +131,11 @@ def _text(value: object, limit: int = 256) -> str:
 
 
 def _int(value: object) -> int:
+    if not isinstance(value, (int, float, str, bytes, bytearray)):
+        return 0
     try:
-        return max(0, int(value or 0))
-    except (TypeError, ValueError):
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -621,7 +623,7 @@ class PromptConflictAnalyzer:
                 if directives[index].polarity >= 0
             ]
             for first, second in itertools.product(negative, affirmative):
-                pair = tuple(sorted((first, second)))
+                pair = (first, second) if first < second else (second, first)
                 if pair in pairs:
                     continue
                 if len(pairs) >= self.max_comparisons:
@@ -643,7 +645,7 @@ class PromptConflictAnalyzer:
                         continue
                     (left_side if left_match else right_side).append(index)
                 for first, second in itertools.product(left_side, right_side):
-                    pair = tuple(sorted((first, second)))
+                    pair = (first, second) if first < second else (second, first)
                     if pair in pairs:
                         continue
                     if len(pairs) >= self.max_comparisons:

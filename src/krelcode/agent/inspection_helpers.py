@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Sequence, TypeVar
 
-from .context_source import ContextLayer
+from .context_contracts import ContextLayer
 from .prompt_plan import PromptFragmentSnapshot
 
 def _short_hash(value: str) -> str:
@@ -27,7 +27,10 @@ def _ids(items: Sequence[str], limit: int = 20) -> str:
                     if len(items) > limit else "")
 
 
-def _bounded(items: Sequence[object], limit: int) -> tuple[list[object], int]:
+_T = TypeVar("_T")
+
+
+def _bounded(items: Sequence[_T], limit: int) -> tuple[list[_T], int]:
     if limit <= 0 or len(items) <= limit:
         return list(items), 0
     return list(items[:limit]), len(items) - limit
@@ -52,9 +55,11 @@ def _is_memory_fragment(fragment: PromptFragmentSnapshot) -> bool:
 
 def _int_value(value: object) -> int:
     """Read a bounded integer from a persisted ToolPromptSpec record."""
+    if not isinstance(value, (int, float, str, bytes, bytearray)):
+        return 0
     try:
-        return max(0, int(value or 0))
-    except (TypeError, ValueError):
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -65,9 +70,9 @@ def _layer_memory_metadata(layer: ContextLayer) -> tuple[tuple[str, ...], dict[s
         raw_ids, (list, tuple, set)) else ()
     raw_scopes = metadata.get("memory_scope_counts", {})
     scopes = {
-        str(key): max(0, int(value))
-        for key, value in dict(raw_scopes).items()
+        str(key): _int_value(value)
+        for key, value in raw_scopes.items()
     } if isinstance(raw_scopes, dict) else {}
-    tokens = max(0, int(metadata.get("memory_tokens", 0) or 0))
+    tokens = _int_value(metadata.get("memory_tokens", 0))
     return ids, scopes, tokens
 

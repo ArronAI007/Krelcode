@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Protocol, Sequence, cast
+
+from ..core.messages import Message
 
 from .context_contracts import (
     CATEGORY_RUNTIME,
@@ -10,6 +12,26 @@ from .context_contracts import (
     ContextTokenContribution,
     TRUST_UNTRUSTED,
 )
+
+class _WorkingEntryPort(Protocol):
+    kind: str
+    content: str
+
+
+class _WorkingSnapshotPort(Protocol):
+    text: str
+    count: int
+    entries: Sequence[_WorkingEntryPort]
+    truncated: bool
+    dropped_entries: int
+    counts_by_kind: object
+    sequence: int
+    token_count: int
+
+
+class _ContextRequestPort(Protocol):
+    history: Sequence[Message]
+    working_context: Optional[object]
 
 
 class WorkingContextSource:
@@ -26,8 +48,9 @@ class WorkingContextSource:
         self.store = store
         self.last_snapshot: Optional[Any] = None
 
-    def collect(self, request):
-        snapshot = getattr(request, "working_context", None)
+    def collect(self, request: object) -> Sequence[ContextLayer]:
+        request = cast(_ContextRequestPort, request)
+        snapshot = cast(Optional[_WorkingSnapshotPort], request.working_context)
         if snapshot is None and self.store is not None:
             snapshot = self.store.snapshot()
         if snapshot is None or not getattr(snapshot, "text", ""):

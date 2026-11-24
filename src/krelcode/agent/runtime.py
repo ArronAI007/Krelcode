@@ -10,12 +10,26 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Optional
+from typing import Awaitable, Callable, Mapping, Optional, Protocol, Sequence
 
-from ..core.messages import SteeringInput
+from ..core.events import EventBus
+from ..core.messages import ImageRef, SteeringInput
 from ..contracts.tool import RuntimeSnapshot
 from .loop import AgentLoop
 from .query import QueryEngine, QuerySession
+
+
+class _SubagentRuntimePort(Protocol):
+    async def shutdown(self) -> None: ...
+
+
+class _MCPSupervisorPort(Protocol):
+    def status(self) -> Sequence[Mapping[str, object]]: ...
+    async def close_all(self) -> None: ...
+
+
+class _ShellJobsRuntimePort(Protocol):
+    async def shutdown(self) -> None: ...
 
 
 class AgentRuntime:
@@ -25,10 +39,10 @@ class AgentRuntime:
         self,
         loop: AgentLoop,
         *,
-        subagents=None,
-        mcp_supervisor=None,
-        mcp_reload=None,
-        shell_jobs=None,
+        subagents: Optional[_SubagentRuntimePort] = None,
+        mcp_supervisor: Optional[_MCPSupervisorPort] = None,
+        mcp_reload: Optional[Callable[[], Awaitable[Sequence[str]]]] = None,
+        shell_jobs: Optional[_ShellJobsRuntimePort] = None,
     ) -> None:
         self.loop = loop
         self.subagents = subagents
@@ -39,7 +53,7 @@ class AgentRuntime:
             if shell_jobs is not None
             else getattr(loop.tool_context, "shell_jobs", None)
         )
-        self._task: Optional[asyncio.Task] = None
+        self._task: Optional[asyncio.Task[str]] = None
         self._query: Optional[QuerySession] = None
         self._closed = False
         self.query_engine = QueryEngine(loop)
@@ -47,11 +61,11 @@ class AgentRuntime:
 
     def _runtime_snapshot(self, base: RuntimeSnapshot) -> RuntimeSnapshot:
         """每轮开始时刷新 MCP 健康状态，其余配置保持不可变快照。"""
-        alive = frozenset()
+        alive: frozenset[str] = frozenset()
         health_known = self.mcp_supervisor is not None
         if self.mcp_supervisor is not None:
             alive = frozenset(
-                item["name"] for item in self.mcp_supervisor.status()
+                str(item["name"]) for item in self.mcp_supervisor.status()
                 if item.get("alive"))
         return replace(
             base,
@@ -60,7 +74,7 @@ class AgentRuntime:
         )
 
     @property
-    def bus(self):
+    def bus(self) -> EventBus:
         return self.loop.bus
 
     @property
@@ -72,7 +86,7 @@ class AgentRuntime:
         return self.loop.registry.names()
 
     @property
-    def active_task(self) -> Optional[asyncio.Task]:
+    def active_task(self) -> Optional[asyncio.Task[str]]:
         return self._task
 
     @property
@@ -83,7 +97,7 @@ class AgentRuntime:
         self,
         message: str,
         *,
-        images=None,
+        images: Optional[list[ImageRef]] = None,
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[list[str]] = None,
     ) -> str:
@@ -107,7 +121,7 @@ class AgentRuntime:
         self,
         message: str,
         *,
-        images=None,
+        images: Optional[list[ImageRef]] = None,
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[list[str]] = None,
     ) -> QuerySession:
@@ -123,22 +137,34 @@ class AgentRuntime:
         self._task = self._query.task
         return self._query
 
-    def start_turn(self, message: str, *, images=None) -> asyncio.Task:
+    def start_turn(
+        self,
+        message: str,
+        *,
+        images: Optional[list[ImageRef]] = None,
+    ) -> asyncio.Task[str]:
         """兼容入口：启动后台 turn 并返回底层 task。"""
         return self.start_query(message, images=images).task
 
-    def steer(self, message: str, *, images=None) -> str:
+    def steer(
+        self,
+        message: str,
+        *,
+        images: Optional[list[ImageRef]] = None,
+    ) -> str:
         """向运行中的 turn 注入用户补充要求及可选附件。"""
         text = message.strip()
         if not text:
             return ""
-        item = SteeringInput(text, tuple(images or ())) if images else text
+        item: SteeringInput | str = (
+            SteeringInput(text, tuple(images or ())) if images else text
+        )
         self.loop.steering_queue.put_nowait(item)
         return text if len(text) <= 40 else text[:40] + "…"
 
-    def drain_steering(self) -> list[Any]:
+    def drain_steering(self) -> list[SteeringInput | str]:
         """取走任务结束后未送达的 steering 项。"""
-        pending: list[Any] = []
+        pending: list[SteeringInput | str] = []
         while not self.loop.steering_queue.empty():
             try:
                 pending.append(self.loop.steering_queue.get_nowait())
@@ -162,7 +188,7 @@ class AgentRuntime:
         self._task = None
         return True
 
-    async def reload_mcp(self):
+    async def reload_mcp(self) -> Sequence[str]:
         if self.mcp_reload is None:
             return []
         return await self.mcp_reload()

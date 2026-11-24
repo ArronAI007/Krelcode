@@ -40,7 +40,7 @@ from .fragments import (
 from .prompt_assembler import PromptAssembler, PromptPlan
 from .prompt_candidate import PROMPT_CANDIDATE_VERSION, PromptCandidate
 from .prompt_authoring import PromptAuthoringReport
-from .prompt_conflicts import PromptConflictAnalyzer
+from .prompt_conflicts import PromptConflict, PromptConflictAnalyzer
 
 
 ISOLATION_VERSION = "1"
@@ -461,7 +461,7 @@ class PromptCandidateIsolator:
         request = candidate.to_authoring_request(target)
         if candidate_layer != request.target_layer:
             precedence_issues.append("candidate-layer-mismatch")
-        candidate_conflicts = ()
+        candidate_conflicts: Tuple[PromptConflict, ...] = ()
         if candidate_plan.conflict_report is not None:
             candidate_conflicts = tuple(
                 conflict for conflict in candidate_plan.conflict_report.conflicts
@@ -470,7 +470,7 @@ class PromptCandidateIsolator:
                     conflict.right_fragment_id,
                 }
             )
-        blocking_conflicts = tuple(
+        blocking_conflicts: Tuple[PromptConflict, ...] = tuple(
             conflict for conflict in candidate_conflicts
             if conflict.unresolved or conflict.winner_fragment_id != target_id
         )

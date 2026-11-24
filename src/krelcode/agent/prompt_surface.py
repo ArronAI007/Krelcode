@@ -21,7 +21,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Mapping, Optional, Sequence, Tuple
+from typing import List, Mapping, Optional, Sequence, Tuple, cast
 
 from .evidence import EvidenceSource, InstructionSource, SourceRole
 from .fragments import PROMPT_STABILITY_LEVELS, PROMPT_TRUST_LEVELS
@@ -89,10 +89,17 @@ def _text(value: object, limit: int = _MAX_TEXT) -> str:
 
 
 def _integer(value: object) -> int:
-    try:
-        return max(0, int(value or 0))
-    except (TypeError, ValueError):
+    if not isinstance(value, (int, float, str, bytes, bytearray)):
         return 0
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _enum_text(value: object) -> str:
+    raw = getattr(value, "value", value)
+    return str(raw or "")
 
 
 def _strings(value: object) -> Tuple[str, ...]:
@@ -209,11 +216,11 @@ class PromptSurfaceDescriptor:
     def as_dict(self) -> dict[str, object]:
         return {
             "id": self.id,
-            "kind": self.kind.value,
+            "kind": _enum_text(self.kind),
             "source": self.source,
             "owner": self.owner,
             "version": self.version,
-            "role": self.role.value,
+            "role": _enum_text(self.role),
             "authority": self.authority,
             "trust": self.trust,
             "stability": self.stability,
@@ -246,7 +253,7 @@ class PromptSurfaceDescriptor:
             available=bool(raw.get("available", True)),
             capabilities=_strings(raw.get("capabilities")),
             metadata=(
-                raw.get("metadata")
+                cast(Mapping[str, object], raw["metadata"])
                 if isinstance(raw.get("metadata"), Mapping) else {}
             ),
             contract=(
@@ -296,11 +303,17 @@ class PromptSurfaceObservation:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, object]) -> "PromptSurfaceObservation":
+        rendered_at = raw.get("first_rendered_at")
+        last_rendered_at = raw.get("last_rendered_at")
         return cls(
             surface_id=str(raw.get("surface_id", "") or ""),
             render_count=_integer(raw.get("render_count")),
-            first_rendered_at=float(raw.get("first_rendered_at", 0.0) or 0.0),
-            last_rendered_at=float(raw.get("last_rendered_at", 0.0) or 0.0),
+            first_rendered_at=(
+                float(rendered_at)
+                if isinstance(rendered_at, (int, float, str, bytes)) else 0.0),
+            last_rendered_at=(
+                float(last_rendered_at)
+                if isinstance(last_rendered_at, (int, float, str, bytes)) else 0.0),
             last_turn_id=str(raw.get("last_turn_id", "") or ""),
             last_step=_integer(raw.get("last_step")),
             last_content_hash=str(raw.get("last_content_hash", "") or ""),
@@ -472,7 +485,7 @@ class PromptSurfaceRegistry:
                 continue
             if text_query and not any(
                 text_query in item.lower()
-                for item in (surface.id, surface.kind.value, surface.source,
+                for item in (surface.id, _enum_text(surface.kind), surface.source,
                              surface.owner, surface.description)
             ):
                 continue
@@ -481,7 +494,7 @@ class PromptSurfaceRegistry:
             values.append(surface)
         return tuple(sorted(
             values,
-            key=lambda item: (item.kind.value, item.id),
+            key=lambda item: (_enum_text(item.kind), item.id),
         ))
 
     def observation(self, surface_id: str) -> Optional[PromptSurfaceObservation]:
@@ -611,13 +624,13 @@ class PromptSurfaceRegistry:
     def kind_counts(self) -> Mapping[str, int]:
         counts: dict[str, int] = {}
         for surface in self._surfaces.values():
-            counts[surface.kind.value] = counts.get(surface.kind.value, 0) + 1
+            counts[_enum_text(surface.kind)] = counts.get(_enum_text(surface.kind), 0) + 1
         return dict(sorted(counts.items()))
 
     def role_counts(self) -> Mapping[str, int]:
         counts: dict[str, int] = {}
         for surface in self._surfaces.values():
-            counts[surface.role.value] = counts.get(surface.role.value, 0) + 1
+            counts[_enum_text(surface.role)] = counts.get(_enum_text(surface.role), 0) + 1
         return dict(sorted(counts.items()))
 
     def trust_counts(self) -> Mapping[str, int]:
@@ -633,7 +646,7 @@ class PromptSurfaceRegistry:
             observations=self.observations(),
         )
 
-    def summary_lines(self) -> list[str]:
+    def summary_lines(self) -> List[str]:
         health = self.health()
         kinds = " · ".join(
             f"{name} {count}" for name, count in self.kind_counts().items()
@@ -710,13 +723,37 @@ def main_prompt_surface(
 def update_observation(
     registry: PromptSurfaceRegistry | None,
     surface_id: str,
-    **kwargs: object,
+    *,
+    content_hash: str = "",
+    tokens: int = 0,
+    turn_id: str = "",
+    step: int = 0,
+    rendered_at: Optional[float] = None,
+    contract_status: str = "",
+    schema_valid: bool = False,
+    timed_out: bool = False,
+    truncated: bool = False,
+    redaction_applied: bool = False,
+    elapsed_ms: int = 0,
 ) -> bool:
     """Safe helper for runtime instrumentation; never affects Provider flow."""
     if registry is None:
         return False
     try:
-        return registry.observe(surface_id, **kwargs)
+        return registry.observe(
+            surface_id,
+            content_hash=content_hash,
+            tokens=tokens,
+            turn_id=turn_id,
+            step=step,
+            rendered_at=rendered_at,
+            contract_status=contract_status,
+            schema_valid=schema_valid,
+            timed_out=timed_out,
+            truncated=truncated,
+            redaction_applied=redaction_applied,
+            elapsed_ms=elapsed_ms,
+        )
     except Exception:
         return False
 

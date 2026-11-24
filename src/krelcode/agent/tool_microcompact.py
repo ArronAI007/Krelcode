@@ -220,7 +220,7 @@ class ToolMicrocompactor:
                 original_chars=effective_chars,
                 compacted_chars=len(compacted),
                 digest=hashlib.sha256(
-                    (message.tool_call_id + tool_name + str(effective_chars))
+                    (str(message.tool_call_id or "") + tool_name + str(effective_chars))
                     .encode("utf-8")
                 ).hexdigest()[:16],
             ))

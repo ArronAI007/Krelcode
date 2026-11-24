@@ -6,7 +6,7 @@ import html
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
-    TYPE_CHECKING, Awaitable, Mapping, Optional, Protocol, Sequence, Tuple,
+    TYPE_CHECKING, Awaitable, Mapping, Optional, Protocol, Sequence, Tuple, cast,
 )
 
 from ..core.messages import Message
@@ -47,6 +47,25 @@ from .working_context_source import WorkingContextSource
 if TYPE_CHECKING:
     from .workflows import TaskWorkflowSelection
     from .working_context import WorkingContextSnapshot
+
+
+class _MemoryViewItem(Protocol):
+    id: str
+    scope: object
+
+
+class _MemoryTopic(Protocol):
+    relative_path: str
+
+
+class _MemoryStorePort(Protocol):
+    def index_view(
+        self,
+    ) -> tuple[str, Sequence[_MemoryViewItem], Sequence[_MemoryTopic]]: ...
+
+
+class _WorkingContextStorePort(Protocol):
+    def snapshot(self) -> "WorkingContextSnapshot": ...
 
 
 @dataclass(frozen=True)
@@ -435,7 +454,7 @@ class MemoryContextSource:
 
     name = "memory"
 
-    def __init__(self, store) -> None:
+    def __init__(self, store: _MemoryStorePort) -> None:
         self.store = store
 
     def collect(self, request: ContextRequest) -> Sequence[ContextLayer]:
@@ -540,9 +559,9 @@ class DirectoryRulesContextSource:
 def default_context_sources(
     rule_loader: Optional[RuleLoader] = None,
     *,
-    working_context_store=None,
+    working_context_store: Optional[_WorkingContextStorePort] = None,
     engine: str = "v3",
-    memory_store=None,
+    memory_store: Optional[_MemoryStorePort] = None,
 ) -> Tuple[ContextSource, ...]:
     normalized_engine = str(engine or "v3").strip().lower()
     prompt_source: ContextSource = (
@@ -561,11 +580,11 @@ def default_context_sources(
         RuntimeHookContextSource(),
     ))
     if working_context_store is not None:
-        sources.append(WorkingContextSource(working_context_store))
+        sources.append(cast(ContextSource, WorkingContextSource(working_context_store)))
     return tuple(sources)
 
 
-def _fragment_category(fragment) -> str:
+def _fragment_category(fragment: PromptFragment) -> str:
     if fragment.group == GROUP_WORKSPACE:
         return CATEGORY_WORKSPACE
     if fragment.source == "memory" or fragment.id.startswith("memory:"):

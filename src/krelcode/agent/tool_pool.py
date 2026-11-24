@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from html import escape
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ..contracts.tool import (
     RuntimeSnapshot,
@@ -90,7 +90,7 @@ class TurnToolPool:
             name for name, entry in self._entries.items()
             if entry.descriptor.tier is ToolTier.CORE
         )
-        self._advertised = frozenset()
+        self._advertised: frozenset[str] = frozenset()
 
     @staticmethod
     def _runtime_exclusion(
@@ -163,7 +163,7 @@ class TurnToolPool:
             )
         return None
 
-    def tool_specs(self) -> List[dict]:
+    def tool_specs(self) -> List[dict[str, object]]:
         """Return sorted full schemas and record this request's execute boundary."""
         specs = self.prompt_specs()
         self._advertised = frozenset(spec.name for spec in specs)
@@ -303,7 +303,7 @@ class TurnToolPool:
             scored.append((score, name, ToolCatalogMatch(
                 name=name,
                 description=description,
-                tier=entry.descriptor.tier,
+                tier=entry.descriptor.tier or ToolTier.CORE,
                 source=entry.descriptor.source.value,
                 read_only=entry.descriptor.read_only,
                 loaded=name in self._loaded,
@@ -496,7 +496,7 @@ TOOL_NAME_ALIASES = {
 }
 
 
-def normalize_tool_allowlist(values) -> set[str]:
+def normalize_tool_allowlist(values: Iterable[object]) -> set[str]:
     """Keep unknown names verbatim while canonicalizing public tool aliases."""
     allowed = set()
     for raw in values:

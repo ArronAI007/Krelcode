@@ -17,18 +17,20 @@ def _mapping(value: object) -> Mapping[str, object]:
 
 
 def _integer(value: object) -> int:
+    if not isinstance(value, (int, float, str, bytes, bytearray)):
+        return 0
     try:
-        return max(0, int(value or 0))
-    except (TypeError, ValueError):
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
 def _float(value: object) -> float | None:
-    if value is None:
+    if not isinstance(value, (int, float, str, bytes)):
         return None
     try:
         return max(0.0, float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 

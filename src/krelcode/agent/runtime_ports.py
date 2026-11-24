@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from .prompt_models import PromptPlan, ProviderMessages as PromptProviderMessages
     from .prompt_assembler import PromptAssemblyRequest
     from .prompt_plan import PromptPlanSnapshot
+    from .fragments import PromptSnapshot
     from .reminders import ReminderCatalog, ReminderContext, ReminderSelection
     from .tool_microcompact import MicrocompactReport
     from .tool_pool import TurnToolPool
@@ -247,6 +248,9 @@ class ContextTurnHostPort(_EventHostPort, _ToolPoolHostPort, Protocol):
     restored_memory_context: tuple[str, ...]
     restored_relevant_memory_ids: tuple[str, ...]
     pending_context_refresh: bool
+    prompt_snapshot: Optional["PromptSnapshot"]
+    prompt_registry: Optional["PromptFragmentRegistry"]
+    skill_base_prompt: str
     context_attachments: "ContextAttachmentStore"
     last_attachment_diff: "ContextAttachmentDiff"
     last_mode_permission_contract: Optional["ModePermissionContract"]

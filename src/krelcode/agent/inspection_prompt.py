@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Mapping, Optional, Sequence
 
+from .context_contracts import ContextLayer
+from .inspection_core import ContextInspectionCoreMixin
 from .inspection_helpers import (
     _bounded,
     _ids,
@@ -16,7 +18,7 @@ from .inspection_helpers import (
 )
 from .prompt_plan import PromptFragmentSnapshot, PromptPlanSnapshot
 
-class ContextInspectionPromptMixin:
+class ContextInspectionPromptMixin(ContextInspectionCoreMixin):
     def plan_lines(
         self,
         *,
@@ -453,8 +455,19 @@ class ContextInspectionPromptMixin:
                 ))
             rule_scope = str(provenance.get("rule_scope", "") or "")
             if rule_scope:
-                overrides = provenance.get("rule_overrides", ())
+                raw_overrides = provenance.get("rule_overrides", ())
+                overrides = (
+                    raw_overrides
+                    if isinstance(raw_overrides, (list, tuple, set, frozenset))
+                    else ()
+                )
                 override_text = ", ".join(str(item) for item in overrides) or "(none)"
+                raw_issues = provenance.get("rule_issues", ())
+                rule_issues = (
+                    raw_issues
+                    if isinstance(raw_issues, (list, tuple, set, frozenset))
+                    else ()
+                )
                 lines.extend((
                     f"  effective rule source: {fragment.id}"
                     f" · scope={rule_scope}"
@@ -462,10 +475,10 @@ class ContextInspectionPromptMixin:
                     f" · overrides={override_text}",
                     f"  rule files: {_join_provenance(provenance.get('rule_sources'))}",
                     f"  imports={provenance.get('rule_import_count', 0)}"
-                    f" · issues={len(provenance.get('rule_issues', ()))}"
+                    f" · issues={len(rule_issues)}"
                     f" · conflict policy={provenance.get('rule_conflict_policy', '(unknown)')}",
                 ))
-                for issue in provenance.get("rule_issues", ()):
+                for issue in rule_issues:
                     if not isinstance(issue, dict):
                         continue
                     lines.append(

@@ -11,10 +11,11 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass, replace
-from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple, cast
 
 from ..core.messages import Message, ToolCall
 from .tokens import estimate_text_tokens
+from .value_utils import merge_by_key
 
 COMPACT_SUMMARY_VERSION = 2
 SUMMARY_MARKER_START = "{"
@@ -110,7 +111,7 @@ class CompactFile:
     status: str = "touched"
     note: str = ""
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         return {"path": self.path, "status": self.status, "note": self.note}
 
     @classmethod
@@ -134,7 +135,7 @@ class CompactTestStatus:
     status: str = "unknown"
     detail: str = ""
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         return {"name": self.name, "status": self.status, "detail": self.detail}
 
     @classmethod
@@ -196,7 +197,7 @@ class CompactSummary:
             separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         """Return the persisted/audit representation.
 
         This includes deterministic metadata that must never be sent back to
@@ -211,7 +212,7 @@ class CompactSummary:
             "created_at": self.created_at,
         }
 
-    def as_contract_dict(self) -> dict:
+    def as_contract_dict(self) -> dict[str, object]:
         """Return exactly the machine-verifiable model-facing v2 schema."""
         return {
             "goal": self.goal,
@@ -224,7 +225,7 @@ class CompactSummary:
             "critical_constraints": list(self.critical_constraints),
         }
 
-    def _content_dict(self) -> dict:
+    def _content_dict(self) -> dict[str, object]:
         return {
             "version": self.version,
             "goal": self.goal,
@@ -241,7 +242,7 @@ class CompactSummary:
         }
 
     def render(self) -> str:
-        payload_data = {}
+        payload_data: dict[str, object] = {}
         if self.goal:
             payload_data["g"] = self.goal
         for key, alias in (
@@ -327,12 +328,12 @@ class CompactSummary:
     def from_model_json_text(cls, text: str) -> "CompactSummary":
         """Parse the strict model-facing contract, not compact wire aliases."""
         raw = _extract_json_object(text)
-        required = set(COMPACT_SUMMARY_JSON_SCHEMA["required"])
+        required = set(cast(Iterable[str], COMPACT_SUMMARY_JSON_SCHEMA["required"]))
         missing = sorted(required - set(raw))
         if missing:
             raise CompactSummaryError(
                 "摘要缺少必填字段: " + ", ".join(missing))
-        allowed = set(COMPACT_SUMMARY_JSON_SCHEMA["properties"])
+        allowed = set(cast(Mapping[str, object], COMPACT_SUMMARY_JSON_SCHEMA["properties"]))
         unexpected = sorted(set(raw) - allowed)
         if unexpected:
             raise CompactSummaryError(
@@ -378,7 +379,7 @@ class CompactSummary:
             issues.append("tests 存在重复 name")
         return issues
 
-    def record(self) -> dict:
+    def record(self) -> dict[str, object]:
         """Content-free accounting safe for events and stream-json."""
         return {
             "version": self.version,
@@ -410,9 +411,11 @@ def merge_summaries(
             goal=candidate.goal or result.goal,
             completed=_merge_strings(result.completed, candidate.completed),
             decisions=_merge_strings(result.decisions, candidate.decisions),
-            files=_merge_by_key(result.files, candidate.files, lambda item: item.path),
+            files=merge_by_key(
+                result.files, candidate.files, lambda item: item.path, limit=_MAX_ITEMS),
             commands=_merge_strings(result.commands, candidate.commands),
-            tests=_merge_by_key(result.tests, candidate.tests, lambda item: item.name),
+            tests=merge_by_key(
+                result.tests, candidate.tests, lambda item: item.name, limit=_MAX_ITEMS),
             errors=_merge_strings(result.errors, candidate.errors),
             open_issues=_merge_strings(
                 result.open_issues, candidate.open_issues),
@@ -534,15 +537,15 @@ def build_history_fallback(
             if message.content:
                 goal = str(message.content).strip()
         elif message.role == "tool":
-            call = calls.get(str(message.tool_call_id or ""))
+            found_call = calls.get(str(message.tool_call_id or ""))
             meta = dict(getattr(message, "tool_meta", None) or {})
             name = str(
                 getattr(message, "tool_name", None)
-                or (call.name if call else "unknown"))
-            if call is not None:
+                or (found_call.name if found_call else "unknown"))
+            if found_call is not None:
                 for key in ("path", "command", "pattern", "cwd"):
-                    if key not in meta and key in call.arguments:
-                        meta[key] = call.arguments.get(key)
+                    if key not in meta and key in found_call.arguments:
+                        meta[key] = found_call.arguments.get(key)
             path = str(meta.get("path") or "").strip()
             if path:
                 status = (
@@ -711,7 +714,7 @@ def _extract_json_object(text: str) -> Mapping[str, Any]:
         raise CompactSummaryError("摘要 JSON 根节点必须是 object")
     if isinstance(raw.get("summary"), Mapping):
         raw = raw["summary"]
-    return raw
+    return cast(Mapping[str, Any], raw)
 
 
 def _string_tuple(value: Any, name: str) -> Tuple[str, ...]:
@@ -775,13 +778,6 @@ def _merge_strings(*groups: Sequence[str]) -> Tuple[str, ...]:
                 result.append(text)
                 seen.add(text)
     return tuple(result[-_MAX_ITEMS:])
-
-
-def _merge_by_key(older, newer, key):
-    merged = {key(item): item for item in older}
-    for item in newer:
-        merged[key(item)] = item
-    return tuple(list(merged.values())[-_MAX_ITEMS:])
 
 
 def _looks_like_test(command: str, meta: Mapping[str, Any]) -> bool:

@@ -28,11 +28,20 @@ import time
 import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Iterable, Mapping, Optional, Sequence
+from typing import Callable, Iterable, Mapping, Optional, Sequence, cast
 
+from .context_checkpoint_event import checkpoint_created_event
+from .context_checkpoint_ports import (
+    CheckpointLoopPort,
+    CompactStorePort,
+    MemoryEntryPort,
+    MemoryStorePort,
+    WorkingContextPort,
+)
 from .context_plan import ContextPlanSnapshot, history_digest
-from .evidence import evidence_record_from_memory, render_evidence_set
-from .working_context import WorkingContextSnapshot, WorkingContextStore
+from .memory_context_render import render_memory_context
+from .working_context import WorkingContextStore
+from .value_utils import nonnegative_float, nonnegative_int
 from ..core.events import (
     AgentEvent,
     ContextAssembled,
@@ -60,7 +69,7 @@ class FileHash:
     sha256: str
     size: int
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         return {"path": self.path, "sha256": self.sha256, "size": self.size}
 
     @classmethod
@@ -68,7 +77,7 @@ class FileHash:
         return cls(
             path=str(raw.get("path", "") or ""),
             sha256=str(raw.get("sha256", "") or ""),
-            size=max(0, int(raw.get("size", 0) or 0)),
+            size=nonnegative_int(raw.get("size", 0)),
         )
 
 
@@ -79,7 +88,7 @@ class MemoryReference:
     scope: str
     kind: str
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         return {
             "id": self.id,
             "digest": self.digest,
@@ -99,7 +108,7 @@ class WorkspaceFingerprint:
     managed_digest: str = ""
     captured_at: float = 0.0
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         return {
             "branch": self.branch,
             "head": self.head,
@@ -127,7 +136,7 @@ class WorkspaceFingerprint:
                 if str(item)
             ),
             managed_digest=str(raw.get("managed_digest", "") or ""),
-            captured_at=float(raw.get("captured_at", 0.0) or 0.0),
+            captured_at=nonnegative_float(raw.get("captured_at", 0.0)),
         )
 
 
@@ -145,7 +154,7 @@ class FileIntegrity:
     def valid(self) -> bool:
         return not self.changed and not self.missing
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         return {
             "unchanged": list(self.unchanged),
             "changed": list(self.changed),
@@ -166,7 +175,7 @@ class ContextRestoreResult:
     workspace_refresh_pending: bool = False
     context_plan: ContextPlanSnapshot = field(default_factory=ContextPlanSnapshot)
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         return {
             "checkpoint_id": self.checkpoint_id,
             "session_id": self.session_id,
@@ -205,7 +214,7 @@ class ContextCheckpoint:
     def history_hash(self) -> str:
         return history_digest(self.history)
 
-    def metadata_record(self) -> dict:
+    def metadata_record(self) -> dict[str, object]:
         """Content-free record suitable for the session JSONL audit stream."""
         working_entries = self.working_context.get("entries")
         working_kinds: dict[str, int] = {}
@@ -246,7 +255,7 @@ class ContextCheckpoint:
             "parent_checkpoint_id": self.parent_checkpoint_id,
         }
 
-    def as_payload(self) -> dict:
+    def as_payload(self) -> dict[str, object]:
         return {
             "type": "context_checkpoint",
             "version": CONTEXT_CHECKPOINT_VERSION,
@@ -279,6 +288,11 @@ class ContextCheckpoint:
                     continue
         refs = []
         raw_refs = raw.get("memory_refs")
+        working_raw = raw.get("working_context")
+        compact_raw = raw.get("compact_summary")
+        plan_raw = raw.get("plan")
+        workspace_raw = raw.get("workspace")
+        context_plan_raw = raw.get("context_plan")
         if isinstance(raw_refs, list):
             for item in raw_refs:
                 if not isinstance(item, Mapping):
@@ -291,22 +305,30 @@ class ContextCheckpoint:
                 ))
         return cls(
             id=str(raw.get("id", fallback_id) or fallback_id),
-            created_at=float(raw.get("created_at", 0.0) or 0.0),
+            created_at=nonnegative_float(raw.get("created_at", 0.0)),
             session_id=str(raw.get("session_id", "") or ""),
             turn_id=str(raw.get("turn_id", "") or ""),
             phase=str(raw.get("phase", "end") or "end"),
             history=history,
-            working_context=dict(raw.get("working_context") or {}),
+            working_context=(
+                dict(cast(Mapping[str, object], working_raw))
+                if isinstance(working_raw, Mapping) else {}),
             file_hashes=tuple(hashes),
             workspace=WorkspaceFingerprint.from_dict(
-                raw.get("workspace") if isinstance(raw.get("workspace"), Mapping) else None),
+                cast(Mapping[str, object], workspace_raw)
+                if isinstance(workspace_raw, Mapping) else None),
             compact_checkpoint_id=str(raw.get("compact_checkpoint_id", "") or ""),
-            compact_summary=dict(raw.get("compact_summary") or {}),
+            compact_summary=(
+                dict(cast(Mapping[str, object], compact_raw))
+                if isinstance(compact_raw, Mapping) else {}),
             memory_query=str(raw.get("memory_query", "") or ""),
             memory_refs=tuple(refs),
             context_plan=ContextPlanSnapshot.from_dict(
-                raw.get("context_plan") if isinstance(raw.get("context_plan"), Mapping) else None),
-            plan=dict(raw.get("plan") or {}),
+                cast(Mapping[str, object], context_plan_raw)
+                if isinstance(context_plan_raw, Mapping) else None),
+            plan=(
+                dict(cast(Mapping[str, object], plan_raw))
+                if isinstance(plan_raw, Mapping) else {}),
             copied_from=str(raw.get("copied_from", "") or ""),
             parent_checkpoint_id=str(raw.get("parent_checkpoint_id", "") or ""),
         )
@@ -405,31 +427,28 @@ class ContextCheckpointStore:
         return self._load_file(self.dir / f"{safe}.json")
 
     def latest_for_session(self, session_id: str) -> Optional[ContextCheckpoint]:
-        return max(
-            (item for item in self._load_all()
-             if not session_id or item.session_id == session_id),
-            key=lambda item: item.created_at,
-            default=None,
-        )
+        candidates = [
+            item for item in self._load_all()
+            if not session_id or item.session_id == session_id
+        ]
+        return max(candidates, key=lambda item: item.created_at) if candidates else None
 
     def latest_for_turn(self, session_id: str, turn_id: str) -> Optional[ContextCheckpoint]:
-        return max(
-            (item for item in self._load_all()
-             if item.session_id == session_id and item.turn_id == turn_id),
-            key=lambda item: item.created_at,
-            default=None,
-        )
+        candidates = [
+            item for item in self._load_all()
+            if item.session_id == session_id and item.turn_id == turn_id
+        ]
+        return max(candidates, key=lambda item: item.created_at) if candidates else None
 
     def latest_before(self, session_id: str, created_at: float) -> Optional[ContextCheckpoint]:
-        return max(
-            (item for item in self._load_all()
-             if (not session_id or item.session_id == session_id)
-             and item.created_at <= float(created_at)),
-            key=lambda item: item.created_at,
-            default=None,
-        )
+        candidates = [
+            item for item in self._load_all()
+            if (not session_id or item.session_id == session_id)
+            and item.created_at <= float(created_at)
+        ]
+        return max(candidates, key=lambda item: item.created_at) if candidates else None
 
-    def list(self, *, limit: int = 50) -> list[dict]:
+    def list(self, *, limit: int = 50) -> list[dict[str, object]]:
         records = sorted(
             self._load_all(), key=lambda item: item.created_at, reverse=True)
         return [item.metadata_record() for item in records[:max(1, int(limit))]]
@@ -488,11 +507,11 @@ class ContextCheckpointStore:
 
 
 def restore_context_checkpoint(
-    loop,
+    loop: CheckpointLoopPort,
     checkpoint: ContextCheckpoint,
     *,
-    compact_store=None,
-    memory_store=None,
+    compact_store: Optional[CompactStorePort] = None,
+    memory_store: Optional[MemoryStorePort] = None,
     history_override: Optional[Sequence[Message]] = None,
 ) -> ContextRestoreResult:
     """Apply one checkpoint to a loop, refreshing volatile project facts."""
@@ -541,7 +560,7 @@ def restore_context_checkpoint(
             integrity.stale, reason="resume-file-hash-mismatch")
         snapshot = loop.working_context_store.snapshot()
 
-    relevant = ()
+    relevant: Sequence[MemoryEntryPort] = ()
     memory_query = checkpoint.memory_query.strip()
     if memory_store is not None and memory_query:
         relevant = memory_store.search(memory_query, limit=8)
@@ -606,7 +625,7 @@ def restore_context_checkpoint(
     return loop.last_context_restore
 
 
-def _refresh_now_if_possible(loop) -> None:
+def _refresh_now_if_possible(loop: CheckpointLoopPort) -> None:
     refresh = getattr(loop, "refresh_workspace_context", None)
     if not callable(refresh):
         loop.pending_context_refresh = False
@@ -623,17 +642,10 @@ def _refresh_now_if_possible(loop) -> None:
     loop.pending_context_refresh = True
 
 
-def render_memory_context(entries: Sequence[object]) -> str:
-    if not entries:
-        return ""
-    records = tuple(evidence_record_from_memory(entry) for entry in entries)
-    return render_evidence_set(records, origin="restored_memory")
-
-
 def collect_tracked_files(
     workspace_root: Path,
     history: Sequence[Message],
-    working_context: Optional[WorkingContextSnapshot] = None,
+    working_context: Optional[WorkingContextPort] = None,
 ) -> tuple[Path, ...]:
     root = Path(workspace_root).resolve()
     candidates: list[Path] = []
@@ -744,12 +756,12 @@ class ContextCheckpointCoordinator:
     def __init__(
         self,
         *,
-        loop,
+        loop: CheckpointLoopPort,
         store: ContextCheckpointStore,
-        compact_store=None,
-        memory_store=None,
+        compact_store: Optional[CompactStorePort] = None,
+        memory_store: Optional[MemoryStorePort] = None,
         redactor: Optional[SecretRedactor] = None,
-        log=None,
+        log: Optional[Callable[[str], None]] = None,
         capture_start: bool = False,
         capture_workspace: bool = True,
     ) -> None:
@@ -761,7 +773,7 @@ class ContextCheckpointCoordinator:
         self.log = log
         self.capture_start = bool(capture_start)
         self.capture_workspace = bool(capture_workspace)
-        self._unsub = None
+        self._unsub: Optional[Callable[[], None]] = None
         self._last_plan: dict[str, object] = {}
         self._active_session_id = ""
 
@@ -818,18 +830,17 @@ class ContextCheckpointCoordinator:
                 phase="cancelled" if isinstance(event, RunCancelled) else "end",
             )
             if checkpoint is not None:
-                await self.loop.bus.emit(_checkpoint_event(checkpoint))
+                await self.loop.bus.emit(checkpoint_created_event(checkpoint))
             self._active_session_id = ""
 
-    def _capture(
-        self,
-        history: Sequence[Message],
+    def _capture(self, history: Sequence[Message],
         *,
         session_id: str,
         turn_id: str,
         phase: str,
     ) -> Optional[ContextCheckpoint]:
         root = Path(self.loop.tool_context.workspace_root)
+        working: WorkingContextPort
         if phase == "start":
             scratch = WorkingContextStore(
                 root, redactor=getattr(self.loop, "redactor", None))
@@ -914,23 +925,6 @@ class ContextCheckpointCoordinator:
     def _session_id(self) -> str:
         runtime = getattr(getattr(self.loop, "tool_context", None), "runtime", None)
         return str(getattr(runtime, "session_id", "") or "")
-
-
-def _checkpoint_event(checkpoint: ContextCheckpoint):
-    # Local import avoids making events.py depend on session storage.
-    from ..core.events import ContextCheckpointCreated
-    record = checkpoint.metadata_record()
-    return ContextCheckpointCreated(
-        checkpoint_id=checkpoint.id,
-        session_id=checkpoint.session_id,
-        turn_id=checkpoint.turn_id,
-        phase=checkpoint.phase,
-        history_hash=checkpoint.history_hash,
-        file_count=len(checkpoint.file_hashes),
-        memory_count=len(checkpoint.memory_refs),
-        compact_checkpoint_id=checkpoint.compact_checkpoint_id,
-        context_plan_hash=checkpoint.context_plan.full_hash,
-    )
 
 
 def _memory_query(history: Sequence[Message]) -> str:

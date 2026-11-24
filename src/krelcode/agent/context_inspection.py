@@ -31,11 +31,7 @@ from .inspection_runtime import ContextInspectionRuntimeMixin
 
 
 @dataclass(frozen=True)
-class ContextInspectionService(
-    ContextInspectionCoreMixin,
-    ContextInspectionPromptMixin,
-    ContextInspectionRuntimeMixin,
-):
+class ContextInspectionService(ContextInspectionRuntimeMixin):
     """Project the last request's snapshot, plan and assembly into text."""
 
     loop: object

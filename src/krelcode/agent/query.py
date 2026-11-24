@@ -10,9 +10,10 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from itertools import count
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Callable, Optional
 
 from ..core.events import AgentEvent
+from ..core.messages import ImageRef
 from .loop import AgentLoop
 
 
@@ -37,7 +38,7 @@ class QuerySession:
     def __init__(
         self,
         turn_id: str,
-        task: asyncio.Task,
+        task: asyncio.Task[str],
         events: AsyncIterator[QueryEvent],
     ) -> None:
         self.turn_id = turn_id
@@ -72,15 +73,15 @@ class QueryEngine:
         self,
         user_input: str,
         *,
-        images=None,
+        images: Optional[list[ImageRef]] = None,
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[list[str]] = None,
     ) -> QuerySession:
         turn_id = f"turn-{next(self._counter)}"
-        queue: asyncio.Queue = asyncio.Queue(maxsize=self.queue_size)
+        queue: asyncio.Queue[QueryEvent | _QueryEnd] = asyncio.Queue(
+            maxsize=self.queue_size)
         sequence = count()
-        unsubscribe_holder = []
-        marker_tasks: list[asyncio.Task] = []
+        marker_tasks: list[asyncio.Task[None]] = []
 
         async def on_event(event: AgentEvent) -> None:
             # 有界队列形成对 AgentLoop 的真实背压：renderer/消费者跟不上时，
@@ -92,8 +93,7 @@ class QueryEngine:
             ))
 
         # 先订阅再启动 task，确保 RunStarted 不会丢失。
-        unsubscribe = self.loop.bus.subscribe(on_event)
-        unsubscribe_holder.append(unsubscribe)
+        unsubscribe: Callable[[], None] = self.loop.bus.subscribe(on_event)
         task = asyncio.create_task(
             self.loop.run_turn(
                 user_input,
@@ -103,7 +103,7 @@ class QueryEngine:
                 reminder_ids=reminder_ids,
             ))
 
-        def on_done(finished: asyncio.Task) -> None:
+        def on_done(finished: asyncio.Task[str]) -> None:
             try:
                 unsubscribe()
             except Exception:
@@ -126,9 +126,9 @@ class QueryEngine:
 
     async def _iter_events(
         self,
-        queue: asyncio.Queue,
-        task: asyncio.Task,
-        marker_tasks: list[asyncio.Task],
+        queue: asyncio.Queue[QueryEvent | _QueryEnd],
+        task: asyncio.Task[str],
+        marker_tasks: list[asyncio.Task[None]],
     ) -> AsyncIterator[QueryEvent]:
         try:
             while True:

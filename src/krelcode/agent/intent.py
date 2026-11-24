@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Iterator, Optional, Tuple
 
 MODE_GENERAL = "general"
 MODE_EXPLAIN_FILES = "explain_files"
@@ -62,7 +62,7 @@ def _has_term(text: str, term: str) -> bool:
     return term.casefold() in text.casefold()
 
 
-def _term_spans(text: str, terms: Tuple[str, ...]):
+def _term_spans(text: str, terms: Tuple[str, ...]) -> Iterator[Tuple[int, int]]:
     """产出术语命中区间；英文仍按完整单词匹配。"""
     for term in terms:
         if term.isascii() and any(ch.isalpha() for ch in term):
