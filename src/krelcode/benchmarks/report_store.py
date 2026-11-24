@@ -75,7 +75,7 @@ def load_behavior_report(path: Path | str) -> object:
     raw = _mapping(payload)
     if raw.get("kind") != BEHAVIOR_REPORT_KIND:
         raise ValueError(f"不是 live_model_behavior 报告: {source}")
-    from .behavior import BehaviorReport
+    from .behavior_models import BehaviorReport
 
     try:
         return BehaviorReport.from_dict(raw)
@@ -89,7 +89,7 @@ def aggregate_behavior_report_files(
     require_complete: bool = True,
 ) -> object:
     """Merge deterministic shard reports without trusting summary counters."""
-    from .behavior import aggregate_behavior_reports
+    from .behavior_reporting import aggregate_behavior_reports
 
     reports = [load_behavior_report(path) for path in paths]
     return aggregate_behavior_reports(

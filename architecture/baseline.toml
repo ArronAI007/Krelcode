@@ -1,17 +1,7 @@
 version = 1
 
-# Existing intra-package cycles are frozen here. New cycles fail the architecture
-# gate; remove entries as the corresponding modules are decoupled.
-[[cycles]]
-modules = [
-  "benchmarks.acceptance",
-  "benchmarks.behavior",
-  "benchmarks.prompt",
-  "benchmarks.report_store",
-  "benchmarks.tuning",
-]
-reason = "Benchmark runners still share report/session helpers in both directions."
-
+# Benchmark domains are now acyclic. Any future intra-package cycle fails the
+# architecture gate rather than being admitted into this baseline.
 [file_size]
 # New production files may not exceed this limit. Files already above it are
 # capped at their current size and may only shrink.
@@ -27,9 +17,6 @@ max_unlisted_lines = 800
 "agent/prompt/prompt_plan.py" = 852
 "agent/prompt/prompt_release_pipeline.py" = 1376
 "agent/context/working_context.py" = 863
-"benchmarks/acceptance.py" = 1477
-"benchmarks/behavior.py" = 3397
-"benchmarks/prompt.py" = 1559
 "browser/runtime.py" = 860
 "daemon/client.py" = 925
 "daemon/server.py" = 947
@@ -216,12 +203,22 @@ assignments = 0
 getattr = 2
 setattr = 0
 
-[loop_dynamic_access.limits."benchmarks/behavior.py"]
+[loop_dynamic_access.limits."benchmarks/behavior_advanced_scenarios.py"]
 assignments = 1
-getattr = 1
-setattr = 14
+getattr = 0
+setattr = 2
 
-[loop_dynamic_access.limits."benchmarks/prompt.py"]
-assignments = 12
+[loop_dynamic_access.limits."benchmarks/behavior_session.py"]
+assignments = 0
+getattr = 1
+setattr = 12
+
+[loop_dynamic_access.limits."benchmarks/prompt_fixture.py"]
+assignments = 9
+getattr = 0
+setattr = 0
+
+[loop_dynamic_access.limits."benchmarks/prompt_scenarios.py"]
+assignments = 3
 getattr = 0
 setattr = 0

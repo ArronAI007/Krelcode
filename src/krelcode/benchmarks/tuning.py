@@ -16,8 +16,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Iterable, Mapping, Sequence
 
-from .behavior import (
-    BEHAVIOR_CASES,
+from .behavior_cases import BEHAVIOR_CASES
+from .behavior_models import (
     BehaviorMetric,
     BehaviorReport,
     BehaviorTrialResult,
