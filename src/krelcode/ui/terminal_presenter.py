@@ -14,10 +14,19 @@ import shlex
 import shutil
 import threading
 import time
-from typing import Any, Callable, Optional
+from typing import Awaitable, Callable, Optional, cast
 
+from ..agent.turn.loop import AgentLoop
 from ..agent.tokens import estimate_history_tokens
-from ..core.events import MemoryWritten
+from ..core.events import AgentEvent, MemoryWritten
+from ..core.redact import SecretRedactor
+from ..session.controller import SessionController
+from ..session.input import InputAction, InputProcessor
+from ..session.memory import MemoryStore
+from ..session.memory_models import MemoryStoreSnapshot
+from ..session.repl_session import ReplSessionRunner
+from ..session.state import SessionViewState
+from .approval import ApprovalRequest
 from .diff_review import (
     DiffPager,
     DiffReview,
@@ -44,12 +53,12 @@ class TerminalPresenter:
 
     def __init__(
         self,
-        loop,
+        loop: AgentLoop,
         *,
-        tool_names: Optional[list] = None,
+        tool_names: Optional[list[str]] = None,
         session_path: Optional[str] = None,
-        input_fn: Optional[Callable] = None,
-        redactor=None,
+        input_fn: Optional[Callable[[str], str | Awaitable[str]]] = None,
+        redactor: Optional[SecretRedactor] = None,
         history_path: Optional[pathlib.Path] = None,
         persist_history: Optional[bool] = None,
     ) -> None:
@@ -77,28 +86,30 @@ class TerminalPresenter:
                 if configured_history
                 else pathlib.Path.home() / ".krelcode" / "history.jsonl"
             )
-        history_redactor = getattr(redactor, "redact", None)
         self.input_history = InputHistory(
             path=history_path if persistent_history else None,
-            redact=history_redactor,
+            redact=redactor.redact if redactor is not None else None,
         )
 
-        self.controller: Any = None
-        self.state: Any = None
-        self.runner: Any = None
-        self.processor: Any = None
-        self.editor: Any = None
+        self.controller: Optional[SessionController] = None
+        self.state: Optional[SessionViewState] = None
+        self.runner: Optional[ReplSessionRunner] = None
+        self.processor: Optional[InputProcessor] = None
+        self.editor: Optional[TerminalLineEditor] = None
         self.panel_controller = PanelController()
         self.quick_status = ""
         self.review_pager: Optional[DiffPager] = None
         self.approval_review: Optional[DiffReview] = None
         self.git_review: Optional[DiffReview] = None
-        self.memory_cache = None
+        self.memory_cache: Optional[MemoryStoreSnapshot] = None
         self.status_cache = ""
         self.last_status_draw = 0.0
-        self.status_renderer = loop.services.extensions.status_line_renderer
-        if not isinstance(self.status_renderer, StatusLineRenderer):
-            self.status_renderer = StatusLineRenderer()
+        configured_status_renderer = (
+            loop.services.extensions.status_line_renderer)
+        self.status_renderer: StatusLineRenderer = (
+            configured_status_renderer
+            if isinstance(configured_status_renderer, StatusLineRenderer)
+            else StatusLineRenderer())
         self.status_branch = read_git_branch(self.workspace_root)
 
     def _prompt_write(self, text: str) -> None:
@@ -114,7 +125,14 @@ class TerminalPresenter:
         text = RUNNING_PROMPT if running else IDLE_PROMPT
         return f"{CYAN}{text}{RESET}" if self.use_color else text
 
-    def bind(self, controller, state, runner, processor, memory_store) -> None:
+    def bind(
+        self,
+        controller: SessionController,
+        state: SessionViewState,
+        runner: ReplSessionRunner,
+        processor: InputProcessor,
+        memory_store: MemoryStore,
+    ) -> None:
         self.controller = controller
         self.state = state
         self.runner = runner
@@ -127,7 +145,7 @@ class TerminalPresenter:
             history=self.input_history,
             panels=self.panel_controller,
             on_diff_pager_change=lambda: self.refresh_panels(
-                queue_size=len(self.runner.queue)),
+                queue_size=len(runner.queue)),
         )
 
     def show_banner(self) -> None:
@@ -135,6 +153,8 @@ class TerminalPresenter:
             self.loop, self.tool_names, session_path=self.session_path)
 
     def suggest(self, text: str) -> list[tuple[str, str]]:
+        if self.state is None or self.processor is None:
+            return []
         return match_slash_commands(
             text,
             running=self.state.is_running,
@@ -144,10 +164,12 @@ class TerminalPresenter:
     def refresh_memory_cache(self) -> None:
         memory_store = self.loop.services.session.memory
         if memory_store is not None:
-            self.memory_cache = memory_store.dashboard_snapshot(limit=8)
+            concrete_memory = cast(MemoryStore, memory_store)
+            self.memory_cache = concrete_memory.dashboard_snapshot(limit=8)
 
     def refresh_panels(self, *, queue_size: int = 0) -> None:
-        if self.state is None or self.processor is None:
+        if (self.state is None or self.processor is None
+                or self.controller is None or self.runner is None):
             return
         snapshot = self.loop.runtime_state.prompt.prompt_snapshot
         fragments = getattr(snapshot, "fragments", ())
@@ -160,6 +182,7 @@ class TerminalPresenter:
                 columns, max(8, terminal.lines - 8), color=self.use_color)
             self.prompt.set_panels(overlay)
             return
+        memory_cache = self.memory_cache
         panels = build_panels(
             self.state,
             permission_mode=self.controller.permission_manager.mode.value,
@@ -168,9 +191,10 @@ class TerminalPresenter:
             context_budget=getattr(context_manager, "max_tokens", None),
             fragment_count=len(fragments),
             stable_fragments=len(getattr(cache, "stable_fragments", ())),
-            memory_entries=self.memory_cache.entries,
-            memory_total=self.memory_cache.total_entries,
-            memory_tokens=self.memory_cache.tokens,
+            memory_entries=memory_cache.entries if memory_cache else (),
+            memory_total=(
+                memory_cache.total_entries if memory_cache is not None else 0),
+            memory_tokens=memory_cache.tokens if memory_cache else 0,
             quick_status=self.quick_status,
             diff_review=self.approval_review or self.git_review,
         )
@@ -178,8 +202,10 @@ class TerminalPresenter:
         layout = self.panel_controller.render(columns)
         self.prompt.set_panels(layout.lines)
 
-    def render_status(self, view) -> str:
+    def render_status(self, view: SessionViewState) -> str:
         """Build a status line without touching disk on every redraw."""
+        if self.controller is None:
+            return ""
         progress = view.status_text()
         if self.review_pager is not None and self.review_pager.active:
             mode = "待审批" if self.review_pager.can_decide else "只读"
@@ -209,7 +235,14 @@ class TerminalPresenter:
             branch=self.status_branch,
         )
 
-    def refresh_status(self, current=None, *, force: bool = False) -> None:
+    def refresh_status(
+        self,
+        current: Optional[SessionViewState] = None,
+        *,
+        force: bool = False,
+    ) -> None:
+        if self.state is None or self.controller is None or self.runner is None:
+            return
         self.refresh_panels(queue_size=len(self.runner.queue))
         now = time.monotonic()
         if not force and now - self.last_status_draw < 0.15:
@@ -229,6 +262,8 @@ class TerminalPresenter:
         self.last_status_draw = now
 
     def restore_prompt(self) -> None:
+        if self.state is None or self.runner is None:
+            return
         self.refresh_panels(queue_size=len(self.runner.queue))
         self.status_cache = self.render_status(self.state)
         self.prompt.set_status(self.status_cache)
@@ -239,19 +274,20 @@ class TerminalPresenter:
     def notice(self, message: str) -> None:
         self.prompt.suspend()
         _stdout_write(f"  {message}\n")
-        if self.state.is_running:
+        if self.state is not None and self.state.is_running:
             self.refresh_status(self.state, force=True)
 
-    def redact(self, value) -> str:
+    def redact(self, value: object) -> str:
         text = str(value)
         return self.redactor.redact(text) if self.redactor is not None else text
 
-    def show_attachment_notes(self, action) -> None:
+    def show_attachment_notes(self, action: InputAction) -> None:
         for note_text in action.notes:
             print(f"  [@] {note_text}")
 
     def mark_submitted(self) -> None:
-        self.prompt.submitted(raw=self.state.raw_input)
+        if self.state is not None:
+            self.prompt.submitted(raw=self.state.raw_input)
 
     def hide(self) -> None:
         self.prompt.hide()
@@ -259,7 +295,7 @@ class TerminalPresenter:
     def finish(self) -> None:
         self.prompt.finish()
 
-    def on_session_event(self, event) -> None:
+    def on_session_event(self, event: AgentEvent) -> None:
         self.renderer(event)
         if isinstance(event, MemoryWritten):
             self.refresh_memory_cache()
@@ -281,11 +317,14 @@ class TerminalPresenter:
     def activate_review(self, review: DiffReview, *, can_decide: bool) -> DiffPager:
         pager = DiffPager(review, can_decide=can_decide, active=True)
         self.review_pager = pager
-        self.editor.set_diff_pager(pager)
+        if self.editor is not None:
+            self.editor.set_diff_pager(pager)
+        if self.runner is None:
+            return pager
         self.refresh_panels(queue_size=len(self.runner.queue))
         return pager
 
-    def show_approval(self, request) -> None:
+    def show_approval(self, request: ApprovalRequest) -> None:
         tool_call = request.tool_call
         command = tool_call.arguments.get("command")
         detail = command if command is not None else tool_call.arguments
@@ -315,6 +354,8 @@ class TerminalPresenter:
 
     async def handle_diff_command(self, arguments: str) -> bool:
         """Open or navigate the current approval/Git diff review."""
+        if self.runner is None:
+            return True
         try:
             parts = shlex.split(arguments) if arguments.strip() else []
         except ValueError as exc:

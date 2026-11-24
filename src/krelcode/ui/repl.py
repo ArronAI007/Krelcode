@@ -12,13 +12,26 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
-from ..agent.loop import AgentLoop
 from ..agent.runtime import AgentRuntime
+from ..agent.loop import AgentLoop
+from ..core.redact import SecretRedactor
+from ..session.commands.ports import (
+    MCPReloadPort,
+    MCPSupervisorPort,
+    ModelSwitchPort,
+    PluginManagerPort,
+    PluginReloadPort,
+    SkillManagerPort,
+    SkillReloadPort,
+    SubagentManagerCommandPort,
+    UsageTrackerPort,
+)
 from ..session.input import InputProcessor
 from ..session.interactions import UserInputBroker
 from ..session.manager import resolve_resume_target
+from ..session.runtime_ports import CheckpointPort
 from .approval import ApprovalBroker
 from .command_dispatch import _handle_command
 from .editor import EditBuffer, HistorySearch, InputHistory, sanitize_pasted_text
@@ -54,21 +67,21 @@ from .repl_surface import (
 
 async def run_repl(
     loop: AgentLoop,
-    tool_names: Optional[list] = None,
+    tool_names: Optional[list[str]] = None,
     session_path: Optional[str] = None,
     sessions_dir: Optional[Path] = None,
-    mcp_supervisor=None,
-    mcp_reload=None,
-    subagents=None,
-    checkpoints=None,
-    usage=None,
-    model_switch=None,
-    skills=None,
-    skills_reload=None,
-    plugins=None,
-    plugins_reload=None,
-    input_fn=None,
-    redactor=None,
+    mcp_supervisor: Optional[MCPSupervisorPort] = None,
+    mcp_reload: Optional[MCPReloadPort] = None,
+    subagents: Optional[SubagentManagerCommandPort] = None,
+    checkpoints: Optional[CheckpointPort] = None,
+    usage: Optional[UsageTrackerPort] = None,
+    model_switch: Optional[ModelSwitchPort] = None,
+    skills: Optional[SkillManagerPort] = None,
+    skills_reload: Optional[SkillReloadPort] = None,
+    plugins: Optional[PluginManagerPort] = None,
+    plugins_reload: Optional[PluginReloadPort] = None,
+    input_fn: Optional[Callable[[str], str | Awaitable[str]]] = None,
+    redactor: Optional[SecretRedactor] = None,
     runtime: Optional[AgentRuntime] = None,
     input_processor: Optional[InputProcessor] = None,
     approval_broker: Optional[ApprovalBroker] = None,

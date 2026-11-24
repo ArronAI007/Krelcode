@@ -6,35 +6,50 @@ commands such as ``/thinking`` and ``/tool-output`` are handled here.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
-from ..session.commands import CommandRegistry
+from ..agent.turn.loop import AgentLoop
+from ..session.commands import CommandRegistry, CommandResult
+from ..session.commands.ports import (
+    MCPReloadPort,
+    MCPSupervisorPort,
+    ModelSwitchPort,
+    PluginManagerPort,
+    PluginReloadPort,
+    SkillManagerPort,
+    SkillReloadPort,
+    SubagentManagerCommandPort,
+    UsageTrackerPort,
+)
 from ..session.controller import SessionController
+from ..session.runtime_ports import CheckpointPort
+from .render import StreamRenderer
 
 
 async def _handle_command(
-    user_input,
-    loop,
-    renderer,
+    user_input: str,
+    loop: AgentLoop,
+    renderer: StreamRenderer,
     *,
-    session_path,
-    sessions_dir,
-    mcp_supervisor,
-    mcp_reload,
-    subagents,
-    checkpoints,
-    usage,
-    restore_session,
-    workspace_root,
-    model_switch=None,
-    skills=None,
-    skills_reload=None,
-    plugins=None,
-    plugins_reload=None,
+    session_path: Optional[str],
+    sessions_dir: Optional[Path],
+    mcp_supervisor: Optional[MCPSupervisorPort],
+    mcp_reload: Optional[MCPReloadPort],
+    subagents: Optional[SubagentManagerCommandPort],
+    checkpoints: Optional[CheckpointPort],
+    usage: Optional[UsageTrackerPort],
+    restore_session: Optional[Callable[..., object]],
+    workspace_root: Path,
+    model_switch: Optional[ModelSwitchPort] = None,
+    skills: Optional[SkillManagerPort] = None,
+    skills_reload: Optional[SkillReloadPort] = None,
+    plugins: Optional[PluginManagerPort] = None,
+    plugins_reload: Optional[PluginReloadPort] = None,
     controller: Optional[SessionController] = None,
     command_registry: Optional[CommandRegistry] = None,
     diff_handler: Optional[Callable[[str], Awaitable[bool]]] = None,
-):
+) -> CommandResult | bool | None:
     """兼容入口：终端展示命令留在 UI，业务命令委托 SessionController。"""
     if not user_input.startswith("/"):
         return None

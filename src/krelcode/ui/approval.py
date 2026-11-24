@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from itertools import count
-from typing import Dict, Optional, Set
+from typing import Awaitable, Callable, Dict, Optional, Set
 
 from ..core.messages import ToolCall
 
@@ -79,7 +79,8 @@ class ApprovalBroker:
             self._cancelled.discard(request_id)
             return NO
         self.expect(request_id)
-        future = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[str] = (
+            asyncio.get_running_loop().create_future())
         approval = ApprovalRequest(tool_call, reason, future, request_id)
         self._by_id[request_id] = approval
         early = self._early.pop(request_id, None)
@@ -185,11 +186,11 @@ class ApprovalBroker:
                 request.future.set_result(NO)
         while True:
             try:
-                request = self._requests.get_nowait()
+                queued_request = self._requests.get_nowait()
             except asyncio.QueueEmpty:
                 break
-            if request is not None and not request.future.done():
-                request.future.set_result(NO)
+            if queued_request is not None and not queued_request.future.done():
+                queued_request.future.set_result(NO)
 
     def close(self) -> None:
         """关闭 broker；未完成审批 fail-closed。可重复调用。"""
@@ -200,7 +201,7 @@ class ApprovalBroker:
         self._requests.put_nowait(None)
 
 
-def make_console_approver():
+def make_console_approver() -> Callable[[ToolCall, str], Awaitable[str]]:
     """返回 async approver(tool_call, reason) -> yes/no/always。"""
 
     async def approve(tool_call: ToolCall, reason: str) -> str:

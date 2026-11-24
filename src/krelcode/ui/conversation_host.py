@@ -9,14 +9,28 @@ in :class:`ReplSessionRunner`.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import threading
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Awaitable, Callable, Optional, Protocol, Sequence, cast
 
 from ..agent.runtime import AgentRuntime
-from ..core.events import ShellJobFinished
+from ..agent.turn.loop import AgentLoop
+from ..core.events import AgentEvent, ShellJobFinished
+from ..core.redact import SecretRedactor
 from ..session.commands import CommandResult
+from ..session.commands.ports import (
+    MCPReloadPort,
+    MCPSupervisorPort,
+    ModelSwitchPort,
+    PluginManagerPort,
+    PluginReloadPort,
+    SkillManagerPort,
+    SkillReloadPort,
+    SubagentManagerCommandPort,
+    UsageTrackerPort,
+)
 from ..session.controller import SessionController
 from ..session.input import (
     InputAction,
@@ -27,18 +41,18 @@ from ..session.input import (
 )
 from ..session.interactions import UserInputBroker
 from ..session.memory import (
-    SCOPE_LABELS,
     MemoryStore,
     memory_lines,
-    parse_memory_note,
     sync_memory_fragment,
 )
+from ..session.memory_models import SCOPE_LABELS, parse_memory_note
 from ..session.repl_session import ReplSessionRunner, SessionPrompt
+from ..session.runtime_ports import CheckpointPort
 from ..session.state import SessionViewState
+from .approval import ApprovalBroker
 from .command_dispatch import _handle_command
-from .repl_primitives import ReplControl, TerminalSubmission
+from .repl_primitives import RUNNING_HINT, ReplControl, TerminalSubmission
 from .repl_surface import (
-    RUNNING_HINT,
     _format_job_notification,
     _queue_label,
     handle_plan_command,
@@ -46,31 +60,43 @@ from .repl_surface import (
 )
 from .terminal_presenter import TerminalPresenter
 
+InputCallback = Callable[[str], str | Awaitable[str]]
+RawInput = str | TerminalSubmission | ReplControl | None
+QueuedAction = InputAction | ReplControl | None
+
+
+class ShellShortcutResult(Protocol):
+    @property
+    def content(self) -> str: ...
+
+    @property
+    def is_error(self) -> bool: ...
+
 
 class ConversationHost:
     """Coordinate one interactive session without owning process bootstrap."""
 
     def __init__(
         self,
-        loop,
-        tool_names: Optional[list] = None,
+        loop: AgentLoop,
+        tool_names: Optional[list[str]] = None,
         session_path: Optional[str] = None,
         sessions_dir: Optional[Path] = None,
-        mcp_supervisor=None,
-        mcp_reload=None,
-        subagents=None,
-        checkpoints=None,
-        usage=None,
-        model_switch=None,
-        skills=None,
-        skills_reload=None,
-        plugins=None,
-        plugins_reload=None,
-        input_fn=None,
-        redactor=None,
+        mcp_supervisor: Optional[MCPSupervisorPort] = None,
+        mcp_reload: Optional[MCPReloadPort] = None,
+        subagents: Optional[SubagentManagerCommandPort] = None,
+        checkpoints: Optional[CheckpointPort] = None,
+        usage: Optional[UsageTrackerPort] = None,
+        model_switch: Optional[ModelSwitchPort] = None,
+        skills: Optional[SkillManagerPort] = None,
+        skills_reload: Optional[SkillReloadPort] = None,
+        plugins: Optional[PluginManagerPort] = None,
+        plugins_reload: Optional[PluginReloadPort] = None,
+        input_fn: Optional[InputCallback] = None,
+        redactor: Optional[SecretRedactor] = None,
         runtime: Optional[AgentRuntime] = None,
-        input_processor=None,
-        approval_broker=None,
+        input_processor: Optional[InputProcessor] = None,
+        approval_broker: Optional[ApprovalBroker] = None,
         input_broker: Optional[UserInputBroker] = None,
         history_path: Optional[Path] = None,
         persist_history: Optional[bool] = None,
@@ -121,12 +147,13 @@ class ConversationHost:
             workspace_root=self.loop.tool_context.workspace_root,
             command_registry=self.processor.command_registry,
         )
-        self.memory_store = self.loop.services.session.memory
-        if self.memory_store is None:
+        configured_memory = self.loop.services.session.memory
+        if configured_memory is None:
             self.memory_store = MemoryStore(
                 self.loop.tool_context.workspace_root, redactor=redactor)
             self.loop.update_runtime_state(memory_store=self.memory_store)
         else:
+            self.memory_store = cast(MemoryStore, configured_memory)
             self.memory_store.redactor = redactor
         sync_memory_fragment(self.loop, self.memory_store)
         self.state = SessionViewState()
@@ -190,23 +217,24 @@ class ConversationHost:
         approval_broker = self.approval_broker
         input_broker = self.input_broker
         presenter.show_banner()
-        raw_inbox: asyncio.Queue = asyncio.Queue()
-        action_queue: asyncio.Queue = asyncio.Queue()
-        job_notifications: asyncio.Queue = asyncio.Queue()
+        raw_inbox: asyncio.Queue[RawInput] = asyncio.Queue()
+        action_queue: asyncio.Queue[QueuedAction] = asyncio.Queue()
+        job_notifications: asyncio.Queue[ShellJobFinished] = asyncio.Queue()
 
-        def on_job_finished(event) -> None:
+        def on_job_finished(event: AgentEvent) -> None:
             if isinstance(event, ShellJobFinished):
                 job_notifications.put_nowait(event)
 
         unsubscribe_job_notifications = loop.bus.subscribe(on_job_finished)
-        quick_task: Optional[asyncio.Task] = None
+        quick_task: Optional[asyncio.Task[ShellShortcutResult]] = None
         quick_unsubscribe: Optional[Callable[[], None]] = None
 
         async def reader() -> None:
             assert self.input_fn is not None
             while True:
                 try:
-                    line = await self.input_fn("")
+                    pending = self.input_fn("")
+                    line = await pending if inspect.isawaitable(pending) else pending
                 except KeyboardInterrupt:
                     await raw_inbox.put(ReplControl.INTERRUPT)
                     continue
@@ -221,18 +249,21 @@ class ConversationHost:
             """真实终端使用 daemon 线程，避免退出时被阻塞的 input() 拖住。"""
             event_loop = asyncio.get_running_loop()
 
-            def push(line) -> None:
+            def push(line: RawInput) -> None:
                 try:
                     event_loop.call_soon_threadsafe(raw_inbox.put_nowait, line)
                 except RuntimeError:
                     pass  # 事件循环已经结束，daemon 线程可自行退出
 
             def read_stdin() -> None:
+                terminal_editor = editor
+                assert terminal_editor is not None
                 while True:
                     input_ready.wait()
                     try:
-                        state.raw_input = editor.available
-                        line = editor.readline(self.presenter.prompt_text)
+                        state.raw_input = terminal_editor.available
+                        line = terminal_editor.readline(
+                            lambda: self.presenter.prompt_text)
                     except KeyboardInterrupt:
                         line = ReplControl.INTERRUPT
                     except (EOFError, OSError):
@@ -271,10 +302,10 @@ class ConversationHost:
                 await action_queue.put(action)
 
         def to_session_prompt(
-            action,
+            action: InputAction,
             *,
-            tool_allowlist: Optional[list[str]] = None,
-            reminder_ids: Optional[list[str]] = None,
+            tool_allowlist: Optional[Sequence[str]] = None,
+            reminder_ids: Optional[Sequence[str]] = None,
         ) -> SessionPrompt:
             return SessionPrompt.create(
                 action.text,
@@ -312,18 +343,18 @@ class ConversationHost:
                 if state.is_running:
                     refresh_status(state, force=True)
 
-        async def handle_command(action: InputAction):
+        async def handle_command(action: InputAction) -> CommandResult | bool:
             if action.command == "/plan":
                 prompt.hide()
-                result = handle_plan_command(
+                plan_result = handle_plan_command(
                     action.arguments,
                     controller.plan_manager,
                     state,
                     allow_actions=not state.is_running,
                 )
-                for line in result.output:
+                for line in plan_result.output:
                     print(line)
-                return result if result.run_prompt is not None else False
+                return plan_result if plan_result.run_prompt is not None else False
             result = await _handle_command(
                 action.text, loop, renderer,
                 session_path=session_path, sessions_dir=sessions_dir,
@@ -337,7 +368,7 @@ class ConversationHost:
             )
             if action.command == "/memory":
                 self.presenter.refresh_memory_cache()
-            return result
+            return result if result is not None else False
 
         restore_prompt()
         reader_task = asyncio.create_task(reader()) if self.input_fn is not None else None
@@ -540,7 +571,9 @@ class ConversationHost:
                 if action.kind is InputKind.MEMORY:
                     if not action.text:
                         prompt.hide()
-                        for line in memory_lines(self.presenter.memory_cache.entries):
+                        memory_cache = self.presenter.memory_cache
+                        entries = memory_cache.entries if memory_cache else ()
+                        for line in memory_lines(entries):
                             print(f"  {line}")
                         self.presenter.panel_controller.focus("memory")
                         restore_prompt()
@@ -628,7 +661,9 @@ class ConversationHost:
                                   f"{_queue_label(action, 60)}")
                         else:
                             preview = controller.steer(
-                                action.text, images=action.images or None)
+                                action.text,
+                                images=list(action.images) or None,
+                            )
                             print(f"  ⎿ 插话已排队（模型下一步看到）: {preview}")
                     restore_prompt()
                     continue

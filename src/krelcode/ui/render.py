@@ -13,7 +13,7 @@ import sys
 import textwrap
 import unicodedata
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Mapping, Optional
 
 from ..core.redact import SecretRedactor
 from ..core.messages import ToolCall
@@ -197,7 +197,7 @@ def _visible_width(text: str) -> int:
     return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in plain)
 
 
-def _format_tool_arguments(arguments: dict) -> str:
+def _format_tool_arguments(arguments: Mapping[str, object]) -> str:
     """短参数用近似 Python 调用语法；长参数和多行文本展开并缩进。"""
     if not arguments:
         return ""

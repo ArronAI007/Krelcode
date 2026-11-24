@@ -7,7 +7,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
-from .model import Panel, unique_panel_items
+from .model import Panel, PanelItem, unique_panel_items
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -124,7 +124,7 @@ def _top_border(
 
 
 def _item_line(
-    item,
+    item: PanelItem,
     *,
     selected: bool,
     focused: bool,

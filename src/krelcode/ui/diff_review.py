@@ -19,12 +19,13 @@ import tempfile
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import Iterable, Optional, Sequence, cast
 
 from ..core.messages import ToolCall
 from ..core.redact import SecretRedactor, redact_obvious_secrets
 from ..safety.environment import scrub_environment
 from ..core.secret_guard import classify_secret_path, redact_secret_text
+from .diff_review_state import CurrentDiff, empty_current_diff
 
 MAX_DIFF_CHARS = 240_000
 MAX_PREVIEW_FILE_BYTES = 1_000_000
@@ -178,7 +179,7 @@ def parse_unified_diff(
             notice=notice, truncated=truncated, redacted=redacted)
 
     files: list[DiffFile] = []
-    current: dict = {}
+    current: CurrentDiff = empty_current_diff()
     hunk_lines: list[DiffLine] = []
     old_line = 0
     new_line = 0
@@ -193,22 +194,21 @@ def parse_unified_diff(
         if len(hunk_lines) > MAX_LINES_PER_HUNK:
             file_truncated = True
             hunk_lines = hunk_lines[:MAX_LINES_PER_HUNK]
-        hunks = list(current.get("hunks", ()))
+        hunks = cast(list[DiffHunk], list(current.get("hunks", ())))
         if len(hunks) < MAX_HUNKS_PER_FILE:
             hunks.append(DiffHunk(header=header, lines=tuple(hunk_lines)))
-        else:
-            file_truncated = True
-        current["hunks"] = hunks
+        else: file_truncated = True
+        current["hunks"] = cast(list[object], hunks)
         hunk_lines = []
 
     def finish_file() -> None:
-        nonlocal file_truncated, review_truncated
+        nonlocal current, file_truncated, review_truncated
         finish_hunk()
         if not current:
             return
         if len(files) >= MAX_FILES:
             review_truncated = True
-            current.clear()
+            current = empty_current_diff()
             file_truncated = False
             return
         old_path = str(current.get("old_path", "") or "")
@@ -224,7 +224,7 @@ def parse_unified_diff(
             else:
                 status = "modified"
         binary = bool(current.get("binary"))
-        hunks = tuple(current.get("hunks", ()))
+        hunks = cast(tuple[DiffHunk, ...], tuple(current.get("hunks", ())))
         additions = sum(
             1 for hunk in hunks for line in hunk.lines if line.kind == "add")
         deletions = sum(
@@ -243,7 +243,7 @@ def parse_unified_diff(
             note=", ".join(dict.fromkeys(notes)),
             status=status,
         ))
-        current.clear()
+        current = empty_current_diff()
         file_truncated = False
 
     pending_old: Optional[str] = None

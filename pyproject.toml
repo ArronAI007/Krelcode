@@ -64,4 +64,5 @@ files = [
     "src/krelcode/session",
     "src/krelcode/subagent",
     "src/krelcode/bootstrap",
+    "src/krelcode/ui",
 ]

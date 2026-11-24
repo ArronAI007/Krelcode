@@ -19,14 +19,20 @@ import unicodedata
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Callable, Optional
 
+termios: Optional[ModuleType]
+tty: Optional[ModuleType]
 try:  # POSIX TTY；Windows 自动退回普通 input()
-    import termios
-    import tty
+    import termios as _termios
+    import tty as _tty
 except ImportError:  # pragma: no cover - Windows
     termios = None
     tty = None
+else:
+    termios = _termios
+    tty = _tty
 
 from .diff_review import DiffPager
 from .editor import (
@@ -137,6 +143,7 @@ class TerminalLineEditor:
     ) -> str | TerminalSubmission | ReplControl:
         if not self.available:
             return input("")
+        assert termios is not None and tty is not None
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         tty.setcbreak(fd)
@@ -426,12 +433,10 @@ class TerminalLineEditor:
         buffer: EditBuffer | list[str],
     ) -> Optional[TerminalSubmission | ReplControl]:
         """应用光标/删除类转义键；特殊提交动作直接返回。"""
-        legacy_list = isinstance(buffer, list)
-        state = EditBuffer("".join(buffer)) if legacy_list else buffer
-
-        def finish() -> None:
-            if legacy_list:
-                buffer[:] = list(state.text)
+        if isinstance(buffer, list):
+            state = EditBuffer("".join(buffer))
+        else:
+            state = buffer
 
         if not sequence:
             return ReplControl.INTERRUPT       # 单独 ESC
@@ -459,39 +464,44 @@ class TerminalLineEditor:
             state.move_word_right()
         elif sequence == b"\x7f":              # Alt-Backspace
             state.delete_word_before()
-        finish()
+        if isinstance(buffer, list):
+            buffer[:] = list(state.text)
         return None
 
     def _navigate_history(
         self, sequence: bytes, buffer: EditBuffer | list[str]
     ) -> bool:
         """应用 ↑/↓；多行文本内优先移动光标行。"""
-        legacy_list = isinstance(buffer, list)
-        state = EditBuffer("".join(buffer)) if legacy_list else buffer
-
-        def finish() -> None:
-            if legacy_list:
-                buffer[:] = list(state.text)
+        if isinstance(buffer, list):
+            state = EditBuffer("".join(buffer))
+        else:
+            state = buffer
 
         if sequence in (b"[A", b"OA"):
             if "\n" in state.text and state.move_line_up():
-                finish()
+                if isinstance(buffer, list):
+                    buffer[:] = list(state.text)
                 return True
             state.set_text(self._history.previous(state.text))
-            finish()
+            if isinstance(buffer, list):
+                buffer[:] = list(state.text)
             return True
         if sequence in (b"[B", b"OB"):
             if "\n" in state.text and state.move_line_down():
-                finish()
+                if isinstance(buffer, list):
+                    buffer[:] = list(state.text)
                 return True
             state.set_text(self._history.next(state.text))
-            finish()
+            if isinstance(buffer, list):
+                buffer[:] = list(state.text)
             return True
         return False
 
     def _complete(self, buffer: EditBuffer | list[str]) -> None:
-        legacy_list = isinstance(buffer, list)
-        state = EditBuffer("".join(buffer)) if legacy_list else buffer
+        if isinstance(buffer, list):
+            state = EditBuffer("".join(buffer))
+        else:
+            state = buffer
         matches = [name for name, _ in self._suggest(state.text)]
         if not matches:
             return
@@ -501,7 +511,7 @@ class TerminalLineEditor:
             common = os.path.commonprefix(matches)
             if len(common) > len(state.text):
                 state.set_text(common)
-        if legacy_list:
+        if isinstance(buffer, list):
             buffer[:] = list(state.text)
 
     def _refresh(
@@ -550,3 +560,24 @@ class TerminalLineEditor:
             cursor_column=cursor_column,
         )
 
+
+__all__ = [
+    "CYAN",
+    "DIM",
+    "IDLE_PROMPT",
+    "MENU_ROWS",
+    "PanelController",
+    "PromptWriter",
+    "RESET",
+    "RUNNING_HINT",
+    "RUNNING_PROMPT",
+    "ReplControl",
+    "TerminalLineEditor",
+    "TerminalSubmission",
+    "_display_width",
+    "_input_rule",
+    "_pad_display",
+    "_stdout_write",
+    "_truncate_display",
+    "auto_color",
+]

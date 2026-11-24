@@ -12,6 +12,7 @@ from typing import Any, Callable, Optional
 from .. import __version__
 from ..agent.loop import AgentLoop
 from ..core.events import ShellJobFinished
+from ..safety.runtime import PlanApprovalCoordinator
 from ..session.commands import CommandRegistry, CommandResult, builtin_command_registry
 from ..session.prompt_queue import PromptQueue
 from ..session.state import SessionViewState
@@ -154,7 +155,7 @@ def format_plan_lines(state: SessionViewState) -> list[str]:
 
 def handle_plan_command(
     arguments: str,
-    plan_manager,
+    plan_manager: PlanApprovalCoordinator,
     state: SessionViewState,
     *,
     allow_actions: bool = True,
@@ -214,7 +215,7 @@ def handle_plan_command(
 
 
 
-def print_banner(loop: AgentLoop, tool_names: Optional[list],
+def print_banner(loop: AgentLoop, tool_names: Optional[list[str]],
                  session_path: Optional[str] = None,
                  write: Callable[[str], None] = print,
                  color: Optional[bool] = None) -> None:
@@ -249,10 +250,26 @@ def print_banner(loop: AgentLoop, tool_names: Optional[list],
         row("session", session_path, path=True)
     write("  ╰" + "─" * inner + "╯")
 
-    accent = (lambda s: f"{CYAN}{s}{RESET}") if color else (lambda s: s)
+    def accent(text: str) -> str:
+        return f"{CYAN}{text}{RESET}" if color else text
     write("")
     write(f"  {accent('/help')} 查看命令 · Shift-Tab 切换权限 · Ctrl-O 面板 · "
           f"↑/↓ 历史 · Ctrl-R 搜索 · {accent('@路径')} 引用文件 · "
           f"{accent('!命令')} Shell · {accent('#记忆')} 记忆 · {accent('/exit')} 退出")
     write("")
 
+
+__all__ = [
+    "QUEUE_USAGE",
+    "RUNNING_HINT",
+    "RUNNING_SLASH_COMMANDS",
+    "SLASH_COMMANDS",
+    "_format_job_notification",
+    "_format_prompt_queue",
+    "_queue_label",
+    "format_plan_lines",
+    "handle_plan_command",
+    "manage_prompt_queue",
+    "match_slash_commands",
+    "print_banner",
+]

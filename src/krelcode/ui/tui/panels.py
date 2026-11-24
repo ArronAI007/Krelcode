@@ -127,6 +127,7 @@ def build_panels(
         f"{context_tokens}/{context_budget} tokens"
         if context_budget else f"{context_tokens} tokens"
     )
+    context_items: tuple[PanelItem, ...]
     if snapshot is None:
         context_items = (
             PanelItem("context-permission", f"permission · {permission_mode}"),

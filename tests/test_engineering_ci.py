@@ -30,6 +30,7 @@ def test_runtime_stays_dependency_free_and_dev_extra_is_explicit():
         "src/krelcode/session",
         "src/krelcode/subagent",
         "src/krelcode/bootstrap",
+        "src/krelcode/ui",
     ]
 
 

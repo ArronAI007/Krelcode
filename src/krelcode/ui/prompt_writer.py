@@ -11,13 +11,15 @@ import shutil
 import sys
 import threading
 import unicodedata
-from typing import Callable, Optional
+from typing import Callable, Optional, TypeAlias
 
 from .render import DIM, RESET, auto_color
 
 IDLE_PROMPT = "❯ "
 RUNNING_PROMPT = "↳ "
 MENU_ROWS = 8
+
+PromptRenderState: TypeAlias = tuple[str, tuple[str, ...], int, int]
 
 
 def _stdout_write(s: str) -> None:
@@ -78,7 +80,7 @@ class PromptWriter:
         self.enabled = sys.stdout.isatty() if enabled is None else enabled
         self._color = auto_color() if color is None else color
         self._visible = False
-        self._last = ""
+        self._last: Optional[PromptRenderState] = None
         self._prompt_width = 0
         self._suggestions: tuple[str, ...] = ()
         self._input_rows = 1
@@ -101,7 +103,7 @@ class PromptWriter:
             if not self.enabled:
                 return
             if self._visible:
-                if (self._last and self._last[0] == text
+                if (self._last is not None and self._last[0] == text
                         and not self._last[1]
                         and self._last_status == self._status):
                     self._submitted = False
@@ -128,9 +130,10 @@ class PromptWriter:
                    else max(0, min(cursor_row, len(lines) - 1)))
             column = (_display_width(lines[row]) if cursor_column is None
                       else max(0, cursor_column))
-            signature = (
-                text, tuple(suggestions or ()), row, column, self._status)
-            if signature == (*self._last, self._last_status):
+            signature = (text, tuple(suggestions or ()), row, column,
+                         self._status)
+            if self._last is not None and signature == (
+                    *self._last, self._last_status):
                 return
             self._render(text, suggestions or [], row, column)
 
@@ -142,7 +145,8 @@ class PromptWriter:
             if normalized == self._panel_lines:
                 return
             self._panel_lines = normalized
-            if not redraw or not self.enabled or not self._visible or not self._last:
+            if (not redraw or not self.enabled or not self._visible
+                    or self._last is None):
                 return
             text, suggestions, row, column = self._last
             self._render(text, list(suggestions), row, column)
@@ -161,7 +165,7 @@ class PromptWriter:
             if status == self._status:
                 return
             self._status = status
-            if not self.enabled or not self._visible or not self._last:
+            if not self.enabled or not self._visible or self._last is None:
                 return
             text, suggestions, row, column = self._last
             self._render(text, list(suggestions), row, column)
@@ -180,7 +184,7 @@ class PromptWriter:
         with self._lock:
             if not self.enabled or self._visible:
                 return
-            if self._last:
+            if self._last is not None:
                 text, suggestions, row, column = self._last
                 self._render(text, list(suggestions), row, column)
             else:
@@ -189,7 +193,7 @@ class PromptWriter:
     def retarget_prompt(self, old: str, new: str) -> None:
         """切换运行/空闲提示符，同时保留用户已经输入的草稿。"""
         with self._lock:
-            if not self.enabled or not self._last:
+            if not self.enabled or self._last is None:
                 return
             text, suggestions, row, column = self._last
             if not text.startswith(old):
@@ -268,7 +272,7 @@ class PromptWriter:
                     self._write(self.CURSOR_DOWN * rows_down)
                 self._write(self.CLEAR_BELOW)
             self._visible = False
-            self._last = ""
+            self._last = None
             self._last_status = ""
             self._submitted = was_visible
 
@@ -279,7 +283,7 @@ class PromptWriter:
             self._move_to_top()
             self._write(self.CLEAR_BELOW)
             self._visible = False
-            self._last = ""
+            self._last = None
             self._last_status = ""
             self._cursor_row = 0
 
@@ -294,3 +298,16 @@ class PromptWriter:
                 self._write("\r\n")
             self._submitted = False
 
+
+__all__ = [
+    "IDLE_PROMPT",
+    "MENU_ROWS",
+    "PromptRenderState",
+    "PromptWriter",
+    "RUNNING_PROMPT",
+    "_display_width",
+    "_input_rule",
+    "_pad_display",
+    "_stdout_write",
+    "_truncate_display",
+]
