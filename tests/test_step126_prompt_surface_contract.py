@@ -18,6 +18,8 @@ from krelcode.agent.prompt_surface_catalog import (
     auxiliary_prompt_surfaces,
     mcp_prompt_surfaces,
 )
+from krelcode.review import review_prompt_surface
+from krelcode.security_review.surfaces import security_review_prompt_surface
 from krelcode.agent.prompt_surface_contract import (
     COMPACT_SURFACE_CONTRACT,
     MCP_PROMPT_SURFACE_CONTRACT,
@@ -286,7 +288,9 @@ async def _return_invalid() -> dict:
 
 def test_auxiliary_surfaces_expose_serializable_contracts():
     registry = PromptSurfaceRegistry({
-        "auxiliary": tuple(auxiliary_prompt_surfaces()),
+        "auxiliary": tuple(auxiliary_prompt_surfaces((
+            review_prompt_surface(), security_review_prompt_surface(),
+        ))),
         "mcp_prompts": tuple(mcp_prompt_surfaces(_FakeMCP())),
     })
     compact = registry.get("aux:compact")

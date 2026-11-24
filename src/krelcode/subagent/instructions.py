@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
-from ..agent.evidence import (
+from ..core.evidence import (
     InstructionSource,
     SourceRole,
     evidence_metadata,

@@ -19,7 +19,7 @@ from ..safety.contract import (
     ToolExposureSnapshot,
     build_mode_permission_contract,
 )
-from ..tools.base import RuntimeSnapshot
+from ..contracts.tool import RuntimeSnapshot
 from .attachments import (
     ContextAttachment,
     ContextAttachmentKind,

@@ -39,8 +39,10 @@ src/krelcode/
 │   ├── tool_playbooks.py # 工具级 L5 操作规则与 advertised tools 选择
 │   ├── workflows.py  # 任务分类、L9 Workflow Fragment 与执行策略
 │   └── prompts.py    # 系统提示词组装
+├── contracts/   # 跨层稳定契约：Runtime / Permission / Tool / Sandbox Port
+├── core/        # 零上层依赖的基础类型、事件、消息、进程与序列化工具
 ├── tools/       # 工具层（实现 Tool 端口）
-│   ├── base.py       # Tool 协议 + ToolResult + ToolContext
+│   ├── base.py       # 历史兼容入口；新代码从 contracts 导入 DTO
 │   ├── registry.py   # ToolRegistry -> OpenAI tools schema
 │   └── builtin/      # 每个工具一个文件，互相独立
 ├── skills/      # 文件系统型 Agent Skills：发现/解析/渐进加载/资源/脚本
@@ -83,9 +85,14 @@ llm/tools/mcp/skills/safety/session persistence = 可替换适配器
 app.py = composition root，只负责创建与注入，不属于业务层
 ```
 
-`session.input` 只依赖 core/session，`session.controller` 不导入 `ui`，`ui` 不导入
-`app/entrypoints`，`core` 不依赖任何上层。
-这些边界由 `tests/test_architecture.py` 的 AST 依赖守护测试固定。
+跨层 DTO 统一由 `contracts/` 提供；`tools` 不得反向依赖 `agent/session`，`safety`
+不得依赖 `tools`，生产业务包不得依赖 `benchmarks`。`benchmarks` 只消费生产实现，
+CLI 入口是唯一允许把 benchmark 命令接入进程的边界。
+
+所有顶层生产包必须在 `tests/test_architecture.py` 的依赖白名单中声明允许的边。
+测试会构建包级依赖图并用 Tarjan 算法拒绝任何强连通分量（SCC），同时禁止使用
+`tools.base` 作为跨层 DTO 入口。`app.py` 与各 `__main__.py` 是组合根/进程边界，
+不计入业务包依赖图；具体运行期装配由这些边界注入。
 
 ## 四个核心端口（契约）
 

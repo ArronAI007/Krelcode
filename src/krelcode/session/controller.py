@@ -15,7 +15,7 @@ from typing import Any, Optional
 from ..agent.loop import AgentLoop
 from ..agent.runtime import AgentRuntime
 from ..safety.runtime import PlanApprovalCoordinator, RuntimePermissionManager
-from ..tools.base import CommandDescriptor, ToolServices
+from ..contracts.tool import CommandDescriptor, ToolServices
 from .lifecycle import SessionLifecycle
 from .rewind import RewindCoordinator
 from .commands import (

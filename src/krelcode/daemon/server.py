@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import hmac
 import json
 import os
 import signal
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from ..config import load_config_layers
 from ..core.events import (
@@ -57,6 +57,35 @@ from .transport import (
 DAEMON_IDLE_CHECK_SECONDS = 15.0
 
 
+@dataclass(frozen=True)
+class DaemonAgentRuntimeRequest:
+    """Inputs needed by the composition root to build daemon-owned agents."""
+
+    workspace_root: Path
+    config_path: Optional[Path]
+    config: Dict[str, Any]
+    no_sandbox: bool = False
+    sandbox_backend: Optional[str] = None
+    sandbox_network: Optional[bool] = None
+    auto_approve: bool = False
+    permission_mode: Optional[str] = None
+    log: Callable[[str], None] = print
+
+
+@dataclass(frozen=True)
+class DaemonAgentRuntime:
+    """Concrete agent runtime returned by an injected composition factory."""
+
+    loop: Any
+    agents: Any
+    mcp_supervisor: Any = None
+
+
+DaemonAgentRuntimeFactory = Callable[
+    [DaemonAgentRuntimeRequest], Awaitable[DaemonAgentRuntime]
+]
+
+
 class DaemonServer:
     def __init__(
         self,
@@ -70,6 +99,7 @@ class DaemonServer:
         no_sandbox: bool = False,
         auto_approve: bool = False,
         permission_mode: Optional[str] = None,
+        agent_runtime_factory: Optional[DaemonAgentRuntimeFactory] = None,
         log=print,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
@@ -82,6 +112,7 @@ class DaemonServer:
         self.no_sandbox = bool(no_sandbox)
         self.auto_approve = bool(auto_approve)
         self.permission_mode = permission_mode
+        self.agent_runtime_factory = agent_runtime_factory
         self.log = log
         self.instance_id = new_instance_id()
         self.started_at = time.time()
@@ -580,56 +611,25 @@ class DaemonServer:
         async with self._agent_lock:
             if self._agents is not None:
                 return self._agent_loop, self._agents
-            from ..app import (
-                build_loop,
-                build_mcp_roots,
-                build_mcp_sampler,
-                compose_mcp_config,
-            )
-            from ..entrypoints.main import build_parser
-            from ..mcp.supervisor import MCPSupervisor
-
-            argv = ["--workspace", str(self.workspace_root)]
-            if self.config_path is not None:
-                argv += ["--config", str(self.config_path)]
-            if self.no_sandbox:
-                argv.append("--no-sandbox")
-            if self.sandbox_backend:
-                argv += ["--sandbox-backend", str(self.sandbox_backend)]
-            if self.sandbox_network is True:
-                argv.append("--sandbox-network")
-            if self.auto_approve:
-                argv.append("--auto-approve")
-            if self.permission_mode:
-                argv += ["--permission-mode", str(self.permission_mode)]
-            args = build_parser().parse_args(argv)
-            # The daemon itself is the owner.  It must construct the concrete
-            # local SubagentManager rather than recursively wrapping it in an RPC
-            # client that points back at this process.
-            args.daemon_worker = True
-            loop, agents = await build_loop(
-                args,
-                self.config,
+            if self.agent_runtime_factory is None:
+                raise RuntimeError(
+                    "daemon agent runtime 未配置；请由组合根注入 "
+                    "agent_runtime_factory")
+            runtime = await self.agent_runtime_factory(DaemonAgentRuntimeRequest(
+                workspace_root=self.workspace_root,
+                config_path=self.config_path,
+                config=dict(self.config),
+                no_sandbox=self.no_sandbox,
+                sandbox_backend=self.sandbox_backend,
+                sandbox_network=self.sandbox_network,
+                auto_approve=self.auto_approve,
+                permission_mode=self.permission_mode,
                 log=lambda text: self.log(f"[daemon:agent] {text}"),
-            )
+            ))
+            loop = runtime.loop
+            agents = runtime.agents
+            self._agent_mcp_supervisor = runtime.mcp_supervisor
             redactor = getattr(loop, "redactor", None) or self.redactor
-            # build_loop intentionally leaves MCP startup to the outer
-            # composition root.  The daemon is that root for its lazy child
-            # runtime, so mirror the REPL wiring before exposing the manager.
-            if not args.no_mcp:
-                supervisor = MCPSupervisor(
-                    loop.registry,
-                    log=lambda text: self.log(f"[daemon:mcp] {text}"),
-                    sampler=build_mcp_sampler(loop.llm),
-                    roots=build_mcp_roots(loop.tool_context.workspace_root),
-                    redactor=redactor,
-                    prompt_surface_registry=loop.prompt_surface_registry,
-                )
-                await supervisor.sync(compose_mcp_config(
-                    self.config, dict(loop.plugin_manager.mcp_servers)))
-                loop.mcp_supervisor = supervisor
-                self._agent_mcp_supervisor = supervisor
-                loop.sync_context_attachments(include_mcp=True)
             agents.redactor = redactor
             agents.sidechains.redactor = redactor
             # Child tools use the daemon's durable job manager, so jobs started
@@ -903,6 +903,7 @@ async def run_daemon(
     no_sandbox: bool = False,
     auto_approve: bool = False,
     permission_mode: Optional[str] = None,
+    agent_runtime_factory: Optional[DaemonAgentRuntimeFactory] = None,
 ) -> None:
     bundle = load_config_layers(
         workspace=workspace_root,
@@ -918,6 +919,7 @@ async def run_daemon(
         no_sandbox=no_sandbox,
         auto_approve=auto_approve,
         permission_mode=permission_mode,
+        agent_runtime_factory=agent_runtime_factory,
         log=lambda text: print(text, flush=True),
     )
     await server.start()
@@ -936,4 +938,10 @@ async def run_daemon(
     await server.serve_forever()
 
 
-__all__ = ["DaemonServer", "run_daemon"]
+__all__ = [
+    "DaemonAgentRuntime",
+    "DaemonAgentRuntimeFactory",
+    "DaemonAgentRuntimeRequest",
+    "DaemonServer",
+    "run_daemon",
+]

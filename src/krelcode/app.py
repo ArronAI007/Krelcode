@@ -56,7 +56,7 @@ from .agent.rules import RuleLoader
 from .agent.runtime import AgentRuntime
 from .agent.usage import UsageTracker
 from .agent.working_context import WorkingContextStore
-from .benchmarks.parity import load_prompt_baseline
+from .agent.prompt_parity import load_prompt_baseline
 from .browser import BrowserOptions, BrowserRuntime
 from .config import load_config_layers, load_managed_config
 from .core.events import EventBus
@@ -136,7 +136,7 @@ from .subagent.manager import (
     build_subagent_system_prompt,
 )
 from .subagent.model_aliases import resolve_agent_model_spec
-from .tools.base import (
+from .contracts.tool import (
     PermissionMode,
     RunMode,
     RuntimeSnapshot,
@@ -159,9 +159,9 @@ from .tools.builtin.job_tools import (
     JobOutputTool,
     JobStartTool,
 )
-from .tools.builtin.memory_search import MemorySearchTool
+from .session.memory_tool import MemorySearchTool
 from .tools.builtin.notebook import NotebookOptions, build_notebook_tools
-from .tools.builtin.prompt_lab import PromptLabTool
+from .agent.prompt_lab_tool import PromptLabTool
 from .tools.builtin.read_file import ReadFileTool
 from .tools.builtin.repo_map import RepoMapTool
 from .tools.builtin.run_command import RunCommandTool
@@ -1031,6 +1031,13 @@ async def build_loop(
         context_coordinator.attach(bus)
         loop.context_checkpoint_coordinator = context_coordinator
     apply_prompt_snapshot(loop, prompt_snapshot)
+    from .review import review_prompt_surface
+    from .security_review.surfaces import security_review_prompt_surface
+
+    loop.auxiliary_prompt_surfaces = (
+        review_prompt_surface(),
+        security_review_prompt_surface(),
+    )
     refresh_prompt_surfaces(loop)
 
     suggest_threshold, auto_threshold = resolve_auto_memory_thresholds(
@@ -1218,6 +1225,52 @@ def build_parser() -> argparse.ArgumentParser:
     from .entrypoints.main import build_parser as build_full_parser
 
     return build_full_parser()
+
+
+async def build_daemon_agent_runtime(request):
+    """Composition-root factory for daemon-owned subagent runtimes."""
+    from .daemon.server import DaemonAgentRuntime
+    from .entrypoints.main import build_parser
+    from .mcp.supervisor import MCPSupervisor
+
+    argv = ["--workspace", str(request.workspace_root)]
+    if request.config_path is not None:
+        argv += ["--config", str(request.config_path)]
+    if request.no_sandbox:
+        argv.append("--no-sandbox")
+    if request.sandbox_backend:
+        argv += ["--sandbox-backend", str(request.sandbox_backend)]
+    if request.sandbox_network is True:
+        argv.append("--sandbox-network")
+    if request.auto_approve:
+        argv.append("--auto-approve")
+    if request.permission_mode:
+        argv += ["--permission-mode", str(request.permission_mode)]
+    args = build_parser().parse_args(argv)
+    # The daemon owns the concrete local manager; never recursively construct
+    # an RPC client that points back at the same daemon process.
+    args.daemon_worker = True
+    loop, agents = await build_loop(args, request.config, log=request.log)
+    redactor = getattr(loop, "redactor", None) or SecretRedactor()
+    supervisor = None
+    if not args.no_mcp:
+        supervisor = MCPSupervisor(
+            loop.registry,
+            log=request.log,
+            sampler=build_mcp_sampler(loop.llm),
+            roots=build_mcp_roots(loop.tool_context.workspace_root),
+            redactor=redactor,
+            prompt_surface_registry=loop.prompt_surface_registry,
+        )
+        await supervisor.sync(compose_mcp_config(
+            request.config, dict(loop.plugin_manager.mcp_servers)))
+        loop.mcp_supervisor = supervisor
+        loop.sync_context_attachments(include_mcp=True)
+    return DaemonAgentRuntime(
+        loop=loop,
+        agents=agents,
+        mcp_supervisor=supervisor,
+    )
 
 
 async def async_main(args: argparse.Namespace) -> int:

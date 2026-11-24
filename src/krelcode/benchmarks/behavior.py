@@ -90,7 +90,7 @@ from ..session.context_checkpoint import (
 )
 from ..session.lifecycle import SessionLifecycle
 from ..session.memory import MemoryKind, MemoryScope, MemoryStore
-from ..tools.base import (
+from ..contracts.tool import (
     PermissionMode,
     RunMode,
     RuntimeSnapshot,

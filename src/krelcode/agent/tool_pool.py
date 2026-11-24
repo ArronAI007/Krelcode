@@ -13,7 +13,7 @@ from fnmatch import fnmatchcase
 from html import escape
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from ..tools.base import (
+from ..contracts.tool import (
     RuntimeSnapshot,
     Tool,
     ToolCatalogMatch,

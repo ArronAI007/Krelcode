@@ -11,7 +11,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Awaitable, Iterable
 
-from ..tools.base import Tool, ToolResult
+from ..contracts.tool import Tool, ToolResult
 
 
 class PluginLoadError(RuntimeError):

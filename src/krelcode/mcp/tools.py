@@ -13,7 +13,7 @@ import re
 from typing import Any, Dict, List
 
 from ..core.messages import ImageBlock, ResourceBlock, TextBlock
-from ..tools.base import ToolContext, ToolResult
+from ..contracts.tool import ToolContext, ToolResult
 from ..tools.schema import validate_tool_arguments
 from .client import MCPClient, MCPError
 from .security import (

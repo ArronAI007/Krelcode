@@ -41,14 +41,14 @@ from krelcode.tools.builtin.database_migration import (
     MigrationValidateTool,
 )
 from krelcode.tools.builtin.edit_file import EditFileTool
-from krelcode.tools.builtin.memory_search import MemorySearchTool
+from krelcode.session.memory_tool import MemorySearchTool
 from krelcode.tools.builtin.notebook import (
     NotebookCreateTool,
     NotebookEditTool,
     NotebookInspectTool,
     NotebookOptions,
 )
-from krelcode.tools.builtin.prompt_lab import PromptLabTool
+from krelcode.agent.prompt_lab_tool import PromptLabTool
 from krelcode.tools.builtin.read_file import ReadFileTool
 from krelcode.tools.builtin.run_command import RunCommandTool
 from krelcode.tools.base import ToolResult

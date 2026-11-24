@@ -25,6 +25,7 @@ from krelcode.agent.prompt_surface_catalog import (
 )
 from krelcode.hooks import HookSpec
 from krelcode.llm.providers.mock import MockProvider
+from krelcode.review import review_prompt_surface
 from krelcode.safety.policy import AllowAllPolicy
 from krelcode.session.controller import SessionController
 from krelcode.subagent.definition import AgentDefinitionManager
@@ -161,6 +162,7 @@ def test_runtime_catalogue_covers_main_tools_workflows_subagents_and_auxiliary(
 ):
     loop = make_loop(tmp_path)
     loop.agent_definitions = AgentDefinitionManager(tmp_path, home=tmp_path)
+    loop.auxiliary_prompt_surfaces = (review_prompt_surface(),)
     registry = refresh_prompt_surfaces(
         loop, mcp_supervisor=FakeMCPSupervisor())
 

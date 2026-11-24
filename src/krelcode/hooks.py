@@ -41,7 +41,7 @@ from .core.events import (
 )
 from .core.hooks import HookResult
 from .core.messages import ToolCall
-from .tools.process import (
+from .core.process import (
     current_process_platform,
     quote_shell_value,
     stop_process_tree,

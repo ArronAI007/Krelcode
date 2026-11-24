@@ -37,7 +37,7 @@ from krelcode.session.memory_candidates import (
     MemoryTurnSnapshot,
 )
 from krelcode.tools.base import ToolContext
-from krelcode.tools.builtin.memory_search import MemorySearchTool
+from krelcode.session.memory_tool import MemorySearchTool
 
 
 def make_store(tmp_path: Path) -> MemoryStore:

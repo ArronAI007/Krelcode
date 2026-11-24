@@ -20,12 +20,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
-from ..benchmarks.parity import (
+from .prompt_parity import (
     FROZEN_PROMPT_PARITY_SUITE_HASH,
     PROMPT_PARITY_CONTRACT,
     evaluate_prompt_parity,
 )
-from ..benchmarks.prompt import PromptBenchmarkRunner
 from .fragments import PromptFragmentRegistry
 from .prompt_authoring import PromptAuthoringValidator
 from .prompt_candidate import PromptCandidate
@@ -569,7 +568,9 @@ class PromptReleasePipeline:
         authoring_validator: Optional[PromptAuthoringValidator] = None,
         isolation_context: object | None = None,
         offline_runner: object | None = None,
+        offline_runner_factory: Callable[[], object] | None = None,
         live_runner: object | None = None,
+        parity_evaluator: Callable[..., object] = evaluate_prompt_parity,
         store: PromptReleaseProposalStore | None = None,
         clock: Callable[[], str] = _now,
     ) -> None:
@@ -582,7 +583,9 @@ class PromptReleasePipeline:
         )
         self.isolation_context = isolation_context
         self.offline_runner = offline_runner
+        self.offline_runner_factory = offline_runner_factory
         self.live_runner = live_runner
+        self.parity_evaluator = parity_evaluator
         self.store = store
         self.clock = clock
 
@@ -674,7 +677,12 @@ class PromptReleasePipeline:
 
         offline_report = request.offline_report
         if offline_report is None and request.run_offline:
-            runner = self.offline_runner or PromptBenchmarkRunner()
+            runner = self.offline_runner
+            if runner is None and self.offline_runner_factory is not None:
+                runner = self.offline_runner_factory()
+            if runner is None:
+                raise PromptPipelineError(
+                    "offline benchmark runner 未配置；请由入口层注入")
             offline_report = await self._invoke_runner(runner, "offline")
         if offline_report is None:
             stages.append(PromptPipelineStage(
@@ -804,7 +812,7 @@ class PromptReleasePipeline:
 
         parity_hash = ""
         if request.parity_baseline is not None:
-            parity = evaluate_prompt_parity(
+            parity = self.parity_evaluator(
                 live_report, request.parity_baseline, PROMPT_PARITY_CONTRACT)
             parity_hash = _manifest_hash(parity)
             stages.append(PromptPipelineStage(

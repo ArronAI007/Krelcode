@@ -5,14 +5,14 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
-from ...agent.prompt_candidate import PROMPT_CANDIDATE_SCHEMA
-from ...agent.prompt_lab import PromptLabError, PromptLabService
-from ...agent.prompt_release_pipeline import (
+from .prompt_candidate import PROMPT_CANDIDATE_SCHEMA
+from .prompt_lab import PromptLabError, PromptLabService
+from .prompt_release_pipeline import (
     PromptPipelineError,
     PromptPipelineRequest,
 )
-from ..base import ToolContext, ToolResult, ToolTier
-from ..prompt import ToolPromptExample
+from ..contracts.tool import ToolContext, ToolResult, ToolTier
+from ..tools.prompt import ToolPromptExample
 
 
 _SPEC_SCHEMA: Dict[str, Any] = {

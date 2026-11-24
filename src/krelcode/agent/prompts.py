@@ -401,8 +401,7 @@ def select_prompt_release(release_id: str = "") -> PromptRelease:
 
 
 def _current_contract_identity() -> tuple[str, str, str]:
-    # Lazy import avoids a Prompt -> benchmark package import at module load.
-    from ..benchmarks.parity import (
+    from .prompt_parity import (
         FROZEN_PROMPT_PARITY_SUITE_HASH,
         PROMPT_PARITY_CONTRACT,
     )

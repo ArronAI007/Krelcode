@@ -17,7 +17,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..core.messages import Message
 from ..core.redact import SecretRedactor
-from ..session.codec import history_to_dicts
+from ..core.codec import history_to_dicts
 from .feed import AgentFeedEntry
 
 SIDECHAIN_DIRNAME = Path(".krelcode") / "sidechains"

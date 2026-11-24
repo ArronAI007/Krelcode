@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional, Union
 
-from ...agent.evidence import evidence_record_from_memory, render_evidence_set
-from ...session.memory import (
+from ..core.evidence import evidence_record_from_memory, render_evidence_set
+from .memory import (
     MemoryStore,
     coerce_memory_scope,
 )
-from ..base import ToolContext, ToolResult, ToolTier
-from ..prompt import ToolPromptExample
+from ..contracts.tool import ToolContext, ToolResult, ToolTier
+from ..tools.prompt import ToolPromptExample
 
 StoreProvider = Union[MemoryStore, Callable[[], Optional[MemoryStore]]]
 

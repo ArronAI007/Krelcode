@@ -22,13 +22,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .agent.cyber_risk import prepend_cyber_risk_prompt
 from .agent.loop import AgentLoop
-from .agent.prompt_surface_catalog import refresh_prompt_surfaces
+from .agent.prompt_surface import PromptSurfaceDescriptor, PromptSurfaceKind
+from .agent.prompt_surface_catalog import prompt_content_hash, refresh_prompt_surfaces
 from .agent.prompt_surface_contract import (
     REVIEW_SURFACE_CONTRACT,
     PromptSurfaceExecutor,
     observe_surface_result,
 )
 from .agent.usage import UsageTracker
+from .agent.evidence import InstructionSource, SourceRole
+from .agent.tokens import estimate_text_tokens
 from .core.events import EventBus, PermissionDenied, ToolCallCompleted
 from .core.redact import SecretRedactor
 from .core.textutil import truncate_middle
@@ -37,8 +40,8 @@ from .llm.providers.mock import MockProvider
 from .llm.registry import create_provider, resolve_settings
 from .llm.retry import RetryPolicy, RetryingProvider
 from .safety.policy import SandboxPolicy
-from .tools.base import ToolContext
-from .tools.base import PermissionMode, RunMode, RuntimeSnapshot
+from .contracts.tool import ToolContext
+from .contracts.tool import PermissionMode, RunMode, RuntimeSnapshot
 from .tools.builtin.find_refs import FindRefsTool
 from .tools.builtin.glob import GlobTool
 from .tools.builtin.grep import GrepTool
@@ -65,6 +68,28 @@ Rules:
 - Do NOT invent issues to seem thorough; if the change looks good, say so.
 - End with a verdict line: 结论: 可合入 / 建议修改后合入 / 需要修改.
 """)
+
+
+def review_prompt_surface() -> PromptSurfaceDescriptor:
+    """Describe the standalone review prompt without making agent own review."""
+    return PromptSurfaceDescriptor(
+        id="aux:review",
+        kind=PromptSurfaceKind.REVIEW,
+        source="review.cli",
+        owner="ReviewRunner",
+        version="review-v1",
+        role=SourceRole.INSTRUCTION,
+        authority=InstructionSource.MANAGED.value,
+        trust="managed",
+        stability="static",
+        scope="managed",
+        content_hash=prompt_content_hash(REVIEW_SYSTEM_PROMPT),
+        token_estimate=estimate_text_tokens(REVIEW_SYSTEM_PROMPT),
+        description="Read-only git diff review contract.",
+        capabilities=("read_only_tools", "structured_verdict"),
+        metadata={"permission_mode": "read-only", "max_steps": 12},
+        contract=REVIEW_SURFACE_CONTRACT,
+    )
 
 
 def readonly_tools() -> List[Any]:
@@ -181,6 +206,7 @@ async def run_review(args: argparse.Namespace, llm: Optional[LLMProvider] = None
         max_steps=getattr(args, "max_steps", 12),
     )
     loop.redactor = redactor
+    loop.auxiliary_prompt_surfaces = (review_prompt_surface(),)
     refresh_prompt_surfaces(loop)
 
     async def run_surface(safe_prompt: object) -> str:

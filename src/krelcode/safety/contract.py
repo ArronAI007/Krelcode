@@ -15,8 +15,9 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping, Optional, Tuple
 
-from ..tools.base import PermissionMode, RunMode, RuntimeSnapshot, ToolSource
-from .sandbox import ExecutionSandbox
+from ..contracts.runtime import PermissionMode, RunMode, RuntimeSnapshot
+from ..contracts.tool import ToolSource
+from ..contracts.safety import SandboxPort
 
 
 CONTRACT_VERSION = "1"
@@ -330,7 +331,7 @@ def build_mode_permission_contract(
     runtime: RuntimeSnapshot,
     tools: ToolExposureSnapshot,
     *,
-    sandbox: Optional[ExecutionSandbox] = None,
+    sandbox: Optional[SandboxPort] = None,
     sandbox_enabled: bool = True,
     policy: object = None,
     subagent_definition: str = "",
@@ -511,7 +512,7 @@ def _is_sandbox_policy(policy: object) -> bool:
 
 
 def _sandbox_contract(
-    sandbox: Optional[ExecutionSandbox],
+    sandbox: Optional[SandboxPort],
     enabled: bool,
     *,
     protected_paths_enforced: bool,

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Tuple
 
-from ..tools.secret_guard import classify_secret_path, redact_secret_text
+from ..core.secret_guard import classify_secret_path, redact_secret_text
 from .models import Skill, SkillError, SkillIssue, SkillReloadReport, SkillResource
 from .parser import SkillParseError, parse_skill_document, split_allowed_tools
 

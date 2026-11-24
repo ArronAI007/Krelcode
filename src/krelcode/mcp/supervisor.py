@@ -19,7 +19,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from ..agent.prompt_surface_contract import MCP_INSTRUCTIONS_SURFACE_CONTRACT
-from ..tools.base import ToolDescriptor, ToolSource
+from ..contracts.tool import ToolDescriptor, ToolSource
 from ..tools.registry import ToolRegistry
 from .client import MCPClient, MCPServerConfig
 from .conformance import (

@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import krelcode.tools.process as process_module
-from krelcode.tools.process import (
+import krelcode.core.process as process_module
+from krelcode.core.process import (
     ProcessPlatform,
     detect_process_platform,
     quote_shell_value,

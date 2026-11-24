@@ -58,12 +58,12 @@ from ..core.redact import SecretRedactor
 from ..llm.base import LLMProvider
 from ..safety.contract import narrow_permission_mode
 from ..safety.policy import AllowAllPolicy
-from ..session.autocommit import ensure_local_exclude, git_is_repo
-from ..session.context_checkpoint import (
+from ..core.git import ensure_local_exclude, git_is_repo
+from ..agent.context_checkpoint import (
     ContextCheckpointCoordinator,
     ContextCheckpointStore,
 )
-from ..tools.base import PermissionMode, RunMode, Tool, ToolContext, TurnAbortSignal
+from ..contracts.tool import PermissionMode, RunMode, Tool, ToolContext, TurnAbortSignal
 from ..tools.registry import ToolRegistry
 from .builtin_agents import DEFAULT_BUILTIN_SUBAGENT_NAME
 from .control import AgentControl

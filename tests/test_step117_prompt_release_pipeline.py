@@ -43,7 +43,7 @@ from krelcode.session.commands.context import CommandContext
 from krelcode.session.commands.handlers.runtime_ops import handle_prompt_release
 from krelcode.skills.manager import BUILTIN_SKILL_ROOT, SkillManager
 from krelcode.tools.base import ToolContext
-from krelcode.tools.builtin.prompt_lab import PromptLabTool
+from krelcode.agent.prompt_lab_tool import PromptLabTool
 
 
 def _candidate(

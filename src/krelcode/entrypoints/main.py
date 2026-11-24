@@ -268,6 +268,7 @@ def _run_daemon(args: argparse.Namespace) -> int:
         if action == "start":
             idle = _daemon_idle_timeout(args)
             if args.foreground:
+                from krelcode.app import build_daemon_agent_runtime
                 from krelcode.daemon.server import run_daemon
 
                 config_path = Path(args.config).expanduser() if args.config else None
@@ -280,6 +281,7 @@ def _run_daemon(args: argparse.Namespace) -> int:
                     no_sandbox=args.no_sandbox,
                     auto_approve=args.auto_approve,
                     permission_mode=args.permission_mode,
+                    agent_runtime_factory=build_daemon_agent_runtime,
                 ))
                 return 0
             status = asyncio.run(client.start(idle_timeout=idle))

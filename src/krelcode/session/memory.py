@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
 from ..agent.context import CONTEXT_ENGINE_V3
-from ..agent.evidence import (
+from ..core.evidence import (
     EvidenceRecord,
     EvidenceSource,
     evidence_metadata,

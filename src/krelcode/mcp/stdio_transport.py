@@ -8,7 +8,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from ..safety.environment import scrub_environment
-from ..tools.process import process_isolation_kwargs, stop_process_tree
+from ..core.process import process_isolation_kwargs, stop_process_tree
 from .transport import MCPError
 
 

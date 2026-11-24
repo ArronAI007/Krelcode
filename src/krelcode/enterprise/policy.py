@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
-from ..tools.base import PermissionMode
+from ..contracts.tool import PermissionMode
 
 
 class EnterprisePolicyError(ValueError):

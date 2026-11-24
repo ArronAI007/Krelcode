@@ -94,19 +94,19 @@ def _benchmark_lines(
     *,
     report_path: str = "",
 ) -> list[str]:
-    from ....benchmarks.behavior import BEHAVIOR_CASES
-    from ....benchmarks.parity import PROMPT_PARITY_CONTRACT
-    from ....benchmarks.report_store import (
+    from ....agent.prompt_benchmark_catalog import PROMPT_BENCHMARK_CASES
+    from ....agent.prompt_benchmark_report import (
         DEFAULT_BEHAVIOR_REPORT_PATH,
         load_behavior_report_summary,
     )
+    from ....agent.prompt_parity import PROMPT_PARITY_CONTRACT
 
     if operation == "list":
         lines = [
-            f"  [prompts benchmark] {len(BEHAVIOR_CASES)} live behavior cases"
+            f"  [prompts benchmark] {len(PROMPT_BENCHMARK_CASES)} live behavior cases"
             " · real provider required · content-light reports",
         ]
-        for case in BEHAVIOR_CASES:
+        for case in PROMPT_BENCHMARK_CASES:
             dimensions = PROMPT_PARITY_CONTRACT.requirement_for_case(case.id)
             suffix = f" · {', '.join(dimensions)}" if dimensions else ""
             lines.append(f"  {case.id} · {case.description}{suffix}")

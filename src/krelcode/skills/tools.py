@@ -12,9 +12,9 @@ from typing import Any, Dict, List, Optional
 from ..core.textutil import truncate_middle
 from ..safety.environment import scrub_environment
 from ..safety.sandbox import SandboxError
-from ..tools.base import ToolContext, ToolResult
+from ..contracts.tool import ToolContext, ToolResult
 from ..tools.builtin.run_command import MAX_OUTPUT_CHARS
-from ..tools.process import (
+from ..core.process import (
     current_process_platform,
     process_isolation_kwargs,
     stop_process_tree,

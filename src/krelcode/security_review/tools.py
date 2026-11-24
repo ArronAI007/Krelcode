@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List
 
-from ..tools.base import Tool
+from ..contracts.tool import Tool
 from ..tools.builtin.find_refs import FindRefsTool
 from ..tools.builtin.glob import GlobTool
 from ..tools.builtin.grep import GrepTool

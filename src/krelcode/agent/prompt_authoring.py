@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable, Sequence, Tuple
 
-from ..tools.base import PermissionMode
+from ..contracts.tool import PermissionMode
 from .evidence import EvidenceSource, InstructionSource, SourceRole
 from .fragments import (
     GROUP_SYSTEM,

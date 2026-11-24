@@ -15,6 +15,7 @@ from krelcode.agent.workflows import TaskType, select_task_workflow
 from krelcode.core.redact import SecretRedactor
 from krelcode.llm.providers.mock import MockProvider
 from krelcode.safety.policy import AllowAllPolicy
+from krelcode.security_review.surfaces import security_review_prompt_surface
 from krelcode.security_review.prompt import (
     SECURITY_REVIEW_SYSTEM_PROMPT,
     build_security_review_input,
@@ -152,9 +153,7 @@ def test_security_workflow_and_prompt_surface_are_registered():
     assert "structured JSON" in selection.definition.render(
         selection.classification)
 
-    surface = next(
-        item for item in auxiliary_prompt_surfaces()
-        if item.id == "aux:security-review")
+    surface = security_review_prompt_surface()
     assert surface.contract is not None
     assert surface.contract.output_schema["$id"] == SECURITY_REVIEW_REPORT_SCHEMA["$id"]
     assert "read_only_tools" in surface.capabilities

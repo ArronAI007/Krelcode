@@ -75,7 +75,7 @@ from ..session.lifecycle import SessionLifecycle
 from ..session.memory import MemoryKind, MemoryScope, MemoryStore
 from ..session.runner import run_session
 from ..session.stream_json_runner import run_stream_json_session
-from ..tools.base import ToolContext
+from ..contracts.tool import ToolContext
 from ..tools.registry import ToolRegistry
 
 

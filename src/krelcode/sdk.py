@@ -23,7 +23,7 @@ from itertools import count
 from pathlib import Path
 from typing import Any, AsyncIterator, Mapping, Optional, Sequence
 
-from .tools.process import process_isolation_kwargs, stop_process_tree
+from .core.process import process_isolation_kwargs, stop_process_tree
 
 PROTOCOL_NAME = "krelcode.stream-json"
 PROTOCOL_VERSION = "1"

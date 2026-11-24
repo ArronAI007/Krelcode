@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
-from ..tools.base import ToolContext, ToolResult, ToolTier
+from ..contracts.tool import ToolContext, ToolResult, ToolTier
 from ..tools.prompt import ToolPromptExample
-from ..tools.secret_guard import classify_secret_path
+from ..core.secret_guard import classify_secret_path
 from .client import LSPError
 from .manager import LSPManager
 

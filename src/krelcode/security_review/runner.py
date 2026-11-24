@@ -18,11 +18,12 @@ from ..llm.providers.mock import MockProvider
 from ..llm.registry import create_provider, resolve_settings
 from ..llm.retry import RetryPolicy, RetryingProvider
 from ..safety.policy import SandboxPolicy
-from ..tools.base import PermissionMode, RunMode, RuntimeSnapshot, ToolContext
+from ..contracts.tool import PermissionMode, RunMode, RuntimeSnapshot, ToolContext
 from .prompt import (
     SECURITY_REVIEW_SYSTEM_PROMPT,
     build_security_review_input,
 )
+from .surfaces import security_review_prompt_surface
 from .report import (
     SECURITY_REVIEW_SURFACE_CONTRACT,
     SecurityReviewReport,
@@ -199,6 +200,7 @@ async def run_security_review(
         max_steps=max(1, min(24, int(getattr(args, "max_steps", 16) or 16))),
     )
     loop.redactor = redactor
+    loop.auxiliary_prompt_surfaces = (security_review_prompt_surface(),)
     refresh_prompt_surfaces(loop)
 
     async def run_surface(safe_prompt: object) -> str:

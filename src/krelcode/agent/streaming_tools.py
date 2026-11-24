@@ -18,7 +18,7 @@ import asyncio
 from typing import Awaitable, Callable, Dict, List, Optional
 
 from ..core.messages import ToolCall
-from ..tools.base import ToolResult
+from ..contracts.tool import ToolResult
 from .tool_pool import TurnToolPool
 
 ToolRunner = Callable[[ToolCall], Awaitable[ToolResult]]

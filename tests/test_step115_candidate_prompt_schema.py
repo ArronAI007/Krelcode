@@ -23,7 +23,7 @@ from krelcode.agent.prompt_candidate import (
 )
 from krelcode.agent.prompt_lab import PromptLabService
 from krelcode.tools.base import ToolContext
-from krelcode.tools.builtin.prompt_lab import PromptLabTool
+from krelcode.agent.prompt_lab_tool import PromptLabTool
 from krelcode.tools.prompt import ToolPromptSpec
 from krelcode.tools.schema import validate_tool_arguments
 

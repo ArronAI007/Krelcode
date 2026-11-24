@@ -32,7 +32,7 @@ from ..safety.runtime import (
     PlanCheckpoint,
     PlanSnapshot,
 )
-from ..tools.base import PermissionMode
+from ..contracts.tool import PermissionMode
 from .checkpoint import (
     CheckpointManager,
     CheckpointRestoreError,

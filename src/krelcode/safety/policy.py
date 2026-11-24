@@ -18,11 +18,9 @@ from typing import Awaitable, Callable, Optional, Protocol, Union
 
 from ..core.events import ApprovalRequested, EventBus
 from ..core.messages import ToolCall
-from ..tools.secret_guard import classify_secret_path
-from ..tools.base import (
-    PermissionMode,
-    ToolContext,
-)
+from ..core.secret_guard import classify_secret_path
+from ..contracts.runtime import PermissionMode
+from ..contracts.tool import ToolContext
 from .commands import RISK_ALLOW, RISK_DENY, classify_command
 from .contract import local_read_only_tool, restricts_to_local_read_only
 from .rules import AllowRules, RuleDecision, RuleMatch

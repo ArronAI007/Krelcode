@@ -31,8 +31,8 @@ from .commands import (
     FIND_ACTION_OPTIONS, REDIRECTS, SEPARATORS, _tokenize, _tokenize_cmd,
 )
 from .environment import scrub_environment
-from ..tools.process import ProcessPlatform, current_process_platform
-from ..tools.secret_guard import classify_secret_path
+from ..core.process import ProcessPlatform, current_process_platform
+from ..core.secret_guard import classify_secret_path
 
 SYSTEM_READ_ROOTS = (
     "/bin", "/sbin", "/usr", "/System", "/Library", "/opt",

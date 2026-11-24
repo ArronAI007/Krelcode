@@ -28,7 +28,7 @@ from krelcode.agent.prompt_isolation import (
 )
 from krelcode.agent.prompt_lab import PromptLabService
 from krelcode.tools.base import PermissionMode, RuntimeSnapshot, ToolContext
-from krelcode.tools.builtin.prompt_lab import PromptLabTool
+from krelcode.agent.prompt_lab_tool import PromptLabTool
 
 
 _CHECK_IDS = (

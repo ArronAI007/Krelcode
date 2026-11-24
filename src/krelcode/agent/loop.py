@@ -142,7 +142,7 @@ from .working_context import (
     compact_tool_metadata,
 )
 from ..safety.policy import ApprovalPolicy
-from ..tools.base import RuntimeSnapshot, ToolContext, ToolResult, TurnAbortSignal
+from ..contracts.tool import RuntimeSnapshot, ToolContext, ToolResult, TurnAbortSignal
 from ..tools.registry import ToolRegistry
 from ..tools.schema import validate_tool_arguments
 

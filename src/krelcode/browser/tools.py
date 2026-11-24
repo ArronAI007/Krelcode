@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from ..core.redact import redact_obvious_secrets
-from ..tools.base import ToolContext, ToolResult, ToolTier
+from ..contracts.tool import ToolContext, ToolResult, ToolTier
 from ..tools.paths import PathOutsideWorkspaceError, resolve_in_workspace
 from ..tools.prompt import ToolPromptExample
-from ..tools.secret_guard import classify_secret_path
+from ..core.secret_guard import classify_secret_path
 from .runtime import (
     BrowserBackendError,
     BrowserOptions,

@@ -6,6 +6,7 @@ import argparse
 import asyncio
 from pathlib import Path
 
+from ..app import build_daemon_agent_runtime
 from .server import run_daemon
 
 
@@ -33,6 +34,7 @@ def main(argv=None) -> int:
         no_sandbox=args.no_sandbox,
         auto_approve=args.auto_approve,
         permission_mode=args.permission_mode,
+        agent_runtime_factory=build_daemon_agent_runtime,
     ))
     return 0
 

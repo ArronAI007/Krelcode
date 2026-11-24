@@ -31,7 +31,7 @@ from ..core.events import (
 from ..core.redact import SecretRedactor
 from ..safety.environment import scrub_environment
 from ..safety.sandbox import ExecutionSandbox, SandboxError
-from ..tools.process import (
+from ..core.process import (
     process_isolation_kwargs,
     shell_argv,
     terminate_process_tree,

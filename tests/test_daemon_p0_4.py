@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from krelcode.app import build_daemon_agent_runtime
 from krelcode.daemon.client import DaemonClient, DaemonJobManager, DaemonSubagentManager
 from krelcode.daemon.options import resolve_daemon_options
 from krelcode.daemon.paths import (
@@ -134,7 +135,7 @@ def test_running_record_from_dead_daemon_is_lost_not_killed(tmp_path, monkeypatc
             daemon_instance_id="dead-daemon",
             started_at=1.0,
         ))
-        server = DaemonServer(tmp_path, idle_timeout=0, no_sandbox=True, log=lambda _x: None)
+        server = DaemonServer(tmp_path, idle_timeout=0, no_sandbox=True, log=lambda _x: None, agent_runtime_factory=build_daemon_agent_runtime)
         await server.start()
         client = DaemonClient(tmp_path)
         try:
@@ -206,6 +207,7 @@ def test_daemon_agent_runtime_uses_mcp_supervisor(tmp_path, monkeypatch):
             idle_timeout=0,
             no_sandbox=True,
             log=lambda _text: None,
+            agent_runtime_factory=build_daemon_agent_runtime,
         )
         await server.start()
         try:
@@ -224,7 +226,7 @@ def test_file_rpc_job_survives_client_disconnect_and_daemon_restart(tmp_path, mo
     force_file_transport(monkeypatch)
 
     async def scenario():
-        server = DaemonServer(tmp_path, idle_timeout=0, no_sandbox=True, log=lambda _x: None)
+        server = DaemonServer(tmp_path, idle_timeout=0, no_sandbox=True, log=lambda _x: None, agent_runtime_factory=build_daemon_agent_runtime)
         await server.start()
         client = DaemonClient(tmp_path)
         bus = EventBus()
@@ -253,7 +255,7 @@ def test_file_rpc_job_survives_client_disconnect_and_daemon_restart(tmp_path, mo
 
         # A new daemon reconciles metadata rather than deleting completed work.
         restarted = DaemonServer(
-            tmp_path, idle_timeout=0, no_sandbox=True, log=lambda _x: None)
+            tmp_path, idle_timeout=0, no_sandbox=True, log=lambda _x: None, agent_runtime_factory=build_daemon_agent_runtime)
         await restarted.start()
         try:
             client2 = DaemonClient(tmp_path)
@@ -281,6 +283,7 @@ def test_subagent_daemon_spawn_wait_and_restart_audit(tmp_path, monkeypatch):
             idle_timeout=0,
             no_sandbox=True,
             log=lambda _x: None,
+            agent_runtime_factory=build_daemon_agent_runtime,
         )
         await server.start()
         client = DaemonClient(tmp_path)
@@ -302,6 +305,7 @@ def test_subagent_daemon_spawn_wait_and_restart_audit(tmp_path, monkeypatch):
             idle_timeout=0,
             no_sandbox=True,
             log=lambda _x: None,
+            agent_runtime_factory=build_daemon_agent_runtime,
         )
         await restarted.start()
         try:

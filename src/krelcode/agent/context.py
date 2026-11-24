@@ -11,14 +11,12 @@
 
 from __future__ import annotations
 
-import asyncio
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from ..tools.fsutils import is_hidden_file, is_pruned_dir, truncate_middle
-from ..tools.process import process_isolation_kwargs, stop_process_tree
+from ..core.git import git_command as _git
 from .rules import (
     DEFAULT_IMPORT_MAX_DEPTH,
     DEFAULT_IMPORT_MAX_FILES,
@@ -230,30 +228,6 @@ def read_agents_md(
 # ---------------------------------------------------------------------------
 # git 快照（asyncio subprocess，失败安全）
 # ---------------------------------------------------------------------------
-
-async def _git(root: Path, *args: str) -> Optional[str]:
-    if shutil.which("git") is None:
-        return None
-    proc = None
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "git", *args,
-            cwd=str(root),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            **process_isolation_kwargs(),
-        )
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
-    except asyncio.TimeoutError:
-        if proc is not None:
-            await stop_process_tree(proc, force=True, timeout=1)
-        return None
-    except OSError:
-        return None
-    if proc.returncode != 0:
-        return None
-    return out.decode("utf-8", "replace").strip()
-
 
 async def git_snapshot(root: Path) -> str:
     branch = await _git(root, "symbolic-ref", "--short", "HEAD")

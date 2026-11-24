@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from ..tools.base import ToolContext, ToolResult
+from ..contracts.tool import ToolContext, ToolResult
 from ..tools.prompt import ToolPromptExample
 from .manager import STATUS_PAUSED, STATUS_RUNNING, SubagentManager
 from .prompt import SPAWN_AGENT_PROMPT_VERSION, build_spawn_agent_prompt

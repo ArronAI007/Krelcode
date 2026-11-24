@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..core.messages import SteeringInput
-from ..tools.base import RuntimeSnapshot
+from ..contracts.tool import RuntimeSnapshot
 from .loop import AgentLoop
 from .query import QueryEngine, QuerySession
 

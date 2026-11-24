@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from ..tools.process import process_isolation_kwargs
+from ..core.process import process_isolation_kwargs
 
 DEFAULT_TEMPLATE = "{status} · {permission} · Shift-Tab 切换 · Ctrl-O 面板"
 ALLOWED_FIELDS = frozenset({

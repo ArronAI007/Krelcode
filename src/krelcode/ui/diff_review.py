@@ -24,7 +24,7 @@ from typing import Iterable, Optional, Sequence
 from ..core.messages import ToolCall
 from ..core.redact import SecretRedactor, redact_obvious_secrets
 from ..safety.environment import scrub_environment
-from ..tools.secret_guard import classify_secret_path, redact_secret_text
+from ..core.secret_guard import classify_secret_path, redact_secret_text
 
 MAX_DIFF_CHARS = 240_000
 MAX_PREVIEW_FILE_BYTES = 1_000_000

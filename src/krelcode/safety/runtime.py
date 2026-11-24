@@ -14,7 +14,7 @@ from enum import Enum
 from html import escape
 from typing import Any, Optional, Sequence
 
-from ..tools.base import PermissionMode
+from ..contracts.runtime import PermissionMode
 
 
 MODE_CYCLE: tuple[PermissionMode, ...] = (

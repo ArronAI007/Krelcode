@@ -30,7 +30,7 @@ from .agent.pricing import match_context_window
 from .config import DEFAULT_PATHS, ConfigBundle
 from .llm.registry import API_KEY_ENV, PROVIDERS, resolve_settings
 from .safety.sandbox import ExecutionSandbox, SandboxError
-from .tools.process import process_isolation_kwargs
+from .core.process import process_isolation_kwargs
 
 STATUS_OK = "ok"
 STATUS_WARN = "warn"

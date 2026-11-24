@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Sequence
 
 from .evidence import EvidenceSource, InstructionSource, SourceRole
 from .prompt_surface import (
@@ -314,11 +314,10 @@ def output_style_prompt_surfaces(
     return tuple(surfaces)
 
 
-def auxiliary_prompt_surfaces() -> tuple[PromptSurfaceDescriptor, ...]:
+def auxiliary_prompt_surfaces(
+    extra: Sequence[PromptSurfaceDescriptor] = (),
+) -> tuple[PromptSurfaceDescriptor, ...]:
     from .compression import SUMMARY_SYSTEM_PROMPT
-    from ..review import REVIEW_SYSTEM_PROMPT
-    from ..security_review.prompt import SECURITY_REVIEW_SYSTEM_PROMPT
-    from ..security_review.report import SECURITY_REVIEW_SURFACE_CONTRACT
 
     return (
         PromptSurfaceDescriptor(
@@ -339,51 +338,7 @@ def auxiliary_prompt_surfaces() -> tuple[PromptSurfaceDescriptor, ...]:
             metadata={"no_tools": True, "bounded_output": True},
             contract=COMPACT_SURFACE_CONTRACT,
         ),
-        PromptSurfaceDescriptor(
-            id="aux:security-review",
-            kind=PromptSurfaceKind.REVIEW,
-            source="security_review.runner",
-            owner="SecurityReviewRunner",
-            version="security-review-v1",
-            role=SourceRole.INSTRUCTION,
-            authority=InstructionSource.MANAGED.value,
-            trust="managed",
-            stability="static",
-            scope="managed",
-            content_hash=prompt_content_hash(SECURITY_REVIEW_SYSTEM_PROMPT),
-            token_estimate=estimate_text_tokens(SECURITY_REVIEW_SYSTEM_PROMPT),
-            description="Defensive Security Review with a structured report contract.",
-            capabilities=(
-                "workflow",
-                "read_only_tools",
-                "json_schema",
-                "security_gate",
-            ),
-            metadata={
-                "run_mode": "review",
-                "permission_mode": "read-only",
-                "workflow": "security-review",
-                "structured_report": True,
-            },
-            contract=SECURITY_REVIEW_SURFACE_CONTRACT,
-        ),
-        PromptSurfaceDescriptor(
-            id="aux:review",
-            kind=PromptSurfaceKind.REVIEW,
-            source="review.cli",
-            owner="ReviewRunner",
-            role=SourceRole.INSTRUCTION,
-            authority=InstructionSource.MANAGED.value,
-            trust="managed",
-            stability="static",
-            scope="managed",
-            content_hash=prompt_content_hash(REVIEW_SYSTEM_PROMPT),
-            token_estimate=estimate_text_tokens(REVIEW_SYSTEM_PROMPT),
-            description="Read-only git diff review contract.",
-            capabilities=("read_only_tools", "structured_verdict"),
-            metadata={"permission_mode": "read-only", "max_steps": 12},
-            contract=REVIEW_SURFACE_CONTRACT,
-        ),
+        *tuple(extra),
     )
 
 
@@ -629,6 +584,7 @@ def build_prompt_surface_collections(
     skills: object | None = None,
     plugins: object | None = None,
     mcp_supervisor: object | None = None,
+    auxiliary_surfaces: Sequence[PromptSurfaceDescriptor] = (),
 ) -> Mapping[str, tuple[PromptSurfaceDescriptor, ...]]:
     return {
         "main": (main_prompt_surface(
@@ -644,7 +600,7 @@ def build_prompt_surface_collections(
         "workflows": workflow_prompt_surfaces(workflows),
         "reminders": reminder_prompt_surfaces(reminders),
         "subagents": subagent_prompt_surfaces(agents),
-        "auxiliary": auxiliary_prompt_surfaces(),
+        "auxiliary": auxiliary_prompt_surfaces(auxiliary_surfaces),
         "output_styles": output_style_prompt_surfaces(output_styles),
         "hooks": hook_prompt_surfaces(hooks),
         "custom_commands": custom_command_prompt_surfaces(custom_commands),
@@ -659,6 +615,7 @@ def refresh_prompt_surfaces(
     *,
     hooks: object | None = None,
     mcp_supervisor: object | None = None,
+    auxiliary_surfaces: Sequence[PromptSurfaceDescriptor] | None = None,
 ) -> PromptSurfaceRegistry:
     """Rebuild the runtime catalogue without touching Provider-bound state."""
     registry = getattr(loop, "prompt_surface_registry", None)
@@ -682,6 +639,10 @@ def refresh_prompt_surfaces(
     effective_mcp = (
         mcp_supervisor if mcp_supervisor is not None
         else getattr(loop, "mcp_supervisor", None))
+    effective_auxiliary = (
+        tuple(auxiliary_surfaces)
+        if auxiliary_surfaces is not None
+        else tuple(getattr(loop, "auxiliary_prompt_surfaces", ()) or ()))
     collections = build_prompt_surface_collections(
         prompt_snapshot=snapshot,
         prompt_plan=getattr(loop, "last_prompt_plan", None),
@@ -700,6 +661,7 @@ def refresh_prompt_surfaces(
         skills=getattr(loop, "skill_manager", None),
         plugins=getattr(loop, "plugin_manager", None),
         mcp_supervisor=effective_mcp,
+        auxiliary_surfaces=effective_auxiliary,
     )
     registry.replace_collections(collections)
     return registry

@@ -33,7 +33,7 @@ from krelcode.tools.base import (
     ToolContext,
     ToolResult,
 )
-from krelcode.tools.builtin.prompt_lab import PromptLabTool
+from krelcode.agent.prompt_lab_tool import PromptLabTool
 from krelcode.tools.prompt import ToolPromptSpec
 from krelcode.tools.registry import ToolRegistry
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import importlib
 import json
 import re
 import time
@@ -724,10 +725,12 @@ class FinalAcceptanceRunner:
         *,
         offline_report=None,
         workspace: Path | None = None,
+        entrypoint_probe: Callable[[], tuple[bool, str, Mapping[str, object]]] | None = None,
     ) -> None:
         self.contract = contract
         self.offline_report = offline_report
         self.workspace = Path(workspace or Path.cwd()).expanduser().resolve()
+        self.entrypoint_probe = entrypoint_probe
 
     def run(
         self,
@@ -1245,8 +1248,13 @@ class FinalAcceptanceRunner:
     # -- runtime probes ---------------------------------------------------------
 
     def _probe_entrypoints(self):
-        from ..entrypoints import cli, main
-
+        if self.entrypoint_probe is not None:
+            return self.entrypoint_probe()
+        # Entrypoints are the process composition boundary above benchmarks.
+        # Runtime discovery keeps the static dependency graph acyclic while the
+        # acceptance probe still exercises the real callables.
+        cli = importlib.import_module("krelcode.entrypoints.cli")
+        main = importlib.import_module("krelcode.entrypoints.main")
         passed = callable(cli.main) and callable(main.main)
         return passed, "fast and full entrypoints are callable", {
             "fast_path_callable": callable(cli.main),
@@ -1277,7 +1285,7 @@ class FinalAcceptanceRunner:
 
     def _probe_tool_pool(self):
         from ..agent.tool_pool import TurnToolPool
-        from ..tools.base import PermissionMode, RuntimeSnapshot
+        from ..contracts.tool import PermissionMode, RuntimeSnapshot
         from ..tools.builtin.read_file import ReadFileTool
         from ..tools.builtin.write_file import WriteFileTool
         from ..tools.registry import ToolRegistry
@@ -1328,7 +1336,7 @@ class FinalAcceptanceRunner:
     def _probe_safety(self):
         from ..agent.tool_pool import TurnToolPool
         from ..safety.policy import classify_protected_path
-        from ..tools.base import PermissionMode, RuntimeSnapshot
+        from ..contracts.tool import PermissionMode, RuntimeSnapshot
         from ..tools.builtin.write_file import WriteFileTool
         from ..tools.registry import ToolRegistry
 
@@ -1345,7 +1353,7 @@ class FinalAcceptanceRunner:
         }
 
     def _probe_secret_paths(self):
-        from ..tools.secret_guard import classify_secret_path
+        from ..core.secret_guard import classify_secret_path
 
         secret_paths = (".env", "credentials.json", ".ssh/id_rsa", "token.json")
         classified = sum(

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Deque, Mapping, MutableMapping, Optional, Sequence
 from urllib.parse import unquote, urlparse
 
-from ..tools.process import process_isolation_kwargs, stop_process_tree
+from ..core.process import process_isolation_kwargs, stop_process_tree
 
 MAX_HEADER_BYTES = 64 * 1024
 DEFAULT_MAX_MESSAGE_BYTES = 16 * 1024 * 1024

@@ -12,7 +12,7 @@ from html.parser import HTMLParser
 from typing import Any, Dict, Mapping, Optional, Protocol, Sequence
 from urllib.parse import urlencode
 
-from ..tools.base import ToolContext, ToolResult, ToolTier
+from ..contracts.tool import ToolContext, ToolResult, ToolTier
 from ..tools.prompt import ToolPromptExample
 from .http import (
     HttpResponse,

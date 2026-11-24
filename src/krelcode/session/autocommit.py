@@ -10,46 +10,14 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import Optional
 
-from ..agent.context import _git
 from ..core.events import AgentEvent, RunFinished, RunStarted
+from ..core.git import ensure_local_exclude, git_command as _git, git_is_repo
 
 LABEL_MAX_CHARS = 60
 EXCLUDE_ENTRY = ".krelcode/"
-
-
-async def git_is_repo(root: Path) -> bool:
-    """工作区是否为 git 仓库（git 不可用/非仓库 → False）。"""
-    if shutil.which("git") is None:
-        return False
-    out = await _git(Path(root), "rev-parse", "--is-inside-work-tree")
-    return out == "true"
-
-
-async def ensure_local_exclude(root: Path, entry: str = EXCLUDE_ENTRY) -> bool:
-    """把 entry 写进 .git/info/exclude（仅本地生效、幂等）；返回是否新增。"""
-    root = Path(root)
-    git_dir = await _git(root, "rev-parse", "--git-dir")
-    if not git_dir:
-        return False
-    exclude_path = (root / git_dir / "info" / "exclude").resolve() \
-        if not Path(git_dir).is_absolute() else Path(git_dir) / "info" / "exclude"
-    try:
-        exclude_path.parent.mkdir(parents=True, exist_ok=True)
-        existing = exclude_path.read_text(encoding="utf-8") if exclude_path.is_file() else ""
-        lines = [l.strip() for l in existing.splitlines()]
-        if entry in lines:
-            return False
-        with open(exclude_path, "a", encoding="utf-8") as f:
-            if existing and not existing.endswith("\n"):
-                f.write("\n")
-            f.write(f"{entry}\n")
-        return True
-    except OSError:
-        return False
 
 
 class AutoCommitter:
