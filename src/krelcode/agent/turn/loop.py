@@ -71,6 +71,7 @@ from krelcode.agent.turn.runtime_ports import (
     ToolTurnHostPort,
 )
 from krelcode.agent.turn.runtime_state import AgentRuntimeState, RuntimeStateHost
+from krelcode.agent.turn.runtime_composition import build_agent_services
 from krelcode.agent.context.working_context import WorkingContextSnapshot, WorkingContextStore
 from krelcode.agent.context.working_context_source import WorkingContextSource
 from krelcode.agent.turn.workflows import TaskWorkflowSelection, select_task_workflow
@@ -139,78 +140,41 @@ class AgentLoop(RuntimeStateHost):
         today_provider: Optional[Callable[[], str]] = None,
         reminder_catalog: Optional[ReminderCatalog] = None,
     ) -> None:
-        # The state container is created before any compatibility attributes
-        # are assigned so ``__setattr__`` can route them into the right group.
         self._runtime_state = AgentRuntimeState()
-        self.llm = llm
-        self.registry = registry
-        self.tool_context = tool_context
-        self.policy = policy
-        self.bus = bus or EventBus()
+        self.services = build_agent_services(
+            llm=llm,
+            registry=registry,
+            tool_context=tool_context,
+            policy=policy,
+            bus=bus,
+            redactor=redactor,
+            hook_port=hook_port,
+            user_input_port=user_input_port,
+            system_prompt=system_prompt,
+            context_manager=context_manager,
+            context_assembler=context_assembler,
+            prompt_assembler=prompt_assembler,
+            working_context_store=working_context_store,
+            tool_microcompactor=tool_microcompactor,
+            compact_checkpoint_store=compact_checkpoint_store,
+            reminder_catalog=reminder_catalog,
+            registry_provider=lambda: self.services.prompt.registry,
+        )
+
+        # Non-service executor dependencies remain explicit attributes.
         self.max_steps = max_steps
         self.repeat_failure_limit = repeat_failure_limit
-        self.context_manager = context_manager
         self.tool_output_inline_limit = tool_output_inline_limit
         self.token_budget = token_budget
-        self.redactor = redactor
-        self.working_context_store = (
-            working_context_store
-            or WorkingContextStore(
-                tool_context.workspace_root,
-                redactor=redactor.redact if redactor is not None else None,
-            )
-        )
-        if self.working_context_store.redactor is None and redactor is not None:
-            self.working_context_store.redactor = redactor.redact
-        if tool_microcompactor is not None and context_manager is not None:
-            context_manager.microcompactor = tool_microcompactor
-        if context_manager is not None:
-            if context_manager.working_context_provider is None:
-                context_manager.working_context_provider = (
-                    lambda: self.working_context_store.snapshot())
-            if redactor is not None:
-                context_manager.redactor = redactor
-        self.tool_microcompactor = (
-            tool_microcompactor
-            or (
-                context_manager.microcompactor
-                if context_manager is not None else None
-            )
-            or ToolMicrocompactor()
-        )
-        if context_assembler is None:
-            self.context_assembler = ContextAssembler(
-                default_context_sources(
-                    working_context_store=self.working_context_store))
-        else:
-            self.context_assembler = context_assembler
-            if (
-                working_context_store is not None
-                and "working_context" not in self.context_assembler.source_names
-            ):
-                self.context_assembler.register(
-                    WorkingContextSource(self.working_context_store))
-            if "memory_retrieval" not in self.context_assembler.source_names:
-                self.context_assembler.register(RetrievedMemoryContextSource())
-        self.prompt_assembler = prompt_assembler or PromptAssembler(
-            self.context_assembler,
-            registry_provider=lambda: getattr(
-                self, "prompt_registry", None),
-        )
+        self.runtime_snapshot_provider = runtime_snapshot_provider
+        self.step_gate = step_gate
+
+        # Mutable state owned by this loop.
         self.context_engine = str(
-            getattr(self.context_assembler, "engine", "v3") or "v3")
-        self.reminder_catalog = reminder_catalog or default_reminder_catalog()
+            getattr(self.services.context.assembler, "engine", "v3") or "v3")
         self.last_reminder_selection: Optional[ReminderSelection] = None
         self._turn_reminder_selection: Optional[ReminderSelection] = None
         self._turn_requested_reminder_ids: tuple[str, ...] = ()
-        self.prompt_surface_registry = PromptSurfaceRegistry({
-            "main": (main_prompt_surface(system_prompt),),
-        })
-        self.compact_checkpoint_store = compact_checkpoint_store
-        self.runtime_snapshot_provider = runtime_snapshot_provider
-        self.hook_port = hook_port
-        self.user_input_port = user_input_port
-        self.step_gate = step_gate
         self.runtime_context: List[str] = []
         self._token_total = 0
         self._failure_counts: Dict[str, int] = {}
@@ -232,22 +196,23 @@ class AgentLoop(RuntimeStateHost):
         )
 
         self.dependencies = AgentDependencies(
-            llm=self.llm,
-            registry=self.registry,
-            tool_context=self.tool_context,
-            bus=self.bus,
-            context_manager=cast(ContextManagerPort, self.context_manager),
-            context_assembler=self.context_assembler,
-            prompt_assembler=self.prompt_assembler,
-            working_context_store=self.working_context_store,
-            tool_microcompactor=self.tool_microcompactor,
-            compact_checkpoint_store=self.compact_checkpoint_store,
-            reminder_catalog=self.reminder_catalog,
-            policy=self.policy,
-            redactor=self.redactor,
+            llm=self.services.core.llm,
+            registry=self.services.core.registry,
+            tool_context=self.services.core.tool_context,
+            bus=self.services.core.bus,
+            context_manager=cast(
+                ContextManagerPort, self.services.context.manager),
+            context_assembler=self.services.context.assembler,
+            prompt_assembler=self.services.prompt.assembler,
+            working_context_store=self.services.context.working_context,
+            tool_microcompactor=self.services.context.tool_microcompactor,
+            compact_checkpoint_store=self.services.context.compact_checkpoint,
+            reminder_catalog=self.services.context.reminder_catalog,
+            policy=self.services.core.policy,
+            redactor=self.services.core.redactor,
             runtime_snapshot_provider=self.runtime_snapshot_provider,
-            hook_port=self.hook_port,
-            user_input_port=self.user_input_port,
+            hook_port=self.services.core.hook_port,
+            user_input_port=self.services.core.user_input_port,
             step_gate=self.step_gate,
             today_provider=today_provider,
             tool_output_inline_limit=self.tool_output_inline_limit,
@@ -266,12 +231,12 @@ class AgentLoop(RuntimeStateHost):
             self.tool_executor,
         )
 
-        if self.context_manager is not None:
-            self.context_manager.rebuild_state(self.history)
+        if self.services.context.manager is not None:
+            self.services.context.manager.rebuild_state(self.history)
         self.context_coordinator.sync_mode_permission_contract()
 
     async def _emit(self, event: AgentEvent) -> None:
-        await self.bus.emit(event)
+        await self.services.core.bus.emit(event)
 
     def reset(self) -> None:
         """Clear history while preserving the system prompt."""
@@ -285,13 +250,14 @@ class AgentLoop(RuntimeStateHost):
         self._turn_requested_reminder_ids = ()
         self.last_reminder_selection = None
         self.context_coordinator.reset()
-        self.working_context_store.clear()
+        self.services.context.working_context.clear()
 
     def rebuild_working_context(self) -> WorkingContextSnapshot:
         """Rebuild session-scoped working facts after resume/fork/rewind."""
-        snapshot = self.working_context_store.rebuild_from_history(self.history)
-        if self.context_manager is not None:
-            self.context_manager.rebuild_state(self.history)
+        snapshot = self.services.context.working_context.rebuild_from_history(
+            self.history)
+        if self.services.context.manager is not None:
+            self.services.context.manager.rebuild_state(self.history)
         return snapshot
 
     async def refresh_workspace_context(self) -> WorkspaceContext:
@@ -397,7 +363,7 @@ class AgentLoop(RuntimeStateHost):
         self._turn_intent = TurnIntent()
         self._turn_workflow = None
         self._active_tool_pool = TurnToolPool(
-            self.registry,
+            self.services.core.registry,
             intent=self._turn_intent,
             runtime=self._turn_tool_context.runtime,
         )
@@ -447,14 +413,14 @@ class AgentLoop(RuntimeStateHost):
         self._failure_counts = {}
         self._token_total = 0
         self._turn_intent = infer_turn_intent(
-            self.tool_context.workspace_root, user_input)
+            self.services.core.tool_context.workspace_root, user_input)
         self._turn_workflow = select_task_workflow(
             user_input, intent=self._turn_intent)
-        self.working_context_store.begin_turn(
+        self.services.context.working_context.begin_turn(
             self._current_turn_id, user_input)
         # 一轮只构建一次：后续每个模型 step 和每次工具执行共用同一份能力快照。
         self._active_tool_pool = TurnToolPool(
-            self.registry,
+            self.services.core.registry,
             intent=self._turn_intent,
             runtime=self._turn_tool_context.runtime,
         )
@@ -479,7 +445,7 @@ class AgentLoop(RuntimeStateHost):
                 if self.token_budget is not None and self._token_total > self.token_budget:
                     text = (f"[krelcode] token 预算耗尽（已用 {self._token_total} > "
                             f"预算 {self.token_budget}），中止本轮。")
-                    self.working_context_store.record_error(
+                    self.services.context.working_context.record_error(
                         text, source="budget")
                     self.history.append(Message.assistant(text))
                     await self._emit(RunFinished(
@@ -509,7 +475,7 @@ class AgentLoop(RuntimeStateHost):
                     assistant.tool_calls, llm_turn.tool_results)
                 if abort_reason:
                     text = f"[krelcode] {abort_reason}，判定为循环，已中止本轮。"
-                    self.working_context_store.record_error(
+                    self.services.context.working_context.record_error(
                         text, source="loop_guard")
                     self.history.append(Message.assistant(text))
                     await self._emit(RunFinished(
@@ -523,7 +489,8 @@ class AgentLoop(RuntimeStateHost):
             raise
 
         text = max_steps_reached_text(self.max_steps)
-        self.working_context_store.record_error(text, source="max_steps")
+        self.services.context.working_context.record_error(
+            text, source="max_steps")
         self.history.append(Message.assistant(text))
         await self._emit(RunFinished(
             text, turn_id=self._current_turn_id))
@@ -546,7 +513,7 @@ class AgentLoop(RuntimeStateHost):
             if str(item).strip()
         ))
         self._turn_abort_signal = TurnAbortSignal()
-        snapshot = self.tool_context.runtime
+        snapshot = self.services.core.tool_context.runtime
         if self.runtime_snapshot_provider is not None:
             snapshot = self.runtime_snapshot_provider(snapshot)
         snapshot = replace(
@@ -558,7 +525,7 @@ class AgentLoop(RuntimeStateHost):
             ),
         )
         self._turn_tool_context = replace(
-            self.tool_context,
+            self.services.core.tool_context,
             runtime=snapshot,
             abort=self._turn_abort_signal,
         )
@@ -688,7 +655,7 @@ class AgentLoop(RuntimeStateHost):
             else f"[krelcode] {failure}"
         )
         final_text = assistant.content
-        self.working_context_store.record_error(
+        self.services.context.working_context.record_error(
             failure, source="provider", metadata={"finish_reason": finish_reason or ""})
         await self._emit(ErrorOccurred(
             failure, f"finish_reason={finish_reason or 'unknown'}"))
@@ -699,7 +666,7 @@ class AgentLoop(RuntimeStateHost):
     def _current_tool_pool(self) -> TurnToolPool:
         if self._active_tool_pool is None:
             self._active_tool_pool = TurnToolPool(
-                self.registry,
+                self.services.core.registry,
                 intent=self._turn_intent,
                 runtime=self._turn_tool_context.runtime,
             )
@@ -743,12 +710,12 @@ class AgentLoop(RuntimeStateHost):
         self, trigger: str, variables: dict[str, str],
     ) -> HookResult:
         """执行生命周期 Hook，并统一注入运行时上下文与审计事件。"""
-        if self.hook_port is None:
+        if self.services.core.hook_port is None:
             return HookResult()
         resolved = dict(variables)
-        resolved.setdefault("workspace", str(self.tool_context.workspace_root))
+        resolved.setdefault("workspace", str(self.services.core.tool_context.workspace_root))
         try:
-            result = await self.hook_port.run_lifecycle(trigger, resolved)
+            result = await self.services.core.hook_port.run_lifecycle(trigger, resolved)
         except Exception as exc:
             await self._emit(ErrorOccurred(
                 f"{type(exc).__name__}: {exc}", f"hook.{trigger}"))
@@ -762,10 +729,10 @@ class AgentLoop(RuntimeStateHost):
         return result
 
     async def _before_tool_hook(self, tool_call: ToolCall) -> HookResult:
-        if self.hook_port is None:
+        if self.services.core.hook_port is None:
             return HookResult()
         try:
-            result = await self.hook_port.before_tool(tool_call)
+            result = await self.services.core.hook_port.before_tool(tool_call)
         except Exception as exc:
             await self._emit(ErrorOccurred(
                 f"{type(exc).__name__}: {exc}", "hook.pre_tool_use"))
@@ -779,10 +746,10 @@ class AgentLoop(RuntimeStateHost):
     async def _after_tool_hook(
         self, tool_call: ToolCall, result: ToolResult,
     ) -> HookResult:
-        if self.hook_port is None:
+        if self.services.core.hook_port is None:
             return HookResult()
         try:
-            hook_result = await self.hook_port.after_tool(
+            hook_result = await self.services.core.hook_port.after_tool(
                 tool_call, result.content, result.is_error)
         except Exception as exc:
             await self._emit(ErrorOccurred(

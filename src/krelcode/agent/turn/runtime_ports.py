@@ -130,7 +130,39 @@ class PromptAssemblerPort(Protocol):
 class WorkingContextPort(Protocol):
     """Durable facts the turn runtime may project or recover."""
 
+    redactor: Optional[Callable[[str], str]]
+
     def snapshot(self) -> "WorkingContextSnapshot": ...
+
+    def clear(self) -> None: ...
+
+    def invalidate_files(
+        self,
+        paths: Sequence[str],
+        *,
+        reason: str = "file-changed",
+    ) -> int: ...
+
+    def begin_turn(
+        self,
+        turn_id: str,
+        user_input: str,
+    ) -> Optional["WorkingEntry"]: ...
+
+    def record_error(
+        self,
+        content: str,
+        *,
+        source: str = "agent",
+        metadata: Optional[Mapping[str, object]] = None,
+    ) -> Optional["WorkingEntry"]: ...
+
+    def rebuild_from_history(
+        self,
+        history: Sequence["Message"],
+        *,
+        max_messages: int = 400,
+    ) -> "WorkingContextSnapshot": ...
 
     def record_plan(
         self,

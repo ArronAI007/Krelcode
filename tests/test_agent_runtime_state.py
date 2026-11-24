@@ -25,22 +25,33 @@ def _loop(tmp_path: Path) -> AgentLoop:
 
 def test_runtime_state_groups_are_the_owned_source_of_truth(tmp_path: Path):
     loop = _loop(tmp_path)
+    skill_manager = object()
+    memory_store = object()
 
     assert loop.runtime_state.turn.history is loop.history
     assert loop.runtime_state.context.pending_context_refresh is False
     assert loop.runtime_state.prompt.prompt_profile_name == ""
+    assert loop.services.core.llm is loop.llm
+    assert loop.services.context.working_context is loop.working_context_store
+    assert loop.services.prompt.assembler is loop.prompt_assembler
 
     loop.update_runtime_state(
         pending_context_refresh=True,
         prompt_profile_name="deepseek",
-        skill_manager=object(),
+        skill_manager=skill_manager,
+        memory_store=memory_store,
     )
 
     assert loop.runtime_state.context.pending_context_refresh is True
     assert loop.pending_context_refresh is True
     assert loop.runtime_state.prompt.prompt_profile_name == "deepseek"
     assert loop.prompt_profile_name == "deepseek"
-    assert loop.runtime_state.extensions.skill_manager is not None
+    assert loop.services.extensions.skills is skill_manager
+    assert loop.services.session.memory is memory_store
+    assert loop.skill_manager is skill_manager
+    assert loop.memory_store is memory_store
+    assert not loop.runtime_state.has_field("skill_manager")
+    assert not loop.runtime_state.has_field("memory_store")
 
 
 def test_runtime_state_update_keeps_dependency_container_in_sync(tmp_path: Path):
