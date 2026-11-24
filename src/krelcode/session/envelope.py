@@ -9,6 +9,7 @@ from typing import Any, Mapping, Optional
 from ..agent.query import QueryEvent
 from ..core.events import AgentEvent
 from ..core.redact import SecretRedactor
+from ..core.session_events import SessionEvent, SessionEventKind, session_event_kind
 
 
 def _safe_scalar(value: Any) -> Any:
@@ -92,7 +93,27 @@ class SessionEnvelope:
     sequence: int
     event_type: str
     payload: Mapping[str, Any] = field(default_factory=dict)
+    event_kind: SessionEventKind = SessionEventKind.RUN
     timestamp: float = field(default_factory=time.time)
+
+    @classmethod
+    def from_session_event(
+        cls,
+        session_event: SessionEvent,
+        *,
+        redactor: Optional[SecretRedactor] = None,
+    ) -> "SessionEnvelope":
+        event = session_event.event
+        session_id = session_event.session_id
+        return cls(
+            session_id=redactor.redact(session_id) if redactor else session_id,
+            turn_id=session_event.turn_id,
+            sequence=session_event.sequence,
+            event_type=session_event.event_type,
+            payload=event_payload(event, redactor=redactor),
+            event_kind=session_event_kind(event),
+            timestamp=session_event.timestamp,
+        )
 
     @classmethod
     def from_query_event(
@@ -102,14 +123,10 @@ class SessionEnvelope:
         session_id: str = "",
         redactor: Optional[SecretRedactor] = None,
     ) -> "SessionEnvelope":
-        event = query_event.event
-        return cls(
-            session_id=redactor.redact(session_id) if redactor else session_id,
-            turn_id=query_event.turn_id,
-            sequence=query_event.sequence,
-            event_type=type(event).__name__,
-            payload=event_payload(event, redactor=redactor),
-        )
+        """Compatibility entry point for the historical query-event name."""
+
+        bound = query_event.with_session_id(session_id)
+        return cls.from_session_event(bound, redactor=redactor)
 
 
 __all__ = ["SessionEnvelope", "event_payload"]

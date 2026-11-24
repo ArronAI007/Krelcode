@@ -1,8 +1,8 @@
-"""查询引擎事件协议：把一次 Agent turn 包装为有序 QueryEvent 流。
+"""查询引擎事件协议：把一次 Agent turn 包装为有序 SessionEvent 流。
 
 REPL/headless/SDK 消费 ``QuerySession.events``；EventBus 仍作为持久化、用量、
 审计等旁路订阅者的兼容通道。这样查询结果不再只有最终字符串，而是稳定的
-增量事件协议。
+增量事件协议。``QueryEvent`` 是 ``SessionEvent`` 的兼容别名。
 """
 
 from __future__ import annotations
@@ -14,16 +14,11 @@ from typing import AsyncIterator, Callable, Optional
 
 from krelcode.core.events import AgentEvent
 from krelcode.core.messages import ImageRef
+from krelcode.core.session_events import SessionEvent, as_session_event_payload
 from krelcode.agent.turn.loop import AgentLoop
 
 
-@dataclass(frozen=True)
-class QueryEvent:
-    """带 turn 身份和单调序号的统一查询事件。"""
-
-    turn_id: str
-    sequence: int
-    event: AgentEvent
+QueryEvent = SessionEvent
 
 
 @dataclass(frozen=True)
@@ -89,7 +84,7 @@ class QueryEngine:
             await queue.put(QueryEvent(
                 turn_id=turn_id,
                 sequence=next(sequence),
-                event=event,
+                event=as_session_event_payload(event),
             ))
 
         # 先订阅再启动 task，确保 RunStarted 不会丢失。

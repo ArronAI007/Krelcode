@@ -1,4 +1,4 @@
-"""Stream-json 协议：QueryEvent 与 UTF-8 JSONL 消息之间的纯适配层。
+"""Stream-json 协议：SessionEvent 与 UTF-8 JSONL 消息之间的纯适配层。
 
 协议是 CLI/SDK 的边界，不进入 AgentLoop。每行一个 JSON 对象，查询事件
 保留 ``turn_id`` 与单调 ``sequence``；终态统一为 ``result``，因此上层无需

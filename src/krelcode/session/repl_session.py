@@ -118,7 +118,7 @@ class ReplSessionRunner:
             reducer=self._reducer,
             redactor=redactor,
         )
-        self.event_router.subscribe_query(self._handle_query_event)
+        self.event_router.subscribe_event(self._handle_query_event)
         if envelope_sink is not None:
             self.event_router.subscribe_envelope(envelope_sink)
         self.last_envelope = None
