@@ -46,6 +46,9 @@ from ..ui.approval import ApprovalBroker
 from ..ui.repl import run_repl
 from ..contracts.tool import RunMode
 from .composition import (
+    CoreRuntime,
+    ExtensionRuntime,
+    RuntimeGraph,
     build_loop,
     build_mcp_roots,
     build_mcp_sampler,
@@ -368,77 +371,138 @@ async def create_application(
     loop.telemetry = telemetry_runtime
     telemetry_runtime.attach(loop.bus)
 
-    return BootstrappedApplication(
-        args=args,
-        runtime=runtime,
-        supervisor=supervisor,
-        checkpoints=checkpoints,
-        usage=usage,
-        model_switch=model_switch,
+    extensions = ExtensionRuntime(
+        plugin_manager=loop.plugin_manager,
+        skill_manager=loop.skill_manager,
+        agent_definitions=loop.agent_definitions,
+        extension_registry=loop.extension_registry,
+        custom_commands=custom_commands,
+        refresh=refresh_extensions,
         reload_skills=reload_skills,
-        redactor=redactor,
-        input_processor=input_processor,
-        note=note,
-        approval_broker=approval_broker,
-        input_broker=input_broker,
-        hooks=hooks,
-        telemetry_runtime=telemetry_runtime,
-        auditor=auditor,
-        loop=loop,
+        reload_plugins=reload_plugins,
+        reload_custom_commands=reload_custom_commands,
     )
+    graph = RuntimeGraph(
+        core=CoreRuntime(
+            runtime=runtime,
+            supervisor=supervisor,
+            checkpoints=checkpoints,
+            usage=usage,
+            model_switch=model_switch,
+            redactor=redactor,
+            input_processor=input_processor,
+            approval_broker=approval_broker,
+            input_broker=input_broker,
+            hooks=hooks,
+            telemetry_runtime=telemetry_runtime,
+            auditor=auditor,
+            loop=loop,
+        ),
+        extensions=extensions,
+    )
+    return BootstrappedApplication(args=args, graph=graph, note=note)
 
 
 @dataclass
 class BootstrappedApplication:
-    """A runnable application graph plus all resources that it owns."""
+    """A runnable application backed by an explicit :class:`RuntimeGraph`."""
 
     args: argparse.Namespace
-    runtime: AgentRuntime
-    supervisor: Any
-    checkpoints: Optional[CheckpointManager]
-    usage: Any
-    model_switch: Any
-    reload_skills: Any
-    redactor: SecretRedactor
-    input_processor: Any
+    graph: RuntimeGraph
     note: Any
-    approval_broker: Optional[ApprovalBroker]
-    input_broker: Optional[UserInputBroker]
-    hooks: Any
-    telemetry_runtime: Any
-    auditor: Any = None
-    loop: Any = None
     _closed: bool = False
 
+    @property
+    def runtime(self) -> AgentRuntime:
+        return self.graph.core.runtime
+
+    @property
+    def supervisor(self) -> Any:
+        return self.graph.core.supervisor
+
+    @property
+    def checkpoints(self) -> Optional[CheckpointManager]:
+        return self.graph.core.checkpoints
+
+    @property
+    def usage(self) -> Any:
+        return self.graph.core.usage
+
+    @property
+    def model_switch(self) -> Any:
+        return self.graph.core.model_switch
+
+    @property
+    def reload_skills(self) -> Any:
+        return self.graph.extensions.reload_skills
+
+    @property
+    def redactor(self) -> SecretRedactor:
+        return self.graph.core.redactor
+
+    @property
+    def input_processor(self) -> Any:
+        return self.graph.core.input_processor
+
+    @property
+    def approval_broker(self) -> Optional[ApprovalBroker]:
+        return self.graph.core.approval_broker
+
+    @property
+    def input_broker(self) -> Optional[UserInputBroker]:
+        return self.graph.core.input_broker
+
+    @property
+    def hooks(self) -> Any:
+        return self.graph.core.hooks
+
+    @property
+    def telemetry_runtime(self) -> Any:
+        return self.graph.core.telemetry_runtime
+
+    @property
+    def auditor(self) -> Any:
+        return self.graph.core.auditor
+
+    @property
+    def loop(self) -> Any:
+        return self.graph.core.loop
+
+    @property
+    def extensions(self) -> ExtensionRuntime:
+        return self.graph.extensions
+
     async def run(self) -> int:
+        core = self.graph.core
         return await run_session(
             self.args,
-            self.runtime,
-            supervisor=self.supervisor,
-            checkpoints=self.checkpoints,
-            usage=self.usage,
-            model_switch=self.model_switch,
-            skills_reload=self.reload_skills,
-            redactor=self.redactor,
-            input_processor=self.input_processor,
+            core.runtime,
+            supervisor=core.supervisor,
+            checkpoints=core.checkpoints,
+            usage=core.usage,
+            model_switch=core.model_switch,
+            skills_reload=self.graph.extensions.reload_skills,
+            redactor=core.redactor,
+            input_processor=core.input_processor,
             log=self.note,
             repl_runner=run_repl,
-            approval_broker=self.approval_broker,
-            user_input_broker=self.input_broker,
-            hooks=self.hooks,
+            approval_broker=core.approval_broker,
+            user_input_broker=core.input_broker,
+            hooks=core.hooks,
         )
 
     async def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        await self.telemetry_runtime.close()
-        if self.auditor is not None:
-            self.auditor.detach()
-        if self.approval_broker is not None:
-            self.approval_broker.close()
-        if self.input_broker is not None:
-            self.input_broker.close()
-        if getattr(self.loop, "lsp_manager", None) is not None:
-            await self.loop.lsp_manager.close()
-        await self.runtime.close()
+        core = self.graph.core
+        await core.telemetry_runtime.close()
+        if core.auditor is not None:
+            core.auditor.detach()
+        if core.approval_broker is not None:
+            core.approval_broker.close()
+        if core.input_broker is not None:
+            core.input_broker.close()
+        if getattr(core.loop, "lsp_manager", None) is not None:
+            await core.loop.lsp_manager.close()
+        await core.runtime.close()

@@ -5,6 +5,7 @@ from __future__ import annotations
 from ._deps import *  # noqa: F401,F403
 from ._deps import _restore_session
 from .daemon import build_daemon_agent_runtime, build_parser
+from .graph import CoreRuntime, ExtensionRuntime, RuntimeGraph
 from .extensions import (
     build_custom_command_manager,
     build_plugin_manager,

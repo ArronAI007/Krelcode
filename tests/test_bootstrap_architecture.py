@@ -80,3 +80,89 @@ def test_run_repl_is_a_thin_conversation_host_adapter(monkeypatch):
     assert asyncio.run(run_repl(loop, input_fn=lambda _prompt: "")) == 9
     assert captured["loop"] is loop
     assert captured["input_fn"] is not None
+
+
+def test_bootstrapped_application_uses_runtime_graph_for_run_and_close(monkeypatch):
+    from krelcode.bootstrap import application as application_module
+    from krelcode.bootstrap.composition import (
+        CoreRuntime,
+        ExtensionRuntime,
+        RuntimeGraph,
+    )
+    from krelcode.bootstrap.application import BootstrappedApplication
+
+    events = []
+
+    class FakeRuntime:
+        async def close(self):
+            events.append("runtime.close")
+
+    class FakeTelemetry:
+        async def close(self):
+            events.append("telemetry.close")
+
+    class FakeAuditor:
+        def detach(self):
+            events.append("auditor.detach")
+
+    class FakeBroker:
+        def close(self):
+            events.append("broker.close")
+
+    graph = RuntimeGraph(
+        core=CoreRuntime(
+            runtime=FakeRuntime(),
+            supervisor=object(),
+            checkpoints=object(),
+            usage=object(),
+            model_switch=object(),
+            redactor=object(),
+            input_processor=object(),
+            approval_broker=FakeBroker(),
+            input_broker=FakeBroker(),
+            hooks=object(),
+            telemetry_runtime=FakeTelemetry(),
+            auditor=FakeAuditor(),
+            loop=object(),
+        ),
+        extensions=ExtensionRuntime(
+            plugin_manager=object(),
+            skill_manager=object(),
+            agent_definitions=object(),
+            extension_registry=object(),
+            custom_commands=object(),
+            refresh=lambda: None,
+            reload_skills=lambda: None,
+            reload_plugins=lambda: None,
+            reload_custom_commands=lambda: None,
+        ),
+    )
+    application = BootstrappedApplication(
+        args=argparse.Namespace(name="test"),
+        graph=graph,
+        note=lambda _message: None,
+    )
+
+    async def fake_run_session(args, runtime, **kwargs):
+        events.append(("run", args.name, runtime, kwargs["skills_reload"]))
+        return 23
+
+    monkeypatch.setattr(application_module, "run_session", fake_run_session)
+
+    async def drive():
+        assert await application.run() == 23
+        await application.close()
+        await application.close()
+
+    asyncio.run(drive())
+    assert events[0] == (
+        "run", "test", graph.core.runtime, graph.extensions.reload_skills)
+    assert events[1:] == [
+        "telemetry.close",
+        "auditor.detach",
+        "broker.close",
+        "broker.close",
+        "runtime.close",
+    ]
+    assert application.runtime is graph.core.runtime
+    assert application.extensions is graph.extensions
