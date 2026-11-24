@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+from functools import partial
 from typing import Any, Callable, Dict, List, Optional
 
 from ..agent.prompt_surface_contract import MCP_INSTRUCTIONS_SURFACE_CONTRACT
@@ -130,9 +131,7 @@ class MCPSupervisor:
             sampler=self._sampler,
             roots=self._roots,
             elicitor=self._elicitor,
-            on_notification=(
-                lambda method, params, server=name:
-                self._handle_notification(server, method, params)),
+            on_notification=partial(self._handle_notification, name),
             log=self._log,
             redactor=self._redactor,
             prompt_surface_registry=self._prompt_surface_registry,
@@ -162,7 +161,7 @@ class MCPSupervisor:
         self._log(f"[mcp] {name}（{info}，{transport_kind}）已连接，{len(tools)} 个远程工具")
         return True
 
-    async def _stop(self, name: str) -> None:
+    async def _stop(self, name: str) -> int:
         client = self.clients.pop(name, None)
         self.configs.pop(name, None)
         self.prompts.pop(name, None)
@@ -347,7 +346,8 @@ class MCPSupervisor:
                     redactor=self._redactor)
                 if not remote_name:
                     continue
-                arguments = prompt.get("arguments") or []
+                raw_arguments = prompt.get("arguments")
+                arguments = raw_arguments if isinstance(raw_arguments, list) else []
                 argument_names = tuple(
                     safe_label(
                         item.get("name"), max_chars=120,

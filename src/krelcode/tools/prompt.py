@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, replace
-from typing import Mapping, Optional, Tuple
+from typing import Mapping, Optional, Tuple, cast
 
 
 TOOL_PROMPT_SPEC_VERSION = "1"
@@ -40,6 +40,15 @@ def _json_copy(value: object) -> object:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
+
+
+def _playbook_priority(value: object) -> int:
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _hash(value: object) -> str:
@@ -176,7 +185,7 @@ class ToolPromptSpec:
             or ""
         ).strip()
         parameters = getattr(tool, "parameters", None)
-        base = {
+        base: dict[str, object] = {
             "name": name,
             "description": description,
             "parameters": parameters,
@@ -198,21 +207,36 @@ class ToolPromptSpec:
             for key in tuple(base):
                 if key in override and override[key] not in (None, "", (), []):
                     base[key] = override[key]
-        return cls(**base)
+        parameters_value = base["parameters"]
+        if not isinstance(parameters_value, Mapping):
+            raise ValueError(f"ToolPromptSpec {name}.parameters 必须是 JSON 对象")
+        return cls(
+            name=str(base["name"] or ""),
+            description=str(base["description"] or ""),
+            parameters=cast(Mapping[str, object], parameters_value),
+            instructions=str(base["instructions"] or ""),
+            when_to_use=_string_tuple(base["when_to_use"]),
+            when_not_to_use=_string_tuple(base["when_not_to_use"]),
+            examples=_examples(base["examples"]),
+            aliases=_string_tuple(base["aliases"]),
+            source=str(base["source"] or ""),
+            version=str(base["version"] or TOOL_PROMPT_SPEC_VERSION),
+        )
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> "ToolPromptSpec":
         """Normalize a legacy ``{name, description, parameters}`` mapping."""
         if not isinstance(value, Mapping):
             raise ValueError("ToolPromptSpec mapping 必须是对象")
+        parameters = value.get("parameters") or value.get("input_schema") or {}
         return cls(
             name=str(value.get("name", "") or ""),
             description=str(value.get("description", "") or ""),
-            parameters=value.get("parameters") or value.get("input_schema") or {},
+            parameters=cast(Mapping[str, object], parameters),
             instructions=str(value.get("instructions", "") or ""),
             when_to_use=_string_tuple(value.get("when_to_use", ())),
             when_not_to_use=_string_tuple(value.get("when_not_to_use", ())),
-            examples=tuple(value.get("examples", ()) or ()),
+            examples=_examples(value.get("examples", ())),
             aliases=_string_tuple(value.get("aliases", ())),
             source=str(value.get("source", "") or ""),
             version=str(
@@ -220,7 +244,8 @@ class ToolPromptSpec:
                 or TOOL_PROMPT_SPEC_VERSION),
             playbook_id=str(value.get("playbook_id", "") or ""),
             playbook_title=str(value.get("playbook_title", "") or ""),
-            playbook_priority=value.get("playbook_priority", 0),
+            playbook_priority=_playbook_priority(
+                value.get("playbook_priority", 0)),
             playbook_version=str(value.get("playbook_version", "") or ""),
         )
 

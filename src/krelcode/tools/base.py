@@ -30,6 +30,7 @@ from ..contracts.tool import (
     ToolTier,
     TurnAbortSignal,
 )
+from ..contracts.safety import SandboxPort
 from ..safety.sandbox import ExecutionSandbox
 
 
@@ -42,7 +43,7 @@ class ToolContext(ContractToolContext):
     making the contract layer import the Safety adapter.
     """
 
-    sandbox: Optional[object] = None
+    sandbox: Optional[SandboxPort] = None
 
     def __post_init__(self) -> None:
         super().__post_init__()

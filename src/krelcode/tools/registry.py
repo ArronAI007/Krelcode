@@ -82,7 +82,7 @@ class ToolRegistry:
     def names(self) -> List[str]:
         return sorted(self._tools)
 
-    def tool_specs(self) -> List[dict]:
+    def tool_specs(self) -> List[dict[str, object]]:
         """生成统一 ToolSpec（{"name","description","parameters"}）。
 
         各 provider adapter 负责把它转成自己的 wire 格式

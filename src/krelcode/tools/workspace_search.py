@@ -359,7 +359,7 @@ async def _ripgrep_batch(
 
 
 def _parse_ripgrep_match(
-    event: dict,
+    event: dict[str, object],
     *,
     workspace_root: Path,
     regex: re.Pattern[str],

@@ -53,6 +53,8 @@ files = [
     "src/krelcode/contracts",
     "src/krelcode/llm",
     "src/krelcode/safety",
+    "src/krelcode/tools",
+    "src/krelcode/mcp",
     "src/krelcode/agent",
     "src/krelcode/session",
     "src/krelcode/subagent",

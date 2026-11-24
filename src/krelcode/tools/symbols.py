@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Protocol, Sequence, Tuple, cast
 
 Symbol = Tuple[str, int, str]
 
@@ -24,6 +24,25 @@ JAVASCRIPT_EXTENSIONS = frozenset({".js", ".jsx", ".mjs", ".cjs"})
 TYPESCRIPT_EXTENSIONS = frozenset({".ts", ".tsx", ".mts", ".cts"})
 SOURCE_EXTENSIONS = PYTHON_EXTENSIONS | JAVASCRIPT_EXTENSIONS | TYPESCRIPT_EXTENSIONS
 SIGNATURE_MAX_CHARS = 100
+
+
+class _TreeSitterPoint(Protocol):
+    row: int
+
+
+class _TreeSitterNode(Protocol):
+    type: str
+    named_children: Sequence["_TreeSitterNode"]
+    start_byte: int
+    end_byte: int
+    start_point: _TreeSitterPoint
+
+    def child_by_field_name(self, field: str) -> Optional["_TreeSitterNode"]: ...
+
+
+class _TreeSitterTree(Protocol):
+    root_node: _TreeSitterNode
+
 
 JS_PATTERNS = (
     (re.compile(r"^\s*(?:export\s+)?(?:declare\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)"), "class"),
@@ -73,7 +92,7 @@ def _python_symbols(source: str) -> List[Symbol]:
         return []
     out: List[Symbol] = []
 
-    def signature(node) -> str:
+    def signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
         names: List[str] = []
         a = node.args
         all_args = list(a.posonlyargs) + list(a.args)
@@ -92,7 +111,7 @@ def _python_symbols(source: str) -> List[Symbol]:
             sig = sig[:SIGNATURE_MAX_CHARS] + "…)"
         return sig
 
-    def walk(body, indent: str) -> None:
+    def walk(body: Sequence[ast.stmt], indent: str) -> None:
         for node in body:
             if isinstance(node, ast.ClassDef):
                 out.append((indent, node.lineno, f"class {node.name}"))
@@ -109,19 +128,19 @@ def _python_symbols(source: str) -> List[Symbol]:
 
 
 @lru_cache(maxsize=8)
-def _load_language(suffix: str):
+def _load_language(suffix: str) -> Optional[object]:
     module_name, factory_name = _language_spec(suffix)
     module = importlib.import_module(module_name)
     factory = getattr(module, factory_name)
     raw = factory()
     try:
-        from tree_sitter import Language
+        from tree_sitter import Language  # type: ignore[import-untyped]
     except (ImportError, OSError):
         return None
     try:
-        return Language(raw)
+        return cast(object, Language(raw))
     except TypeError:
-        return raw
+        return cast(object, raw)
 
 
 def _language_spec(suffix: str) -> Tuple[str, str]:
@@ -138,12 +157,13 @@ def _tree_sitter_symbols(source: str, suffix: str) -> Optional[Tuple[Symbol, ...
         if language is None:
             return None
         from tree_sitter import Parser
+        parser: Any
         try:
             parser = Parser(language)
         except TypeError:
             parser = Parser()
             parser.set_language(language)
-        tree = parser.parse(source.encode("utf-8"))
+        tree = cast(_TreeSitterTree, parser.parse(source.encode("utf-8")))
     except (ImportError, OSError, AttributeError, TypeError, ValueError):
         return None
     out: List[Symbol] = []
@@ -151,7 +171,13 @@ def _tree_sitter_symbols(source: str, suffix: str) -> Optional[Tuple[Symbol, ...
     return tuple(out)
 
 
-def _walk_tree_sitter(node, source: bytes, out: List[Symbol], *, depth: int) -> None:
+def _walk_tree_sitter(
+    node: _TreeSitterNode,
+    source: bytes,
+    out: List[Symbol],
+    *,
+    depth: int,
+) -> None:
     kind = node.type
     if kind in {"program", "export_statement", "ambient_declaration"}:
         for child in node.named_children:
@@ -225,21 +251,24 @@ def _walk_tree_sitter(node, source: bytes, out: List[Symbol], *, depth: int) -> 
         return
 
 
-def _field_text(node, field: str, source: bytes) -> str:
+def _field_text(node: _TreeSitterNode, field: str, source: bytes) -> str:
     child = node.child_by_field_name(field)
     if child is None:
         return ""
     return source[child.start_byte:child.end_byte].decode("utf-8", errors="replace").strip()
 
 
-def _first_named_child(node, kinds: set[str]):
+def _first_named_child(
+    node: _TreeSitterNode,
+    kinds: set[str],
+) -> Optional[_TreeSitterNode]:
     for child in node.named_children:
         if child.type in kinds:
             return child
     return None
 
 
-def _line(node) -> int:
+def _line(node: _TreeSitterNode) -> int:
     return int(node.start_point.row) + 1
 
 

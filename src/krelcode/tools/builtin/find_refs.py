@@ -13,7 +13,7 @@ from __future__ import annotations
 import ast
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Iterator, List, Tuple
 
 from ...contracts.tool import ToolContext
 from ..base import ToolResult, ToolTier
@@ -49,12 +49,19 @@ class _RefVisitor(ast.NodeVisitor):
             self._add(node.lineno, "ref")
         self.generic_visit(node)
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+    def _visit_function(
+        self,
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> None:
         if node.name == self.symbol:
             self._add(node.lineno, "def")
         self.generic_visit(node)
 
-    visit_AsyncFunctionDef = visit_FunctionDef
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_function(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_function(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         if node.name == self.symbol:
@@ -167,7 +174,7 @@ references.
             data={"count": len(lines_out), "truncated": truncated})
 
 
-def _iter_py_files(base: Path, workspace_root: Path):
+def _iter_py_files(base: Path, workspace_root: Path) -> Iterator[Path]:
     for root, dirs, files in os.walk(base):
         dirs[:] = sorted(
             d for d in dirs

@@ -49,10 +49,15 @@ class UrllibSSEConnector:
     """默认连接器：标准库 urllib。"""
 
     def __init__(self) -> None:
-        self._resp = None
+        self._resp: Optional[Any] = None
         self._lock = threading.Lock()
 
-    def open_stream(self, url, headers, timeout):
+    def open_stream(
+        self,
+        url: str,
+        headers: Headers,
+        timeout: float,
+    ) -> Tuple[int, Headers, Iterator[bytes]]:
         req = urllib.request.Request(url, headers={**headers, "Accept": "text/event-stream"})
         try:
             resp = urllib.request.urlopen(req, timeout=timeout)
@@ -63,9 +68,15 @@ class UrllibSSEConnector:
         with self._lock:
             self._resp = resp
         resp_headers = {k.lower(): v for k, v in (resp.headers or {}).items()}
-        return resp.status, resp_headers, iter(resp.readline, b"")
+        return int(resp.status), resp_headers, iter(resp.readline, b"")
 
-    def post(self, url, headers, body, timeout):
+    def post(
+        self,
+        url: str,
+        headers: Headers,
+        body: bytes,
+        timeout: float,
+    ) -> Tuple[int, bytes]:
         req = urllib.request.Request(
             url, data=body,
             headers={**headers, "Content-Type": "application/json"},
@@ -73,9 +84,9 @@ class UrllibSSEConnector:
         )
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.status, resp.read()
+                return int(resp.status), bytes(resp.read())
         except urllib.error.HTTPError as e:
-            return e.code, e.read()
+            return int(e.code), bytes(e.read())
         except urllib.error.URLError as e:
             raise MCPError(f"SSE POST 失败: {e.reason}") from e
 
@@ -217,7 +228,7 @@ class SSETransport:
             for msg in messages:
                 self._safe_call(on_message, msg)
 
-    def _safe_call(self, fn: Callable, *args) -> None:
+    def _safe_call(self, fn: Callable[..., object], *args: object) -> None:
         """reader 线程 → 事件循环线程安全回投。"""
         loop = self._loop
         if loop is None or loop.is_closed():

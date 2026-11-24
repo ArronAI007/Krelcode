@@ -12,7 +12,7 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence, cast
 
 from ...core.redact import redact_obvious_secrets
 from ...contracts.tool import ToolContext
@@ -69,7 +69,12 @@ class NotebookDocument:
 
     @property
     def cells(self) -> list[Dict[str, Any]]:
-        return self.data["cells"]
+        cells = self.data.get("cells")
+        if not isinstance(cells, list) or not all(
+            isinstance(cell, dict) for cell in cells
+        ):
+            raise NotebookError("notebook cells 必须是对象数组")
+        return cast(list[Dict[str, Any]], cells)
 
 
 class NotebookError(ValueError):

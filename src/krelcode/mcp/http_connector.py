@@ -17,8 +17,11 @@ Headers = Dict[str, str]
 
 
 class HTTPResponse(Protocol):
-    status: int
-    headers: Headers  # 键已小写
+    @property
+    def status(self) -> int: ...
+
+    @property
+    def headers(self) -> Headers: ...  # 键已小写
 
     def read(self) -> bytes: ...
     def iter_lines(self) -> Iterator[bytes]: ...
@@ -59,7 +62,14 @@ class UrllibHTTPConnector:
     def __init__(self) -> None:
         self._open: Optional[Any] = None
 
-    def request(self, method, url, headers, body, timeout) -> HTTPResponse:
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: Headers,
+        body: Optional[bytes],
+        timeout: float,
+    ) -> HTTPResponse:
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
             resp = urllib.request.urlopen(req, timeout=timeout)
@@ -93,7 +103,7 @@ class _UrllibResponse:
 
     @property
     def status(self) -> int:
-        return self._resp.status
+        return int(self._resp.status)
 
     @property
     def headers(self) -> Headers:
@@ -101,7 +111,7 @@ class _UrllibResponse:
 
     def read(self) -> bytes:
         try:
-            return self._resp.read()
+            return bytes(self._resp.read())
         finally:
             self.close()
 

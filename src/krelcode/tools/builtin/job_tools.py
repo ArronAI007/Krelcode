@@ -2,22 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
+from ...contracts.service_ports import ShellJobManagerPort
 from ...contracts.tool import ToolContext
 from ..base import ToolResult, ToolTier
 from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
 from ..prompt import ToolPromptExample
 
 
-def _manager(ctx: ToolContext):
-    manager = getattr(ctx, "shell_jobs", None)
-    if manager is None:
-        return None, ToolResult(
-            content="后台任务管理器未启用",
-            is_error=True,
-        )
-    return manager, None
+def _manager(ctx: ToolContext) -> Optional[ShellJobManagerPort]:
+    return ctx.shell_jobs
+
+
+def _manager_error() -> ToolResult:
+    return ToolResult(
+        content="后台任务管理器未启用",
+        is_error=True,
+    )
 
 
 class JobStartTool:
@@ -71,9 +73,9 @@ cannot be bypassed.
     }
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
-        manager, error = _manager(ctx)
-        if error is not None:
-            return error
+        manager = _manager(ctx)
+        if manager is None:
+            return _manager_error()
         command = args.get("command")
         if not isinstance(command, str) or not command.strip():
             return ToolResult(content="command 必须是非空字符串", is_error=True)
@@ -104,7 +106,7 @@ cannot be bypassed.
                 "pid": job.pid,
                 "status": job.status.value,
                 "cwd": job.cwd,
-                "log_path": job.log_path,
+                "log_path": str(job.log_path),
             },
         )
 
@@ -166,9 +168,9 @@ treat an intermediate log line as completion or dump unbounded logs into context
     }
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
-        manager, error = _manager(ctx)
-        if error is not None:
-            return error
+        manager = _manager(ctx)
+        if manager is None:
+            return _manager_error()
         job_id = str(args.get("job_id") or "").strip()
         if not job_id:
             return ToolResult(content="job_id 不能为空", is_error=True)
@@ -230,9 +232,9 @@ process.
     }
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
-        manager, error = _manager(ctx)
-        if error is not None:
-            return error
+        manager = _manager(ctx)
+        if manager is None:
+            return _manager_error()
         jobs = manager.list_jobs()
         if not jobs:
             return ToolResult(content="当前没有后台任务", data={"jobs": []})
@@ -296,9 +298,9 @@ partial output or remaining cleanup requirement afterward.
     }
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
-        manager, error = _manager(ctx)
-        if error is not None:
-            return error
+        manager = _manager(ctx)
+        if manager is None:
+            return _manager_error()
         job_id = str(args.get("job_id") or "").strip()
         if not job_id:
             return ToolResult(content="job_id 不能为空", is_error=True)

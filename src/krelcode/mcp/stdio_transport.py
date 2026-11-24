@@ -29,7 +29,7 @@ class StdioTransport:
         self.args = list(args or [])
         self.env_overlay = dict(env or {})
         self._proc: Optional[asyncio.subprocess.Process] = None
-        self._reader_task: Optional[asyncio.Task] = None
+        self._reader_task: Optional[asyncio.Task[None]] = None
         self._closed = False
         self._disconnected = False
 

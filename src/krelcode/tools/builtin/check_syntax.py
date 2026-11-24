@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterator, List
 
 import ast
 
@@ -113,7 +113,7 @@ relevant behavioral verification rather than treating a clean parse as completio
             data={"files": len(py_files), "errors": 0})
 
 
-def _iter_py_files(base: Path, workspace_root: Path):
+def _iter_py_files(base: Path, workspace_root: Path) -> Iterator[Path]:
     import os
     for root, dirs, files in os.walk(base):
         dirs[:] = sorted(

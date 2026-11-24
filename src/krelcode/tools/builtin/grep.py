@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict
 
+from ...contracts.json import ToolExecutionData
 from ...contracts.tool import ToolContext
 from ..base import ToolResult
 from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
@@ -111,7 +112,7 @@ filtering cannot be bypassed by the ripgrep acceleration path.
             max_results=max_results,
             abort=ctx.abort,
         )
-        data = {
+        data: ToolExecutionData = {
             "count": len(batch.matches),
             "truncated": batch.truncated,
             "files_scanned": batch.files_scanned,

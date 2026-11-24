@@ -27,7 +27,7 @@ import time
 from typing import Callable, Dict, Optional
 
 from ..contracts.json import JsonObject, JsonValueError, ensure_json_object
-from .http_connector import HTTPConnector, UrllibHTTPConnector
+from .http_connector import HTTPConnector, HTTPResponse, UrllibHTTPConnector
 from .sseparse import SSEEventParser
 from .transport import MCPAuthRequired, MCPError
 
@@ -167,7 +167,7 @@ class StreamableHTTPTransport:
                 pass
             self._maybe_start_listener()
 
-    def _consume_sse(self, resp) -> None:
+    def _consume_sse(self, resp: HTTPResponse) -> None:
         parser = SSEEventParser()
         for raw in resp.iter_lines():
             if self._closed:

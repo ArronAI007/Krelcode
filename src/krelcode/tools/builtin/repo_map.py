@@ -14,6 +14,7 @@ import asyncio
 from pathlib import Path
 from typing import Any, Dict, List
 
+from ...contracts.json import ToolExecutionData
 from ...contracts.tool import ToolContext
 from ..base import ToolResult, ToolTier
 from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
@@ -100,7 +101,7 @@ material workspace change rather than relying on a stale map.
             total += len(text)
             file_count += 1
 
-        data = {
+        data: ToolExecutionData = {
             "files": file_count,
             "truncated": truncated,
             "max_file_bytes": MAX_FILE_BYTES,

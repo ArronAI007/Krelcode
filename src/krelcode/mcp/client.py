@@ -20,6 +20,7 @@ from ..agent.prompt_surface_contract import (
     MCP_PROMPT_SURFACE_CONTRACT,
     PromptSurfaceContract,
     PromptSurfaceExecutor,
+    PromptSurfaceResult,
     observe_surface_result,
 )
 from ..core.redact import SecretRedactor
@@ -543,14 +544,19 @@ class MCPClient:
                     if isinstance(data.get("arguments"), dict) else {}),
             })
 
+        def observe(
+            _surface_id: str,
+            result: PromptSurfaceResult,
+        ) -> None:
+            observe_surface_result(self._prompt_surface_registry, result)
+
         surface = await self._surface_executor.execute(
             f"mcp-prompt:{self.name}:{name}",
             self._prompt_contract,
             {"server": self.name, "name": name, "arguments": safe_arguments},
             run_surface,
             redactor=self._redactor,
-            observer=lambda _surface_id, result: observe_surface_result(
-                self._prompt_surface_registry, result),
+            observer=observe,
         )
         if not surface.ok or not isinstance(surface.value, dict):
             raise MCPError(

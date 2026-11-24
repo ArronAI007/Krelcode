@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict
 
+from ...contracts.json import ToolExecutionData
 from ...contracts.tool import ToolContext
 from ..base import ToolResult
 from ..paths import (
@@ -87,12 +88,14 @@ of the runtime contract and must not be bypassed.
             return ToolResult(content=str(e), is_error=True)
 
         redacted = category in ("redact_env", "redact_toml")
-        if redacted:
+        if category == "redact_env":
+            text = redact_secret_text(text, category)
+        elif category == "redact_toml":
             text = redact_secret_text(text, category)
 
         offset = _positive_int(args.get("offset"), 1)
         limit = min(_positive_int(args.get("limit"), MAX_LINES), MAX_LINES)
-        data = {
+        data: ToolExecutionData = {
             "path": str(path),
             "total_lines": text.count("\n") + (1 if text and not text.endswith("\n") else 0),
         }

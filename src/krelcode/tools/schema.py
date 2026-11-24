@@ -206,7 +206,11 @@ def _validate_array(
     return errors
 
 
-def _validate_string(value: str, schema: Mapping[str, Any], path: str):
+def _validate_string(
+    value: str,
+    schema: Mapping[str, Any],
+    path: str,
+) -> list[SchemaValidationError]:
     errors: list[SchemaValidationError] = []
     if isinstance(schema.get("minLength"), int) and len(value) < schema["minLength"]:
         errors.append(SchemaValidationError(
@@ -225,7 +229,11 @@ def _validate_string(value: str, schema: Mapping[str, Any], path: str):
     return errors
 
 
-def _validate_number(value: float, schema: Mapping[str, Any], path: str):
+def _validate_number(
+    value: float,
+    schema: Mapping[str, Any],
+    path: str,
+) -> list[SchemaValidationError]:
     errors: list[SchemaValidationError] = []
     minimum = schema.get("minimum")
     maximum = schema.get("maximum")
@@ -289,7 +297,7 @@ def _json_type(value: Any) -> str:
 def _json_equal(left: Any, right: Any) -> bool:
     if isinstance(left, bool) or isinstance(right, bool):
         return type(left) is type(right) and left == right
-    return left == right
+    return bool(left == right)
 
 
 def _resolve_ref(root: Mapping[str, Any], ref: str) -> Optional[Any]:
