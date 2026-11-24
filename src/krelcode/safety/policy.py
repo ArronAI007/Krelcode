@@ -14,7 +14,9 @@ import fnmatch
 import inspect
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Awaitable, Callable, Optional, Protocol, Union
+from typing import (
+    Awaitable, Callable, Mapping, Optional, Protocol, Union,
+)
 
 from ..core.events import ApprovalRequested, EventBus
 from ..core.messages import ToolCall
@@ -42,6 +44,18 @@ def deny(reason: str) -> Decision:
 class ApprovalPolicy(Protocol):
     async def check(self, tool_call: ToolCall, ctx: ToolContext) -> Decision:
         ...
+
+
+class ManagedPolicyPort(Protocol):
+    """Enterprise policy surface enforced before local approval."""
+
+    allow_auto_approve: bool
+
+    def deny_tool_reason(
+        self,
+        tool_call: ToolCall,
+        workspace_root: Path,
+    ) -> Optional[str]: ...
 
 
 class AllowAllPolicy:
@@ -78,7 +92,7 @@ class SandboxPolicy:
         auto_approve: bool = False,
         workspace_root: Optional[Path] = None,
         review_writes: bool = False,
-        managed_policy=None,
+        managed_policy: Optional[ManagedPolicyPort] = None,
     ) -> None:
         self.approver = approver
         self.rules = AllowRules(
@@ -231,8 +245,10 @@ class SandboxPolicy:
             ctx is not None
             and ctx.runtime.permission_mode is PermissionMode.AUTO_APPROVE
         )
-        managed_auto = getattr(self.managed_policy, "allow_auto_approve", None)
-        auto_disabled = managed_auto is False
+        auto_disabled = (
+            self.managed_policy is not None
+            and not self.managed_policy.allow_auto_approve
+        )
         if not force_approval and not auto_disabled and (
                 self.auto_approve or runtime_auto):
             source = "运行时权限模式" if runtime_auto else "--auto-approve"
@@ -242,7 +258,7 @@ class SandboxPolicy:
             await self.bus.emit(ApprovalRequested(tool_call, reason))
         if self.approver is None:
             return deny(f"非交互模式且无审批器，已拒绝（{reason}）")
-        answer = await self.approver(tool_call, reason)
+        answer = self.approver(tool_call, reason)
         if inspect.isawaitable(answer):
             answer = await answer
         if answer == "always":
@@ -261,11 +277,13 @@ class EnterpriseGuardPolicy:
     Sandbox must never disable organization-level restrictions.
     """
 
-    def __init__(self, inner: ApprovalPolicy, managed_policy) -> None:
+    def __init__(
+        self, inner: ApprovalPolicy, managed_policy: ManagedPolicyPort,
+    ) -> None:
         self.inner = inner
         self.managed_policy = managed_policy
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> object:
         # Keep diagnostics and legacy policy attributes (review_writes,
         # auto_approve, rules) observable without weakening the guard.
         return getattr(self.inner, name)
@@ -278,11 +296,11 @@ class EnterpriseGuardPolicy:
         return await self.inner.check(tool_call, ctx)
 
 
-def _tool_paths(arguments) -> tuple[str, ...]:
+def _tool_paths(arguments: Mapping[str, object]) -> tuple[str, ...]:
     """提取需要参与路径规则匹配的参数；未知工具也使用同一安全边界。"""
-    values = []
+    values: list[str] = []
     for key in ("path", "file_path"):
-        value = arguments.get(key) if hasattr(arguments, "get") else None
+        value = arguments.get(key)
         if value not in (None, ""):
             values.append(str(value))
     return tuple(values)

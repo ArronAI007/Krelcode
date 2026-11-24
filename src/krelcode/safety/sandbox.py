@@ -25,13 +25,17 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
+from typing import Iterable, List, Optional, Sequence, cast
 
 from .commands import (
     FIND_ACTION_OPTIONS, REDIRECTS, SEPARATORS, _tokenize, _tokenize_cmd,
 )
 from .environment import scrub_environment
-from ..core.process import ProcessPlatform, current_process_platform
+from ..core.process import (
+    ProcessIsolationKwargs,
+    ProcessPlatform,
+    current_process_platform,
+)
 from ..core.secret_guard import classify_secret_path
 
 SYSTEM_READ_ROOTS = (
@@ -72,7 +76,8 @@ class SandboxedCommand:
     argv: List[str]
     env: dict[str, str]
     backend: str
-    process_kwargs: dict[str, object] = field(default_factory=dict)
+    process_kwargs: ProcessIsolationKwargs = field(
+        default_factory=lambda: cast(ProcessIsolationKwargs, {}))
 
 
 @dataclass(frozen=True)
@@ -506,9 +511,9 @@ def _network_violation(tokens: Sequence[str]) -> Optional[str]:
         if original_program == "env":
             nested_env = _unwrap_env(args[1:])
             if nested_env:
-                nested = _network_violation(nested_env)
-                if nested:
-                    return nested
+                nested_violation = _network_violation(nested_env)
+                if nested_violation:
+                    return nested_violation
         program_index = _effective_program_index(args)
         program = _program_name(args[program_index])
         program_args = args[program_index + 1:]
@@ -524,8 +529,8 @@ def _network_violation(tokens: Sequence[str]) -> Optional[str]:
         if program in PACKAGE_MANAGERS and any(
                 arg.lower() in PACKAGE_NETWORK_SUBCOMMANDS for arg in program_args):
             return f"网络已禁用，拒绝执行 {program} 网络操作"
-        for nested in _embedded_commands(args):
-            violation = _network_violation(nested)
+        for nested_tokens in _embedded_commands(args):
+            violation = _network_violation(nested_tokens)
             if violation:
                 return violation
     return None
@@ -836,14 +841,14 @@ def _embedded_commands(tokens: Sequence[str]) -> List[List[str]]:
         elif program == "eval" and program_args:
             embedded.append([program_args[0]])
         elif program == "env":
-            nested = _unwrap_env(program_args)
-            if nested:
-                embedded.append(nested)
+            nested_env_tokens = _unwrap_env(program_args)
+            if nested_env_tokens:
+                embedded.append(nested_env_tokens)
         elif program in {
                 "command", "exec", "nohup", "nice", "time", "timeout", "stdbuf"}:
-            nested = _unwrap_runtime_wrapper(program, program_args)
-            if nested:
-                embedded.append(nested)
+            wrapped_tokens = _unwrap_runtime_wrapper(program, program_args)
+            if wrapped_tokens:
+                embedded.append(wrapped_tokens)
         elif program == "find":
             for index, arg in enumerate(program_args):
                 if arg in FIND_ACTION_OPTIONS and arg not in {
@@ -852,9 +857,9 @@ def _embedded_commands(tokens: Sequence[str]) -> List[List[str]]:
                         embedded.append(program_args[index + 1:])
                     break
         elif program == "xargs":
-            nested = _unwrap_xargs(program_args)
-            if nested:
-                embedded.append(nested)
+            xargs_tokens = _unwrap_xargs(program_args)
+            if xargs_tokens:
+                embedded.append(xargs_tokens)
         elif program == "sort":
             value = _option_value(program_args, "--compress-program")
             if value:

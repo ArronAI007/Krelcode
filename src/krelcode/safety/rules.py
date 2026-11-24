@@ -198,7 +198,9 @@ class AllowRules:
                 self.workspace_rules = []
 
     @staticmethod
-    def _parse_rules(raw_rules, scope: RuleScope) -> List[PermissionRule]:
+    def _parse_rules(
+        raw_rules: object, scope: RuleScope,
+    ) -> List[PermissionRule]:
         if not isinstance(raw_rules, list):
             return []
         parsed: List[PermissionRule] = []
@@ -384,7 +386,7 @@ class AllowRules:
             return
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            payload = {
+            payload: dict[str, object] = {
                 "allow_programs": sorted(self.programs),
                 "allow_commands": sorted(self.commands),
             }

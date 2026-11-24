@@ -52,4 +52,5 @@ files = [
     "src/krelcode/core",
     "src/krelcode/contracts",
     "src/krelcode/llm",
+    "src/krelcode/safety",
 ]

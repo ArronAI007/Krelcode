@@ -12,9 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from enum import Enum
 from html import escape
-from typing import Any, Optional, Sequence
+from typing import Optional, Protocol, Sequence
 
 from ..contracts.runtime import PermissionMode
+from ..contracts.tool import ToolContext
 
 
 MODE_CYCLE: tuple[PermissionMode, ...] = (
@@ -43,10 +44,18 @@ def parse_permission_mode(raw: str) -> PermissionMode:
     return PermissionMode(aliases.get(normalized, normalized))
 
 
+class RuntimeLoopPort(Protocol):
+    """Minimal mutable loop state touched by permission mode changes."""
+
+    tool_context: ToolContext
+    _turn_tool_context: ToolContext
+    _active_tool_pool: object | None
+
+
 class RuntimePermissionManager:
     """权限模式的唯一写入口，确保下一轮工具池与当前轮策略同时更新。"""
 
-    def __init__(self, loop: Any) -> None:
+    def __init__(self, loop: RuntimeLoopPort) -> None:
         self.loop = loop
         self._previous_mode = loop.tool_context.runtime.permission_mode
 
@@ -105,18 +114,16 @@ class RuntimePermissionManager:
         self.loop.tool_context.runtime = runtime
         # 本 turn 的工具池已经固化，但策略层仍应读取最新模式；否则运行中
         # Shift-Tab 会出现“界面已切换、实际审批仍沿用旧模式”的假象。
-        turn_context = getattr(self.loop, "_turn_tool_context", None)
-        if turn_context is not None:
-            self.loop._turn_tool_context = replace(
-                turn_context,
-                runtime=replace(
-                    turn_context.runtime, permission_mode=mode),
-            )
+        turn_context = self.loop._turn_tool_context
+        self.loop._turn_tool_context = replace(
+            turn_context,
+            runtime=replace(
+                turn_context.runtime, permission_mode=mode),
+        )
         # Capability filtering is part of the same permission boundary.  Drop
         # the turn pool so the next model/tool step is rebuilt from the new
         # runtime snapshot instead of advertising a stale write capability.
-        if hasattr(self.loop, "_active_tool_pool"):
-            self.loop._active_tool_pool = None
+        self.loop._active_tool_pool = None
         sync = getattr(self.loop, "sync_context_attachments", None)
         if callable(sync):
             sync(
