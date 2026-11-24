@@ -50,9 +50,13 @@ from ..core.events import (
 )
 from ..core.messages import ImageRef, Message, ToolCall
 from ..agent.query import QueryEvent
-
-PROTOCOL_NAME = "krelcode.stream-json"
-PROTOCOL_VERSION = "1"
+from .stream_json_schema import (
+    STREAM_JSON_PROTOCOL_NAME as PROTOCOL_NAME,
+    STREAM_JSON_PROTOCOL_VERSION as PROTOCOL_VERSION,
+    StreamJsonSchemaError,
+    validate_input_message,
+    validate_stream_event,
+)
 
 
 class StreamJsonProtocolError(ValueError):
@@ -94,7 +98,7 @@ class StreamJsonEncoder:
         self.metadata = metadata
 
     def init_message(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "type": "system",
             "subtype": "init",
             "protocol": PROTOCOL_NAME,
@@ -108,14 +112,18 @@ class StreamJsonEncoder:
             "tools": list(self.metadata.tools),
             "mcp_servers": list(self.metadata.mcp_servers),
         }
+        validate_stream_event(payload)
+        return payload
 
     def session_end_message(self, reason: str = "eof") -> Dict[str, Any]:
-        return {
+        payload = {
             "type": "system",
             "subtype": "session_end",
             "session_id": self.metadata.session_id,
             "reason": reason,
         }
+        validate_stream_event(payload)
+        return payload
 
     def encode(
         self,
@@ -420,6 +428,7 @@ class StreamJsonEncoder:
             "sequence": query_event.sequence,
             "session_id": self.metadata.session_id,
         })
+        validate_stream_event(payload)
         return payload
 
     def job_event_message(self, event: ShellJobStarted | ShellJobOutput | ShellJobFinished) -> Dict[str, Any]:
@@ -429,6 +438,7 @@ class StreamJsonEncoder:
             # 以免两者在 encoder.encode() 中互相覆盖。
             payload["sequence"] = event.sequence
         payload["session_id"] = self.metadata.session_id
+        validate_stream_event(payload)
         return payload
 
     @staticmethod
@@ -494,6 +504,7 @@ class StreamJsonEncoder:
         })
         if sequence is not None:
             payload["sequence"] = sequence
+        validate_stream_event(payload)
         return payload
 
 
@@ -517,6 +528,7 @@ def parse_input_line(line: str) -> StreamUserMessage | StreamControlMessage:
     if message_type == "control":
         subtype = str(value.get("subtype", "")).strip()
         if subtype in {"end", "interrupt"}:
+            _validate_input_envelope(value)
             return StreamControlMessage(subtype)
         if subtype == "permission_response":
             request_id = _control_request_id(value, subtype)
@@ -524,6 +536,7 @@ def parse_input_line(line: str) -> StreamUserMessage | StreamControlMessage:
             if decision not in {"allow", "deny", "always"}:
                 raise StreamJsonProtocolError(
                     "permission_response.decision 必须为 allow/deny/always")
+            _validate_input_envelope(value)
             return StreamControlMessage(
                 subtype=subtype,
                 request_id=request_id,
@@ -551,6 +564,7 @@ def parse_input_line(line: str) -> StreamUserMessage | StreamControlMessage:
             if action == "cancel" and content:
                 raise StreamJsonProtocolError(
                     "user_input_response.cancel 不能携带 content")
+            _validate_input_envelope(value)
             return StreamControlMessage(
                 subtype=subtype,
                 request_id=request_id,
@@ -578,11 +592,19 @@ def parse_input_line(line: str) -> StreamUserMessage | StreamControlMessage:
     content, images = _parse_content(raw_content)
     if not content.strip() and not images:
         raise StreamJsonProtocolError("user.content 不能为空")
+    _validate_input_envelope(value)
     return StreamUserMessage(
         content=content,
         request_id=request_id,
         images=tuple(images),
     )
+
+
+def _validate_input_envelope(value: Mapping[str, Any]) -> None:
+    try:
+        validate_input_message(value)
+    except StreamJsonSchemaError as exc:
+        raise StreamJsonProtocolError(str(exc)) from exc
 
 
 def _control_request_id(value: Mapping[str, Any], subtype: str) -> str:
