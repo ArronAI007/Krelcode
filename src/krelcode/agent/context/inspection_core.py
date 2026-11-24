@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, cast
+from typing import TYPE_CHECKING, Optional, Protocol, cast
 
 from krelcode.core.context_usage import ContextUsageSnapshot
 from krelcode.agent.context.context_cache_ledger import ContextCacheLedger
@@ -16,28 +16,44 @@ from krelcode.agent.context.inspection_helpers import (
 from krelcode.agent.prompt.prompt_plan import PromptPlanSnapshot
 from krelcode.agent.context.tokens import estimate_history_tokens
 
+if TYPE_CHECKING:
+    from krelcode.agent.turn.runtime_services import AgentServices
+    from krelcode.agent.turn.runtime_state import AgentRuntimeState
+    from krelcode.core.messages import Message
+
+
+class ContextInspectionHostPort(Protocol):
+    services: "AgentServices"
+    runtime_state: "AgentRuntimeState"
+    history: list["Message"]
+
+
 class ContextInspectionCoreMixin:
     loop: object
+
+    @property
+    def _host(self) -> ContextInspectionHostPort:
+        return cast(ContextInspectionHostPort, self.loop)
 
     @property
     def snapshot(self) -> Optional[ContextUsageSnapshot]:
         return cast(
             Optional[ContextUsageSnapshot],
-            getattr(self.loop, "last_context_snapshot", None),
+            self._host.runtime_state.context.last_context_snapshot,
         )
 
     @property
     def assembly(self) -> Optional[ContextAssembly]:
         return cast(
             Optional[ContextAssembly],
-            getattr(self.loop, "last_context_assembly", None),
+            self._host.runtime_state.context.last_context_assembly,
         )
 
     @property
     def plan(self) -> Optional[ContextPlanSnapshot]:
         return cast(
             Optional[ContextPlanSnapshot],
-            getattr(self.loop, "last_context_plan", None),
+            self._host.runtime_state.context.last_context_plan,
         )
 
     @property
@@ -49,14 +65,14 @@ class ContextInspectionCoreMixin:
     def previous_snapshot(self) -> Optional[ContextUsageSnapshot]:
         return cast(
             Optional[ContextUsageSnapshot],
-            getattr(self.loop, "previous_context_snapshot", None),
+            self._host.runtime_state.context.previous_context_snapshot,
         )
 
     @property
     def cache_ledger(self) -> Optional[ContextCacheLedger]:
         ledger = cast(
             Optional[ContextCacheLedger],
-            getattr(self.loop, "last_context_cache_ledger", None),
+            self._host.runtime_state.context.last_context_cache_ledger,
         )
         if ledger is not None:
             return ledger
@@ -70,7 +86,7 @@ class ContextInspectionCoreMixin:
         snapshot = self.snapshot
         if snapshot is not None:
             items.extend(str(item) for item in snapshot.dropped_items)
-        workspace = getattr(self.loop, "workspace_context", None)
+        workspace = self._host.runtime_state.context.workspace_context
         for item in getattr(workspace, "omitted", ()) or ():
             value = f"workspace:{item}"
             if value not in items:
@@ -115,9 +131,9 @@ class ContextInspectionCoreMixin:
     def summary_lines(self, *, source_limit: int = 8) -> list[str]:
         snapshot = self.snapshot
         if snapshot is None:
-            total = estimate_history_tokens(getattr(self.loop, "history", []))
-            budget = getattr(getattr(self.loop, "context_manager", None),
-                             "max_tokens", None)
+            total = estimate_history_tokens(self._host.history)
+            manager = self._host.services.context.manager
+            budget = getattr(manager, "max_tokens", None)
             return [
                 f"  [context] 尚无真实请求快照 · 历史约 {total} tokens"
                 f" · 预算 {budget or '未启用压缩'}",
@@ -165,7 +181,7 @@ class ContextInspectionCoreMixin:
                 f"  prompt conflicts: {self.prompt_plan.conflict_count}"
                 f" · unresolved {self.prompt_plan.unresolved_conflict_count}"
                 f" · analyzer hash {_short_hash(self.prompt_plan.conflict_hash)}")
-        manager = getattr(self.loop, "context_manager", None)
+        manager = self._host.services.context.manager
         high = getattr(manager, "high_watermark_tokens", 0) if manager else 0
         low = getattr(manager, "low_watermark_tokens", 0) if manager else 0
         if high or low:

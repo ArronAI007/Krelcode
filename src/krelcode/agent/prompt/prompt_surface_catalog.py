@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Mapping, Optional, Protocol, Sequence
 
 from krelcode.agent.evidence import EvidenceSource, InstructionSource, SourceRole
 from krelcode.agent.prompt.prompt_surface import (
@@ -31,8 +31,24 @@ from krelcode.agent.prompt.prompt_surface_contract import (
 from krelcode.agent.tokens import estimate_text_tokens
 from krelcode.agent.workflows import DEFAULT_TASK_WORKFLOW_CATALOG, TaskClassification
 
+if TYPE_CHECKING:
+    from krelcode.agent.turn.runtime_services import AgentServices
+    from krelcode.core.messages import Message
+
 
 MAX_SKILL_SURFACE_BYTES = 1_000_000
+
+
+class PromptSurfaceHostPort(Protocol):
+    """Explicit host boundary for rebuilding the Prompt surface catalogue."""
+
+    services: "AgentServices"
+    history: list["Message"]
+    prompt_snapshot: object | None
+    prompt_profile_resolution: object | None
+    prompt_profile_name: str
+    auxiliary_prompt_surfaces: Sequence[PromptSurfaceDescriptor]
+    last_prompt_plan: object | None
 
 
 def _scope_values(source: str) -> tuple[str, str]:
@@ -614,58 +630,51 @@ def build_prompt_surface_collections(
 
 
 def refresh_prompt_surfaces(
-    loop: object,
+    loop: PromptSurfaceHostPort,
     *,
     hooks: object | None = None,
     mcp_supervisor: object | None = None,
     auxiliary_surfaces: Sequence[PromptSurfaceDescriptor] | None = None,
 ) -> PromptSurfaceRegistry:
     """Rebuild the runtime catalogue without touching Provider-bound state."""
-    registry = getattr(loop, "prompt_surface_registry", None)
-    if not isinstance(registry, PromptSurfaceRegistry):
-        registry = PromptSurfaceRegistry()
-        if hasattr(loop, "update_runtime_state"):
-            loop.update_runtime_state(prompt_surface_registry=registry)
-        else:  # compatibility for lightweight prompt hosts
-            setattr(loop, "prompt_surface_registry", registry)
-
-    snapshot = getattr(loop, "prompt_snapshot", None)
+    registry = loop.services.prompt.surface_registry
+    snapshot = loop.prompt_snapshot
     system_prompt = str(getattr(snapshot, "text", "") or "")
     if not system_prompt:
-        history = tuple(getattr(loop, "history", ()) or ())
+        history = tuple(loop.history)
         if history and getattr(history[0], "role", "") == "system":
             system_prompt = str(getattr(history[0], "content", "") or "")
 
-    resolution = getattr(loop, "prompt_profile_resolution", None)
-    prompt_assembler = getattr(loop, "prompt_assembler", None)
+    resolution = loop.prompt_profile_resolution
+    prompt_assembler = loop.services.prompt.assembler
     workflows = getattr(
         prompt_assembler, "task_workflow_catalog", DEFAULT_TASK_WORKFLOW_CATALOG)
     effective_hooks = (
-        hooks if hooks is not None else getattr(loop, "hook_port", None))
+        hooks if hooks is not None else loop.services.core.hook_port)
     effective_mcp = (
         mcp_supervisor if mcp_supervisor is not None
-        else getattr(loop, "mcp_supervisor", None))
+        else loop.services.extensions.mcp)
     effective_auxiliary = (
         tuple(auxiliary_surfaces)
         if auxiliary_surfaces is not None
-        else tuple(getattr(loop, "auxiliary_prompt_surfaces", ()) or ()))
+        else tuple(loop.auxiliary_prompt_surfaces))
     collections = build_prompt_surface_collections(
         prompt_snapshot=snapshot,
-        prompt_plan=getattr(loop, "last_prompt_plan", None),
+        prompt_plan=loop.last_prompt_plan,
         system_prompt=system_prompt,
-        prompt_profile=str(getattr(loop, "prompt_profile_name", "") or ""),
+        prompt_profile=str(loop.prompt_profile_name or ""),
         prompt_release=str(getattr(resolution, "release_id", "") or ""),
-        provider=str(getattr(getattr(loop, "llm", None), "name", "") or ""),
-        model=str(getattr(getattr(loop, "llm", None), "model", "") or ""),
-        tools=getattr(loop, "registry", None),
+        provider=str(getattr(loop.services.core.llm, "name", "") or ""),
+        model=str(getattr(loop.services.core.llm, "model", "") or ""),
+        tools=loop.services.core.registry,
         workflows=workflows,
-        reminders=getattr(loop, "reminder_catalog", None),
-        agents=getattr(loop, "agent_definitions", None),
-        output_styles=getattr(loop, "output_style_manager", None),
+        reminders=loop.services.context.reminder_catalog,
+        agents=loop.services.extensions.agents,
+        output_styles=loop.services.extensions.output_styles,
         hooks=effective_hooks,
-        custom_commands=getattr(loop, "custom_command_manager", None),
-        skills=getattr(loop, "skill_manager", None),
-        plugins=getattr(loop, "plugin_manager", None),
+        custom_commands=loop.services.extensions.custom_commands,
+        skills=loop.services.extensions.skills,
+        plugins=loop.services.extensions.plugins,
         mcp_supervisor=effective_mcp,
         auxiliary_surfaces=effective_auxiliary,
     )
@@ -674,6 +683,7 @@ def refresh_prompt_surfaces(
 
 
 __all__ = [
+    "PromptSurfaceHostPort",
     "build_prompt_surface_collections",
     "refresh_prompt_surfaces",
     "reminder_prompt_surfaces",

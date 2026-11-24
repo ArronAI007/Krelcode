@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 from krelcode.agent.context import ContextOptions, build_workspace_context_bundle
 from krelcode.agent.context_assembler import ContextAssembler
@@ -29,6 +30,7 @@ from krelcode.agent.rules import (
     extract_rule_targets,
     load_rules,
 )
+from krelcode.agent.turn.runtime_state import AgentRuntimeState
 from krelcode.core.messages import Message, ToolCall
 from krelcode.session.commands.builtin import builtin_command_registry
 from krelcode.session.commands.context import CommandContext
@@ -307,15 +309,19 @@ def test_context_rules_command_reports_scopes_imports_and_issues(tmp_path):
         workspace_root=ws,
     ))
 
-    class Loop:
-        pass
-
-    loop = Loop()
-    loop.rule_loader = loader
-    loop.workspace_context = type("Bundle", (), {
-        "rule_bundle": loader.load_base(),
-    })()
-    loop.directory_rule_source = source
+    state = AgentRuntimeState()
+    state.context.workspace_context = SimpleNamespace(
+        rule_bundle=loader.load_base())
+    loop = SimpleNamespace(
+        runtime_state=state,
+        services=SimpleNamespace(
+            context=SimpleNamespace(
+                rule_loader=loader,
+                directory_rule_source=source,
+            ),
+            prompt=SimpleNamespace(registry=None),
+        ),
+    )
     ctx = CommandContext(
         request=CommandRequest(
             name="context", arguments="rules", raw_text="/context rules"),

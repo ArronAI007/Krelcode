@@ -246,6 +246,15 @@ class ContextManager:
         self.last_compact_result = None
         return summary
 
+    def restore_summary(self, summary: object) -> None:
+        """Install a persisted compact summary without rebuilding history."""
+        if not isinstance(summary, CompactSummary):
+            raise TypeError("summary must be a CompactSummary")
+        self.last_summary = summary
+        self.last_summary_source = summary.source
+        self.last_generation = summary.generation
+        self.last_compact_result = None
+
     def over_budget(
         self,
         history: List[Message],

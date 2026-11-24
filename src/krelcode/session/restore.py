@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any, Callable, cast
 
 from ..agent.fragments import PromptSnapshot, refresh_registry_snapshot, skills_fragment
-from ..agent.context.context_checkpoint_ports import CheckpointLoopPort
+from ..agent.context.context_checkpoint_ports import (
+    CheckpointLoopPort,
+)
 from ..agent.prompt.prompt_snapshot_ports import PromptSnapshotHostPort
 from ..agent.prompts import build_system_prompt
 from ..agent.cyber_risk import prepend_cyber_risk_prompt
@@ -21,18 +23,16 @@ from .recorder import (
 
 def refresh_skill_system_prompt(loop: CheckpointLoopPort) -> None:
     """热重载/恢复会话后，只替换受影响的 catalog attachment。"""
-    manager = getattr(loop, "skill_manager", None)
-    sync = getattr(loop, "sync_context_attachments", None)
-    if callable(sync):
-        sync(
-            include_environment=False,
-            include_catalogs=True,
-            include_mcp=False,
-            include_reminders=False,
-        )
-        return
+    services = loop.services
+    manager = services.extensions.skills
+    loop.sync_context_attachments(
+        include_environment=False,
+        include_catalogs=True,
+        include_mcp=False,
+        include_reminders=False,
+    )
     # Compatibility for third-party loops without an attachment store.
-    registry = getattr(loop, "prompt_registry", None)
+    registry = services.prompt.registry
     if registry is not None:
         if manager is not None:
             fragment = skills_fragment(manager.prompt_index())
@@ -46,10 +46,7 @@ def refresh_skill_system_prompt(loop: CheckpointLoopPort) -> None:
     # 兼容手工构造的旧 AgentLoop（没有 PromptFragmentRegistry）。
     if manager is None:
         return
-    base = getattr(loop, "skill_base_prompt", None)
-    if base is None:
-        return
-    prompt = manager.apply_to_prompt(base)
+    prompt = manager.apply_to_prompt(loop.skill_base_prompt)
     if loop.history and loop.history[0].role == "system":
         loop.history[0].content = prompt
     elif not loop.history:
@@ -73,7 +70,8 @@ def restore_session(
         log(f"（会话文件不存在: {path}）")
         return False
 
-    store = getattr(loop, "context_checkpoint_store", None)
+    services = loop.services
+    store = services.context.checkpoint
     checkpoint = None
     if store is not None:
         checkpoint_id = load_latest_context_checkpoint_id(path)
@@ -83,7 +81,7 @@ def restore_session(
             checkpoint = store.latest_for_session(path.stem)
 
     history = load_history(path)
-    memory_store = getattr(loop, "memory_store", None)
+    memory_store = services.session.memory
     if checkpoint is not None:
         if memory_store is not None:
             # Retrieval must see the source session's scoped memory before the
@@ -92,7 +90,7 @@ def restore_session(
         result = restore_context_checkpoint(
             loop,
             checkpoint,
-            compact_store=getattr(loop, "compact_checkpoint_store", None),
+            compact_store=services.context.compact_checkpoint,
             memory_store=memory_store,
             history_override=checkpoint.history or history,
         )
@@ -117,9 +115,9 @@ def restore_session(
     if history[0].role != "system":
         history.insert(0, Message.system(prepend_cyber_risk_prompt(
             build_system_prompt(
-                profile=getattr(loop, "prompt_profile_config", "auto"),
-                provider=getattr(loop, "llm", ""),
-                model=getattr(getattr(loop, "llm", None), "model", ""),
+                profile=str(loop.prompt_profile_config or "auto"),
+                provider=services.core.llm,
+                model=getattr(services.core.llm, "model", ""),
             ))))
     loop.update_runtime_state(
         history=history,
@@ -133,15 +131,11 @@ def restore_session(
 
 
 def _refresh_now_if_possible(loop: CheckpointLoopPort) -> None:
-    refresh = getattr(loop, "refresh_workspace_context", None)
-    if not callable(refresh):
-        loop.update_runtime_state(pending_context_refresh=False)
-        return
     try:
         asyncio.get_running_loop()
     except RuntimeError:
         try:
-            asyncio.run(refresh())
+            asyncio.run(loop.refresh_workspace_context())
         except Exception:
             loop.update_runtime_state(pending_context_refresh=True)
     else:

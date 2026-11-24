@@ -14,7 +14,7 @@ facade preserves the original API and the single ``MemoryStore`` entry point.
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Iterable, Optional, Protocol, cast
 
 from ..agent.context import CONTEXT_ENGINE_V3
 from ..agent.fragments import PromptFragment, refresh_registry_snapshot
@@ -76,6 +76,15 @@ from .memory_utils import (
 )
 from .memory_views import MemoryStoreViewMixin
 
+if TYPE_CHECKING:
+    from ..agent.turn.runtime_services import AgentServices
+    from ..agent.turn.runtime_state import AgentRuntimeState
+
+
+class _MemoryPromptHostPort(Protocol):
+    services: "AgentServices"
+    runtime_state: "AgentRuntimeState"
+
 
 class MemoryStore(
     MemoryStoreStorageMixin,
@@ -87,13 +96,14 @@ class MemoryStore(
 
 
 def sync_memory_fragment(
-    loop: Any, store: MemoryStore
+    loop: object, store: MemoryStore
 ) -> Optional[PromptFragment]:
     """Register/replace or remove the scoped-memory prompt fragment."""
-    registry = getattr(loop, "prompt_registry", None)
+    host = cast(_MemoryPromptHostPort, loop)
+    registry = host.services.prompt.registry
     if registry is None:
         return None
-    options = getattr(loop, "context_options", None)
+    options = host.runtime_state.context.context_options
     engine = str(getattr(options, "engine", "") or "").strip().lower()
     if engine == CONTEXT_ENGINE_V3:
         # v3 injects memory through MemoryContextSource with an explicit
@@ -101,7 +111,7 @@ def sync_memory_fragment(
         # accidentally promote it to a system instruction again.
         registry.remove(LEGACY_FRAGMENT_ID)
         registry.remove(FRAGMENT_ID)
-        refresh_registry_snapshot(loop)
+        refresh_registry_snapshot(cast(Any, loop))
         return None
     fragment = store.fragment()
     registry.remove(LEGACY_FRAGMENT_ID)
@@ -112,7 +122,7 @@ def sync_memory_fragment(
             registry.upsert(fragment)
         except ValueError:
             registry.register(fragment)
-    refresh_registry_snapshot(loop)
+    refresh_registry_snapshot(cast(Any, loop))
     return fragment
 
 

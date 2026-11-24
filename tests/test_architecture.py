@@ -356,8 +356,9 @@ def loop_dynamic_access_counts(path: Path) -> dict[str, int]:
     return counts
 
 
-def test_loop_dynamic_access_does_not_grow_beyond_baseline():
+def test_loop_dynamic_access_is_forbidden():
     limits = architecture_baseline()["loop_dynamic_access"]["limits"]
+    assert not limits, "loop dynamic-access exceptions were fully retired"
     violations: dict[str, dict[str, int]] = {}
     seen: set[str] = set()
     for path in sorted(ROOT.rglob("*.py")):

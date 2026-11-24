@@ -75,8 +75,9 @@ class ConversationHost:
         history_path: Optional[Path] = None,
         persist_history: Optional[bool] = None,
     ) -> None:
-        if input_broker is not None and loop.user_input_port is None:
-            loop.user_input_port = input_broker
+        if (input_broker is not None
+                and loop.services.core.user_input_port is None):
+            loop.update_runtime_state(user_input_port=input_broker)
         self.runtime = runtime or AgentRuntime(
             loop,
             subagents=subagents,
@@ -120,7 +121,7 @@ class ConversationHost:
             workspace_root=self.loop.tool_context.workspace_root,
             command_registry=self.processor.command_registry,
         )
-        self.memory_store = getattr(self.loop, "memory_store", None)
+        self.memory_store = self.loop.services.session.memory
         if self.memory_store is None:
             self.memory_store = MemoryStore(
                 self.loop.tool_context.workspace_root, redactor=redactor)

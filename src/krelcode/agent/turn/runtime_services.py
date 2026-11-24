@@ -14,7 +14,18 @@ the remaining call sites migrate incrementally.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Protocol, Sequence
+from pathlib import Path
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Collection,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+)
 
 from .runtime_ports import (
     CompactCheckpointStorePort,
@@ -39,10 +50,18 @@ if TYPE_CHECKING:
     from krelcode.core.interactions import UserInputPort
     from krelcode.core.redact import SecretRedactor
     from krelcode.contracts.service_ports import EnterprisePolicyPort, PrincipalPort
-    from krelcode.contracts.tool import ToolContext
+    from krelcode.contracts.tool import RuntimeSnapshot, ToolContext
     from krelcode.llm.base import LLMProvider
     from krelcode.safety.policy import ApprovalPolicy
     from krelcode.tools.registry import ToolRegistry
+
+
+class MemoryEntryServicePort(Protocol):
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def text(self) -> str: ...
 
 
 class MemoryServicePort(Protocol):
@@ -56,13 +75,38 @@ class MemoryServicePort(Protocol):
 
     def bind_session(self, session_id: str) -> None: ...
 
-    def copy_session(self, source: str, target: str) -> None: ...
+    def copy_session(self, source: str, target: str) -> bool: ...
 
-    def search(self, query: str, *, limit: int = 8) -> object: ...
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int = 8,
+    ) -> Sequence[MemoryEntryServicePort]: ...
 
 
 class SessionRecorderPort(Protocol):
-    def path(self) -> object: ...
+    @property
+    def path(self) -> Path: ...
+
+    @property
+    def metadata(self) -> dict[str, object]: ...
+
+    def detach(self) -> None: ...
+
+    def flush_history(self, *, turn_id: str = "") -> None: ...
+
+    def update_metadata(self, **metadata: Any) -> None: ...
+
+    def record_rewind(
+        self,
+        *,
+        target_index: int,
+        target_turn_id: str,
+        removed_turns: int,
+        restored: int = 0,
+        deleted: int = 0,
+    ) -> None: ...
 
 
 class SkillServicePort(Protocol):
@@ -72,9 +116,12 @@ class SkillServicePort(Protocol):
 
 
 class PluginServicePort(Protocol):
+    @property
+    def mcp_servers(self) -> Mapping[str, object]: ...
+
     def status_lines(self) -> list[str]: ...
 
-    def reload(self) -> object: ...
+    def reload(self) -> object | Awaitable[object]: ...
 
 
 class AgentDefinitionServicePort(Protocol):
@@ -91,6 +138,112 @@ class CommandServicePort(Protocol):
     def names(self) -> tuple[str, ...]: ...
 
 
+class LspServicePort(Protocol):
+    def status_lines(self) -> Sequence[str]: ...
+
+    async def close(self) -> None: ...
+
+
+class WebOptionsServicePort(Protocol):
+    enabled: bool
+    timeout: float
+    max_bytes: int
+    allow_private: bool
+    allowed_ports: Collection[int]
+    search_enabled: bool
+    search_provider: str
+    search_api_key_env: str
+
+
+class WebRuntimeServicePort(Protocol):
+    options: WebOptionsServicePort
+
+
+class BrowserOptionsServicePort(Protocol):
+    enabled: bool
+    max_sessions: int
+
+
+class BrowserRuntimeServicePort(Protocol):
+    options: BrowserOptionsServicePort
+
+    @property
+    def backend_name(self) -> str: ...
+
+    @property
+    def capabilities(self) -> Collection[str]: ...
+
+
+class OutputStyleEntryServicePort(Protocol):
+    name: str
+    content: str
+    description: str
+    scope: str
+    path: Optional[Path]
+    source: str
+    keep_coding_instructions: bool
+
+
+class OutputStyleServicePort(Protocol):
+    @property
+    def styles(self) -> Sequence[OutputStyleEntryServicePort]: ...
+
+    def get(self, name: str) -> Optional[OutputStyleEntryServicePort]: ...
+
+    def reload(self) -> object: ...
+
+    def select(self, name: str) -> Optional[OutputStyleEntryServicePort]: ...
+
+    def apply_to_registry(self, registry: object) -> None: ...
+
+    def status_lines(self) -> Sequence[str]: ...
+
+
+class ExtensionRegistryServicePort(Protocol):
+    def status_lines(
+        self,
+        *,
+        kind: Optional[str] = None,
+        source: str = "",
+    ) -> Sequence[str]: ...
+
+
+class TelemetryPreferencesServicePort(Protocol):
+    mode: str
+    endpoint: str
+
+
+class TelemetryConfigServicePort(Protocol):
+    mode: str
+
+
+class TelemetryServicePort(Protocol):
+    config: TelemetryConfigServicePort
+
+    def status(self) -> Mapping[str, object]: ...
+
+    def enable(
+        self,
+        mode: str = "local",
+        *,
+        endpoint: str = "",
+        sample_rate: Optional[float] = None,
+    ) -> TelemetryPreferencesServicePort: ...
+
+    def disable(self) -> TelemetryPreferencesServicePort: ...
+
+    def summary(self) -> Mapping[str, object]: ...
+
+    def export(self, destination: Path) -> Path: ...
+
+    def clear(self) -> bool: ...
+
+    async def flush(self, *, max_batches: int = 20) -> int: ...
+
+
+ExtensionRefresh = Callable[[], object | Awaitable[object]]
+
+
 @dataclass(slots=True)
 class CoreRuntimeServices:
     """Provider, tools and turn-independent safety primitives."""
@@ -103,6 +256,9 @@ class CoreRuntimeServices:
     redactor: Optional["SecretRedactor"] = None
     hook_port: Optional["HookPort"] = None
     user_input_port: Optional["UserInputPort"] = None
+    runtime_snapshot_provider: Optional[
+        Callable[["RuntimeSnapshot"], "RuntimeSnapshot"]
+    ] = None
 
 
 @dataclass(slots=True)
@@ -140,14 +296,21 @@ class ExtensionRuntimeServices:
     agents: Optional[AgentDefinitionServicePort] = None
     mcp: Optional[MCPServicePort] = None
     custom_commands: object | None = None
-    output_styles: object | None = None
-    lsp: object | None = None
-    web: object | None = None
-    browser: object | None = None
+    output_styles: Optional[OutputStyleServicePort] = None
+    lsp: Optional[LspServicePort] = None
+    web: Optional[WebRuntimeServicePort] = None
+    browser: Optional[BrowserRuntimeServicePort] = None
     auto_memory: object | None = None
-    telemetry: object | None = None
+    telemetry: Optional[TelemetryServicePort] = None
     auditor: object | None = None
-    extension_registry: object | None = None
+    extension_registry: Optional[ExtensionRegistryServicePort] = None
+    base_skill_paths: tuple[str, ...] = ()
+    extension_refresh: Optional[ExtensionRefresh] = None
+    plugin_reload: Optional[ExtensionRefresh] = None
+    custom_commands_reload: Optional[ExtensionRefresh] = None
+    notebook_options: object | None = None
+    migration_options: object | None = None
+    status_line_renderer: object | None = None
     prompt_release_pipeline: object | None = None
     prompt_release_approval_service: object | None = None
     runtime_service_binder: object | None = None
@@ -210,6 +373,7 @@ _SERVICE_FIELDS: dict[str, tuple[str, str]] = {
     "redactor": ("core", "redactor"),
     "hook_port": ("core", "hook_port"),
     "user_input_port": ("core", "user_input_port"),
+    "runtime_snapshot_provider": ("core", "runtime_snapshot_provider"),
     "context_manager": ("context", "manager"),
     "context_assembler": ("context", "assembler"),
     "working_context_store": ("context", "working_context"),
@@ -237,6 +401,13 @@ _SERVICE_FIELDS: dict[str, tuple[str, str]] = {
     "telemetry": ("extensions", "telemetry"),
     "auditor": ("extensions", "auditor"),
     "extension_registry": ("extensions", "extension_registry"),
+    "base_skill_paths": ("extensions", "base_skill_paths"),
+    "extension_refresh": ("extensions", "extension_refresh"),
+    "plugin_reload": ("extensions", "plugin_reload"),
+    "custom_commands_reload": ("extensions", "custom_commands_reload"),
+    "notebook_options": ("extensions", "notebook_options"),
+    "migration_options": ("extensions", "migration_options"),
+    "status_line_renderer": ("extensions", "status_line_renderer"),
     "prompt_release_pipeline": ("extensions", "prompt_release_pipeline"),
     "prompt_release_approval_service": (
         "extensions", "prompt_release_approval_service"),
@@ -255,16 +426,29 @@ SERVICE_FIELD_NAMES = frozenset(_SERVICE_FIELDS)
 __all__ = [
     "AgentDefinitionServicePort",
     "AgentServices",
+    "BrowserOptionsServicePort",
+    "BrowserRuntimeServicePort",
     "CommandServicePort",
     "ContextRuntimeServices",
     "CoreRuntimeServices",
+    "ExtensionRefresh",
+    "ExtensionRegistryServicePort",
     "ExtensionRuntimeServices",
+    "LspServicePort",
     "MCPServicePort",
+    "MemoryEntryServicePort",
     "MemoryServicePort",
     "PluginServicePort",
+    "OutputStyleEntryServicePort",
+    "OutputStyleServicePort",
     "PromptRuntimeServices",
     "SERVICE_FIELD_NAMES",
     "SessionRecorderPort",
     "SessionRuntimeServices",
     "SkillServicePort",
+    "TelemetryConfigServicePort",
+    "TelemetryPreferencesServicePort",
+    "TelemetryServicePort",
+    "WebOptionsServicePort",
+    "WebRuntimeServicePort",
 ]

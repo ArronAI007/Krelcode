@@ -205,7 +205,7 @@ async def run_review(args: argparse.Namespace, llm: Optional[LLMProvider] = None
         system_prompt=REVIEW_SYSTEM_PROMPT,
         max_steps=getattr(args, "max_steps", 12),
     )
-    loop.redactor = redactor
+    loop.update_runtime_state(redactor=redactor)
     loop.update_runtime_state(
         auxiliary_prompt_surfaces=(review_prompt_surface(),))
     refresh_prompt_surfaces(loop)
@@ -220,7 +220,7 @@ async def run_review(args: argparse.Namespace, llm: Optional[LLMProvider] = None
         run_surface,
         redactor=redactor,
         observer=lambda _surface_id, result: observe_surface_result(
-            loop.prompt_surface_registry, result),
+            loop.services.prompt.surface_registry, result),
     )
     if not surface_result.ok:
         message = surface_result.error or surface_result.status

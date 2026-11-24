@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import os
 import shlex
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Optional, cast
 
 from ....agent.context import build_workspace_context_bundle
 from ....agent.context_inspection import ContextInspectionService
@@ -17,7 +20,11 @@ from ....agent.fragments import (
     workspace_fragments,
 )
 from ....agent.prompt_authoring import PROMPT_AUTHORING_FRAGMENT_ID
-from ....agent.prompt.prompt_release_pipeline import PromptReleaseProposal
+from ....agent.prompt.prompt_release_pipeline import (
+    PromptReleaseApprovalService,
+    PromptReleasePipeline,
+    PromptReleaseProposal,
+)
 from ....agent.prompts import build_system_prompt
 from ....agent.tokens import estimate_history_tokens
 from ....core.messages import Message
@@ -89,8 +96,14 @@ def _prompt_release_lines(
 
 
 async def handle_prompt_release(ctx: CommandContext) -> CommandResult:
-    pipeline = getattr(ctx.loop, "prompt_release_pipeline", None)
-    service = getattr(ctx.loop, "prompt_release_approval_service", None)
+    pipeline = cast(
+        Optional[PromptReleasePipeline],
+        ctx.loop.services.extensions.prompt_release_pipeline,
+    )
+    service = cast(
+        Optional[PromptReleaseApprovalService],
+        ctx.loop.services.extensions.prompt_release_approval_service,
+    )
     if pipeline is None or service is None or pipeline.store is None:
         return _ok(
             "  （Prompt release pipeline 未启用；在 [prompt.authoring] enabled=true 后重启）")
@@ -168,7 +181,7 @@ async def handle_prompt_release(ctx: CommandContext) -> CommandResult:
 
 
 async def handle_telemetry(ctx: CommandContext) -> CommandResult:
-    runtime = getattr(ctx.loop, "telemetry", None)
+    runtime = ctx.loop.services.extensions.telemetry
     if runtime is None:
         return _ok("  [telemetry] 当前运行未初始化遥测运行时")
     parts = shlex.split(ctx.request.arguments)
@@ -176,7 +189,9 @@ async def handle_telemetry(ctx: CommandContext) -> CommandResult:
     try:
         if operation == "status":
             status = runtime.status()
-            queue = status["queue"]
+            queue = status.get("queue")
+            if not isinstance(queue, Mapping):
+                raise ValueError("telemetry queue status 无效")
             lines = [
                 f"  [telemetry] mode={status['mode']} · "
                 f"enabled={'yes' if status['effective_enabled'] else 'no'} · "
@@ -210,8 +225,12 @@ async def handle_telemetry(ctx: CommandContext) -> CommandResult:
             )
         if operation == "export" and len(parts) >= 2:
             destination = os.path.expanduser(parts[1])
-            path = ctx.workspace_root / destination if not os.path.isabs(destination) else destination
-            exported = runtime.export(path)
+            export_path = (
+                Path(ctx.workspace_root) / destination
+                if not os.path.isabs(destination)
+                else Path(destination)
+            )
+            exported = runtime.export(export_path)
             return _ok(f"  [telemetry] exported: {exported}")
         if operation == "clear":
             runtime.clear()

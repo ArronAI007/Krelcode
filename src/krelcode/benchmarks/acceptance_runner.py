@@ -577,6 +577,10 @@ class FinalAcceptanceRunner:
         # benchmark package. Subprocess probes preserve one-way dependencies.
         env = dict(os.environ)
         env.pop("PYTHONHOME", None)
+        source_root = str((self.workspace / "src").resolve())
+        existing_path = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = os.pathsep.join(
+            item for item in (source_root, existing_path) if item)
         fast = subprocess.run(
             [sys.executable, "-m", "krelcode", "--version"],
             cwd=self.workspace,

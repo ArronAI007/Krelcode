@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Mapping, Optional, Protocol, Sequence
+from typing import Any, Mapping, Optional, Protocol, Sequence
 
 from krelcode.core.events import EventBus
 from krelcode.core.messages import Message
 from krelcode.contracts.tool import ToolContext
-
 
 class ContextPlanPort(Protocol):
     @property
@@ -50,12 +49,132 @@ class MemoryEntryPort(Protocol):
     def id(self) -> str: ...
 
 
+class RedactorPort(Protocol):
+    def redact(self, text: str) -> str: ...
+
+
+class RuleSourcePort(Protocol):
+    @property
+    def display_path(self) -> str: ...
+
+    @property
+    def imported(self) -> bool: ...
+
+
+class RuleBundlePort(Protocol):
+    @property
+    def content(self) -> str: ...
+
+    @property
+    def sources(self) -> Sequence[RuleSourcePort]: ...
+
+
+class RuleLoaderPort(Protocol):
+    def load_base(self) -> RuleBundlePort: ...
+
+
+class CompactSummaryPort(Protocol):
+    def as_dict(self) -> Mapping[str, object]: ...
+
+
+class CompactCheckpointPort(Protocol):
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def summary(self) -> CompactSummaryPort: ...
+
+
 class CompactStorePort(Protocol):
-    def load(self, checkpoint_id: str) -> object: ...
+    def load(self, checkpoint_id: str) -> Any: ...
 
 
 class MemoryStorePort(Protocol):
+    def bind_session(self, session_id: str) -> None: ...
+
+    def copy_session(self, source: str, target: str) -> bool: ...
+
     def search(self, query: str, *, limit: int = 8) -> Sequence[MemoryEntryPort]: ...
+
+
+class ContextCheckpointStorePort(Protocol):
+    def load(self, checkpoint_id: str) -> Any: ...
+
+    def latest_for_session(self, session_id: str) -> Any: ...
+
+
+class PromptRegistryPort(Protocol):
+    def snapshot(self) -> Any: ...
+
+    def remove(self, fragment_id: str) -> object: ...
+
+    def upsert(self, fragment: Any) -> object: ...
+
+
+class SkillManagerPort(Protocol):
+    def prompt_index(self) -> str: ...
+
+    def apply_to_prompt(self, prompt: str) -> str: ...
+
+
+class CheckpointContextServicesPort(Protocol):
+    @property
+    def manager(self) -> Optional[ContextManagerRestorePort]: ...
+
+    @property
+    def working_context(self) -> WorkingStorePort: ...
+
+    @property
+    def checkpoint(self) -> Optional[ContextCheckpointStorePort]: ...
+
+    @property
+    def compact_checkpoint(self) -> Optional[CompactStorePort]: ...
+
+    @property
+    def rule_loader(self) -> Optional[RuleLoaderPort]: ...
+
+
+class CheckpointPromptServicesPort(Protocol):
+    @property
+    def registry(self) -> Optional[PromptRegistryPort]: ...
+
+
+class CheckpointSessionServicesPort(Protocol):
+    @property
+    def memory(self) -> Optional[MemoryStorePort]: ...
+
+
+class CheckpointExtensionServicesPort(Protocol):
+    @property
+    def skills(self) -> Optional[SkillManagerPort]: ...
+
+
+class CheckpointCoreServicesPort(Protocol):
+    @property
+    def tool_context(self) -> ToolContext: ...
+
+    @property
+    def llm(self) -> object: ...
+
+    @property
+    def redactor(self) -> Optional[RedactorPort]: ...
+
+
+class CheckpointRuntimeServicesPort(Protocol):
+    @property
+    def core(self) -> CheckpointCoreServicesPort: ...
+
+    @property
+    def context(self) -> CheckpointContextServicesPort: ...
+
+    @property
+    def prompt(self) -> CheckpointPromptServicesPort: ...
+
+    @property
+    def extensions(self) -> CheckpointExtensionServicesPort: ...
+
+    @property
+    def session(self) -> CheckpointSessionServicesPort: ...
 
 
 class WorkingStorePort(Protocol):
@@ -69,21 +188,20 @@ class WorkingStorePort(Protocol):
 
 
 class ContextManagerRestorePort(Protocol):
-    @property
-    def last_summary(self) -> object: ...
-
-    @property
-    def last_summary_source(self) -> str: ...
-
-    @property
-    def last_generation(self) -> int: ...
-
     def rebuild_state(self, history: Sequence[Message]) -> object: ...
+
+    def restore_summary(self, summary: object) -> None: ...
 
 
 class CheckpointLoopPort(Protocol):
     @property
+    def services(self) -> CheckpointRuntimeServicesPort: ...
+
+    @property
     def history(self) -> list[Message]: ...
+
+    @property
+    def skill_base_prompt(self) -> str: ...
 
     @property
     def tool_context(self) -> ToolContext: ...
@@ -95,7 +213,7 @@ class CheckpointLoopPort(Protocol):
     def working_context_store(self) -> WorkingStorePort: ...
 
     @property
-    def last_compact_checkpoint(self) -> object: ...
+    def last_compact_checkpoint(self) -> Optional[CompactCheckpointPort]: ...
 
     @property
     def last_context_restore(self) -> Optional[object]: ...
@@ -133,18 +251,45 @@ class CheckpointLoopPort(Protocol):
     @property
     def bus(self) -> EventBus: ...
 
+    @property
+    def prompt_profile_config(self) -> object: ...
+
     def rebuild_working_context(self) -> WorkingContextPort: ...
+    def sync_context_attachments(
+        self,
+        *,
+        include_environment: bool = True,
+        include_catalogs: bool = True,
+        include_mcp: bool = True,
+        include_contract: bool = True,
+        include_reminders: bool = True,
+    ) -> object: ...
     async def refresh_workspace_context(self) -> object: ...
     def update_runtime_state(self, **values: object) -> None: ...
 
 
 __all__ = [
+    "CheckpointContextServicesPort",
+    "CheckpointCoreServicesPort",
+    "CheckpointExtensionServicesPort",
     "CheckpointLoopPort",
+    "CheckpointPromptServicesPort",
+    "CheckpointRuntimeServicesPort",
+    "CheckpointSessionServicesPort",
+    "CompactCheckpointPort",
     "CompactStorePort",
+    "CompactSummaryPort",
+    "ContextCheckpointStorePort",
     "ContextManagerRestorePort",
     "ContextPlanPort",
     "MemoryEntryPort",
     "MemoryStorePort",
+    "PromptRegistryPort",
+    "RedactorPort",
+    "RuleBundlePort",
+    "RuleLoaderPort",
+    "RuleSourcePort",
+    "SkillManagerPort",
     "WorkingStorePort",
     "WorkingContextPort",
     "WorkingEntryPort",

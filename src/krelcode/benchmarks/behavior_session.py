@@ -262,7 +262,7 @@ class BehaviorSession:
             "stable_hash": plan.stable_hash[:16],
             "full_hash": plan.full_hash[:16],
         }
-        registry = getattr(loop, "prompt_surface_registry", None)
+        registry = loop.services.prompt.surface_registry
         health = getattr(registry, "health", lambda: {})()
         if isinstance(health, Mapping):
             facts["prompt_surfaces"] = int(health.get("surfaces", 0) or 0)

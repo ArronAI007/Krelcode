@@ -230,8 +230,8 @@ class ContextInspectionRuntimeMixin(ContextInspectionPromptMixin):
 
     def reminder_lines(self) -> list[str]:
         """Explain this turn's reminder selection without exposing content."""
-        catalog = getattr(self.loop, "reminder_catalog", None)
-        selection = getattr(self.loop, "last_reminder_selection", None)
+        catalog = self._host.services.context.reminder_catalog
+        selection = self._host.runtime_state.turn.last_reminder_selection
         catalog_size = int(getattr(catalog, "size", 0) or 0)
         if selection is None:
             return [

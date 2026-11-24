@@ -57,7 +57,8 @@ class AgentRuntime:
         self._query: Optional[QuerySession] = None
         self._closed = False
         self.query_engine = QueryEngine(loop)
-        loop.runtime_snapshot_provider = self._runtime_snapshot
+        loop.update_runtime_state(
+            runtime_snapshot_provider=self._runtime_snapshot)
 
     def _runtime_snapshot(self, base: RuntimeSnapshot) -> RuntimeSnapshot:
         """每轮开始时刷新 MCP 健康状态，其余配置保持不可变快照。"""
@@ -75,15 +76,15 @@ class AgentRuntime:
 
     @property
     def bus(self) -> EventBus:
-        return self.loop.bus
+        return self.loop.services.core.bus
 
     @property
     def workspace_root(self) -> Path:
-        return self.loop.tool_context.workspace_root
+        return self.loop.services.core.tool_context.workspace_root
 
     @property
     def tool_names(self) -> list[str]:
-        return self.loop.registry.names()
+        return list(self.loop.services.core.registry.names())
 
     @property
     def active_task(self) -> Optional[asyncio.Task[str]]:
@@ -205,3 +206,6 @@ class AgentRuntime:
             await self.subagents.shutdown()
         if self.mcp_supervisor is not None:
             await self.mcp_supervisor.close_all()
+        lsp = self.loop.services.extensions.lsp
+        if lsp is not None:
+            await lsp.close()

@@ -211,26 +211,10 @@ class PromptRuntimeState(StateGroup):
 
 @dataclass
 class ExtensionRuntimeState(StateGroup):
-    """Installed extension services and their reload handles."""
-
-    base_skill_paths: tuple[str, ...] = ()
-    extension_refresh: Any = None
-    plugin_reload: Any = None
-    custom_commands_reload: Any = None
-    notebook_options: Any = None
-    migration_options: Any = None
-    status_line_renderer: Any = None
+    """Reserved compatibility group; extension services are typed services."""
 
     def __post_init__(self) -> None:
-        self.values.update({
-            "base_skill_paths": self.base_skill_paths,
-            "extension_refresh": self.extension_refresh,
-            "plugin_reload": self.plugin_reload,
-            "custom_commands_reload": self.custom_commands_reload,
-            "notebook_options": self.notebook_options,
-            "migration_options": self.migration_options,
-            "status_line_renderer": self.status_line_renderer,
-        })
+        StateGroup.__init__(self)
 
 
 @dataclass
@@ -344,18 +328,20 @@ class RuntimeStateHost:
         return cast(AgentRuntimeState, self._runtime_state)
 
     def update_runtime_state(self, **values: Any) -> None:
-        """Route legacy names to service or mutable-state ownership.
+        """Route an explicit update through the ownership boundary.
 
-        Service names always update ``AgentServices`` first.  Unknown names are
-        rejected by ``AgentRuntimeState.set_field`` instead of silently creating
-        another ad-hoc loop attribute.
+        Service names are checked first, then mutable turn state.  Unknown
+        names are rejected instead of silently creating ad-hoc attributes.
+        Routing through ``__setattr__`` also keeps ``AgentDependencies`` in
+        sync when a live service is replaced at the composition root.
         """
         services = self.__dict__.get("services")
+        state = self._runtime_state
         for name, value in values.items():
-            if services is not None and services.has_field(name):
-                services.set_field(name, value)
-                continue
-            self._runtime_state.set_field(name, value)
+            if not ((services is not None and services.has_field(name))
+                    or state.has_field(name)):
+                raise AttributeError(name)
+            setattr(self, name, value)
 
     def set_hook_port(self, hook_port: Optional[HookPort]) -> None:
         """Bind or replace a dependency-owner hook without direct caller writes."""

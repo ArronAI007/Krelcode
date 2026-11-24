@@ -25,6 +25,7 @@ from krelcode.agent.evidence import (
     instruction_source_for,
     render_evidence_set,
 )
+from krelcode.agent.turn.runtime_state import AgentRuntimeState
 from krelcode.agent.fragments import (
     LAYER_L3_PROJECT_RULES,
     LAYER_L4_AGENT_STYLE,
@@ -295,11 +296,11 @@ def test_context_why_reports_evidence_authority(tmp_path):
     assembly = asyncio.run(ContextAssembler([
         MemoryContextSource(store),
     ]).assemble(request(tmp_path)))
+    state = AgentRuntimeState()
+    state.context.last_context_assembly = assembly
     service = ContextInspectionService(SimpleNamespace(
-        last_context_snapshot=None,
-        last_context_assembly=assembly,
-        last_context_plan=None,
-        workspace_context=None,
+        runtime_state=state,
+        history=[],
     ))
 
     output = "\n".join(service.why_lines("memory:scoped"))

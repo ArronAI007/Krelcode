@@ -24,6 +24,10 @@ class MemoryEntryPort(Protocol):
 
 
 class MemoryStorePort(Protocol):
+    def bind_session(self, session_id: str) -> None: ...
+
+    def copy_session(self, source: str, target: str) -> bool: ...
+
     def search(
         self,
         query: str,

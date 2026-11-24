@@ -6,20 +6,14 @@ import json
 import os
 import shlex
 
-from ....agent.context import build_workspace_context_bundle
 from ....agent.context_inspection import ContextInspectionService
-from ....agent.cyber_risk import prepend_cyber_risk_prompt
 from ....agent.fragments import (
-    GROUP_WORKSPACE,
     refresh_registry_snapshot,
     rule_fragment,
     skills_fragment,
-    workspace_fragments,
 )
 from ....agent.prompt_authoring import PROMPT_AUTHORING_FRAGMENT_ID
-from ....agent.prompts import build_system_prompt
 from ....agent.tokens import estimate_history_tokens
-from ....core.messages import Message
 from ....mcp.security import render_mcp_prompt_evidence
 from ....safety.runtime import parse_permission_mode
 from ....safety.rules import RuleDecision, RuleScope
@@ -48,7 +42,9 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
     except ValueError as exc:
         return _ok(f"  [context] 参数解析失败: {exc}")
     operation = parts[0].lower() if parts else "stats"
-    registry = getattr(ctx.loop, "prompt_registry", None)
+    state = ctx.loop.runtime_state
+    services = ctx.loop.services
+    registry = services.prompt.registry
 
     if operation == "plan" and len(parts) == 1:
         inspection = ContextInspectionService(ctx.loop)
@@ -67,65 +63,21 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         return _ok(*inspection.reminder_lines())
 
     if operation == "refresh" and len(parts) == 1:
-        manager = ctx.skills or getattr(ctx.loop, "skill_manager", None)
-        if manager is not None and getattr(ctx.loop, "skill_manager", None) is None:
-            ctx.loop.update_runtime_state(skill_manager=manager)
-        refresh = getattr(ctx.loop, "refresh_workspace_context", None)
-        if callable(refresh):
-            bundle = await refresh()
-            lines = ["  [context] 工作区规则与环境附件已刷新"]
-            lines.extend(f"  {line}" for line in bundle.summary_lines())
-            diff = getattr(ctx.loop, "last_attachment_diff", None)
-            if diff is not None:
-                lines.extend(f"  {line}" for line in diff.summary_lines())
-            snapshot = getattr(ctx.loop, "prompt_snapshot", None)
-            if snapshot is not None:
-                lines.extend(f"  {line}" for line in snapshot.summary_lines())
-            return _ok(*lines)
-
-        options = getattr(ctx.loop, "context_options", None)
-        rule_loader = getattr(ctx.loop, "rule_loader", None)
-        bundle = await build_workspace_context_bundle(
-            ctx.workspace_root, options=options, rule_loader=rule_loader)
-        ctx.loop.update_runtime_state(workspace_context=bundle)
-        if registry is not None:
-            registry.replace_group(
-                GROUP_WORKSPACE, workspace_fragments(bundle))
-            if manager is not None:
-                skill_fragment = skills_fragment(manager.prompt_index())
-                if skill_fragment is None:
-                    registry.remove("skills:index")
-                else:
-                    registry.upsert(skill_fragment)
-            snapshot = refresh_registry_snapshot(ctx.loop)
-            lines = ["  [context] 工作区上下文已刷新"]
-            lines.extend(f"  {line}" for line in bundle.summary_lines())
-            if snapshot is not None:
-                lines.extend(f"  {line}" for line in snapshot.summary_lines())
-            return _ok(*lines)
-
-        # 兼容没有 Registry 的嵌入式 AgentLoop。
-        base_prompt = prepend_cyber_risk_prompt(build_system_prompt(
-            bundle.text,
-            profile=getattr(ctx.loop, "prompt_profile_config", "auto"),
-            provider=getattr(ctx.loop, "llm", ""),
-            model=getattr(getattr(ctx.loop, "llm", None), "model", ""),
-        ))
-        ctx.loop.update_runtime_state(skill_base_prompt=base_prompt)
-        prompt = (
-            manager.apply_to_prompt(base_prompt) if manager is not None
-            else base_prompt)
-        if ctx.loop.history and ctx.loop.history[0].role == "system":
-            ctx.loop.history[0] = Message.system(prompt)
-        else:
-            ctx.loop.history.insert(0, Message.system(prompt))
-        return _ok(
-            "  [context] 工作区上下文已刷新",
-            *[f"  {line}" for line in bundle.summary_lines()],
-        )
+        if ctx.skills is not None:
+            services.extensions.skills = ctx.skills
+        bundle = await ctx.loop.refresh_workspace_context()
+        lines = ["  [context] 工作区规则与环境附件已刷新"]
+        lines.extend(f"  {line}" for line in bundle.summary_lines())
+        diff = state.context.last_attachment_diff
+        if diff is not None:
+            lines.extend(f"  {line}" for line in diff.summary_lines())
+        snapshot = state.prompt.prompt_snapshot
+        if snapshot is not None:
+            lines.extend(f"  {line}" for line in snapshot.summary_lines())
+        return _ok(*lines)
 
     if operation == "attachments" and len(parts) == 1:
-        store = getattr(ctx.loop, "context_attachments", None)
+        store = state.context.context_attachments
         if store is None:
             return _ok("  （Context Attachment Store 未启用）")
         snapshot = store.snapshot()
@@ -138,7 +90,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             lines.append(
                 f"  {item.id} · {item.kind.value} · revision {item.revision}"
                 f" · {item.layer} · {item.tokens} tokens · dynamic")
-        diff = getattr(ctx.loop, "last_attachment_diff", None)
+        diff = state.context.last_attachment_diff
         if diff is not None and diff.changed:
             lines.extend(f"  {line}" for line in diff.summary_lines())
         if not snapshot.items:
@@ -146,8 +98,8 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         return _ok(*lines)
 
     if operation == "rules" and len(parts) == 1:
-        loader = getattr(ctx.loop, "rule_loader", None)
-        workspace = getattr(ctx.loop, "workspace_context", None)
+        loader = services.context.rule_loader
+        workspace = state.context.workspace_context
         base = getattr(workspace, "rule_bundle", None)
         layers = list(getattr(workspace, "rule_layers", ()) or ())
         if not layers and loader is not None:
@@ -156,7 +108,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             base = stack.base_bundle
         if base is None and loader is not None:
             base = loader.load_base()
-        directory_source = getattr(ctx.loop, "directory_rule_source", None)
+        directory_source = services.context.directory_rule_source
         directory = getattr(directory_source, "last_bundle", None)
         if directory is not None and directory.content:
             from ....agent.rules import RuleLayer, RuleScope
@@ -213,7 +165,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         return _ok(*lines)
 
     if operation == "sources":
-        assembler = getattr(ctx.loop, "context_assembler", None)
+        assembler = services.context.assembler
         if assembler is None:
             return _ok("  （ContextAssembler 未启用）")
         names = tuple(getattr(assembler, "source_names", ()) or ())
@@ -279,11 +231,11 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
 
     if operation == "cache" and len(parts) == 1:
         lines = ContextInspectionService(ctx.loop).cache_lines()
-        context_plan = getattr(ctx.loop, "last_context_plan", None)
-        plan = getattr(ctx.loop, "last_prompt_plan", None)
+        context_plan = state.context.last_context_plan
+        plan = state.prompt.last_prompt_plan
         if plan is not None and context_plan is None:
             cache_meta = plan.cache
-            store = getattr(ctx.loop, "context_attachments", None)
+            store = state.context.context_attachments
             attachment_generation = (
                 store.snapshot().generation
                 if store is not None else 0
@@ -314,7 +266,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         if registry is None:
             return _ok("  （Prompt Fragment Registry 未启用）")
         fragment = registry.get(PROMPT_AUTHORING_FRAGMENT_ID)
-        configured = bool(getattr(ctx.loop, "prompt_authoring_enabled", False))
+        configured = bool(state.prompt.prompt_authoring_enabled)
         if fragment is None:
             return _ok(
                 "  [authoring] disabled · PromptAuthoringContract 未装配",
@@ -350,7 +302,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             "/context enable|disable|toggle <id|source> | "
             "/context reset | /context cache | /context refresh")
 
-    snapshot = getattr(ctx.loop, "last_context_snapshot", None)
+    snapshot = state.context.last_context_snapshot
     if snapshot is not None:
         budget = (
             f"{snapshot.budget_tokens} tokens"
@@ -424,13 +376,13 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         lines.append(
             f"  当前历史 {len(ctx.loop.history)} 条消息"
             f"（其中工具结果 {tool_messages} 条）")
-        working_store = getattr(ctx.loop, "working_context_store", None)
+        working_store = services.context.working_context
         if working_store is not None:
             working = working_store.snapshot()
             lines.append(
                 f"  Working Context: {working.count} 条 · {working.token_count} tokens"
                 f" · {'已裁剪' if working.truncated else '完整'}")
-        micro = getattr(ctx.loop, "last_microcompact_report", None)
+        micro = state.context.last_microcompact_report
         if micro is not None:
             lines.append(
                 f"  Tool Microcompact: {micro.compacted_count} 条"
@@ -439,7 +391,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
                 f" · reference {micro.referenced_count}")
         if snapshot.dropped_items:
             lines.append("  已裁剪: " + ", ".join(snapshot.dropped_items))
-        bundle = getattr(ctx.loop, "workspace_context", None)
+        bundle = state.context.workspace_context
         if bundle is not None and bundle.omitted:
             lines.append("  工作区未注入: " + ", ".join(bundle.omitted))
         inspection = ContextInspectionService(ctx.loop)
@@ -464,26 +416,26 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         f"（含 {tool_messages} 条工具结果） · 估算 {total} tokens"
         f" · 预算 {budget_text}",
     ]
-    bundle = getattr(ctx.loop, "workspace_context", None)
+    bundle = state.context.workspace_context
     if bundle is not None:
         lines.extend(f"  {line}" for line in bundle.summary_lines())
-    runtime_context = getattr(ctx.loop, "runtime_context", ())
+    runtime_context = state.turn.runtime_context
     if runtime_context:
         lines.append(f"  运行时 Hook 上下文: {len(runtime_context)} 段")
-    working_store = getattr(ctx.loop, "working_context_store", None)
+    working_store = services.context.working_context
     if working_store is not None:
         working = working_store.snapshot()
         lines.append(
             f"  Working Context: {working.count} 条"
             f" · {working.token_count} tokens"
             f" · {'已裁剪' if working.truncated else '完整'}")
-    micro = getattr(ctx.loop, "last_microcompact_report", None)
+    micro = state.context.last_microcompact_report
     if micro is not None:
         lines.append(
             f"  Tool Microcompact: {micro.compacted_count} 条"
             f" · saved {micro.saved_tokens} tokens")
-    manager = getattr(ctx.loop, "context_manager", None)
-    summary = getattr(manager, "last_summary", None)
+    context_manager = services.context.manager
+    summary = getattr(context_manager, "last_summary", None)
     if summary is not None:
         lines.append(
             f"  Structured Compact: v{summary.version}"
@@ -493,7 +445,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             f" · {len(summary.files)} files"
             f" · {len(summary.tests)} tests"
             f" · digest {summary.digest}")
-    checkpoint = getattr(ctx.loop, "last_compact_checkpoint", None)
+    checkpoint = state.context.last_compact_checkpoint
     if checkpoint is not None:
         lines.append(
             f"  Compact Checkpoint: {checkpoint.id}"
@@ -504,6 +456,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
 
 
 async def handle_compact(ctx: CommandContext) -> CommandResult:
+    state = ctx.loop.runtime_state
     if ctx.loop.context_manager is None:
         return _ok("  （上下文压缩未启用：--no-compress）")
     raw = ctx.request.arguments.strip()
@@ -522,7 +475,7 @@ async def handle_compact(ctx: CommandContext) -> CommandResult:
     if preview_mode:
         preview = manager.preview_compact(
             ctx.loop.history, force=not auto_mode,
-            current_turn_id=getattr(ctx.loop, "_current_turn_id", ""))
+            current_turn_id=state.turn.current_turn_id)
         return _ok(*[
             f"  {line}" for line in preview.render().splitlines()
         ])
@@ -538,7 +491,7 @@ async def handle_compact(ctx: CommandContext) -> CommandResult:
     if done:
         lines = [f"  [compact] 已压缩: {before} → {after} tokens"
                  + (f" · focus={focus[:80]}" if focus else "")]
-        checkpoint = getattr(ctx.loop, "last_compact_checkpoint", None)
+        checkpoint = state.context.last_compact_checkpoint
         if checkpoint is not None:
             lines.append(f"  checkpoint: {checkpoint.id}")
     else:

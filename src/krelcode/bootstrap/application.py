@@ -128,6 +128,4 @@ class BootstrappedApplication:
             core.approval_broker.close()
         if core.input_broker is not None:
             core.input_broker.close()
-        if getattr(core.loop, "lsp_manager", None) is not None:
-            await core.loop.lsp_manager.close()
         await core.runtime.close()

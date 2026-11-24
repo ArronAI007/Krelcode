@@ -94,7 +94,7 @@ def _entry_lines(entries: Iterable[MemoryEntry]) -> list[str]:
 
 
 async def _emit(ctx: CommandContext, event: AgentEvent) -> None:
-    bus = getattr(ctx.loop, "bus", None)
+    bus = ctx.loop.services.core.bus
     if bus is not None:
         await bus.emit(event)
 
@@ -176,11 +176,13 @@ def _parse_add(rest: str) -> tuple[str, MemoryScope, dict[str, str]]:
 
 
 async def handle_memory(ctx: CommandContext) -> CommandResult:
-    store: Optional[MemoryStore] = getattr(ctx.loop, "memory_store", None)
+    store = cast(Optional[MemoryStore], ctx.loop.services.session.memory)
     if store is None:
         return _ok("  （Memory 未启用）")
-    auto_memory: Optional[AutoMemoryCoordinator] = getattr(
-        ctx.loop, "auto_memory", None)
+    auto_memory = cast(
+        Optional[AutoMemoryCoordinator],
+        ctx.loop.services.extensions.auto_memory,
+    )
     raw = ctx.request.arguments.strip()
     operation, _, rest = raw.partition(" ")
     operation = operation.lower() or "list"

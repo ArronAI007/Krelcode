@@ -49,7 +49,7 @@ async def handle_security_review(ctx: CommandContext) -> CommandResult:
         ctx.workspace_root,
         staged=staged,
         focus=focus,
-        redactor=getattr(ctx.loop, "redactor", None),
+        redactor=ctx.loop.services.core.redactor,
     )
     if review_input is None:
         return CommandResult(

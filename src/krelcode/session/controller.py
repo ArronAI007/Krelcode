@@ -19,6 +19,7 @@ from ..contracts.runtime import PermissionMode
 from ..safety.runtime import PlanApprovalCoordinator, RuntimePermissionManager
 from ..contracts.tool import CommandDescriptor, ToolResult, ToolServices
 from ..core.messages import ImageRef, SteeringInput
+from .compact_checkpoint import CompactCheckpointStore
 from .lifecycle import SessionLifecycle
 from .rewind import RewindCoordinator
 from .checkpoint import CheckpointManager
@@ -94,7 +95,7 @@ class SessionController:
             sessions_dir,
             session_path,
             runtime=self.runtime,
-            redactor=getattr(self.loop, "redactor", None),
+            redactor=self.loop.services.core.redactor,
         )
         self.mcp_supervisor = (mcp_supervisor
                                if mcp_supervisor is not None
@@ -111,10 +112,18 @@ class SessionController:
         self.jobs = jobs if jobs is not None else self.runtime.shell_jobs
         self.skills = skills
         self.skills_reload = skills_reload
-        self.plugins = (plugins if plugins is not None
-                        else getattr(self.loop, "plugin_manager", None))
-        self.plugins_reload = (plugins_reload if plugins_reload is not None
-                               else getattr(self.loop, "plugin_reload", None))
+        self.plugins = (
+            plugins if plugins is not None
+            else cast(
+                Optional[PluginManagerPort],
+                self.loop.services.extensions.plugins,
+            )
+        )
+        self.plugins_reload = (
+            plugins_reload
+            if plugins_reload is not None
+            else self.loop.plugin_reload
+        )
         self.workspace_root = workspace_root or self.runtime.workspace_root
         self.permission_manager = (
             permission_manager or RuntimePermissionManager(self.loop))
@@ -128,18 +137,19 @@ class SessionController:
                 session_lifecycle=self.session_lifecycle,
                 plan_manager=self.plan_manager,
                 checkpoints=self.checkpoints,
-                compact_checkpoints=getattr(
-                    self.loop, "compact_checkpoint_store", None),
-                context_checkpoints=getattr(
-                    self.loop, "context_checkpoint_store", None),
-                context_coordinator=getattr(
-                    self.loop, "context_checkpoint_coordinator", None),
+                compact_checkpoints=cast(
+                    Optional[CompactCheckpointStore],
+                    self.loop.services.context.compact_checkpoint,
+                ),
+                context_checkpoints=self.loop.services.context.checkpoint,
+                context_coordinator=(
+                    self.loop.services.context.checkpoint_coordinator),
             )
         )
         self.command_registry = command_registry or builtin_command_registry()
         sync_custom_commands(
             self.command_registry,
-            getattr(self.loop, "custom_command_manager", None),
+            self.loop.services.extensions.custom_commands,
         )
         sync_skill_commands(self.command_registry, self.skills)
         sync_plugin_commands(self.command_registry, self.plugins)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import (
     TYPE_CHECKING,
+    Any,
     Awaitable,
     Callable,
     Iterator,
@@ -33,12 +34,6 @@ if TYPE_CHECKING:
     from krelcode.agent.context.compression import CompactResult
     from krelcode.agent.context.workspace import WorkspaceContext
     from krelcode.agent.context.context_cache_ledger import ContextCacheLedger
-    from krelcode.agent.context.context_checkpoint import (
-        ContextRestoreResult,
-        FileHash,
-        FileIntegrity,
-        WorkspaceFingerprint,
-    )
     from krelcode.agent.context.context_plan import ContextPlanSnapshot
     from krelcode.agent.context.context_source import (
         ContextAssembly,
@@ -134,6 +129,11 @@ class WorkingContextPort(Protocol):
 
     def snapshot(self) -> "WorkingContextSnapshot": ...
 
+    def restore_snapshot(
+        self,
+        raw: Mapping[str, object],
+    ) -> "WorkingContextSnapshot": ...
+
     def clear(self) -> None: ...
 
     def invalidate_files(
@@ -202,6 +202,18 @@ class CompactSummaryResultPort(Protocol):
     def digest(self) -> str: ...
 
 
+class ContextRestoreResultPort(Protocol):
+    """Marker for checkpoint restore results projected onto turn state."""
+
+
+class FileIntegrityPort(Protocol):
+    """Marker for current file-integrity verification state."""
+
+
+class WorkspaceFingerprintPort(Protocol):
+    """Marker for workspace identity captured by a checkpoint."""
+
+
 class CompactCheckpointResultPort(Protocol):
     """Checkpoint result needed by the context turn, without adapter imports."""
 
@@ -214,6 +226,8 @@ class CompactCheckpointResultPort(Protocol):
 
 class CompactCheckpointStorePort(Protocol):
     """Persistence boundary for pre-compact history checkpoints."""
+
+    def load(self, checkpoint_id: str) -> object: ...
 
     def record(
         self,
@@ -228,7 +242,7 @@ class CompactCheckpointStorePort(Protocol):
         boundary: Optional[Mapping[str, object]] = None,
         source_savings: Optional[Mapping[str, int]] = None,
         working_context: Optional[Mapping[str, object]] = None,
-        file_hashes: Optional[Sequence["FileHash"]] = None,
+        file_hashes: Optional[Sequence[Any]] = None,
         created_at: Optional[float] = None,
     ) -> Optional["CompactCheckpointResultPort"]: ...
 
@@ -276,10 +290,10 @@ class ContextTurnHostPort(_EventHostPort, _ToolPoolHostPort, Protocol):
     previous_context_cache_ledger: Optional["ContextCacheLedger"]
     cache_ledger_owner: str
     parent_policy_instruction_hash: str
-    last_context_restore: Optional["ContextRestoreResult"]
-    context_integrity: Optional["FileIntegrity"]
-    context_workspace_fingerprint: Optional["WorkspaceFingerprint"]
-    restored_workspace_fingerprint: Optional["WorkspaceFingerprint"]
+    last_context_restore: Optional[ContextRestoreResultPort]
+    context_integrity: Optional[FileIntegrityPort]
+    context_workspace_fingerprint: Optional[WorkspaceFingerprintPort]
+    restored_workspace_fingerprint: Optional[WorkspaceFingerprintPort]
     restored_context_checkpoint_id: str
     restored_memory_context: tuple[str, ...]
     restored_relevant_memory_ids: tuple[str, ...]
@@ -336,11 +350,14 @@ __all__ = [
     "CompactSummaryResultPort",
     "ContextAssemblerPort",
     "ContextManagerPort",
+    "ContextRestoreResultPort",
     "ContextTurnHostPort",
+    "FileIntegrityPort",
     "ModelTurnHostPort",
     "PromptAssemblerPort",
     "ReminderCatalogPort",
     "ToolMicrocompactorPort",
     "ToolTurnHostPort",
     "WorkingContextPort",
+    "WorkspaceFingerprintPort",
 ]

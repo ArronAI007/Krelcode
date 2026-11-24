@@ -47,19 +47,22 @@ async def build_daemon_agent_runtime(
     # an RPC client that points back at the same daemon process.
     args.daemon_worker = True
     loop, agents = await build_loop(args, request.config, log=request.log)
-    redactor = getattr(loop, "redactor", None) or SecretRedactor()
+    redactor = loop.services.core.redactor or SecretRedactor()
     supervisor = None
     if not args.no_mcp:
         supervisor = MCPSupervisor(
-            loop.registry,
+            loop.services.core.registry,
             log=request.log,
-            sampler=build_mcp_sampler(loop.llm),
-            roots=build_mcp_roots(loop.tool_context.workspace_root),
+            sampler=build_mcp_sampler(loop.services.core.llm),
+            roots=build_mcp_roots(loop.services.core.tool_context.workspace_root),
             redactor=redactor,
-            prompt_surface_registry=loop.prompt_surface_registry,
+            prompt_surface_registry=loop.services.prompt.surface_registry,
         )
+        plugins = loop.services.extensions.plugins
+        if plugins is None:
+            raise RuntimeError("插件服务未初始化")
         await supervisor.sync(compose_mcp_config(
-            request.config, dict(loop.plugin_manager.mcp_servers)))
+            request.config, dict(plugins.mcp_servers)))
         loop.update_runtime_state(mcp_supervisor=supervisor)
         loop.sync_context_attachments(include_mcp=True)
     return DaemonAgentRuntime(

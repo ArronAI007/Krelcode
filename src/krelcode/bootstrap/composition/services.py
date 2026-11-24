@@ -87,7 +87,7 @@ class RuntimeServiceBinder:
             runtime_service_binder=self,
             runtime_services=self.services,
         )
-        if getattr(loop, "prompt_registry", None) is not None:
+        if loop.services.prompt.registry is not None:
             sync_memory_fragment(
                 loop, self.services.persistence.memory_store)
 
@@ -98,10 +98,9 @@ class RuntimeServiceBinder:
             context_checkpoint_store=persistence.context_checkpoint_store,
             context_checkpoint_coordinator=(
                 persistence.context_checkpoint_coordinator),
+            working_context_store=persistence.working_context_store,
+            compact_checkpoint_store=persistence.compact_checkpoint_store,
         )
-        # These are executor dependencies, not turn/session state.
-        loop.working_context_store = persistence.working_context_store
-        loop.compact_checkpoint_store = persistence.compact_checkpoint_store
         loop.tool_context.shell_jobs = cast(
             Optional[ShellJobManagerPort], persistence.shell_jobs)
 
@@ -111,8 +110,8 @@ class RuntimeServiceBinder:
         subagents: Optional[object],
     ) -> None:
         redactor = self.services.redactor
-        loop.redactor = redactor
-        loop.working_context_store.redactor = redactor.redact
+        loop.update_runtime_state(redactor=redactor)
+        loop.services.context.working_context.redactor = redactor.redact
         if self.services.context_manager is not None:
             self.services.context_manager.redactor = redactor
         if self.services.rule_loader is not None:
@@ -145,8 +144,8 @@ class RuntimeServiceBinder:
     ) -> None:
         enterprise_policy = self.services.enterprise_policy
         principal = self.services.principal
-        loop.policy = self.services.approval_policy
         loop.update_runtime_state(
+            policy=self.services.approval_policy,
             enterprise_policy=enterprise_policy,
             principal=principal,
         )

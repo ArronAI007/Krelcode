@@ -5,14 +5,14 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, cast
 
 from ..agent.loop import AgentLoop
 from ..agent.runtime import AgentRuntime
 from ..core.messages import Message
 from ..core.redact import SecretRedactor
 from .context_checkpoint import ContextCheckpoint, restore_context_checkpoint
-from .memory import sync_memory_fragment
+from .memory import MemoryStore, sync_memory_fragment
 from .manager import (
     SessionInfo,
     append_session_metadata,
@@ -60,15 +60,15 @@ class SessionLifecycle:
         self.runtime = runtime
         self.redactor = redactor
         self.on_switch: Optional[Callable[[], None]] = None
-        self.context_checkpoints = getattr(loop, "context_checkpoint_store", None)
-        memory_store = getattr(loop, "memory_store", None)
+        self.context_checkpoints = loop.services.context.checkpoint
+        memory_store = loop.services.session.memory
         if memory_store is not None and self.session_path is not None:
             memory_store.bind_session(self.session_path.stem)
-            sync_memory_fragment(loop, memory_store)
+            sync_memory_fragment(loop, cast(MemoryStore, memory_store))
 
     @property
     def metadata(self) -> dict[str, Any]:
-        recorder = getattr(self.loop, "session_recorder", None)
+        recorder = self.loop.services.session.recorder
         if recorder is not None and Path(recorder.path) == self.session_path:
             return dict(recorder.metadata)
         return {}
@@ -84,14 +84,14 @@ class SessionLifecycle:
             "session_id": path.stem,
             "title": title,
             "parent_id": parent_id,
-            "provider": str(getattr(self.loop.llm, "name", "") or ""),
-            "model": str(getattr(self.loop.llm, "model", "") or ""),
+            "provider": str(getattr(self.loop.services.core.llm, "name", "") or ""),
+            "model": str(getattr(self.loop.services.core.llm, "model", "") or ""),
             "workspace": str(self.loop.tool_context.workspace_root),
             "created_at": time.time(),
         }
 
     def _flush_current(self) -> None:
-        recorder = getattr(self.loop, "session_recorder", None)
+        recorder = self.loop.services.session.recorder
         if recorder is not None and Path(recorder.path) == self.session_path:
             recorder.flush_history()
 
@@ -105,7 +105,7 @@ class SessionLifecycle:
     ) -> None:
         if self.sessions_dir is None:
             raise SessionLifecycleError("会话目录未知，无法切换会话")
-        old = getattr(self.loop, "session_recorder", None)
+        old = self.loop.services.session.recorder
         if old is not None:
             old.detach()
         metadata = self._new_metadata(
@@ -116,16 +116,17 @@ class SessionLifecycle:
             redactor=self.redactor,
             metadata=metadata,
         )
-        recorder.attach(self.loop.bus)
+        recorder.attach(self.loop.services.core.bus)
         recorder.flush_history()
-        self.loop.update_runtime_state(session_recorder=recorder)
+        self.loop.services.session.recorder = recorder
         self.session_path = path
         if self.runtime is not None:
             self.runtime.bind_session(path.stem)
-        memory_store = getattr(self.loop, "memory_store", None)
+        memory_store = self.loop.services.session.memory
         if memory_store is not None:
             memory_store.bind_session(path.stem)
-            sync_memory_fragment(self.loop, memory_store)
+            sync_memory_fragment(
+                self.loop, cast(MemoryStore, memory_store))
         if self.on_switch is not None:
             self.on_switch()
         if context_checkpoint is not None:
@@ -134,8 +135,7 @@ class SessionLifecycle:
             restore_context_checkpoint(
                 self.loop,
                 context_checkpoint,
-                compact_store=getattr(
-                    self.loop, "compact_checkpoint_store", None),
+                compact_store=self.loop.services.context.compact_checkpoint,
                 memory_store=memory_store,
             )
 
@@ -156,11 +156,9 @@ class SessionLifecycle:
         source_session_id = parent_id
         if history is not None:
             self.loop.update_runtime_state(history=list(history))
-        rebuild = getattr(self.loop, "rebuild_working_context", None)
-        if callable(rebuild):
-            rebuild()
+        self.loop.rebuild_working_context()
         path = new_session_path(self.sessions_dir)
-        memory_store = getattr(self.loop, "memory_store", None)
+        memory_store = self.loop.services.session.memory
         if memory_store is not None and source_session_id:
             memory_store.copy_session(source_session_id, path.stem)
         copied_checkpoint = None
@@ -199,7 +197,7 @@ class SessionLifecycle:
             return False
         if self.sessions_dir is not None:
             new_path = new_session_path(self.sessions_dir)
-            memory_store = getattr(self.loop, "memory_store", None)
+            memory_store = self.loop.services.session.memory
             if memory_store is not None:
                 memory_store.copy_session(path.stem, new_path.stem)
             copied_checkpoint = None
@@ -225,7 +223,7 @@ class SessionLifecycle:
         self._validate_title(title)
         if self.session_path is None or not self.session_path.is_file():
             raise SessionLifecycleError("当前没有可重命名的会话")
-        recorder = getattr(self.loop, "session_recorder", None)
+        recorder = self.loop.services.session.recorder
         if recorder is not None and Path(recorder.path) == self.session_path:
             recorder.update_metadata(title=title)
         else:

@@ -15,6 +15,7 @@ from krelcode.agent.fragments import PromptFragmentRegistry, base_fragments
 from krelcode.agent.prompt_assembler import PromptAssembler, PromptAssemblyRequest
 from krelcode.agent.prompt_plan import PromptPlanSnapshot
 from krelcode.agent.tool_pool import TurnToolPool
+from krelcode.agent.turn.runtime_state import AgentRuntimeState
 from krelcode.core.messages import Message
 from krelcode.llm.providers.anthropic import tool_specs_to_anthropic
 from krelcode.llm.providers.openai import tool_specs_to_openai
@@ -258,11 +259,14 @@ def test_context_inspection_exposes_tool_spec_metadata_without_body(tmp_path):
     )
 
     class Loop:
-        last_context_plan = ContextPlanSnapshot(
-            turn_id="turn-step109-context",
-            step=1,
-            prompt_plan=snapshot,
-        )
+        def __init__(self) -> None:
+            self.runtime_state = AgentRuntimeState()
+            self.runtime_state.context.last_context_plan = ContextPlanSnapshot(
+                turn_id="turn-step109-context",
+                step=1,
+                prompt_plan=snapshot,
+            )
+            self.history = []
 
     service = ContextInspectionService(Loop())
     output = "\n".join(service.plan_lines())

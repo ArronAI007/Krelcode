@@ -199,7 +199,7 @@ async def run_security_review(
         system_prompt=SECURITY_REVIEW_SYSTEM_PROMPT,
         max_steps=max(1, min(24, int(getattr(args, "max_steps", 16) or 16))),
     )
-    loop.redactor = redactor
+    loop.update_runtime_state(redactor=redactor)
     loop.update_runtime_state(
         auxiliary_prompt_surfaces=(security_review_prompt_surface(),))
     refresh_prompt_surfaces(loop)
@@ -214,7 +214,7 @@ async def run_security_review(
         run_surface,
         redactor=redactor,
         observer=lambda _surface_id, result: observe_surface_result(
-            loop.prompt_surface_registry, result),
+            loop.services.prompt.surface_registry, result),
     )
 
     report: Optional[SecurityReviewReport] = None

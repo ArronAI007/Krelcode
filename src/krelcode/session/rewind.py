@@ -338,7 +338,7 @@ class RewindCoordinator:
                 self.loop,
                 context_before,
                 compact_store=self.compact_checkpoints,
-                memory_store=getattr(self.loop, "memory_store", None),
+                memory_store=self.loop.services.session.memory,
                 history_override=history_before,
             )
         else:
@@ -347,11 +347,9 @@ class RewindCoordinator:
             if restored_compact is not None:
                 restore_compact_checkpoint(self.loop, restored_compact)
             else:
-                rebuild = getattr(self.loop, "rebuild_working_context", None)
-                if callable(rebuild):
-                    rebuild()
+                self.loop.rebuild_working_context()
                 self.loop.update_runtime_state(pending_context_refresh=True)
-            current_plan = getattr(self.loop, "last_context_plan", None)
+            current_plan = self.loop.runtime_state.context.last_context_plan
             if current_plan is None:
                 current_plan = ContextPlanSnapshot()
             self.loop.update_runtime_state(last_context_plan=current_plan.restored_for(
@@ -363,7 +361,7 @@ class RewindCoordinator:
         self.plan_manager.restore(entry.plan_before)
         self.timeline.truncate_before(turn_index)
 
-        recorder = getattr(self.loop, "session_recorder", None)
+        recorder = self.loop.services.session.recorder
         if recorder is not None:
             recorder.record_rewind(
                 target_index=turn_index,

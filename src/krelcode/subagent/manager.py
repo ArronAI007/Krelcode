@@ -521,7 +521,7 @@ class SubagentManager(SubagentReadMixin):
         event: AgentEvent,
     ) -> None:
         if isinstance(event, ContextAssembled):
-            ledger = getattr(handle.loop, "last_context_cache_ledger", None)
+            ledger = handle.loop.runtime_state.context.last_context_cache_ledger
             if (
                 ledger is not None
                 and ledger.complete_request_hash

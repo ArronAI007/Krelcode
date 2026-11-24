@@ -211,7 +211,7 @@ async def handle_delete(ctx: CommandContext) -> CommandResult:
 
 
 async def handle_export(ctx: CommandContext) -> CommandResult:
-    redactor = getattr(ctx.loop, "redactor", None)
+    redactor = ctx.loop.services.core.redactor
     try:
         if ctx.request.arguments:
             path = Path(ctx.request.arguments)

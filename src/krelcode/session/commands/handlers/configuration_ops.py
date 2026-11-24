@@ -62,17 +62,17 @@ async def handle_undo(ctx: CommandContext) -> CommandResult:
 
 
 async def handle_lsp(ctx: CommandContext) -> CommandResult:
-    manager = getattr(ctx.loop, "lsp_manager", None)
+    manager = ctx.loop.services.extensions.lsp
     if manager is None:
         return _ok("  （LSP 不可用）")
     return _ok(*manager.status_lines())
 
 
 async def handle_web(ctx: CommandContext) -> CommandResult:
-    runtime = getattr(ctx.loop, "web_runtime", None)
-    options = getattr(runtime, "options", None)
-    browser = getattr(ctx.loop, "browser_runtime", None)
-    browser_options = getattr(browser, "options", None)
+    runtime = ctx.loop.services.extensions.web
+    options = runtime.options if runtime is not None else None
+    browser = ctx.loop.services.extensions.browser
+    browser_options = browser.options if browser is not None else None
     if options is None or not options.enabled:
         browser_line = (
             "  Browser: disabled"
@@ -87,7 +87,7 @@ async def handle_web(ctx: CommandContext) -> CommandResult:
             "  WebFetch/WebSearch 已禁用（--no-web 或 [web].enabled=false）",
             browser_line,
         )
-    key_env = getattr(options, "search_api_key_env", "")
+    key_env = options.search_api_key_env
     configured = bool(os.environ.get(key_env)) if key_env else False
     if (
         browser is None
@@ -115,9 +115,12 @@ async def handle_web(ctx: CommandContext) -> CommandResult:
 
 
 async def handle_output_style(ctx: CommandContext) -> CommandResult:
-    manager = getattr(ctx.loop, "output_style_manager", None)
+    manager = ctx.loop.services.extensions.output_styles
     if manager is None:
         return _ok("  （Output Styles 不可用）")
+    registry = ctx.loop.services.prompt.registry
+    if registry is None:
+        return _ok("  （Prompt Registry 未启用）")
     parts = ctx.request.arguments.split(maxsplit=1)
     operation = parts[0].strip().lower() if parts else ""
     argument = parts[1].strip() if len(parts) > 1 else ""
@@ -127,7 +130,7 @@ async def handle_output_style(ctx: CommandContext) -> CommandResult:
         return _ok(*manager.status_lines())
     if operation == "reload":
         manager.reload()
-        manager.apply_to_registry(ctx.loop.prompt_registry)
+        manager.apply_to_registry(registry)
         refresh_registry_snapshot(ctx.loop)
         return _ok("  Output Styles 已重载", *manager.status_lines())
     if operation in {"show", "info"}:
@@ -144,12 +147,12 @@ async def handle_output_style(ctx: CommandContext) -> CommandResult:
             body)
     if operation == "default":
         manager.select("default")
-        manager.apply_to_registry(ctx.loop.prompt_registry)
+        manager.apply_to_registry(registry)
         refresh_registry_snapshot(ctx.loop)
         return _ok("  已恢复默认输出样式")
     if operation in {"off", "none"}:
         manager.select("off")
-        manager.apply_to_registry(ctx.loop.prompt_registry)
+        manager.apply_to_registry(registry)
         refresh_registry_snapshot(ctx.loop)
         return _ok("  已恢复默认输出样式")
     style = manager.select(operation)
@@ -158,7 +161,7 @@ async def handle_output_style(ctx: CommandContext) -> CommandResult:
             f"  未找到 Output Style: {operation}",
             "  可用样式: " + (", ".join(item.name for item in manager.styles)
                               if manager.styles else "（无）"))
-    manager.apply_to_registry(ctx.loop.prompt_registry)
+    manager.apply_to_registry(registry)
     refresh_registry_snapshot(ctx.loop)
     return _ok(
         f"  已切换 Output Style: {style.name} [{style.scope}]",

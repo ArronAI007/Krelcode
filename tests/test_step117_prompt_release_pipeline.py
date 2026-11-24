@@ -383,8 +383,12 @@ def test_slash_command_is_the_human_approval_path(tmp_path, monkeypatch):
     pipeline, store, proposal = _prepare(tmp_path)
     monkeypatch.setenv("USER", "terminal-human")
     loop = SimpleNamespace(
-        prompt_release_pipeline=pipeline,
-        prompt_release_approval_service=PromptReleaseApprovalService(store),
+        services=SimpleNamespace(
+            extensions=SimpleNamespace(
+                prompt_release_pipeline=pipeline,
+                prompt_release_approval_service=PromptReleaseApprovalService(store),
+            ),
+        ),
     )
     context = CommandContext(
         request=CommandRequest(

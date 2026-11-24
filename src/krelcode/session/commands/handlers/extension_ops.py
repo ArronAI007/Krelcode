@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+from typing import Optional, cast
 
 from ....agent.context import build_workspace_context_bundle
 from ....agent.context_inspection import ContextInspectionService
@@ -18,6 +19,7 @@ from ....agent.fragments import (
 )
 from ....agent.prompt_authoring import PROMPT_AUTHORING_FRAGMENT_ID
 from ....agent.prompts import build_system_prompt
+from ....session.commands.custom import CustomCommandManager
 from ....agent.tokens import estimate_history_tokens
 from ....core.messages import Message
 from ....mcp.security import render_mcp_prompt_evidence
@@ -379,12 +381,12 @@ async def handle_plugins(ctx: CommandContext) -> CommandResult:
 
 async def handle_extensions(ctx: CommandContext) -> CommandResult:
     """Show the unified extension catalogue with live provenance refresh."""
-    callback = getattr(ctx.loop, "extension_refresh", None)
+    callback = ctx.loop.services.extensions.extension_refresh
     if callback is not None:
         result = callback()
         if hasattr(result, "__await__"):
             await result
-    registry = getattr(ctx.loop, "extension_registry", None)
+    registry = ctx.loop.services.extensions.extension_registry
     if registry is None:
         return _ok("  （ExtensionRegistry 不可用）")
     raw = ctx.request.arguments.strip()
@@ -440,7 +442,7 @@ async def handle_plugin_command(ctx: CommandContext) -> CommandResult:
 
 async def handle_custom_command(ctx: CommandContext) -> CommandResult:
     """Execute a user/project Markdown command."""
-    manager = getattr(ctx.loop, "custom_command_manager", None)
+    manager = cast(Optional[CustomCommandManager], ctx.loop.services.extensions.custom_commands)
     command = manager.get(ctx.request.name) if manager is not None else None
     if command is None:
         return _ok(f"  （Custom Command 不可用: /{ctx.request.name}）")

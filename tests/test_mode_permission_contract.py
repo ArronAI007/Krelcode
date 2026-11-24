@@ -28,6 +28,7 @@ from krelcode.agent.fragments import (
 from krelcode.agent.loop import AgentLoop
 from krelcode.agent.prompt_assembler import PromptAssembler, PromptAssemblyRequest
 from krelcode.agent.prompt_plan import PromptPlanSnapshot
+from krelcode.agent.turn.runtime_state import AgentRuntimeState
 from krelcode.core.events import EventBus
 from krelcode.core.messages import Message, ToolCall
 from krelcode.llm.base import ProviderCapabilities, StreamFinished
@@ -343,12 +344,9 @@ def test_context_why_reports_contract_provenance_without_names_or_paths(tmp_path
         history_digest="history",
         tools=loop.current_tool_pool().tool_specs(),
     )
-    inspection_loop = SimpleNamespace(
-        last_context_snapshot=None,
-        last_context_assembly=None,
-        last_context_plan=ContextPlanSnapshot(prompt_plan=snapshot),
-        history=[],
-    )
+    state = AgentRuntimeState()
+    state.context.last_context_plan = ContextPlanSnapshot(prompt_plan=snapshot)
+    inspection_loop = SimpleNamespace(runtime_state=state, history=[])
 
     output = "\n".join(ContextInspectionService(inspection_loop).why_lines(
         "attachment:mode_permission_contract"))

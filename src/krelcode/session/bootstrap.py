@@ -5,12 +5,12 @@ from __future__ import annotations
 import argparse
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, cast
 
 from ..agent.loop import AgentLoop
 from ..core.redact import SecretRedactor
 from .context_checkpoint import restore_context_checkpoint
-from .memory import sync_memory_fragment
+from .memory import MemoryStore, sync_memory_fragment
 from .recorder import SessionRecorder, latest_session, new_session_path
 from .restore import restore_session
 
@@ -43,15 +43,15 @@ def setup_session(
     if args.no_session:
         return None
     session_path = new_session_path(sessions_dir)
-    memory_store = getattr(loop, "memory_store", None)
+    memory_store = loop.services.session.memory
     if memory_store is not None and resumed_from:
         memory_store.copy_session(resumed_from, session_path.stem)
     metadata = {
         "session_id": session_path.stem,
         "title": "",
         "parent_id": resumed_from,
-        "provider": str(getattr(loop.llm, "name", "") or ""),
-        "model": str(getattr(loop.llm, "model", "") or ""),
+        "provider": str(getattr(loop.services.core.llm, "name", "") or ""),
+        "model": str(getattr(loop.services.core.llm, "model", "") or ""),
         "workspace": str(loop.tool_context.workspace_root),
         "created_at": time.time(),
     }
@@ -61,12 +61,12 @@ def setup_session(
         redactor=redactor,
         metadata=metadata,
     )
-    recorder.attach(loop.bus)
-    loop.update_runtime_state(session_recorder=recorder)
+    recorder.attach(loop.services.core.bus)
+    loop.services.session.recorder = recorder
     if memory_store is not None:
         memory_store.bind_session(session_path.stem)
-        sync_memory_fragment(loop, memory_store)
-    context_store = getattr(loop, "context_checkpoint_store", None)
+        sync_memory_fragment(loop, cast(MemoryStore, memory_store))
+    context_store = loop.services.context.checkpoint
     if context_store is not None and resumed_path is not None:
         source_checkpoint = context_store.latest_for_session(resumed_from)
         if source_checkpoint is not None:
@@ -80,7 +80,7 @@ def setup_session(
                 restore_context_checkpoint(
                     loop,
                     copied,
-                    compact_store=getattr(loop, "compact_checkpoint_store", None),
+                    compact_store=loop.services.context.compact_checkpoint,
                     memory_store=memory_store,
                 )
     return session_path

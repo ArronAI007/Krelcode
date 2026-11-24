@@ -13,13 +13,17 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple, cast
 
 from ..agent.compact_summary import CompactSummary, summary_from_history
 from ..core.messages import Message
 from ..core.redact import SecretRedactor
 from ..contracts.tool import ToolContext
 from .codec import history_from_dicts, history_to_dicts
+if TYPE_CHECKING:
+    from ..agent.turn.runtime_services import AgentServices
+
+
 from .context_checkpoint import (
     FileHash,
     FileIntegrity,
@@ -37,7 +41,11 @@ class CompactCheckpointHostPort(Protocol):
     history: list[Message]
     tool_context: ToolContext
 
+    @property
+    def services(self) -> object: ...
+
     def update_runtime_state(self, **values: object) -> None: ...
+    def rebuild_working_context(self) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -296,24 +304,24 @@ def restore_compact_checkpoint(
 ) -> FileIntegrity:
     """Restore the exact pre-compact task scene and invalidate stale files."""
     loop.update_runtime_state(last_compact_checkpoint=checkpoint)
-    store = getattr(loop, "working_context_store", None)
-    restore_working = getattr(store, "restore_snapshot", None)
+    services = cast("AgentServices", loop.services)
+    store = services.context.working_context
     raw_entries = checkpoint.working_context.get("entries")
-    if callable(restore_working) and isinstance(raw_entries, list) and raw_entries:
-        snapshot = restore_working(checkpoint.working_context)
+    snapshot: object
+    if isinstance(raw_entries, list) and raw_entries:
+        snapshot = store.restore_snapshot(checkpoint.working_context)
     else:
-        rebuild = getattr(loop, "rebuild_working_context", None)
-        snapshot = rebuild() if callable(rebuild) else None
+        snapshot = loop.rebuild_working_context()
 
     workspace_root = Path(loop.tool_context.workspace_root)
     integrity = checkpoint.verify_files(workspace_root)
-    if integrity.stale and store is not None:
+    if integrity.stale:
         store.invalidate_files(
             integrity.stale, reason="compact-file-hash-mismatch")
         snapshot = store.snapshot()
     loop.update_runtime_state(context_integrity=integrity)
 
-    manager = getattr(loop, "context_manager", None)
+    manager = services.context.manager
     if manager is not None:
         manager.rebuild_state(loop.history)
     loop.update_runtime_state(pending_context_refresh=True)

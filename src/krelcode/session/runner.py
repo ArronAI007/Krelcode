@@ -19,6 +19,7 @@ from ..core.redact import SecretRedactor
 from .bootstrap import setup_session
 from .commands.ports import (
     ModelSwitchPort,
+    SkillManagerPort,
     SkillReloadPort,
     SubagentManagerCommandPort,
 )
@@ -67,8 +68,8 @@ async def run_session(
     sessions_dir = runtime.workspace_root / ".krelcode" / "sessions"
 
     if hooks is not None:
-        if loop.hook_port is None:
-            loop.hook_port = hooks
+        if loop.services.core.hook_port is None:
+            loop.set_hook_port(hooks)
         await loop.run_lifecycle_hook("session_start", {
             "session": str(session_path) if session_path else "",
             "workspace": str(runtime.workspace_root),
@@ -116,7 +117,10 @@ async def run_session(
                         checkpoints=checkpoints,
                         usage=usage,
                         model_switch=model_switch,
-                        skills=getattr(loop, "skill_manager", None),
+                        skills=cast(
+                            Optional[SkillManagerPort],
+                            loop.services.extensions.skills,
+                        ),
                         skills_reload=skills_reload,
                         workspace_root=runtime.workspace_root,
                         command_registry=input_processor.command_registry,
@@ -217,10 +221,13 @@ async def run_session(
             usage=usage,
             model_switch=model_switch,
             redactor=redactor,
-            skills=loop.skill_manager,
+            skills=cast(
+                Optional[SkillManagerPort],
+                loop.services.extensions.skills,
+            ),
             skills_reload=skills_reload,
-            plugins=getattr(loop, "plugin_manager", None),
-            plugins_reload=getattr(loop, "plugin_reload", None),
+            plugins=loop.services.extensions.plugins,
+            plugins_reload=loop.plugin_reload,
             input_processor=input_processor,
             approval_broker=approval_broker,
             input_broker=user_input_broker,

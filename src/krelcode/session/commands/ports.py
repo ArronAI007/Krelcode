@@ -8,12 +8,26 @@ needs while leaving lifecycle and wire-level behavior in the owning modules.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Optional, Protocol, Sequence, Tuple, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    runtime_checkable,
+)
 
 from ...contracts.service_ports import ShellJobPagePort, ShellJobPort
 from ...contracts.runtime import PermissionMode
 from ...contracts.tool import Tool, ToolDescriptor
 from ...core.messages import Message
+
+if TYPE_CHECKING:
+    from ...agent.turn.runtime_services import AgentServices
 
 
 @runtime_checkable
@@ -78,7 +92,25 @@ class CommandLoopPort(Protocol):
     """Runtime state and operations command handlers may touch directly."""
 
     @property
+    def services(self) -> "AgentServices": ...
+
+    @property
     def history(self) -> list[Message]: ...
+
+    @property
+    def prompt_profile_resolution(self) -> Optional[Any]: ...
+
+    @property
+    def prompt_profile_name(self) -> str: ...
+
+    @property
+    def auxiliary_prompt_surfaces(self) -> Sequence[Any]: ...
+
+    @property
+    def last_prompt_plan(self) -> Optional[Any]: ...
+
+    @property
+    def runtime_state(self) -> Any: ...
 
     @property
     def policy(self) -> object: ...
@@ -103,6 +135,7 @@ class CommandLoopPort(Protocol):
 
     def update_runtime_state(self, **values: object) -> None: ...
     def current_tool_pool(self) -> ToolPoolPort: ...
+    async def refresh_workspace_context(self) -> Any: ...
     def reset(self) -> None: ...
     async def compress_context(
         self,

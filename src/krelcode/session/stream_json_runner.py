@@ -34,7 +34,11 @@ from .controller import SessionController
 from .input import InputAction, InputEnvelope, InputKind, InputProcessor
 from .interactions import UserInputBroker
 from .commands.types import CommandResult
-from .commands.ports import MCPSupervisorPort, SubagentManagerCommandPort
+from .commands.ports import (
+    MCPSupervisorPort,
+    SkillManagerPort,
+    SubagentManagerCommandPort,
+)
 from .stream_json import (
     StreamControlMessage,
     StreamJsonEncoder,
@@ -97,8 +101,8 @@ async def run_stream_json_session(
     encoder = StreamJsonEncoder(StreamJsonMetadata(
         session_id=Path(session_path).stem if session_path else None,
         cwd=str(runtime.workspace_root),
-        provider=str(getattr(loop.llm, "name", "unknown")),
-        model=str(getattr(loop.llm, "model", "unknown")),
+        provider=str(getattr(loop.services.core.llm, "name", "unknown")),
+        model=str(getattr(loop.services.core.llm, "model", "unknown")),
         tools=tuple(runtime.tool_names),
         mcp_servers=_mcp_server_names(runtime),
         permission_mode=loop.tool_context.runtime.permission_mode.value,
@@ -114,7 +118,8 @@ async def run_stream_json_session(
         subagents=cast(
             Optional[SubagentManagerCommandPort], runtime.subagents),
         usage=usage,
-        skills=getattr(loop, "skill_manager", None),
+        skills=cast(
+            Optional[SkillManagerPort], loop.services.extensions.skills),
         workspace_root=runtime.workspace_root,
         command_registry=(
             input_processor.command_registry

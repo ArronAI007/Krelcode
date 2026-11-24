@@ -355,7 +355,11 @@ def test_custom_command_project_override_execution_and_source(tmp_path):
 
     context = SimpleNamespace(
         request=CommandRequest("review", "src/app.py", "/review src/app.py"),
-        loop=SimpleNamespace(custom_command_manager=manager),
+        loop=SimpleNamespace(
+            services=SimpleNamespace(
+                extensions=SimpleNamespace(custom_commands=manager),
+            ),
+        ),
     )
 
     async def go():

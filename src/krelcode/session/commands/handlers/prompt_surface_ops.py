@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shlex
 from pathlib import Path
+from typing import cast
 
 from ....agent.prompt_surface import (
     CORE_SURFACE_KINDS,
@@ -14,7 +15,10 @@ from ....agent.prompt_surface import (
     PromptSurfaceRegistry,
     SourceRole,
 )
-from ....agent.prompt_surface_catalog import refresh_prompt_surfaces
+from ....agent.prompt_surface_catalog import (
+    PromptSurfaceHostPort,
+    refresh_prompt_surfaces,
+)
 from ....tools.prompt_lint import lint_tool_registry
 from ..context import CommandContext
 from ..types import CommandResult
@@ -32,7 +36,9 @@ def _ok(*output: str) -> CommandResult:
 
 def _registry(ctx: CommandContext) -> PromptSurfaceRegistry:
     return refresh_prompt_surfaces(
-        ctx.loop, mcp_supervisor=ctx.mcp_supervisor)
+        cast(PromptSurfaceHostPort, ctx.loop),
+        mcp_supervisor=ctx.mcp_supervisor,
+    )
 
 
 def _surface_kind(surface: PromptSurfaceDescriptor) -> PromptSurfaceKind:
@@ -169,7 +175,7 @@ async def handle_prompts(ctx: CommandContext) -> CommandResult:
 
     if operation == "lint" and len(parts) <= 2:
         tool_names = {parts[1]} if len(parts) == 2 else None
-        tool_registry = getattr(ctx.loop, "registry", None)
+        tool_registry = ctx.loop.services.core.registry
         if tool_registry is None:
             return _ok("  [prompts lint] 当前会话没有 ToolRegistry")
         if tool_names is not None and tool_registry.get(parts[1]) is None:
@@ -294,7 +300,7 @@ async def handle_prompts(ctx: CommandContext) -> CommandResult:
     if operation == "active" and len(parts) <= 2:
         selector = parts[1] if len(parts) == 2 else ""
         kind = _kind_filter(selector)
-        context_plan = getattr(ctx.loop, "last_context_plan", None)
+        context_plan = ctx.loop.runtime_state.context.last_context_plan
         prompt_plan = getattr(context_plan, "prompt_plan", None)
         turn_id = str(getattr(prompt_plan, "turn_id", "") or "")
         if not turn_id:

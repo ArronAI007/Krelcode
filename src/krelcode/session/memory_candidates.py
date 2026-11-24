@@ -1012,21 +1012,21 @@ class AutoMemoryCoordinator:
             self._turn_input = event.user_input
             self._turn_id = event.turn_id
             self._session_id = event.session_id
-            history = getattr(self.loop, "history", ())
-            self._turn_start = max(0, len(history) - 1)
+            history_now = self.loop.history
+            self._turn_start = max(0, len(history_now) - 1)
             return
         if not isinstance(event, RunFinished):
             return
-        history = tuple(getattr(self.loop, "history", ())[self._turn_start:])
+        turn_history = tuple(self.loop.history[self._turn_start:])
         try:
             report = self.process_turn(
                 self._turn_input,
-                history,
+                turn_history,
                 turn_id=event.turn_id or self._turn_id,
                 session_id=self._session_id,
             )
             for candidate in report.extracted:
-                await self.loop.bus.emit(MemoryCandidateObserved(
+                await self.loop.services.core.bus.emit(MemoryCandidateObserved(
                     candidate_id=candidate.id,
                     status=candidate.status_value,
                     trigger=candidate.trigger_value,
@@ -1035,7 +1035,7 @@ class AutoMemoryCoordinator:
                     digest=candidate.digest,
                 ))
             for candidate in report.accepted:
-                await self.loop.bus.emit(MemoryWritten(
+                await self.loop.services.core.bus.emit(MemoryWritten(
                     memory_id=candidate.existing_memory_id or "",
                     action="accepted",
                     scope=MemoryScope.PROJECT.value,

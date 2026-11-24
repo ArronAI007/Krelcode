@@ -481,7 +481,11 @@ def test_repl_telemetry_command_has_status_enable_disable(tmp_path):
         return CommandContext(
             request=CommandRequest(
                 "telemetry", arguments, f"/telemetry {arguments}".strip()),
-            loop=SimpleNamespace(telemetry=runtime),
+            loop=SimpleNamespace(
+                services=SimpleNamespace(
+                    extensions=SimpleNamespace(telemetry=runtime),
+                ),
+            ),
             command_registry=builtin_command_registry(),
             workspace_root=tmp_path,
         )

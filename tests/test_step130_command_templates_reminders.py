@@ -28,6 +28,7 @@ from krelcode.agent.reminders import (
     TRIGGER_ALWAYS,
     TRIGGER_TASK_TYPE,
 )
+from krelcode.agent.turn.runtime_state import AgentRuntimeState
 from krelcode.core.messages import Message, ToolCall
 from krelcode.llm.providers.mock import MockProvider
 from krelcode.safety.policy import AllowAllPolicy
@@ -100,7 +101,11 @@ def test_command_template_binds_provenance_trust_arguments_tools_and_reminders(
 
     context = SimpleNamespace(
         request=CommandRequest("review", "src/app.py", "/review src/app.py"),
-        loop=SimpleNamespace(custom_command_manager=manager),
+        loop=SimpleNamespace(
+            services=SimpleNamespace(
+                extensions=SimpleNamespace(custom_commands=manager),
+            ),
+        ),
         command_registry=registry,
     )
     result = asyncio.run(handle_custom_command(context))
@@ -289,12 +294,20 @@ def test_reminder_and_command_diagnostics_are_content_light(tmp_path):
     ),))
     selection = catalog.select(ReminderContext(
         requested_reminder_ids=("test:diagnostic",)))
+    state = AgentRuntimeState()
+    state.turn.last_reminder_selection = selection
     loop = SimpleNamespace(
-        reminder_catalog=catalog,
-        last_reminder_selection=selection,
+        runtime_state=state,
+        services=SimpleNamespace(
+            context=SimpleNamespace(
+                reminder_catalog=catalog,
+                manager=None,
+                assembler=None,
+                working_context=None,
+            ),
+            prompt=SimpleNamespace(registry=None),
+        ),
         command_registry=command_registry,
-        prompt_registry=None,
-        last_context_snapshot=None,
     )
     reminder_output = "\n".join(asyncio.run(handle_context(SimpleNamespace(
         request=CommandRequest("context", "reminders", "/context reminders"),

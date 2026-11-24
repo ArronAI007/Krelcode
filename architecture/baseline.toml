@@ -20,8 +20,8 @@ max_unlisted_lines = 800
 
 [file_size.limits]
 "agent/context/compact_summary.py" = 859
-"agent/context/compression.py" = 862
-"agent/context/context_checkpoint.py" = 1037
+"agent/context/compression.py" = 871
+"agent/context/context_checkpoint.py" = 1035
 "agent/prompt/fragments.py" = 880
 "agent/prompt/prompt_authoring.py" = 890
 "agent/prompt/prompt_parity.py" = 1011
@@ -30,7 +30,7 @@ max_unlisted_lines = 800
 "agent/context/working_context.py" = 863
 "browser/runtime.py" = 860
 "daemon/client.py" = 925
-"daemon/server.py" = 947
+"daemon/server.py" = 946
 "enterprise/auth.py" = 848
 "llm/base.py" = 816
 "safety/sandbox.py" = 926
@@ -38,198 +38,5 @@ max_unlisted_lines = 800
 "tools/builtin/database_migration.py" = 892
 "ui/diff_review.py" = 919
 
-
-[loop_dynamic_access.limits."bootstrap/composition/daemon.py"]
-assignments = 0
-getattr = 1
-setattr = 0
-
-[loop_dynamic_access.limits."bootstrap/composition/runtime.py"]
-assignments = 0
-getattr = 0
-setattr = 0
-
-[loop_dynamic_access.limits."bootstrap/composition/services.py"]
-assignments = 4
-getattr = 1
-setattr = 0
-
-[loop_dynamic_access.limits."bootstrap/application.py"]
-assignments = 0
-getattr = 1
-setattr = 0
-
-[loop_dynamic_access.limits."session/commands/handlers/configuration_ops.py"]
-assignments = 0
-getattr = 4
-setattr = 0
-
-[loop_dynamic_access.limits."session/commands/handlers/context_ops.py"]
-assignments = 0
-getattr = 33
-setattr = 0
-
-[loop_dynamic_access.limits."session/commands/handlers/extension_ops.py"]
-assignments = 0
-getattr = 3
-setattr = 0
-
-[loop_dynamic_access.limits."session/commands/handlers/prompt_release_ops.py"]
-assignments = 0
-getattr = 3
-setattr = 0
-
-[loop_dynamic_access.limits."agent/context/context_checkpoint.py"]
-assignments = 0
-getattr = 15
-setattr = 0
-
-[loop_dynamic_access.limits."session/restore.py"]
-assignments = 0
-getattr = 11
-setattr = 0
-
-[loop_dynamic_access.limits."session/lifecycle.py"]
-assignments = 0
-getattr = 11
-setattr = 0
-
-[loop_dynamic_access.limits."ui/terminal_presenter.py"]
-assignments = 0
-getattr = 5
-setattr = 0
-
-[loop_dynamic_access.limits."ui/conversation_host.py"]
-assignments = 1
-getattr = 1
-setattr = 0
-
-[loop_dynamic_access.limits."agent/prompt/prompt_surface_catalog.py"]
-assignments = 0
-getattr = 19
-setattr = 1
-
-[loop_dynamic_access.limits."agent/context/inspection_core.py"]
-assignments = 0
-getattr = 9
-setattr = 0
-
-[loop_dynamic_access.limits."agent/context/inspection_runtime.py"]
-assignments = 0
-getattr = 2
-setattr = 0
-
-[loop_dynamic_access.limits."session/controller.py"]
-assignments = 0
-getattr = 7
-setattr = 0
-
-[loop_dynamic_access.limits."session/rewind.py"]
-assignments = 0
-getattr = 4
-setattr = 0
-
-[loop_dynamic_access.limits."session/compact_checkpoint.py"]
-assignments = 0
-getattr = 3
-setattr = 0
-
-[loop_dynamic_access.limits."session/runner.py"]
-assignments = 1
-getattr = 3
-setattr = 0
-
-[loop_dynamic_access.limits."session/bootstrap.py"]
-assignments = 0
-getattr = 3
-setattr = 0
-
-[loop_dynamic_access.limits."session/memory_candidates.py"]
-assignments = 0
-getattr = 2
-setattr = 0
-
-[loop_dynamic_access.limits."session/memory.py"]
-assignments = 0
-getattr = 2
-setattr = 0
-
-[loop_dynamic_access.limits."session/commands/handlers/memory_ops.py"]
-assignments = 0
-getattr = 3
-setattr = 0
-
-[loop_dynamic_access.limits."session/commands/handlers/prompt_surface_ops.py"]
-assignments = 0
-getattr = 2
-setattr = 0
-
-[loop_dynamic_access.limits."session/commands/handlers/security_ops.py"]
-assignments = 0
-getattr = 1
-setattr = 0
-
-[loop_dynamic_access.limits."session/commands/handlers/session_ops.py"]
-assignments = 0
-getattr = 1
-setattr = 0
-
-[loop_dynamic_access.limits."session/stream_json_runner.py"]
-assignments = 0
-getattr = 1
-setattr = 0
-
-[loop_dynamic_access.limits."subagent/manager.py"]
-assignments = 0
-getattr = 1
-setattr = 0
-
-[loop_dynamic_access.limits."agent/prompt/fragments.py"]
-assignments = 0
-getattr = 0
-setattr = 0
-
-[loop_dynamic_access.limits."agent/turn/runtime.py"]
-assignments = 1
-getattr = 0
-setattr = 0
-
-[loop_dynamic_access.limits."safety/runtime.py"]
-assignments = 0
-getattr = 2
-setattr = 0
-
-[loop_dynamic_access.limits."security_review/runner.py"]
-assignments = 1
-getattr = 0
-setattr = 0
-
-[loop_dynamic_access.limits."review.py"]
-assignments = 1
-getattr = 0
-setattr = 0
-
-[loop_dynamic_access.limits."daemon/server.py"]
-assignments = 0
-getattr = 2
-setattr = 0
-
-[loop_dynamic_access.limits."benchmarks/behavior_advanced_scenarios.py"]
-assignments = 0
-getattr = 0
-setattr = 1
-
-[loop_dynamic_access.limits."benchmarks/behavior_session.py"]
-assignments = 0
-getattr = 1
-setattr = 0
-
-[loop_dynamic_access.limits."benchmarks/prompt_fixture.py"]
-assignments = 0
-getattr = 0
-setattr = 0
-
-[loop_dynamic_access.limits."benchmarks/prompt_scenarios.py"]
-assignments = 0
-getattr = 0
-setattr = 0
+[loop_dynamic_access]
+limits = {}

@@ -519,7 +519,7 @@ def restore_context_checkpoint(
         history_override if history_override is not None else checkpoint.history))
     # Keep the current base/system shell. Workspace/rules/git text is refreshed
     # from live sources before the next provider request.
-    current = getattr(loop, "history", None) or []
+    current = loop.history
     if current and current[0].role == "system":
         system = copy.deepcopy(current[0])
         if restored and restored[0].role == "system":
@@ -540,16 +540,13 @@ def restore_context_checkpoint(
             summary = None
     if compact is not None:
         loop.update_runtime_state(last_compact_checkpoint=compact)
-    manager = getattr(loop, "context_manager", None)
+    manager = loop.context_manager
     if manager is not None and summary is not None:
-        manager.last_summary = summary
-        manager.last_summary_source = summary.source
-        manager.last_generation = summary.generation
+        manager.restore_summary(summary)
 
-    working_store = getattr(loop, "working_context_store", None)
-    restore_working = getattr(working_store, "restore_snapshot", None)
-    if callable(restore_working) and checkpoint.working_context.get("entries"):
-        snapshot = restore_working(checkpoint.working_context)
+    working_store = loop.working_context_store
+    if checkpoint.working_context.get("entries"):
+        snapshot = working_store.restore_snapshot(checkpoint.working_context)
         if loop.context_manager is not None:
             loop.context_manager.rebuild_state(loop.history)
     else:
@@ -619,22 +616,17 @@ def restore_context_checkpoint(
     _refresh_now_if_possible(loop)
     loop.update_runtime_state(last_context_restore=replace(
         result,
-        workspace_refresh_pending=bool(
-            getattr(loop, "pending_context_refresh", False)),
+        workspace_refresh_pending=bool(loop.pending_context_refresh),
     ))
     return cast(ContextRestoreResult, loop.last_context_restore)
 
 
 def _refresh_now_if_possible(loop: CheckpointLoopPort) -> None:
-    refresh = getattr(loop, "refresh_workspace_context", None)
-    if not callable(refresh):
-        loop.update_runtime_state(pending_context_refresh=False)
-        return
     try:
         asyncio.get_running_loop()
     except RuntimeError:
         try:
-            asyncio.run(refresh())
+            asyncio.run(loop.refresh_workspace_context())
         except Exception:
             # The next AgentLoop turn retries; stale context is never injected.
             loop.update_runtime_state(pending_context_refresh=True)
@@ -796,7 +788,7 @@ class ContextCheckpointCoordinator:
                 "turn_id": event.turn_id,
             }
         elif isinstance(event, ContextAssembled):
-            plan = getattr(self.loop, "last_context_plan", None)
+            plan = self.loop.last_context_plan
             if plan is not None:
                 self._last_plan["context_plan"] = plan.as_dict()
         elif isinstance(event, RunStarted):
@@ -806,7 +798,7 @@ class ContextCheckpointCoordinator:
                 self.capture_start
                 and self.store.latest_for_session(session_id) is None
             ):
-                history = list(getattr(self.loop, "history", ()) or ())
+                history = list(self.loop.history)
                 if (
                     history and history[-1].role == "user"
                     and (history[-1].content or "") == event.user_input
@@ -817,7 +809,7 @@ class ContextCheckpointCoordinator:
                     history, session_id=session_id,
                     turn_id=event.turn_id, phase="start")
         elif isinstance(event, (RunFinished, RunCancelled)):
-            history = list(getattr(self.loop, "history", ()) or ())
+            history = list(self.loop.history)
             checkpoint = await asyncio.to_thread(
                 self._capture,
                 history,
@@ -840,15 +832,21 @@ class ContextCheckpointCoordinator:
         phase: str,
     ) -> Optional[ContextCheckpoint]:
         root = Path(self.loop.tool_context.workspace_root)
+        plan = (
+            cast(ContextPlanSnapshot, self.loop.last_context_plan)
+            if self.loop.last_context_plan is not None
+            else None
+        )
         working: WorkingContextPort
         if phase == "start":
+            redactor = self.loop.services.core.redactor
             scratch = WorkingContextStore(
-                root, redactor=getattr(self.loop, "redactor", None))
+                root,
+                redactor=redactor.redact if redactor is not None else None,
+            )
             working = scratch.rebuild_from_history(history)
-            plan = getattr(self.loop, "last_context_plan", None)
         else:
             working = self.loop.working_context_store.snapshot()
-            plan = getattr(self.loop, "last_context_plan", None)
         tracked = collect_tracked_files(root, history, working)
         file_hashes = hash_tracked_files(tracked, root)
         query = _memory_query(history)
@@ -867,7 +865,7 @@ class ContextCheckpointCoordinator:
                         getattr(entry, "kind", "")) or ""),
                 ))
         if self.capture_workspace:
-            rule_loader = getattr(self.loop, "rule_loader", None)
+            rule_loader = self.loop.services.context.rule_loader
             rules_content = ""
             rules_sources: list[str] = []
             if rule_loader is not None:
@@ -888,14 +886,14 @@ class ContextCheckpointCoordinator:
             # rescanning it from every child would contend on the event loop
             # and turn parallel children into serialized Git/tree scans.
             workspace = WorkspaceFingerprint(captured_at=time.time())
-        compact = getattr(self.loop, "last_compact_checkpoint", None)
-        compact_summary = {}
+        compact = self.loop.last_compact_checkpoint
+        compact_summary: Mapping[str, object] = {}
         if compact is not None:
             try:
                 compact_summary = compact.summary.as_dict()
             except AttributeError:
                 compact_summary = {}
-        manager = getattr(self.loop, "context_manager", None)
+        manager = self.loop.context_manager
         if not compact_summary and manager is not None:
             summary = getattr(manager, "last_summary", None)
             if summary is not None:
@@ -923,7 +921,7 @@ class ContextCheckpointCoordinator:
         return checkpoint
 
     def _session_id(self) -> str:
-        runtime = getattr(getattr(self.loop, "tool_context", None), "runtime", None)
+        runtime = self.loop.tool_context.runtime
         return str(getattr(runtime, "session_id", "") or "")
 
 

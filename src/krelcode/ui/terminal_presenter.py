@@ -96,7 +96,7 @@ class TerminalPresenter:
         self.memory_cache = None
         self.status_cache = ""
         self.last_status_draw = 0.0
-        self.status_renderer = getattr(loop, "status_line_renderer", None)
+        self.status_renderer = loop.services.extensions.status_line_renderer
         if not isinstance(self.status_renderer, StatusLineRenderer):
             self.status_renderer = StatusLineRenderer()
         self.status_branch = read_git_branch(self.workspace_root)
@@ -142,17 +142,17 @@ class TerminalPresenter:
         )
 
     def refresh_memory_cache(self) -> None:
-        memory_store = getattr(self.loop, "memory_store", None)
+        memory_store = self.loop.services.session.memory
         if memory_store is not None:
             self.memory_cache = memory_store.dashboard_snapshot(limit=8)
 
     def refresh_panels(self, *, queue_size: int = 0) -> None:
         if self.state is None or self.processor is None:
             return
-        snapshot = getattr(self.loop, "prompt_snapshot", None)
+        snapshot = self.loop.runtime_state.prompt.prompt_snapshot
         fragments = getattr(snapshot, "fragments", ())
         cache = getattr(snapshot, "cache", None)
-        context_manager = getattr(self.loop, "context_manager", None)
+        context_manager = self.loop.services.context.manager
         terminal = shutil.get_terminal_size((80, 24))
         columns = max(1, terminal.columns - 1)
         if self.review_pager is not None and self.review_pager.active:
@@ -189,11 +189,11 @@ class TerminalPresenter:
         elif not progress and self.controller.plan_manager.pending:
             progress = "计划待确认 · /plan approve 执行"
         tokens = estimate_history_tokens(self.loop.history)
-        manager = getattr(self.loop, "context_manager", None)
+        manager = self.loop.services.context.manager
         budget = getattr(manager, "max_tokens", None)
         context = f"ctx {tokens}/{budget}" if budget else f"ctx {tokens}"
-        provider = str(getattr(self.loop.llm, "name", "") or "")
-        model = str(getattr(self.loop.llm, "model", "") or "")
+        provider = str(getattr(self.loop.services.core.llm, "name", "") or "")
+        model = str(getattr(self.loop.services.core.llm, "model", "") or "")
         session = (
             pathlib.Path(self.session_path).stem if self.session_path else "")
         return self.status_renderer.render(

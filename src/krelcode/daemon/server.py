@@ -629,13 +629,12 @@ class DaemonServer:
             loop = runtime.loop
             agents = runtime.agents
             self._agent_mcp_supervisor = runtime.mcp_supervisor
-            redactor = getattr(loop, "redactor", None) or self.redactor
+            redactor = loop.services.core.redactor or self.redactor
             agents.redactor = redactor
             agents.sidechains.redactor = redactor
             # Child tools use the daemon's durable job manager, so jobs started
             # by subagents remain controllable after the spawning client leaves.
-            if getattr(loop, "tool_context", None) is not None:
-                loop.tool_context.shell_jobs = self.jobs
+            loop.services.core.tool_context.shell_jobs = self.jobs
             if getattr(agents, "tool_context", None) is not None:
                 agents.tool_context.shell_jobs = self.jobs
             agents.bus.subscribe(self._on_agent_event)
