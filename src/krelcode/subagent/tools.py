@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 
 from ..contracts.tool import ToolContext, ToolResult
 from ..tools.prompt import ToolPromptExample
-from .manager import STATUS_PAUSED, STATUS_RUNNING, SubagentManager
+from .contracts import STATUS_PAUSED, STATUS_RUNNING, SubagentManagerPort
 from .prompt import SPAWN_AGENT_PROMPT_VERSION, build_spawn_agent_prompt
 
 
@@ -125,7 +125,7 @@ class SpawnAgentTool:
         "required": ["task"],
     }
 
-    def __init__(self, manager: SubagentManager) -> None:
+    def __init__(self, manager: SubagentManagerPort) -> None:
         self.manager = manager
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -200,7 +200,7 @@ status and report; do not treat an intermediate feed message as a completed resu
         "required": ["agent_id"],
     }
 
-    def __init__(self, manager: SubagentManager) -> None:
+    def __init__(self, manager: SubagentManagerPort) -> None:
         self.manager = manager
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -305,7 +305,7 @@ queued unless changed evidence requires it.
         "required": ["agent_id", "message"],
     }
 
-    def __init__(self, manager: SubagentManager) -> None:
+    def __init__(self, manager: SubagentManagerPort) -> None:
         self.manager = manager
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -382,7 +382,7 @@ prove task completion.
         "required": ["agent_id"],
     }
 
-    def __init__(self, manager: SubagentManager) -> None:
+    def __init__(self, manager: SubagentManagerPort) -> None:
         self.manager = manager
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -438,7 +438,7 @@ resume, send new input, or kill the child.
         "required": ["agent_id"],
     }
 
-    def __init__(self, manager: SubagentManager) -> None:
+    def __init__(self, manager: SubagentManagerPort) -> None:
         self.manager = manager
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -485,7 +485,7 @@ do not use it to restart or silently broaden the task.
         "required": ["agent_id"],
     }
 
-    def __init__(self, manager: SubagentManager) -> None:
+    def __init__(self, manager: SubagentManagerPort) -> None:
         self.manager = manager
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -536,7 +536,7 @@ result, feed, or sidechain evidence.
         "required": ["agent_id"],
     }
 
-    def __init__(self, manager: SubagentManager) -> None:
+    def __init__(self, manager: SubagentManagerPort) -> None:
         self.manager = manager
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -581,7 +581,7 @@ that fits the task. Do not guess a definition name without checking the catalogu
     prompt_version = "1"
     parameters: Dict[str, Any] = {"type": "object", "properties": {}}
 
-    def __init__(self, manager: SubagentManager) -> None:
+    def __init__(self, manager: SubagentManagerPort) -> None:
         self.manager = manager
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -621,7 +621,7 @@ as final deliverables, and avoid re-spawning an already active duplicate.
     prompt_version = "1"
     parameters: Dict[str, Any] = {"type": "object", "properties": {}}
 
-    def __init__(self, manager: SubagentManager) -> None:
+    def __init__(self, manager: SubagentManagerPort) -> None:
         self.manager = manager
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -631,7 +631,7 @@ as final deliverables, and avoid re-spawning an already active duplicate.
         return ToolResult(content="\n".join(lines), data={"count": len(lines)})
 
 
-def build_subagent_tools(manager: SubagentManager) -> List[Any]:
+def build_subagent_tools(manager: SubagentManagerPort) -> List[Any]:
     return [
         SpawnAgentTool(manager),
         WaitAgentTool(manager),

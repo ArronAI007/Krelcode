@@ -75,6 +75,15 @@ from .sidechain import (
     SidechainStore,
     read_sidechain,
 )
+from .contracts import (
+    STATUS_CANCELLED,
+    STATUS_COMPLETED,
+    STATUS_FAILED,
+    STATUS_KILLED,
+    STATUS_PAUSED,
+    STATUS_RUNNING,
+    TERMINAL_STATUSES,
+)
 
 SUBAGENT_ROLE_PROMPT = """\
 You are a Krelcode SUBAGENT working on a delegated subtask.
@@ -101,17 +110,6 @@ def build_subagent_system_prompt(
 SUBAGENT_SYSTEM_PROMPT = build_subagent_system_prompt()
 
 PREVIEW_CHARS = 160
-
-STATUS_RUNNING = "running"
-STATUS_PAUSED = "paused"
-STATUS_COMPLETED = "completed"
-STATUS_FAILED = "failed"
-STATUS_CANCELLED = "cancelled"
-STATUS_KILLED = "killed"
-
-TERMINAL_STATUSES = frozenset({
-    STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED, STATUS_KILLED,
-})
 
 INTERRUPT_MARKER = "\n[被打断，用户新指示] "
 

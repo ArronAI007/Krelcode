@@ -57,7 +57,8 @@ from .reminders import (
 from .tool_pool import TurnToolPool
 from .tool_microcompact import MicrocompactReport, ToolMicrocompactor
 from .tool_turn import ToolBatchExecutor
-from .working_context import WorkingContextSource, WorkingContextStore
+from .working_context import WorkingContextStore
+from .working_context_source import WorkingContextSource
 from .workflows import TaskWorkflowSelection, select_task_workflow
 from ..safety.policy import ApprovalPolicy
 from ..contracts.tool import RuntimeSnapshot, ToolContext, ToolResult, TurnAbortSignal

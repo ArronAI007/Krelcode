@@ -15,13 +15,35 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ..agent.runtime import AgentRuntime
+from ..core.events import ShellJobFinished
+from ..session.commands import CommandResult
 from ..session.controller import SessionController
-from ..session.input import InputEnvelope, InputKind
+from ..session.input import (
+    InputAction,
+    InputDelivery,
+    InputEnvelope,
+    InputKind,
+    InputProcessor,
+)
 from ..session.interactions import UserInputBroker
-from ..session.memory import MemoryStore, sync_memory_fragment
+from ..session.memory import (
+    SCOPE_LABELS,
+    MemoryStore,
+    memory_lines,
+    parse_memory_note,
+    sync_memory_fragment,
+)
 from ..session.repl_session import ReplSessionRunner, SessionPrompt
 from ..session.state import SessionViewState
-from . import repl as ui
+from .command_dispatch import _handle_command
+from .repl_primitives import ReplControl, TerminalSubmission
+from .repl_surface import (
+    RUNNING_HINT,
+    _format_job_notification,
+    _queue_label,
+    handle_plan_command,
+    manage_prompt_queue,
+)
 from .terminal_presenter import TerminalPresenter
 
 
@@ -79,7 +101,7 @@ class ConversationHost:
         self.redactor = redactor
         self.approval_broker = approval_broker
         self.input_broker = input_broker
-        self.processor = input_processor or ui.InputProcessor(
+        self.processor = input_processor or InputProcessor(
             self.loop.tool_context.workspace_root)
         self.controller = SessionController(
             self.runtime,
@@ -166,28 +188,13 @@ class ConversationHost:
         skills_reload = self.skills_reload
         approval_broker = self.approval_broker
         input_broker = self.input_broker
-        ReplControl = ui.ReplControl
-        TerminalSubmission = ui.TerminalSubmission
-        InputAction = ui.InputAction
-        InputDelivery = ui.InputDelivery
-        CommandResult = ui.CommandResult
-        RUNNING_HINT = ui.RUNNING_HINT
-        handle_plan_command = ui.handle_plan_command
-        _handle_command = ui._handle_command
-        _format_job_notification = ui._format_job_notification
-        _queue_label = ui._queue_label
-        manage_prompt_queue = ui.manage_prompt_queue
-        memory_lines = ui.memory_lines
-        parse_memory_note = ui.parse_memory_note
-        SCOPE_LABELS = ui.SCOPE_LABELS
-
         presenter.show_banner()
         raw_inbox: asyncio.Queue = asyncio.Queue()
         action_queue: asyncio.Queue = asyncio.Queue()
         job_notifications: asyncio.Queue = asyncio.Queue()
 
         def on_job_finished(event) -> None:
-            if isinstance(event, ui.ShellJobFinished):
+            if isinstance(event, ShellJobFinished):
                 job_notifications.put_nowait(event)
 
         unsubscribe_job_notifications = loop.bus.subscribe(on_job_finished)
@@ -273,7 +280,7 @@ class ConversationHost:
                 images=action.images,
                 tool_allowlist=tool_allowlist,
                 reminder_ids=reminder_ids or (),
-                label=ui._queue_label(action),
+                label=_queue_label(action),
             )
 
         async def cancel_quick_task(

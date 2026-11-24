@@ -1,11 +1,10 @@
-"""Session-scoped working context and its dynamic ContextSource.
+"""Session-scoped working context.
 
 Working Context is intentionally *not* long-term memory.  It is a bounded,
 redacted view of the current task (goal, plan, files touched, commands, errors
 and important observations) that is rebuilt from the live conversation.  The
-store keeps provenance and lifecycle independent from the permanent MemoryStore,
-while ``WorkingContextSource`` projects one immutable snapshot into a provider
-request.
+store keeps provenance and lifecycle independent from the permanent MemoryStore;
+the optional projection adapter lives in :mod:`working_context_source`.
 """
 
 from __future__ import annotations
@@ -841,71 +840,6 @@ class _ToolResultStub:
 WorkingContext = WorkingContextStore
 
 
-class WorkingContextSource:
-    """Expose a bounded WorkingContextSnapshot as volatile runtime context."""
-
-    name = "working_context"
-
-    def __init__(self, store: Optional[WorkingContextStore] = None) -> None:
-        self.store = store
-        self.last_snapshot: Optional[WorkingContextSnapshot] = None
-
-    def collect(self, request):
-        snapshot = getattr(request, "working_context", None)
-        if snapshot is None and self.store is not None:
-            snapshot = self.store.snapshot()
-        if snapshot is None or not getattr(snapshot, "text", ""):
-            self.last_snapshot = snapshot
-            return ()
-        latest_user = next(
-            (message.content or "" for message in reversed(request.history)
-             if message.role == "user"),
-            "",
-        ).strip()
-        if (
-            latest_user
-            and snapshot.count == 1
-            and snapshot.entries[0].kind == "goal"
-            and snapshot.entries[0].content.strip() == latest_user
-        ):
-            # The current goal already exists verbatim in history. Injecting
-            # Working Context before any tool fact exists only duplicates tokens.
-            self.last_snapshot = snapshot
-            return ()
-        self.last_snapshot = snapshot
-        # Imported lazily to keep the store usable without the assembler stack.
-        from .context_source import (
-            CATEGORY_RUNTIME,
-            ContextLayer,
-            ContextTokenContribution,
-            TRUST_UNTRUSTED,
-        )
-
-        return (ContextLayer(
-            id="runtime:working-context",
-            source=self.name,
-            category=CATEGORY_RUNTIME,
-            content=snapshot.text,
-            trust=TRUST_UNTRUSTED,
-            origin="working_context",
-            priority=40,
-            cacheable=False,
-            compactable=True,
-            metadata={
-                "entries": snapshot.count,
-                "truncated": snapshot.truncated,
-                "dropped_entries": snapshot.dropped_entries,
-                "kinds": snapshot.counts_by_kind,
-                "sequence": snapshot.sequence,
-            },
-            token_contributions=(ContextTokenContribution(
-                "runtime:working-context",
-                CATEGORY_RUNTIME,
-                snapshot.token_count,
-            ),),
-        ),)
-
-
 __all__ = [
     "WORKING_CONTEXT_KINDS",
     "WorkingContext",
@@ -917,3 +851,13 @@ __all__ = [
     "compact_tool_metadata",
     "normalize_kind",
 ]
+
+
+
+def __getattr__(name: str):
+    """Keep the historical import path without restoring the module cycle."""
+    if name == "WorkingContextSource":
+        from .working_context_source import WorkingContextSource
+
+        return WorkingContextSource
+    raise AttributeError(name)

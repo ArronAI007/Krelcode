@@ -14,6 +14,8 @@ from .mcp import build_mcp_roots, build_mcp_sampler, compose_mcp_config
 from .memory import resolve_auto_memory_mode, resolve_auto_memory_thresholds
 from .providers import build_llm
 from .security import (
+    _configured_features,
+    _disabled_tools,
     build_execution_sandbox,
     build_policy,
     resolve_permission_mode,

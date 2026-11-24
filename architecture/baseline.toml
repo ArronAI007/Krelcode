@@ -12,28 +12,6 @@ modules = [
 ]
 reason = "Benchmark runners still share report/session helpers in both directions."
 
-[[cycles]]
-modules = [
-  "ui.conversation_host",
-  "ui.repl",
-  "ui.terminal_presenter",
-]
-reason = "Conversation host, terminal presenter and REPL primitives share one module surface."
-
-[[cycles]]
-modules = [
-  "agent.context_source",
-  "agent.working_context",
-]
-reason = "Working Context projection is currently defined next to its store."
-
-[[cycles]]
-modules = [
-  "subagent.manager",
-  "subagent.tools",
-]
-reason = "Subagent tool adapters currently depend on the concrete manager."
-
 [file_size]
 # New production files may not exceed this limit. Files already above it are
 # capped at their current size and may only shrink.
@@ -47,18 +25,17 @@ max_unlisted_lines = 800
 "benchmarks/acceptance.py" = 1477
 "agent/prompt_assembler.py" = 1383
 "agent/prompt_release_pipeline.py" = 1376
-"ui/repl.py" = 1222
 "session/memory_candidates.py" = 1157
 "plugins/manager.py" = 1069
 "agent/context_checkpoint.py" = 1043
 "agent/context_inspection.py" = 1030
-"subagent/manager.py" = 1021
+"subagent/manager.py" = 1019
 "agent/prompt_parity.py" = 1011
 "daemon/server.py" = 947
 "safety/sandbox.py" = 926
 "daemon/client.py" = 925
 "ui/diff_review.py" = 919
-"agent/working_context.py" = 919
+"agent/working_context.py" = 863
 "tools/builtin/database_migration.py" = 892
 "agent/prompt_authoring.py" = 890
 "agent/fragments.py" = 882

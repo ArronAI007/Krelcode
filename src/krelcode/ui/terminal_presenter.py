@@ -7,12 +7,36 @@ review displays.  Conversation flow and session ownership remain in
 
 from __future__ import annotations
 
+import asyncio
+import os
 import pathlib
+import shlex
+import shutil
 import threading
 import time
 from typing import Any, Callable, Optional
 
-from . import repl as ui
+from ..agent.tokens import estimate_history_tokens
+from ..core.events import MemoryWritten
+from .diff_review import (
+    DiffPager,
+    DiffReview,
+    build_tool_call_review,
+    collect_git_review,
+)
+from .editor import InputHistory
+from .render import CYAN, RESET, StreamRenderer, auto_color
+from .repl_primitives import (
+    IDLE_PROMPT,
+    RUNNING_PROMPT,
+    PanelController,
+    PromptWriter,
+    TerminalLineEditor,
+    _stdout_write,
+)
+from .repl_surface import match_slash_commands, print_banner
+from .status_line import StatusLineRenderer, read_git_branch
+from .tui.panels import build_panels
 
 
 class TerminalPresenter:
@@ -35,9 +59,9 @@ class TerminalPresenter:
         self.input_fn = input_fn
         self.redactor = redactor
         self.workspace_root = loop.tool_context.workspace_root
-        self.use_color = ui.auto_color()
-        self.prompt = ui.PromptWriter(color=self.use_color)
-        self.renderer = ui.StreamRenderer(
+        self.use_color = auto_color()
+        self.prompt = PromptWriter(color=self.use_color)
+        self.renderer = StreamRenderer(
             write=self._prompt_write, redactor=redactor)
         self.input_ready = threading.Event()
 
@@ -47,14 +71,14 @@ class TerminalPresenter:
             if persist_history is None else persist_history
         )
         if history_path is None:
-            configured_history = ui.os.environ.get("KRELCODE_HISTORY_FILE")
+            configured_history = os.environ.get("KRELCODE_HISTORY_FILE")
             history_path = (
                 pathlib.Path(configured_history).expanduser()
                 if configured_history
                 else pathlib.Path.home() / ".krelcode" / "history.jsonl"
             )
         history_redactor = getattr(redactor, "redact", None)
-        self.input_history = ui.InputHistory(
+        self.input_history = InputHistory(
             path=history_path if persistent_history else None,
             redact=history_redactor,
         )
@@ -64,31 +88,31 @@ class TerminalPresenter:
         self.runner: Any = None
         self.processor: Any = None
         self.editor: Any = None
-        self.panel_controller = ui.PanelController()
+        self.panel_controller = PanelController()
         self.quick_status = ""
-        self.review_pager: Optional[ui.DiffPager] = None
-        self.approval_review: Optional[ui.DiffReview] = None
-        self.git_review: Optional[ui.DiffReview] = None
+        self.review_pager: Optional[DiffPager] = None
+        self.approval_review: Optional[DiffReview] = None
+        self.git_review: Optional[DiffReview] = None
         self.memory_cache = None
         self.status_cache = ""
         self.last_status_draw = 0.0
         self.status_renderer = getattr(loop, "status_line_renderer", None)
-        if not isinstance(self.status_renderer, ui.StatusLineRenderer):
-            self.status_renderer = ui.StatusLineRenderer()
-        self.status_branch = ui.read_git_branch(self.workspace_root)
+        if not isinstance(self.status_renderer, StatusLineRenderer):
+            self.status_renderer = StatusLineRenderer()
+        self.status_branch = read_git_branch(self.workspace_root)
 
     def _prompt_write(self, text: str) -> None:
         # Preserve the current draft while an asynchronous event writes output.
         self.prompt.suspend()
-        ui._stdout_write(text)
+        _stdout_write(text)
 
     @property
     def prompt_text(self) -> str:
         return self.styled_prompt(self.state.is_running if self.state else False)
 
     def styled_prompt(self, running: bool) -> str:
-        text = ui.RUNNING_PROMPT if running else ui.IDLE_PROMPT
-        return f"{ui.CYAN}{text}{ui.RESET}" if self.use_color else text
+        text = RUNNING_PROMPT if running else IDLE_PROMPT
+        return f"{CYAN}{text}{RESET}" if self.use_color else text
 
     def bind(self, controller, state, runner, processor, memory_store) -> None:
         self.controller = controller
@@ -96,7 +120,7 @@ class TerminalPresenter:
         self.runner = runner
         self.processor = processor
         self.memory_cache = memory_store.dashboard_snapshot(limit=8)
-        self.editor = ui.TerminalLineEditor(
+        self.editor = TerminalLineEditor(
             self.prompt,
             self.suggest,
             color=self.use_color,
@@ -107,11 +131,11 @@ class TerminalPresenter:
         )
 
     def show_banner(self) -> None:
-        ui.print_banner(
+        print_banner(
             self.loop, self.tool_names, session_path=self.session_path)
 
     def suggest(self, text: str) -> list[tuple[str, str]]:
-        return ui.match_slash_commands(
+        return match_slash_commands(
             text,
             running=self.state.is_running,
             registry=self.processor.command_registry,
@@ -129,18 +153,18 @@ class TerminalPresenter:
         fragments = getattr(snapshot, "fragments", ())
         cache = getattr(snapshot, "cache", None)
         context_manager = getattr(self.loop, "context_manager", None)
-        terminal = ui.shutil.get_terminal_size((80, 24))
+        terminal = shutil.get_terminal_size((80, 24))
         columns = max(1, terminal.columns - 1)
         if self.review_pager is not None and self.review_pager.active:
             overlay = self.review_pager.render(
                 columns, max(8, terminal.lines - 8), color=self.use_color)
             self.prompt.set_panels(overlay)
             return
-        panels = ui.build_panels(
+        panels = build_panels(
             self.state,
             permission_mode=self.controller.permission_manager.mode.value,
             queue_size=queue_size,
-            context_tokens=ui.estimate_history_tokens(self.loop.history),
+            context_tokens=estimate_history_tokens(self.loop.history),
             context_budget=getattr(context_manager, "max_tokens", None),
             fragment_count=len(fragments),
             stable_fragments=len(getattr(cache, "stable_fragments", ())),
@@ -164,7 +188,7 @@ class TerminalPresenter:
                 "j/k 滚动 · y/n 决定 · q 返回")
         elif not progress and self.controller.plan_manager.pending:
             progress = "计划待确认 · /plan approve 执行"
-        tokens = ui.estimate_history_tokens(self.loop.history)
+        tokens = estimate_history_tokens(self.loop.history)
         manager = getattr(self.loop, "context_manager", None)
         budget = getattr(manager, "max_tokens", None)
         context = f"ctx {tokens}/{budget}" if budget else f"ctx {tokens}"
@@ -214,7 +238,7 @@ class TerminalPresenter:
 
     def notice(self, message: str) -> None:
         self.prompt.suspend()
-        ui._stdout_write(f"  {message}\n")
+        _stdout_write(f"  {message}\n")
         if self.state.is_running:
             self.refresh_status(self.state, force=True)
 
@@ -237,7 +261,7 @@ class TerminalPresenter:
 
     def on_session_event(self, event) -> None:
         self.renderer(event)
-        if isinstance(event, ui.MemoryWritten):
+        if isinstance(event, MemoryWritten):
             self.refresh_memory_cache()
             refresh = getattr(self, "refresh_status", None)
             if refresh is not None:
@@ -254,8 +278,8 @@ class TerminalPresenter:
         if self.editor is not None:
             self.editor.set_diff_pager(None)
 
-    def activate_review(self, review: ui.DiffReview, *, can_decide: bool) -> ui.DiffPager:
-        pager = ui.DiffPager(review, can_decide=can_decide, active=True)
+    def activate_review(self, review: DiffReview, *, can_decide: bool) -> DiffPager:
+        pager = DiffPager(review, can_decide=can_decide, active=True)
         self.review_pager = pager
         self.editor.set_diff_pager(pager)
         self.refresh_panels(queue_size=len(self.runner.queue))
@@ -266,33 +290,33 @@ class TerminalPresenter:
         command = tool_call.arguments.get("command")
         detail = command if command is not None else tool_call.arguments
         self.prompt.suspend()
-        ui._stdout_write(f"  [审批] {tool_call.name}: {self.redact(detail)}\n")
-        ui._stdout_write(f"  原因: {self.redact(request.reason)}\n")
+        _stdout_write(f"  [审批] {tool_call.name}: {self.redact(detail)}\n")
+        _stdout_write(f"  原因: {self.redact(request.reason)}\n")
 
-        review = ui.build_tool_call_review(
+        review = build_tool_call_review(
             tool_call, self.workspace_root, redactor=self.redactor)
         self.approval_review = review
         if review.has_changes:
-            ui._stdout_write(f"  差异审阅: {self.redact(review.stats)}\n")
+            _stdout_write(f"  差异审阅: {self.redact(review.stats)}\n")
             for line in review.summary_lines(limit=4):
-                ui._stdout_write(f"    {self.redact(line)}\n")
+                _stdout_write(f"    {self.redact(line)}\n")
             for line in review.preview_lines(limit=7):
-                ui._stdout_write(f"    {self.redact(line)}\n")
+                _stdout_write(f"    {self.redact(line)}\n")
             self.activate_review(review, can_decide=True)
-            ui._stdout_write(
+            _stdout_write(
                 "  j/k 滚动 · PgUp/PgDn 翻页 · [/] 切换文件 · "
                 "y 允许 · n 拒绝 · q 返回\n")
             return
 
         if review.notice:
-            ui._stdout_write(f"  {self.redact(review.notice)}\n")
-        ui._stdout_write(
+            _stdout_write(f"  {self.redact(review.notice)}\n")
+        _stdout_write(
             "  允许执行? [y]是 / [n]否 / [a]始终允许此命令（直接 Enter=否）\n")
 
     async def handle_diff_command(self, arguments: str) -> bool:
         """Open or navigate the current approval/Git diff review."""
         try:
-            parts = ui.shlex.split(arguments) if arguments.strip() else []
+            parts = shlex.split(arguments) if arguments.strip() else []
         except ValueError as exc:
             print(f"  [diff] 参数解析失败: {exc}")
             return True
@@ -309,8 +333,8 @@ class TerminalPresenter:
                 if operation not in {"", "staged", "refresh"}:
                     print("  用法: /diff [staged|refresh|next|prev|file <n>|close]")
                     return True
-                review = await ui.asyncio.to_thread(
-                    ui.collect_git_review,
+                review = await asyncio.to_thread(
+                    collect_git_review,
                     self.workspace_root,
                     staged=staged,
                     redactor=self.redactor,
@@ -353,8 +377,8 @@ class TerminalPresenter:
         elif operation in {"", "staged", "refresh"}:
             if operation != "":
                 staged = operation == "staged"
-                review = await ui.asyncio.to_thread(
-                    ui.collect_git_review,
+                review = await asyncio.to_thread(
+                    collect_git_review,
                     self.workspace_root,
                     staged=staged,
                     redactor=self.redactor,
