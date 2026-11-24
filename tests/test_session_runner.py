@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from types import SimpleNamespace
 from pathlib import Path
+from typing import get_type_hints
 
 from krelcode.agent.loop import AgentLoop
 from krelcode.agent.runtime import AgentRuntime
@@ -15,8 +17,22 @@ from krelcode.llm.providers.mock import MockProvider
 from krelcode.safety.policy import AllowAllPolicy
 from krelcode.session.input import InputProcessor
 from krelcode.session.runner import run_session
+from krelcode.session.runtime_ports import SessionRuntimePorts
 from krelcode.tools.base import ToolContext
 from krelcode.tools.registry import ToolRegistry
+
+
+def test_run_session_uses_explicit_session_runtime_ports():
+    signature = inspect.signature(run_session)
+    annotations = get_type_hints(run_session)
+
+    assert signature.parameters["ports"].annotation == "SessionRuntimePorts"
+    assert annotations["ports"] is SessionRuntimePorts
+    assert "supervisor" not in signature.parameters
+    assert "checkpoints" not in signature.parameters
+    assert "approval_broker" not in signature.parameters
+    assert "user_input_broker" not in signature.parameters
+    assert "hooks" not in signature.parameters
 
 
 def make_runtime(tmp_path: Path) -> AgentRuntime:
@@ -48,8 +64,7 @@ def test_headless_mode_runs_through_runtime(tmp_path, capsys):
     rc = asyncio.run(run_session(
         base_args(message="hello"),
         runtime,
-        supervisor=None,
-        checkpoints=None,
+        SessionRuntimePorts(),
         usage=usage,
         model_switch=None,
         skills_reload=None,
@@ -71,8 +86,7 @@ def test_headless_input_processor_applies_user_input_hook(tmp_path, capsys):
     rc = asyncio.run(run_session(
         base_args(message="hello"),
         runtime,
-        supervisor=None,
-        checkpoints=None,
+        SessionRuntimePorts(),
         usage=UsageTracker(),
         model_switch=None,
         skills_reload=None,
@@ -99,8 +113,7 @@ def test_interactive_mode_delegates_without_importing_terminal_ui(tmp_path):
     rc = asyncio.run(run_session(
         base_args(),
         runtime,
-        supervisor=None,
-        checkpoints=None,
+        SessionRuntimePorts(),
         usage=UsageTracker(),
         model_switch=None,
         skills_reload=None,

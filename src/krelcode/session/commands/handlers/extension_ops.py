@@ -21,6 +21,7 @@ from ....agent.prompt_authoring import PROMPT_AUTHORING_FRAGMENT_ID
 from ....agent.prompts import build_system_prompt
 from ....session.commands.custom import CustomCommandManager
 from ....agent.tokens import estimate_history_tokens
+from ....contracts.json import JsonObject
 from ....core.messages import Message
 from ....mcp.security import render_mcp_prompt_evidence
 from ....safety.runtime import parse_permission_mode
@@ -563,7 +564,7 @@ async def handle_mcp_prompt_command(ctx: CommandContext) -> CommandResult:
         return _ok(f"  [mcp] {exc}")
     try:
         result = await ctx.mcp_supervisor.get_prompt(
-            server, prompt_name, arguments)
+            server, prompt_name, cast(JsonObject, arguments))
     except Exception as exc:
         return _ok(f"  [mcp] Prompt 获取失败: {type(exc).__name__}: {exc}")
     wrapped = render_mcp_prompt_evidence(
@@ -622,4 +623,3 @@ def _format_skill_details(skills: SkillManagerPort, name: str) -> str:
         return "\n".join(lines)
     except Exception as exc:
         return f"  [skill] {exc}"
-

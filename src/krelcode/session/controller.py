@@ -22,7 +22,7 @@ from ..core.messages import ImageRef, SteeringInput
 from .compact_checkpoint import CompactCheckpointStore
 from .lifecycle import SessionLifecycle
 from .rewind import RewindCoordinator
-from .checkpoint import CheckpointManager
+from .runtime_ports import CheckpointPort
 from .commands import (
     CommandContext,
     CommandKind,
@@ -71,7 +71,7 @@ class SessionController:
         mcp_supervisor: Optional[MCPSupervisorPort] = None,
         mcp_reload: Optional[MCPReloadPort] = None,
         subagents: Optional[SubagentManagerCommandPort] = None,
-        checkpoints: Optional[CheckpointManager] = None,
+        checkpoints: Optional[CheckpointPort] = None,
         usage: Optional[UsageTrackerPort] = None,
         model_switch: Optional[ModelSwitchPort] = None,
         skills: Optional[SkillManagerPort] = None,

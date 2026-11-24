@@ -10,7 +10,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Awaitable, cast, Callable, List, Optional, TextIO
+from typing import Awaitable, cast, Callable, List, Optional, TextIO
 
 from ..agent.runtime import AgentRuntime
 from ..agent.usage import UsageTracker
@@ -25,7 +25,7 @@ from .commands.ports import (
 )
 from .controller import SessionController
 from .input import InputEnvelope, InputKind, InputProcessor
-from .interactions import UserInputBroker
+from .runtime_ports import SessionRuntimePorts
 
 
 class _RunSummary:
@@ -45,17 +45,13 @@ class _RunSummary:
 async def run_session(
     args: argparse.Namespace,
     runtime: AgentRuntime,
+    ports: SessionRuntimePorts,
     *,
-    supervisor: Any,
-    checkpoints: Any,
     usage: UsageTracker,
     model_switch: Optional[ModelSwitchPort],
     skills_reload: Optional[SkillReloadPort],
     redactor: SecretRedactor,
     input_processor: Optional[InputProcessor] = None,
-    approval_broker: Any = None,
-    user_input_broker: Optional[UserInputBroker] = None,
-    hooks: Any = None,
     log: Callable[[str], None] = print,
     repl_runner: Optional[Callable[..., Awaitable[int]]] = None,
     input_stream: Optional[TextIO] = None,
@@ -63,6 +59,11 @@ async def run_session(
 ) -> int:
     """按 CLI 参数运行 headless turn 或交互 REPL。"""
     loop = runtime.loop
+    supervisor = ports.supervisor
+    checkpoints = ports.checkpoints
+    approval_broker = ports.approval
+    user_input_broker = ports.user_input
+    hooks = ports.hooks
     session_path = setup_session(args, loop, log=log, redactor=redactor)
     runtime.bind_session(Path(session_path).stem if session_path else None)
     sessions_dir = runtime.workspace_root / ".krelcode" / "sessions"

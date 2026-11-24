@@ -25,6 +25,7 @@ from ...contracts.service_ports import ShellJobPagePort, ShellJobPort
 from ...contracts.runtime import PermissionMode
 from ...contracts.tool import Tool, ToolDescriptor
 from ...core.messages import Message
+from ...contracts.json import JsonObject
 
 if TYPE_CHECKING:
     from ...agent.turn.runtime_services import AgentServices
@@ -154,8 +155,8 @@ class MCPSupervisorPort(Protocol):
         self,
         server: str,
         prompt_name: str,
-        arguments: Mapping[str, str],
-    ) -> Mapping[str, Any]: ...
+        arguments: JsonObject,
+    ) -> JsonObject: ...
 
 
 MCPReloadPort = Callable[[], Awaitable[Sequence[str]]]

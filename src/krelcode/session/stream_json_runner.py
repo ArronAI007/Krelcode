@@ -17,7 +17,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from itertools import count
 from pathlib import Path
-from typing import Any, cast, Callable, Iterator, Optional, Protocol, TextIO
+from typing import Any, cast, Callable, Iterator, Optional, TextIO
 
 from ..agent.runtime import AgentRuntime
 from ..agent.usage import UsageTotals, UsageTracker
@@ -32,7 +32,7 @@ from ..core.session_events import SessionEventPayload, as_session_event_payload
 from ..agent.query import QueryEvent, QuerySession
 from .controller import SessionController
 from .input import InputAction, InputEnvelope, InputKind, InputProcessor
-from .interactions import UserInputBroker
+from .runtime_ports import ApprovalBrokerPort, UserInputBrokerPort
 from .commands.types import CommandResult
 from .commands.ports import (
     MCPSupervisorPort,
@@ -48,14 +48,6 @@ from .stream_json import (
     dumps_message,
     parse_input_line,
 )
-
-
-class _ApprovalBrokerPort(Protocol):
-    """Session-layer interaction port; the UI broker is injected by the composition root."""
-
-    def expect(self, request_id: str) -> None: ...
-    def resolve_for(self, request_id: str, raw: str) -> Optional[str]: ...
-    def cancel_all(self) -> None: ...
 
 
 _INPUT_DONE = object()
@@ -90,8 +82,8 @@ async def run_stream_json_session(
     initial_prompt: Optional[str] = None,
     input_stream: Optional[TextIO] = None,
     output_stream: Optional[TextIO] = None,
-    approval_broker: Optional[_ApprovalBrokerPort] = None,
-    user_input_broker: Optional[UserInputBroker] = None,
+    approval_broker: Optional[ApprovalBrokerPort] = None,
+    user_input_broker: Optional[UserInputBrokerPort] = None,
     log: Callable[[str], None] = print,
 ) -> int:
     """运行 stream-json 输入输出；返回进程退出码。"""
@@ -211,8 +203,8 @@ async def _run_turn(
     encoder: StreamJsonEncoder,
     controller: SessionController,
     command_counter: Iterator[int],
-    approval_broker: Optional[_ApprovalBrokerPort],
-    user_input_broker: Optional[UserInputBroker],
+    approval_broker: Optional[ApprovalBrokerPort],
+    user_input_broker: Optional[UserInputBrokerPort],
     log: Callable[[str], None],
 ) -> _TurnOutcome:
     """执行一个 turn；同时监听 interrupt/end，并保留后续 user 消息顺序。"""
@@ -372,8 +364,8 @@ async def _monitor_during_turn(
     *,
     writer: _JsonlWriter,
     encoder: StreamJsonEncoder,
-    approval_broker: Optional[_ApprovalBrokerPort],
-    user_input_broker: Optional[UserInputBroker],
+    approval_broker: Optional[ApprovalBrokerPort],
+    user_input_broker: Optional[UserInputBrokerPort],
 ) -> None:
     """在 turn 运行期间消费控制消息，user 消息延后但保持顺序。"""
     while not query.task.done():
@@ -421,7 +413,7 @@ async def _monitor_during_turn(
 
 
 def _resolve_permission(
-    broker: Optional[_ApprovalBrokerPort], request_id: str, decision: str,
+    broker: Optional[ApprovalBrokerPort], request_id: str, decision: str,
 ) -> bool:
     if broker is None:
         return False
@@ -430,7 +422,7 @@ def _resolve_permission(
 
 
 def _resolve_user_input(
-    broker: Optional[UserInputBroker], item: StreamControlMessage,
+    broker: Optional[UserInputBrokerPort], item: StreamControlMessage,
 ) -> bool:
     if broker is None:
         return False
@@ -441,8 +433,8 @@ def _resolve_user_input(
 
 
 def _cancel_interactions(
-    approval_broker: Optional[_ApprovalBrokerPort],
-    user_input_broker: Optional[UserInputBroker],
+    approval_broker: Optional[ApprovalBrokerPort],
+    user_input_broker: Optional[UserInputBrokerPort],
 ) -> None:
     if approval_broker is not None:
         approval_broker.cancel_all()

@@ -40,6 +40,7 @@ from ..session.controller import SessionController
 from ..session.lifecycle import SessionLifecycle
 from ..session.memory import MemoryKind, MemoryScope, MemoryStore
 from ..session.runner import run_session
+from ..session.runtime_ports import SessionRuntimePorts
 from ..session.stream_json_runner import run_stream_json_session
 from ..contracts.tool import ToolContext
 from ..tools.registry import ToolRegistry
@@ -137,8 +138,7 @@ async def _run_headless(root: Path) -> _ScenarioOutcome:
                 no_session=True,
             ),
             runtime,
-            supervisor=None,
-            checkpoints=None,
+            SessionRuntimePorts(),
             usage=_UsageTrackerFactory(),
             model_switch=None,
             skills_reload=None,

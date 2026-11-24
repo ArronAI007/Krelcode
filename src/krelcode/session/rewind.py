@@ -38,7 +38,6 @@ from ..safety.runtime import (
 )
 from ..contracts.tool import PermissionMode
 from .checkpoint import (
-    CheckpointManager,
     CheckpointRestoreError,
     RestoreTurnsResult,
 )
@@ -46,6 +45,7 @@ from .compact_checkpoint import restore_compact_checkpoint
 from .compact_checkpoint import CompactCheckpointStore
 from .context_checkpoint import restore_context_checkpoint
 from .lifecycle import SessionLifecycle
+from .runtime_ports import CheckpointPort, RestoreTurnsResultPort
 
 
 class RewindError(RuntimeError):
@@ -88,7 +88,7 @@ class TurnTimeline:
         bus: EventBus,
         get_history: Callable[[], List[Message]],
         plan_manager: PlanApprovalCoordinator,
-        checkpoints: Optional[CheckpointManager] = None,
+        checkpoints: Optional[CheckpointPort] = None,
         context_checkpoints: Optional[ContextCheckpointStore] = None,
     ) -> None:
         self.bus = bus
@@ -243,7 +243,7 @@ class RewindResult:
     target_turn_id: str
     label: str
     removed_turns: int
-    files: RestoreTurnsResult
+    files: RestoreTurnsResultPort
     context_checkpoint_id: str = ""
 
 
@@ -266,7 +266,7 @@ class RewindCoordinator:
         loop: AgentLoop,
         session_lifecycle: SessionLifecycle,
         plan_manager: PlanApprovalCoordinator,
-        checkpoints: Optional[CheckpointManager] = None,
+        checkpoints: Optional[CheckpointPort] = None,
         compact_checkpoints: Optional[CompactCheckpointStore] = None,
         context_checkpoints: Optional[ContextCheckpointStore] = None,
         context_coordinator: Optional[object] = None,

@@ -450,6 +450,7 @@ def test_session_start_context_and_session_end_hook_run_around_session(tmp_path)
     from krelcode.agent.usage import UsageTracker
     from krelcode.core.redact import SecretRedactor
     from krelcode.session.runner import run_session
+    from krelcode.session.runtime_ports import SessionRuntimePorts
     from types import SimpleNamespace
 
     hooks = HookRunner(tmp_path, [
@@ -472,13 +473,11 @@ def test_session_start_context_and_session_end_hook_run_around_session(tmp_path)
     rc = asyncio.run(run_session(
         args,
         runtime,
-        supervisor=None,
-        checkpoints=None,
+        SessionRuntimePorts(hooks=hooks),
         usage=UsageTracker(),
         model_switch=None,
         skills_reload=None,
         redactor=SecretRedactor(),
-        hooks=hooks,
     ))
     assert rc == 0
     assert loop.runtime_context == ["startup-context"]

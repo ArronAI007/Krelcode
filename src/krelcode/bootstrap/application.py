@@ -6,12 +6,20 @@ import argparse
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, cast
 
+from ..agent.loop import AgentLoop
 from ..agent.runtime import AgentRuntime
+from ..agent.usage import UsageTracker
+from ..core.hooks import HookPort
 from ..core.redact import SecretRedactor
-from ..session.checkpoint import CheckpointManager
-from ..session.interactions import UserInputBroker
+from ..session.commands.ports import ModelSwitchPort, MCPSupervisorPort
+from ..session.input import InputProcessor
 from ..session.runner import run_session
-from ..ui.approval import ApprovalBroker
+from ..session.runtime_ports import (
+    ApprovalBrokerPort,
+    CheckpointPort,
+    SessionRuntimePorts,
+    UserInputBrokerPort,
+)
 from ..ui.repl import run_repl
 from .application_builder import BuiltRuntime, build_application
 from .composition import ExtensionRuntime, RuntimeGraph
@@ -39,22 +47,22 @@ class BootstrappedApplication:
 
     @property
     def runtime(self) -> AgentRuntime:
-        return cast(AgentRuntime, self.graph.core.runtime)
+        return self.graph.core.runtime
 
     @property
-    def supervisor(self) -> Any:
+    def supervisor(self) -> Optional[MCPSupervisorPort]:
         return self.graph.core.supervisor
 
     @property
-    def checkpoints(self) -> Optional[CheckpointManager]:
-        return cast(Optional[CheckpointManager], self.graph.core.checkpoints)
+    def checkpoints(self) -> Optional[CheckpointPort]:
+        return self.graph.core.checkpoints
 
     @property
-    def usage(self) -> Any:
+    def usage(self) -> UsageTracker:
         return self.graph.core.usage
 
     @property
-    def model_switch(self) -> Any:
+    def model_switch(self) -> Optional[ModelSwitchPort]:
         return self.graph.core.model_switch
 
     @property
@@ -63,22 +71,22 @@ class BootstrappedApplication:
 
     @property
     def redactor(self) -> SecretRedactor:
-        return cast(SecretRedactor, self.graph.core.redactor)
+        return self.graph.core.redactor
 
     @property
-    def input_processor(self) -> Any:
+    def input_processor(self) -> Optional[InputProcessor]:
         return self.graph.core.input_processor
 
     @property
-    def approval_broker(self) -> Optional[ApprovalBroker]:
-        return cast(Optional[ApprovalBroker], self.graph.core.approval_broker)
+    def approval_broker(self) -> Optional[ApprovalBrokerPort]:
+        return self.graph.core.approval_broker
 
     @property
-    def input_broker(self) -> Optional[UserInputBroker]:
-        return cast(Optional[UserInputBroker], self.graph.core.input_broker)
+    def input_broker(self) -> Optional[UserInputBrokerPort]:
+        return self.graph.core.input_broker
 
     @property
-    def hooks(self) -> Any:
+    def hooks(self) -> Optional[HookPort]:
         return self.graph.core.hooks
 
     @property
@@ -90,7 +98,7 @@ class BootstrappedApplication:
         return self.graph.core.auditor
 
     @property
-    def loop(self) -> Any:
+    def loop(self) -> AgentLoop:
         return self.graph.core.loop
 
     @property
@@ -102,8 +110,13 @@ class BootstrappedApplication:
         return await run_session(
             self.args,
             core.runtime,
-            supervisor=core.supervisor,
-            checkpoints=core.checkpoints,
+            SessionRuntimePorts(
+                supervisor=core.supervisor,
+                checkpoints=core.checkpoints,
+                hooks=core.hooks,
+                approval=core.approval_broker,
+                user_input=core.input_broker,
+            ),
             usage=core.usage,
             model_switch=core.model_switch,
             skills_reload=self.graph.extensions.reload_skills,
@@ -111,9 +124,6 @@ class BootstrappedApplication:
             input_processor=core.input_processor,
             log=self.note,
             repl_runner=run_repl,
-            approval_broker=core.approval_broker,
-            user_input_broker=core.input_broker,
-            hooks=core.hooks,
         )
 
     async def close(self) -> None:

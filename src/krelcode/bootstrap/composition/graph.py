@@ -8,26 +8,39 @@ construction remains in ``bootstrap.application``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Optional
+
+from ...agent.loop import AgentLoop
+from ...agent.runtime import AgentRuntime
+from ...agent.usage import UsageTracker
+from ...core.hooks import HookPort
+from ...core.redact import SecretRedactor
+from ...session.commands.ports import MCPSupervisorPort, ModelSwitchPort
+from ...session.input import InputProcessor
+from ...session.runtime_ports import (
+    ApprovalBrokerPort,
+    CheckpointPort,
+    UserInputBrokerPort,
+)
 
 
 @dataclass(frozen=True)
 class CoreRuntime:
     """Core services required to run and close one application instance."""
 
-    runtime: Any
-    supervisor: Any
-    checkpoints: Any
-    usage: Any
-    model_switch: Any
-    redactor: Any
-    input_processor: Any
-    approval_broker: Any
-    input_broker: Any
-    hooks: Any
+    runtime: AgentRuntime
+    supervisor: Optional[MCPSupervisorPort]
+    checkpoints: Optional[CheckpointPort]
+    usage: UsageTracker
+    model_switch: Optional[ModelSwitchPort]
+    redactor: SecretRedactor
+    input_processor: Optional[InputProcessor]
+    approval_broker: Optional[ApprovalBrokerPort]
+    input_broker: Optional[UserInputBrokerPort]
+    hooks: Optional[HookPort]
     telemetry_runtime: Any
     auditor: Any
-    loop: Any
+    loop: AgentLoop
 
 
 @dataclass(frozen=True)

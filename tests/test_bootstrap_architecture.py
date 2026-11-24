@@ -7,6 +7,7 @@ from pathlib import Path
 import krelcode.app as app
 from krelcode.bootstrap import main as bootstrap_main
 from krelcode.bootstrap.main import AsyncMain
+from krelcode.session.runtime_ports import SessionRuntimePorts
 from krelcode.ui import conversation_host as host_module
 from krelcode.ui.repl import run_repl
 
@@ -174,7 +175,8 @@ def test_bootstrapped_application_uses_runtime_graph_for_run_and_close(monkeypat
         note=lambda _message: None,
     )
 
-    async def fake_run_session(args, runtime, **kwargs):
+    async def fake_run_session(args, runtime, ports, **kwargs):
+        assert isinstance(ports, SessionRuntimePorts)
         events.append(("run", args.name, runtime, kwargs["skills_reload"]))
         return 23
 
