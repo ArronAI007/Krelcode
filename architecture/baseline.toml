@@ -113,7 +113,17 @@ setattr = 1
 
 [loop_dynamic_access.limits."agent/context_inspection.py"]
 assignments = 0
-getattr = 11
+getattr = 0
+setattr = 0
+
+[loop_dynamic_access.limits."agent/inspection_core.py"]
+assignments = 0
+getattr = 9
+setattr = 0
+
+[loop_dynamic_access.limits."agent/inspection_runtime.py"]
+assignments = 0
+getattr = 2
 setattr = 0
 
 [loop_dynamic_access.limits."session/controller.py"]
