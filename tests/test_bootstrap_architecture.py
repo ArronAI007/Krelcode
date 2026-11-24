@@ -199,3 +199,135 @@ def test_bootstrapped_application_uses_runtime_graph_for_run_and_close(monkeypat
     ]
     assert application.runtime is graph.core.runtime
     assert application.extensions is graph.extensions
+
+
+def test_application_builder_runs_declarative_stages_in_order(monkeypatch):
+    from krelcode.bootstrap import application_builder as builder_module
+
+    events = []
+    created = {}
+    graph = object()
+
+    class FakeContext:
+        note = staticmethod(lambda _message: None)
+
+    class FakeInteractions:
+        pass
+
+    class FakeCore:
+        pass
+
+    class FakeContextServices:
+        pass
+
+    class FakeExtensions:
+        pass
+
+    class FakeSession:
+        pass
+
+    async def build_context(args):
+        events.append(("context", args))
+        created["context"] = FakeContext()
+        return created["context"]
+
+    def build_interactions(context):
+        events.append(("interactions", context))
+        created["interactions"] = FakeInteractions()
+        return created["interactions"]
+
+    async def build_core(context, interactions):
+        events.append(("core", context, interactions))
+        created["core"] = FakeCore()
+        return created["core"]
+
+    def build_context_services(context, core):
+        events.append(("context_services", context, core))
+        created["context_services"] = FakeContextServices()
+        return created["context_services"]
+
+    def build_extensions(context, core, context_services):
+        events.append(("extensions", context, core, context_services))
+        created["extensions"] = FakeExtensions()
+        return created["extensions"]
+
+    async def build_session(context, core):
+        events.append(("session", context, core))
+        created["session"] = FakeSession()
+        return created["session"]
+
+    def build_graph(**services):
+        events.append(("graph", services))
+        return graph
+
+    monkeypatch.setattr(
+        builder_module, "build_application_context", build_context)
+    monkeypatch.setattr(
+        builder_module, "build_interaction_services", build_interactions)
+    monkeypatch.setattr(builder_module, "build_core_services", build_core)
+    monkeypatch.setattr(
+        builder_module, "build_context_services", build_context_services)
+    monkeypatch.setattr(
+        builder_module, "build_extension_services", build_extensions)
+    monkeypatch.setattr(
+        builder_module, "build_session_services", build_session)
+    monkeypatch.setattr(builder_module, "build_runtime_graph", build_graph)
+
+    args = argparse.Namespace(name="ordered")
+    built = asyncio.run(builder_module.build_application(args))
+
+    assert built.graph is graph
+    assert [event[0] for event in events] == [
+        "context",
+        "interactions",
+        "core",
+        "context_services",
+        "extensions",
+        "session",
+        "graph",
+    ]
+    graph_services = events[-1][1]
+    assert graph_services == {
+        "core": created["core"],
+        "context": created["context_services"],
+        "extensions": created["extensions"],
+        "session": created["session"],
+        "interactions": created["interactions"],
+    }
+
+
+def test_application_builder_turns_stage_failure_into_exit_code(
+    monkeypatch, capsys,
+):
+    from krelcode.bootstrap import application_builder as builder_module
+
+    async def fail(_args):
+        raise builder_module.BuildStageError("invalid bootstrap input")
+
+    monkeypatch.setattr(builder_module, "build_application_context", fail)
+
+    assert asyncio.run(
+        builder_module.build_application(argparse.Namespace())) == 2
+    assert "invalid bootstrap input" in capsys.readouterr().err
+
+
+def test_runtime_graph_contracts_have_no_any_fields():
+    from krelcode.bootstrap.composition import CoreRuntime, ExtensionRuntime
+
+    for contract in (CoreRuntime, ExtensionRuntime):
+        assert all(
+            "Any" not in annotation
+            for annotation in contract.__annotations__.values()
+        )
+
+
+def test_application_builder_is_a_thin_stage_orchestrator():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "krelcode"
+        / "bootstrap"
+        / "application_builder.py"
+    )
+    lines = source.read_text(encoding="utf-8").splitlines()
+    assert len(lines) < 100

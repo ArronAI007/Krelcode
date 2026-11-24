@@ -1,27 +1,51 @@
 """Explicit runtime composition graph for a bootstrapped application.
 
-The graph separates process-facing core services from hot-reloadable extension
-surfaces.  It deliberately contains only runtime-ready objects and callables;
-construction remains in ``bootstrap.application``.
+The graph separates process-facing runtime services from hot-reloadable
+extension surfaces. It contains runtime-ready objects and narrow ports only;
+construction belongs to ``bootstrap.application_stages``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional, Protocol, Tuple
 
 from ...agent.loop import AgentLoop
 from ...agent.runtime import AgentRuntime
 from ...agent.usage import UsageTracker
+from ...core.events import EventBus
 from ...core.hooks import HookPort
 from ...core.redact import SecretRedactor
-from ...session.commands.ports import MCPSupervisorPort, ModelSwitchPort
+from ...extensions import ExtensionRecord, ExtensionRegistry
+from ...plugins import PluginManager, PluginRecord
+from ...session.commands.custom import CustomCommandManager
+from ...session.commands.ports import (
+    MCPSupervisorPort,
+    ModelSwitchPort,
+    SkillReloadPort,
+)
 from ...session.input import InputProcessor
 from ...session.runtime_ports import (
     ApprovalBrokerPort,
     CheckpointPort,
     UserInputBrokerPort,
 )
+from ...skills import SkillManager
+from ...subagent.definition import AgentDefinitionManager
+
+
+class TelemetryRuntimePort(Protocol):
+    """Lifecycle surface required by the application host."""
+
+    def attach(self, bus: EventBus) -> None: ...
+
+    async def close(self) -> None: ...
+
+
+class AuditorPort(Protocol):
+    """Lifecycle surface required to detach an enterprise auditor."""
+
+    def detach(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -38,8 +62,8 @@ class CoreRuntime:
     approval_broker: Optional[ApprovalBrokerPort]
     input_broker: Optional[UserInputBrokerPort]
     hooks: Optional[HookPort]
-    telemetry_runtime: Any
-    auditor: Any
+    telemetry_runtime: TelemetryRuntimePort
+    auditor: Optional[AuditorPort]
     loop: AgentLoop
 
 
@@ -47,15 +71,15 @@ class CoreRuntime:
 class ExtensionRuntime:
     """Hot-reloadable extension surfaces exposed to command/tool consumers."""
 
-    plugin_manager: Any
-    skill_manager: Any
-    agent_definitions: Any
-    extension_registry: Any
-    custom_commands: Any
-    refresh: Callable[[], Any]
-    reload_skills: Callable[[], Any]
-    reload_plugins: Callable[[], Awaitable[Any]]
-    reload_custom_commands: Callable[[], Any]
+    plugin_manager: PluginManager
+    skill_manager: SkillManager
+    agent_definitions: AgentDefinitionManager
+    extension_registry: ExtensionRegistry
+    custom_commands: CustomCommandManager
+    refresh: Callable[[], Tuple[ExtensionRecord, ...]]
+    reload_skills: SkillReloadPort
+    reload_plugins: Callable[[], Awaitable[Tuple[PluginRecord, ...]]]
+    reload_custom_commands: Callable[[], CustomCommandManager]
 
 
 @dataclass(frozen=True)
@@ -66,4 +90,10 @@ class RuntimeGraph:
     extensions: ExtensionRuntime
 
 
-__all__ = ["CoreRuntime", "ExtensionRuntime", "RuntimeGraph"]
+__all__ = [
+    "AuditorPort",
+    "CoreRuntime",
+    "ExtensionRuntime",
+    "RuntimeGraph",
+    "TelemetryRuntimePort",
+]

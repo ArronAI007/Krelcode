@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, cast
+from typing import Callable, Optional
 
 from ..agent.loop import AgentLoop
 from ..agent.runtime import AgentRuntime
 from ..agent.usage import UsageTracker
 from ..core.hooks import HookPort
 from ..core.redact import SecretRedactor
-from ..session.commands.ports import ModelSwitchPort, MCPSupervisorPort
+from ..session.commands.ports import (
+    MCPSupervisorPort,
+    ModelSwitchPort,
+    SkillReloadPort,
+)
 from ..session.input import InputProcessor
 from ..session.runner import run_session
 from ..session.runtime_ports import (
@@ -23,6 +27,7 @@ from ..session.runtime_ports import (
 from ..ui.repl import run_repl
 from .application_builder import BuiltRuntime, build_application
 from .composition import ExtensionRuntime, RuntimeGraph
+from .composition.graph import AuditorPort, TelemetryRuntimePort
 
 
 async def create_application(
@@ -66,7 +71,7 @@ class BootstrappedApplication:
         return self.graph.core.model_switch
 
     @property
-    def reload_skills(self) -> Any:
+    def reload_skills(self) -> SkillReloadPort:
         return self.graph.extensions.reload_skills
 
     @property
@@ -90,11 +95,11 @@ class BootstrappedApplication:
         return self.graph.core.hooks
 
     @property
-    def telemetry_runtime(self) -> Any:
+    def telemetry_runtime(self) -> TelemetryRuntimePort:
         return self.graph.core.telemetry_runtime
 
     @property
-    def auditor(self) -> Any:
+    def auditor(self) -> Optional[AuditorPort]:
         return self.graph.core.auditor
 
     @property
