@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -41,7 +42,7 @@ from ..core.redact import SecretRedactor
 AUDIT_SCHEMA = 1
 AUDIT_MODES = ("off", "hash-chain", "hmac")
 DEFAULT_MAX_VALUE_CHARS = 4_000
-_SENSITIVE_KEY_RE = __import__("re").compile(
+_SENSITIVE_KEY_RE = re.compile(
     r"(?i)(?:api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|"
     r"id[_-]?token|client[_-]?secret|secret|password|passwd|cookie|"
     r"authorization|proxy[_-]?authorization|private[_-]?key)"

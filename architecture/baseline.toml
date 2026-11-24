@@ -2,6 +2,17 @@ version = 1
 
 # Benchmark domains are now acyclic. Any future intra-package cycle fails the
 # architecture gate rather than being admitted into this baseline.
+[dynamic_import]
+# Dynamic loading bypasses static import analysis. Keep it visible and confined
+# to process dispatch, optional adapters, plugin loading and benchmark facades.
+allowed_files = [
+  "benchmarks/behavior.py",
+  "browser/runtime.py",
+  "entrypoints/cli.py",
+  "plugins/loader.py",
+  "tools/symbols.py",
+]
+
 [file_size]
 # New production files may not exceed this limit. Files already above it are
 # capped at their current size and may only shrink.

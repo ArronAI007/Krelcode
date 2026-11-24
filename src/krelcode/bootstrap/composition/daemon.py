@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ._deps import *  # noqa: F401,F403
 from .mcp import build_mcp_roots, build_mcp_sampler, compose_mcp_config
+from ..parser import build_parser as _build_parser
 from .runtime import build_loop
 
 
@@ -12,16 +13,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     CLI ownership now lives in :mod:`krelcode.entrypoints.main`.
     """
-    module = importlib.import_module("krelcode.entrypoints.main")
-    return module.build_parser()
+    return _build_parser()
 
 
 async def build_daemon_agent_runtime(request):
     """Composition-root factory for daemon-owned subagent runtimes."""
     from ...daemon.server import DaemonAgentRuntime
 
-    build_parser = importlib.import_module(
-        "krelcode.entrypoints.main").build_parser
     from ...mcp.supervisor import MCPSupervisor
 
     argv = ["--workspace", str(request.workspace_root)]

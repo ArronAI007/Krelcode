@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import importlib
 import json
+import os
 import re
+import subprocess
+import sys
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -571,15 +573,35 @@ class FinalAcceptanceRunner:
     def _probe_entrypoints(self):
         if self.entrypoint_probe is not None:
             return self.entrypoint_probe()
-        # Entrypoints are the process composition boundary above benchmarks.
-        # Runtime discovery keeps the static dependency graph acyclic while the
-        # acceptance probe still exercises the real callables.
-        cli = importlib.import_module("krelcode.entrypoints.cli")
-        main = importlib.import_module("krelcode.entrypoints.main")
-        passed = callable(cli.main) and callable(main.main)
-        return passed, "fast and full entrypoints are callable", {
-            "fast_path_callable": callable(cli.main),
-            "full_path_callable": callable(main.main),
+        # Exercise the real process boundary without importing it from the
+        # benchmark package. Subprocess probes preserve one-way dependencies.
+        env = dict(os.environ)
+        env.pop("PYTHONHOME", None)
+        fast = subprocess.run(
+            [sys.executable, "-m", "krelcode", "--version"],
+            cwd=self.workspace,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        full = subprocess.run(
+            [sys.executable, "-m", "krelcode", "--help"],
+            cwd=self.workspace,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        fast_ok = fast.returncode == 0 and fast.stdout.startswith("krelcode ")
+        full_ok = full.returncode == 0 and "usage: krelcode" in full.stdout
+        return fast_ok and full_ok, "fast and full entrypoints are callable", {
+            "fast_path_callable": fast_ok,
+            "full_path_callable": full_ok,
+            "fast_path_exit_code": fast.returncode,
+            "full_path_exit_code": full.returncode,
         }
 
     def _probe_provider(self):

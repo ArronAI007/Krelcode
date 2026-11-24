@@ -8,6 +8,7 @@ the executable entry point and report rendering stable.
 from __future__ import annotations
 
 import argparse
+import sys
 import json
 from pathlib import Path
 from typing import Sequence
@@ -192,7 +193,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             cases=cases, sdk_timeout=args.sdk_timeout,
         ).run(requested)
     except ValueError as exc:
-        print(str(exc), file=__import__("sys").stderr)
+        print(str(exc), file=sys.stderr)
         return 2
     if args.json:
         print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2))

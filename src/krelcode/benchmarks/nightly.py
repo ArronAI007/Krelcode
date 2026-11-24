@@ -8,6 +8,7 @@ step summaries; it never copies answers, tool arguments or Prompt bodies.
 from __future__ import annotations
 
 import argparse
+import sys
 import json
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -116,7 +117,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         print(render_nightly_summary(args.summary), end="")
     except ValueError as exc:
-        print(str(exc), file=__import__("sys").stderr)
+        print(str(exc), file=sys.stderr)
         return 2
     return 0
 

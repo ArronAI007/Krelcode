@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib
 import json
 import sys
 from pathlib import Path
@@ -27,7 +26,10 @@ from ..llm.registry import (
     create_provider,
     resolve_settings,
 )
+from .behavior_cases import BEHAVIOR_CASES
 from .behavior_models import BehaviorReport
+from .behavior_runner import BehaviorBenchmarkRunner
+from .acceptance_runner import FinalAcceptanceRunner
 from .parity import (
     PROMPT_PARITY_CONTRACT,
     PROMPT_PARITY_MINIMUM_TRIALS,
@@ -244,21 +246,37 @@ def _parity_payload(
     return payload
 
 
+def _loaded_attr(module_name: str, name: str, fallback):
+    """Read an already-loaded compatibility facade without importing it."""
+    module = sys.modules.get(module_name)
+    return getattr(module, name, fallback) if module is not None else fallback
+
+
 def run_live_command(args: argparse.Namespace) -> int:
     """CLI adapter used by ``python -m krelcode.benchmarks.prompt --live``."""
-    behavior = importlib.import_module(".behavior", __package__)
-    # Resolve these through the compatibility facade so existing monkeypatch and
-    # plugin seams keep targeting ``krelcode.benchmarks.behavior``.
-    BEHAVIOR_CASES = behavior.BEHAVIOR_CASES
-    BehaviorBenchmarkRunner = behavior.BehaviorBenchmarkRunner
-    aggregate_behavior_report_files = behavior.aggregate_behavior_report_files
-    create_provider = behavior.create_provider
-    load_config_layers = behavior.load_config_layers
-    prompt_profile_from_config = behavior.prompt_profile_from_config
-    prompt_release_id_from_config = behavior.prompt_release_id_from_config
-    resolve_prompt_profile = behavior.resolve_prompt_profile
-    resolve_settings = behavior.resolve_settings
-    save_behavior_report = behavior.save_behavior_report
+    # Use focused modules by default.  If the historical compatibility facade
+    # is already loaded (for tests, plugins or embedders), honor its patched
+    # symbols without creating a live_cli -> facade dependency edge.
+    behavior = "krelcode.benchmarks.behavior"
+    behavior_cases = _loaded_attr(behavior, "BEHAVIOR_CASES", BEHAVIOR_CASES)
+    behavior_runner = _loaded_attr(
+        behavior, "BehaviorBenchmarkRunner", BehaviorBenchmarkRunner)
+    aggregate_reports = _loaded_attr(
+        behavior, "aggregate_behavior_report_files",
+        aggregate_behavior_report_files)
+    provider_factory = _loaded_attr(behavior, "create_provider", create_provider)
+    config_loader = _loaded_attr(
+        behavior, "load_config_layers", load_config_layers)
+    profile_from_config = _loaded_attr(
+        behavior, "prompt_profile_from_config", prompt_profile_from_config)
+    release_from_config = _loaded_attr(
+        behavior, "prompt_release_id_from_config", prompt_release_id_from_config)
+    resolve_profile = _loaded_attr(
+        behavior, "resolve_prompt_profile", resolve_prompt_profile)
+    settings_resolver = _loaded_attr(
+        behavior, "resolve_settings", resolve_settings)
+    report_saver = _loaded_attr(
+        behavior, "save_behavior_report", save_behavior_report)
     try:
         suite = resolve_suite(getattr(args, "suite", "standard"))
     except BenchmarkSuiteError as exc:
@@ -291,7 +309,7 @@ def run_live_command(args: argparse.Namespace) -> int:
                   "baseline/final-acceptance/content/tune 混用", file=sys.stderr)
             return 2
         try:
-            report = aggregate_behavior_report_files(aggregate_paths)
+            report = aggregate_reports(aggregate_paths)
         except (OSError, TypeError, ValueError) as exc:
             print(f"benchmark shard 聚合失败: {_safe_error(exc)}", file=sys.stderr)
             return 2
@@ -302,7 +320,7 @@ def run_live_command(args: argparse.Namespace) -> int:
             if not destination.is_absolute():
                 destination = Path.cwd() / destination
             try:
-                saved_path = str(save_behavior_report(report, destination))
+                saved_path = str(report_saver(report, destination))
             except (OSError, TypeError, ValueError) as exc:
                 print(f"live report 保存失败: {_safe_error(exc)}", file=sys.stderr)
                 return 2
@@ -365,7 +383,7 @@ def run_live_command(args: argparse.Namespace) -> int:
 
     if getattr(args, "list", False):
         requested = tuple(getattr(args, "case", []) or ())
-        available = suite.select(case.id for case in BEHAVIOR_CASES)
+        available = suite.select(case.id for case in behavior_cases)
         unknown = sorted(set(requested) - set(available))
         if unknown:
             print("suite 中不存在 benchmark case: " + ", ".join(unknown),
@@ -379,7 +397,7 @@ def run_live_command(args: argparse.Namespace) -> int:
             print(str(exc), file=sys.stderr)
             return 2
         selected = set(selected_ids)
-        cases = [case for case in BEHAVIOR_CASES if case.id in selected]
+        cases = [case for case in behavior_cases if case.id in selected]
         if getattr(args, "json", False):
             print(json.dumps(
                 [case.as_dict() for case in cases],
@@ -430,7 +448,7 @@ def run_live_command(args: argparse.Namespace) -> int:
         print("gate/baseline/final acceptance 必须运行完整 case manifest，"
               "不能同时指定 --case", file=sys.stderr)
         return 2
-    available_ids = suite.select(case.id for case in BEHAVIOR_CASES)
+    available_ids = suite.select(case.id for case in behavior_cases)
     outside_suite = sorted(set(requested_cases) - set(available_ids))
     if outside_suite:
         print("suite 中不存在 benchmark case: " + ", ".join(outside_suite),
@@ -446,7 +464,7 @@ def run_live_command(args: argparse.Namespace) -> int:
         return 2
     if (gate_path or save_path or final_acceptance) and (
             suite.name == "smoke"
-            or len(selected_case_ids) != len(BEHAVIOR_CASES)
+            or len(selected_case_ids) != len(behavior_cases)
             or bool(getattr(args, "shard", None))):
         print("gate/baseline/final acceptance 必须使用完整未分片 suite",
               file=sys.stderr)
@@ -466,23 +484,23 @@ def run_live_command(args: argparse.Namespace) -> int:
             Path(args.config).expanduser()
             if getattr(args, "config", None) else None)
         bundle = (
-            load_config_layers(explicit_path=config_path)
+            config_loader(explicit_path=config_path)
             if config_path is not None
-            else load_config_layers(workspace=workspace)
+            else config_loader(workspace=workspace)
         )
         if config_path is not None and not bundle.sources:
             raise ValueError(f"配置文件不存在: {config_path}")
-        settings = resolve_settings(
+        settings = settings_resolver(
             provider=getattr(args, "provider", None),
             model=getattr(args, "model", None),
             base_url=getattr(args, "base_url", None),
             config=bundle.data,
         )
-        prompt_resolution = resolve_prompt_profile(
+        prompt_resolution = resolve_profile(
             settings.provider,
             settings.model or "provider-default",
-            configured=prompt_profile_from_config(bundle.data),
-            release_id=prompt_release_id_from_config(bundle.data),
+            configured=profile_from_config(bundle.data),
+            release_id=release_from_config(bundle.data),
             calibrations=_configured_prompt_calibrations(
                 bundle.data, workspace),
         )
@@ -504,13 +522,13 @@ def run_live_command(args: argparse.Namespace) -> int:
         return 2
 
     def factory() -> LLMProvider:
-        return create_provider(settings)
+        return provider_factory(settings)
 
     requested_trials = int(getattr(args, "trials", 0) or 0)
     trials = requested_trials or suite.default_trials
     if gate_path or save_path:
         trials = max(trials, PROMPT_PARITY_MINIMUM_TRIALS)
-    runner = BehaviorBenchmarkRunner(
+    runner = behavior_runner(
         factory,
         trials=trials,
         max_steps=getattr(args, "live_max_steps", 14),
@@ -548,7 +566,7 @@ def run_live_command(args: argparse.Namespace) -> int:
         if not destination.is_absolute():
             destination = workspace / destination
         try:
-            saved_report_path = str(save_behavior_report(report, destination))
+            saved_report_path = str(report_saver(report, destination))
         except (OSError, TypeError, ValueError) as exc:
             print(f"live report 保存失败: {_safe_error(exc)}", file=sys.stderr)
             return 2
@@ -584,8 +602,12 @@ def run_live_command(args: argparse.Namespace) -> int:
         if gate_result is None:
             print("final acceptance 缺少 live Parity Gate", file=sys.stderr)
             return 2
-        acceptance = importlib.import_module(".acceptance", __package__)
-        acceptance_report = acceptance.FinalAcceptanceRunner(
+        acceptance_runner = _loaded_attr(
+            "krelcode.benchmarks.acceptance",
+            "FinalAcceptanceRunner",
+            FinalAcceptanceRunner,
+        )
+        acceptance_report = acceptance_runner(
             workspace=workspace,
         ).run(
             include_sdk=True,

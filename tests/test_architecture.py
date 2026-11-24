@@ -13,9 +13,83 @@ ROOT = PROJECT_ROOT / "src" / "krelcode"
 BASELINE_PATH = PROJECT_ROOT / "architecture" / "baseline.toml"
 
 
+DYNAMIC_IMPORT_CALLS = frozenset({
+    "importlib.import_module",
+    "importlib.util.find_spec",
+    "importlib.util.spec_from_file_location",
+    "importlib.util.module_from_spec",
+    "__import__",
+})
+
+
+def _module_name(path: Path) -> str:
+    parts = list(path.relative_to(ROOT.parent).with_suffix("").parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
+
+
+def _module_package(path: Path) -> str:
+    module = _module_name(path)
+    return module if path.name == "__init__.py" else module.rpartition(".")[0]
+
+
+def _qualified_name(node: ast.AST, aliases: dict[str, str]) -> str:
+    if isinstance(node, ast.Name):
+        return aliases.get(node.id, node.id)
+    if isinstance(node, ast.Attribute):
+        return f"{_qualified_name(node.value, aliases)}.{node.attr}"
+    return ""
+
+
+def _resolve_dynamic_target(path: Path, value: str) -> str:
+    if not value.startswith("."):
+        return value
+    package = _module_package(path)
+    level = len(value) - len(value.lstrip("."))
+    suffix = value.lstrip(".")
+    parts = package.split(".") if package else []
+    if level > 1:
+        parts = parts[: -(level - 1)]
+    if suffix:
+        parts.extend(suffix.split("."))
+    return ".".join(part for part in parts if part)
+
+
+def _dynamic_import_calls(path: Path) -> tuple[tuple[str, str | None], ...]:
+    """Return ``(kind, resolved_target)`` for dynamic module-loading calls."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    aliases[alias.asname] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                aliases[alias.asname or alias.name] = (
+                    f"{node.module}.{alias.name}")
+    calls: list[tuple[str, str | None]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        kind = _qualified_name(node.func, aliases)
+        if kind not in DYNAMIC_IMPORT_CALLS:
+            continue
+        target = None
+        if node.args and isinstance(node.args[0], ast.Constant) and isinstance(
+            node.args[0].value, str
+        ):
+            raw = node.args[0].value
+            if kind != "importlib.util.spec_from_file_location":
+                target = _resolve_dynamic_target(path, raw)
+        calls.append((kind, target))
+    return tuple(sorted(calls, key=lambda item: (item[0], item[1] or "")))
+
+
 @lru_cache(maxsize=None)
 def imported_modules(path: Path) -> set[str]:
-    """返回 Python 文件中的静态 import 及相对 import 的完整模块名。"""
+    """Return static and resolvable dynamic imports for one module."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     module_parts = list(path.relative_to(ROOT.parent).with_suffix("").parts)
     package_parts = module_parts[:-1]
@@ -41,6 +115,10 @@ def imported_modules(path: Path) -> set[str]:
                 # module graph and cycle gate see real imports.
                 if node.module is None:
                     found.update(f"{imported}.{alias.name}" for alias in node.names)
+    found.update(
+        target for _kind, target in _dynamic_import_calls(path)
+        if target is not None
+    )
     return found
 
 
@@ -184,6 +262,29 @@ def test_module_cycles_match_the_frozen_baseline():
     }
 
 
+def test_dynamic_module_loading_is_confined_to_reviewed_boundaries():
+    policy = architecture_baseline().get("dynamic_import", {})
+    allowed = set(policy.get("allowed_files", ()))
+    actual = {
+        path.relative_to(ROOT).as_posix()
+        for path in ROOT.rglob("*.py")
+        if "__pycache__" not in path.parts and _dynamic_import_calls(path)
+    }
+    assert actual == allowed, {
+        "new_dynamic_loaders": sorted(actual - allowed),
+        "stale_allowlist": sorted(allowed - actual),
+    }
+
+
+def test_resolvable_dynamic_imports_are_part_of_the_module_graph():
+    graph = imported_module_dependencies()
+    assert "krelcode.entrypoints.main" in graph["krelcode.entrypoints.cli"]
+    # The live CLI consumes focused benchmark modules directly.  The
+    # compatibility facade may point at live_cli, but the executable domain
+    # must not point back at the facade (which would create a package cycle).
+    assert "krelcode.benchmarks.behavior" not in graph["krelcode.benchmarks.live_cli"]
+
+
 def test_oversized_files_match_the_frozen_baseline():
     baseline = architecture_baseline()["file_size"]
     limits = baseline["limits"]
@@ -320,12 +421,12 @@ PACKAGE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "daemon": frozenset({"app", "config", "core", "jobs", "safety", "subagent"}),
     "telemetry": frozenset({"core"}),
     "benchmarks": frozenset({
-        "agent", "app", "config", "contracts", "core", "extensions", "llm",
-        "safety", "sdk", "session", "subagent", "tools",
+        "agent", "app", "bootstrap", "config", "contracts", "core",
+        "extensions", "llm", "safety", "sdk", "session", "subagent", "tools",
     }),
     "entrypoints": frozenset({
-        "agent", "app", "benchmarks", "config", "core", "daemon", "doctor",
-        "enterprise", "jobs", "review", "scaffold", "security_review",
+        "agent", "app", "benchmarks", "bootstrap", "config", "core", "daemon",
+        "doctor", "enterprise", "jobs", "review", "scaffold", "security_review",
         "telemetry",
     }),
 }

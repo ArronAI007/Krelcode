@@ -25,7 +25,7 @@ from ..agent.prompt_surface_catalog import refresh_prompt_surfaces
 from ..agent.rules import RuleLoader
 from ..agent.usage import UsageTracker
 from ..agent.working_context import WorkingContextStore
-from ..app import default_tools
+from ..bootstrap.composition.tools import default_tools
 from ..core.events import EventBus
 from ..core.redact import SecretRedactor
 from ..llm.base import LLMProvider
