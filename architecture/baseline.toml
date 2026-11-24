@@ -33,7 +33,6 @@ max_unlisted_lines = 800
 "enterprise/auth.py" = 848
 "llm/base.py" = 816
 "safety/sandbox.py" = 926
-"session/memory_candidates.py" = 1157
 "tools/builtin/database_migration.py" = 892
 "ui/diff_review.py" = 919
 
