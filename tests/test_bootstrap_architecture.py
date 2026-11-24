@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ast
 from pathlib import Path
 
 import krelcode.app as app
@@ -17,6 +18,31 @@ def test_app_facade_preserves_public_composition_symbols():
     assert callable(app.async_main)
     assert callable(app.build_parser)
     assert callable(app.default_tools)
+
+
+def test_composition_implementations_use_explicit_dependencies():
+    composition_root = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "krelcode"
+        / "bootstrap"
+        / "composition"
+    )
+    violations: dict[str, int] = {}
+    for path in sorted(composition_root.glob("*.py")):
+        if path.name in {"__init__.py", "_deps.py"}:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            imports_bag = node.module == "_deps" or (
+                node.module is None
+                and any(alias.name == "_deps" for alias in node.names)
+            )
+            if imports_bag:
+                violations[path.name] = node.lineno
+    assert not violations, violations
 
 
 def test_bootstrap_has_explicit_build_phases_and_thin_host():

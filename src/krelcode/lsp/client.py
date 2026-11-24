@@ -20,6 +20,7 @@ import asyncio
 import json
 import os
 import re
+from types import TracebackType
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -511,7 +512,12 @@ class LSPClient:
     async def __aenter__(self) -> "LSPClient":
         return await self.start()
 
-    async def __aexit__(self, exc_type, exc, tb) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         await self.close()
 
 

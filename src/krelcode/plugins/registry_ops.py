@@ -6,11 +6,11 @@ import asyncio
 import os
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 from .dependencies import DependencyNode, resolve_dependencies
-from .manifest import PluginManifestError, parse_manifest
-from .models import PluginLifecycleResult
+from .manifest import PluginManifest, PluginManifestError, parse_manifest
+from .models import PluginLifecycleResult, PluginRecord
 from .registry import (
     PluginRegistry,
     PluginRegistryError,
@@ -24,10 +24,41 @@ from .signing import PluginSignatureError, PluginVerification
 from .trust import (
     PluginRegistryConfig,
     PluginTrustError,
+    PluginTrustStore,
     TrustedPluginKey,
 )
 
+
 class PluginRegistryMixin:
+    if TYPE_CHECKING:
+        trust_store: PluginTrustStore
+        _records: tuple[PluginRecord, ...]
+        _discovered_manifests: dict[str, PluginManifest]
+        _verification: dict[str, PluginVerification]
+
+        @property
+        def user_root(self) -> Path: ...
+
+        @property
+        def project_root(self) -> Path: ...
+
+        def _verify_manifest(self, manifest: PluginManifest) -> PluginVerification: ...
+
+        def _install_sync(
+            self,
+            source: Path,
+            scope: str,
+            replace: bool,
+            require_signature: Optional[bool] = None,
+            registry_metadata: Optional[Mapping[str, Any]] = None,
+        ) -> PluginLifecycleResult: ...
+
+        def _load_state(self) -> dict[str, bool]: ...
+
+        def _write_state(self, state: Mapping[str, bool]) -> None: ...
+
+        def _expand_path(self, path: str | Path) -> Path: ...
+
     def _resolve_registry_bundle(
         self,
         registry: PluginRegistry,
@@ -273,4 +304,3 @@ class PluginRegistryMixin:
 
     def revoke_trusted_key(self, registry: str, key_id: str) -> TrustedPluginKey:
         return self.trust_store.set_revoked(registry, key_id, True)
-

@@ -2,11 +2,60 @@
 
 from __future__ import annotations
 
-from typing import Callable, Tuple, cast
+import argparse
+from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
-from ._deps import *  # noqa: F401,F403
+from krelcode.agent.context import CONTEXT_ENGINE_V3
+from krelcode.agent.context.context_assembler import ContextAssembler
+from krelcode.agent.context.context_checkpoint import (
+    ContextCheckpointCoordinator,
+    ContextCheckpointStore,
+)
+from krelcode.agent.context.context_source import (
+    DirectoryRulesContextSource,
+    default_context_sources,
+)
+from krelcode.agent.context.working_context import WorkingContextStore
+from krelcode.agent.prompt.cyber_risk import cyber_risk_fragment
+from krelcode.agent.prompt.fragments import (
+    PromptFragmentRegistry,
+    apply_prompt_snapshot,
+    base_fragments,
+    skills_fragment,
+    sync_rule_fragments,
+)
+from krelcode.agent.prompt.memory_contract import memory_contract_fragment
+from krelcode.agent.prompt.prompt_authoring import prompt_authoring_fragment
+from krelcode.agent.prompt.prompt_lab_tool import PromptLabTool
+from krelcode.agent.prompt.prompt_release_pipeline import (
+    PromptReleaseApprovalService,
+    PromptReleasePipeline,
+    PromptReleaseProposalStore,
+)
+from krelcode.agent.prompt.prompt_surface_catalog import refresh_prompt_surfaces
+from krelcode.agent.turn.loop import AgentLoop
+from krelcode.contracts.service_ports import PrincipalPort
+from krelcode.contracts.tool import Tool, ToolDescriptor, ToolSource
+from krelcode.enterprise.policy import EnterprisePolicy
+from krelcode.extensions import ExtensionRegistry, replace_runtime_extensions
+from krelcode.llm.base import LLMProvider
+from krelcode.output_styles import OutputStyleConfig, OutputStyleManager
+from krelcode.safety.policy import Approver
+from krelcode.session.compact_checkpoint import CompactCheckpointStore
+from krelcode.session.memory import sync_memory_fragment
+from krelcode.session.memory_candidates import AutoMemoryCoordinator
+from krelcode.session.restore import refresh_skill_system_prompt
+from krelcode.subagent.definition import AgentDefinitionManager
+from krelcode.subagent.manager import SubagentManager
+from krelcode.subagent.models import build_subagent_system_prompt
+from krelcode.tools.registry import ToolRegistry
+from krelcode.ui.status_line import StatusLineOptions, StatusLineRenderer
+
 from ...agent.prompt.fragments import PromptFragment
-from ...contracts.service_ports import PromptFragmentRegistryPort, PromptReleasePipelinePort
+from ...contracts.service_ports import (
+    PromptFragmentRegistryPort,
+    PromptReleasePipelinePort,
+)
 from ...core.interactions import UserInputPort
 from ...extensions import ExtensionRecord
 from ...plugins import PluginRecord
@@ -14,20 +63,15 @@ from ...subagent.sidechain import SidechainStore
 from .foundation import build_runtime_foundation
 from .mcp import compose_mcp_config
 from .memory import resolve_auto_memory_mode, resolve_auto_memory_thresholds
-from .model_switcher import (
-    SubagentManagerPort as _SubagentManagerPort,
-)
-from .services import (
-    PersistenceServices,
-    RuntimeServiceBinder,
-    RuntimeServices,
-)
+from .model_switcher import SubagentManagerPort as _SubagentManagerPort
+from .services import PersistenceServices, RuntimeServiceBinder, RuntimeServices
 from .subagents import build_subagent_llm_resolver
 from .tools import default_tools
 
 
 def _default_log(message: str) -> None:
     print(message)
+
 
 async def build_loop(
     args: argparse.Namespace,
@@ -121,29 +165,35 @@ async def build_loop(
                 if tool is not None:
                     tools.append(tool)
         return tools
+
     registry = ToolRegistry(builtin_tools)
     for tool in skill_tools:
-        registry.register(
-            tool, ToolDescriptor.from_tool(tool, source=ToolSource.SKILL))
+        registry.register(tool, ToolDescriptor.from_tool(tool, source=ToolSource.SKILL))
     for tool in extra_tools or []:
         try:
             registry.register(
-                tool, ToolDescriptor.from_tool(tool, source=ToolSource.PLUGIN))
+                tool, ToolDescriptor.from_tool(tool, source=ToolSource.PLUGIN)
+            )
         except ValueError as exc:
             log(f"[plugins] 工具注册失败，已隔离: {getattr(tool, 'name', '?')}: {exc}")
     for tool in plugin_tools:
         try:
             registry.register(
-                tool, ToolDescriptor.from_tool(tool, source=ToolSource.PLUGIN))
+                tool, ToolDescriptor.from_tool(tool, source=ToolSource.PLUGIN)
+            )
         except ValueError as exc:
             log(f"[plugins] 工具注册失败，已隔离: {tool.name}: {exc}")
     agent_definitions = AgentDefinitionManager(
-        workspace_root, extra_paths=plugin_manager.agent_paths)
+        workspace_root, extra_paths=plugin_manager.agent_paths
+    )
     if agent_definitions.list():
-        log("[agents] 已加载 Agent Definition: "
-            + ", ".join(item.name for item in agent_definitions.list()))
+        log(
+            "[agents] 已加载 Agent Definition: "
+            + ", ".join(item.name for item in agent_definitions.list())
+        )
     for agent_issue in agent_definitions.issues:
         log(f"[agents] 跳过无效定义: {agent_issue.path}: {agent_issue.message}")
+
     def subagent_base_prompt(child_llm: LLMProvider) -> str:
         return build_subagent_system_prompt(
             profile=prompt_profile_setting,
@@ -175,37 +225,47 @@ async def build_loop(
         daemon_manager.prompt_calibrations = tuple(prompt_calibrations)
         manager = cast(_SubagentManagerPort, daemon_manager)
     else:
-        manager = cast(_SubagentManagerPort, SubagentManager(
-            llm=llm,
-            tool_factory=child_tool_factory,
-            tool_context=tool_context,
-            policy=approval_policy,
-            bus=bus,
-            redactor=redactor,
-            max_steps=args.max_steps,
-            context_budget=context_budget,   # 子代理长任务同样受压缩保护
-            # Keep the legacy composite view; new assembly splits base (L1) and
-            # the skill catalog (L6) into independent source-attributed fragments.
-            system_prompt_provider=(
-                lambda: skill_manager.apply_to_prompt(
-                    subagent_base_prompt(manager.llm))),
-            base_prompt_for_llm=subagent_base_prompt,
-            prompt_profile=prompt_profile_setting,
-            prompt_release_id=prompt_release_setting,
-            prompt_calibrations=prompt_calibrations,
-            catalog_fragments_provider=subagent_catalog_fragments,
-            definitions=agent_definitions,
-            memory_store=memory_store,
-            llm_resolver=build_subagent_llm_resolver(
-                args, config, lambda: manager.llm, redactor,
-                enterprise_policy=policy),
-            mcp_servers_provider=lambda: tuple(
-                compose_mcp_config(config, dict(plugin_manager.mcp_servers))
+        manager = cast(
+            _SubagentManagerPort,
+            SubagentManager(
+                llm=llm,
+                tool_factory=child_tool_factory,
+                tool_context=tool_context,
+                policy=approval_policy,
+                bus=bus,
+                redactor=redactor,
+                max_steps=args.max_steps,
+                context_budget=context_budget,  # 子代理长任务同样受压缩保护
+                # Keep the legacy composite view; new assembly splits base (L1) and
+                # the skill catalog (L6) into independent source-attributed fragments.
+                system_prompt_provider=(
+                    lambda: skill_manager.apply_to_prompt(
+                        subagent_base_prompt(manager.llm)
+                    )
+                ),
+                base_prompt_for_llm=subagent_base_prompt,
+                prompt_profile=prompt_profile_setting,
+                prompt_release_id=prompt_release_setting,
+                prompt_calibrations=prompt_calibrations,
+                catalog_fragments_provider=subagent_catalog_fragments,
+                definitions=agent_definitions,
+                memory_store=memory_store,
+                llm_resolver=build_subagent_llm_resolver(
+                    args,
+                    config,
+                    lambda: manager.llm,
+                    redactor,
+                    enterprise_policy=policy,
+                ),
+                mcp_servers_provider=lambda: tuple(
+                    compose_mcp_config(config, dict(plugin_manager.mcp_servers))
+                ),
             ),
-        ))
+        )
     for tool in manager.build_tools():
         registry.register(
-            tool, ToolDescriptor.from_tool(tool, source=ToolSource.SUBAGENT))
+            tool, ToolDescriptor.from_tool(tool, source=ToolSource.SUBAGENT)
+        )
     output_style_config = OutputStyleConfig.from_config(
         config.get("output_styles"),
         workspace=workspace_root,
@@ -214,12 +274,15 @@ async def build_loop(
     )
     if getattr(args, "no_output_styles", False):
         output_style_config = OutputStyleConfig(
-            enabled=False, active="", paths=output_style_config.paths,
-            home=output_style_config.home)
+            enabled=False,
+            active="",
+            paths=output_style_config.paths,
+            home=output_style_config.home,
+        )
     output_style_manager = OutputStyleManager(
-        workspace_root, config=output_style_config)
-    prompt_registry = PromptFragmentRegistry(
-        base_fragments(prompt_profile_resolution))
+        workspace_root, config=output_style_config
+    )
+    prompt_registry = PromptFragmentRegistry(base_fragments(prompt_profile_resolution))
     prompt_registry.register(cyber_risk_fragment())
     if memory_store is not None:
         prompt_registry.register(memory_contract_fragment())
@@ -238,8 +301,7 @@ async def build_loop(
     # prompt_lab is a read-only execution tool and must inspect the same
     # per-agent Registry used by PromptAssembler. ToolContext is copied for
     # every tool call by AgentLoop, so assigning it here propagates naturally.
-    tool_context.prompt_registry = cast(
-        PromptFragmentRegistryPort, prompt_registry)
+    tool_context.prompt_registry = cast(PromptFragmentRegistryPort, prompt_registry)
     prompt_release_pipeline: Optional[PromptReleasePipelinePort] = None
     prompt_release_approval_service: Optional[PromptReleaseApprovalService] = None
     if prompt_authoring_enabled:
@@ -249,10 +311,8 @@ async def build_loop(
             isolation_context=tool_context,
             store=release_store,
         )
-        prompt_release_pipeline = cast(
-            PromptReleasePipelinePort, release_pipeline)
-        prompt_release_approval_service = PromptReleaseApprovalService(
-            release_store)
+        prompt_release_pipeline = cast(PromptReleasePipelinePort, release_pipeline)
+        prompt_release_approval_service = PromptReleaseApprovalService(release_store)
         tool_context.prompt_release_pipeline = prompt_release_pipeline
     directory_rules_enabled = (
         not args.no_context
@@ -260,24 +320,31 @@ async def build_loop(
         and context_options.include_directory_rules
     )
     working_context_store = WorkingContextStore(
-        workspace_root, redactor=redactor.redact)
+        workspace_root, redactor=redactor.redact
+    )
     compact_checkpoint_store = (
-        None if args.no_checkpoint else CompactCheckpointStore(
-            workspace_root, redactor=redactor))
+        None
+        if args.no_checkpoint
+        else CompactCheckpointStore(workspace_root, redactor=redactor)
+    )
     context_checkpoint_store = (
-        None if args.no_checkpoint else ContextCheckpointStore(
-            workspace_root, redactor=redactor))
+        None
+        if args.no_checkpoint
+        else ContextCheckpointStore(workspace_root, redactor=redactor)
+    )
     context_sources = default_context_sources(
         rule_loader if directory_rules_enabled else None,
         working_context_store=working_context_store,
         engine=context_options.engine,
         memory_store=memory_store,
     )
-    context_assembler = ContextAssembler(
-        context_sources, engine=context_options.engine)
+    context_assembler = ContextAssembler(context_sources, engine=context_options.engine)
     directory_rule_source = next(
-        (source for source in context_sources
-         if isinstance(source, DirectoryRulesContextSource)),
+        (
+            source
+            for source in context_sources
+            if isinstance(source, DirectoryRulesContextSource)
+        ),
         None,
     )
     loop = AgentLoop(
@@ -330,7 +397,8 @@ async def build_loop(
         notebook_options=notebook_options,
         migration_options=migration_options,
         status_line_renderer=StatusLineRenderer(
-            StatusLineOptions.from_config(config.get("status_line"))),
+            StatusLineOptions.from_config(config.get("status_line"))
+        ),
     )
     loop.sync_context_attachments(include_mcp=False)
     context_coordinator = None
@@ -356,8 +424,7 @@ async def build_loop(
     )
     refresh_prompt_surfaces(loop)
 
-    suggest_threshold, auto_threshold = resolve_auto_memory_thresholds(
-        args, config)
+    suggest_threshold, auto_threshold = resolve_auto_memory_thresholds(args, config)
     auto_memory = AutoMemoryCoordinator(
         loop,
         memory_store,
@@ -395,16 +462,15 @@ async def build_loop(
             try:
                 registry.register(
                     plugin_tool,
-                    ToolDescriptor.from_tool(
-                        plugin_tool, source=ToolSource.PLUGIN))
+                    ToolDescriptor.from_tool(plugin_tool, source=ToolSource.PLUGIN),
+                )
             except ValueError as exc:
                 log(f"[plugins] 工具注册失败，已隔离: {plugin_tool.name}: {exc}")
         skill_manager.set_extra_paths(
             [*plugin_manager.skill_paths, *loop.base_skill_paths],
             reload=True,
         )
-        agent_definitions.set_extra_paths(
-            plugin_manager.agent_paths, reload=True)
+        agent_definitions.set_extra_paths(plugin_manager.agent_paths, reload=True)
         refresh_skill_system_prompt(loop)
         loop.sync_context_attachments(include_mcp=True)
         refresh_extensions_basic()
@@ -427,7 +493,8 @@ async def build_loop(
             context_checkpoint_store=context_checkpoint_store,
             context_checkpoint_coordinator=context_coordinator,
             sidechains=cast(
-                Optional[SidechainStore], getattr(manager, "sidechains", None)),
+                Optional[SidechainStore], getattr(manager, "sidechains", None)
+            ),
             shell_jobs=shell_jobs,
             auto_memory=auto_memory,
         ),

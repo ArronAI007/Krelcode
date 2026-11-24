@@ -2,13 +2,9 @@
 
 from .components import PluginCommand, PluginComponentError
 from .loader import NamespacedTool, load_entrypoint, namespace_tool_name
-from .manager import (
-    PluginIssue,
-    PluginLifecycleResult,
-    PluginManager,
-    PluginRecord,
-)
+from .manager import PluginManager
 from .manifest import PluginManifest, PluginManifestError, parse_manifest
+from .models import PluginIssue, PluginLifecycleResult, PluginRecord
 from .dependencies import (
     DependencyDiagnostic,
     DependencyNode,

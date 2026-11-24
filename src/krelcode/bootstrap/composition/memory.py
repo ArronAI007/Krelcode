@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from ._deps import *  # noqa: F401,F403
+import argparse
+from typing import Any, Dict
+
+from krelcode.session.memory_candidates import (
+    DEFAULT_AUTO_THRESHOLD,
+    DEFAULT_SUGGEST_THRESHOLD,
+    AutoMemoryMode,
+    coerce_auto_memory_mode,
+)
 
 
 def resolve_auto_memory_mode(
@@ -29,15 +37,18 @@ def resolve_auto_memory_thresholds(
     auto = getattr(args, "memory_auto_threshold", None)
     try:
         suggest_value = float(
-            suggest if suggest is not None else
-            section.get("suggest_threshold", DEFAULT_SUGGEST_THRESHOLD))
+            suggest
+            if suggest is not None
+            else section.get("suggest_threshold", DEFAULT_SUGGEST_THRESHOLD)
+        )
         auto_value = float(
-            auto if auto is not None else
-            section.get("auto_threshold", DEFAULT_AUTO_THRESHOLD))
+            auto
+            if auto is not None
+            else section.get("auto_threshold", DEFAULT_AUTO_THRESHOLD)
+        )
     except (TypeError, ValueError):
         suggest_value = DEFAULT_SUGGEST_THRESHOLD
         auto_value = DEFAULT_AUTO_THRESHOLD
     suggest_value = max(0.0, min(suggest_value, 1.0))
     auto_value = max(suggest_value, min(auto_value, 1.0))
     return suggest_value, auto_value
-

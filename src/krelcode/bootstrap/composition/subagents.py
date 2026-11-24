@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from ._deps import *  # noqa: F401,F403
+import argparse
+from typing import Any, Callable, Dict, Optional
+
+from krelcode.core.redact import SecretRedactor
+from krelcode.enterprise.policy import EnterprisePolicy
+from krelcode.llm.base import LLMProvider
+from krelcode.llm.registry import ProviderSettings, create_provider, resolve_settings
+from krelcode.llm.retry import RetryingProvider, RetryPolicy
+from krelcode.subagent.model_aliases import resolve_agent_model_spec
 
 
 def build_subagent_llm_resolver(
@@ -31,7 +39,8 @@ def build_subagent_llm_resolver(
             return parent_provider
         parent_name = str(getattr(parent_provider, "name", "openai") or "openai")
         resolved = resolve_agent_model_spec(
-            raw, parent_provider=parent_name, config=config)
+            raw, parent_provider=parent_name, config=config
+        )
         if resolved is None:
             return parent_provider
         provider_name, model_name = resolved
@@ -48,7 +57,8 @@ def build_subagent_llm_resolver(
         inner = create_provider_factory(settings)
         if getattr(inner, "api_key", None) is None:
             raise ValueError(
-                f"Agent Definition 模型 {provider_name}/{model_name} 缺少 API key")
+                f"Agent Definition 模型 {provider_name}/{model_name} 缺少 API key"
+            )
         provider: LLMProvider = inner
         if args.retries > 0:
             provider = RetryingProvider(
@@ -57,11 +67,11 @@ def build_subagent_llm_resolver(
                 on_retry=lambda attempt, delay, error: print(
                     f"[retry:subagent] LLM 调用失败"
                     f"（{type(error).__name__}），第 {attempt} 次重试，"
-                    f"{delay:g}s 后…"),
+                    f"{delay:g}s 后…"
+                ),
             )
         if redactor is not None:
             redactor.add(getattr(inner, "api_key", None))
         return provider
 
     return resolve
-

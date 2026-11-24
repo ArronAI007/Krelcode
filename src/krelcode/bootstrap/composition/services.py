@@ -20,7 +20,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Optional, cast
 
-from ._deps import *  # noqa: F401,F403
+from krelcode.agent.context.compression import ContextManager
+from krelcode.agent.context.context_checkpoint import (
+    ContextCheckpointCoordinator,
+    ContextCheckpointStore,
+)
+from krelcode.agent.context.working_context import WorkingContextStore
+from krelcode.agent.rules import RuleLoader
+from krelcode.agent.turn.loop import AgentLoop
+from krelcode.contracts.service_ports import PrincipalPort, ShellJobManagerPort
+from krelcode.core.redact import SecretRedactor
+from krelcode.enterprise.policy import EnterprisePolicy
+from krelcode.safety.policy import ApprovalPolicy
+from krelcode.session.compact_checkpoint import CompactCheckpointStore
+from krelcode.session.memory import MemoryStore, sync_memory_fragment
+from krelcode.session.memory_candidates import AutoMemoryCoordinator
+
 from ...subagent.sidechain import SidechainStore
 
 
@@ -88,21 +103,20 @@ class RuntimeServiceBinder:
             runtime_services=self.services,
         )
         if loop.services.prompt.registry is not None:
-            sync_memory_fragment(
-                loop, self.services.persistence.memory_store)
+            sync_memory_fragment(loop, self.services.persistence.memory_store)
 
     def _bind_persistence(self, loop: AgentLoop) -> None:
         persistence = self.services.persistence
         loop.update_runtime_state(
             memory_store=persistence.memory_store,
             context_checkpoint_store=persistence.context_checkpoint_store,
-            context_checkpoint_coordinator=(
-                persistence.context_checkpoint_coordinator),
+            context_checkpoint_coordinator=(persistence.context_checkpoint_coordinator),
             working_context_store=persistence.working_context_store,
             compact_checkpoint_store=persistence.compact_checkpoint_store,
         )
         loop.tool_context.shell_jobs = cast(
-            Optional[ShellJobManagerPort], persistence.shell_jobs)
+            Optional[ShellJobManagerPort], persistence.shell_jobs
+        )
 
     def _bind_redaction(
         self,

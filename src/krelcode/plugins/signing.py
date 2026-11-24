@@ -377,6 +377,27 @@ class PluginVerification:
         return self.status == "valid"
 
 
+def _verification(
+    status: str,
+    *,
+    message: str,
+    signer: str,
+    integrity: PluginIntegrity,
+    metadata: SignatureMetadata,
+) -> PluginVerification:
+    return PluginVerification(
+        status=status,
+        key_id=metadata.key_id,
+        registry=metadata.registry,
+        signer=signer,
+        integrity_digest=integrity.digest,
+        manifest_sha256=integrity.manifest_sha256,
+        files_sha256=integrity.files_sha256,
+        files_count=integrity.files_count,
+        message=message,
+    )
+
+
 def verify_plugin(
     root: Path,
     *,
@@ -399,38 +420,38 @@ def verify_plugin(
         return PluginVerification(
             "invalid", key_id=metadata.key_id, registry=metadata.registry,
             message=str(exc))
-    base = dict(
-        key_id=metadata.key_id,
-        registry=metadata.registry,
-        signer=signer,
-        integrity_digest=integrity.digest,
-        manifest_sha256=integrity.manifest_sha256,
-        files_sha256=integrity.files_sha256,
-        files_count=integrity.files_count,
-    )
     if metadata.plugin != expected_name:
-        return PluginVerification(
-            "invalid", message="签名 plugin 与 manifest name 不一致", **base)
+        return _verification(
+            "invalid", message="签名 plugin 与 manifest name 不一致",
+            signer=signer, integrity=integrity, metadata=metadata)
     if metadata.version != expected_version:
-        return PluginVerification(
-            "invalid", message="签名 version 与 manifest version 不一致", **base)
+        return _verification(
+            "invalid", message="签名 version 与 manifest version 不一致",
+            signer=signer, integrity=integrity, metadata=metadata)
     if metadata.manifest_sha256 != integrity.manifest_sha256:
-        return PluginVerification(
-            "invalid", message="manifest Hash 不匹配", **base)
+        return _verification(
+            "invalid", message="manifest Hash 不匹配",
+            signer=signer, integrity=integrity, metadata=metadata)
     if metadata.files_sha256 != integrity.files_sha256:
-        return PluginVerification(
-            "invalid", message="组件文件 Hash 不匹配", **base)
+        return _verification(
+            "invalid", message="组件文件 Hash 不匹配",
+            signer=signer, integrity=integrity, metadata=metadata)
     if metadata.files_count != integrity.files_count:
-        return PluginVerification(
-            "invalid", message="组件文件数量不匹配", **base)
+        return _verification(
+            "invalid", message="组件文件数量不匹配",
+            signer=signer, integrity=integrity, metadata=metadata)
     if key_revoked:
-        return PluginVerification(
-            "revoked", message="签名公钥已撤销", **base)
+        return _verification(
+            "revoked", message="签名公钥已撤销",
+            signer=signer, integrity=integrity, metadata=metadata)
     if public_key is None:
-        return PluginVerification(
-            "unknown_key", message="签名公钥不在信任库中", **base)
+        return _verification(
+            "unknown_key", message="签名公钥不在信任库中",
+            signer=signer, integrity=integrity, metadata=metadata)
     if not verify(metadata.signed_bytes(), metadata.signature, public_key):
-        return PluginVerification(
-            "invalid", message="Ed25519 签名验证失败", **base)
-    return PluginVerification(
-        "valid", message="签名有效", **base)
+        return _verification(
+            "invalid", message="Ed25519 签名验证失败",
+            signer=signer, integrity=integrity, metadata=metadata)
+    return _verification(
+        "valid", message="签名有效",
+        signer=signer, integrity=integrity, metadata=metadata)

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional, cast
 
+from ..contracts.json import ToolExecutionData
 from ..contracts.tool import ToolContext, ToolResult, ToolTier
 from ..tools.prompt import ToolPromptExample
 from ..core.secret_guard import classify_secret_path
@@ -149,9 +150,11 @@ diagnostic result does not replace relevant tests for runtime behavior.
                 content=content,
                 is_error=any(int(item.get("severity", 1)) == 1
                              for item in filtered),
-                data={"path": str(path), "server": server.name,
-                      "count": len(filtered),
-                      "diagnostics": filtered[:MAX_ITEMS]},
+                data=cast(ToolExecutionData, {
+                    "path": str(path), "server": server.name,
+                    "count": len(filtered),
+                    "diagnostics": filtered[:MAX_ITEMS],
+                }),
             )
         except (ValueError, OSError, LSPError) as exc:
             return self.format_error(exc)
@@ -297,9 +300,11 @@ to understand behavior.
             lines.extend(_format_location(item) for item in locations[:MAX_ITEMS])
             return ToolResult(
                 content=_bounded("\n".join(lines)),
-                data={"locations": locations[:MAX_ITEMS],
-                      "outside_workspace": outside,
-                      "server": server.name},
+                data=cast(ToolExecutionData, {
+                    "locations": locations[:MAX_ITEMS],
+                    "outside_workspace": outside,
+                    "server": server.name,
+                }),
             )
         except (ValueError, OSError, LSPError) as exc:
             return self.format_error(exc)
@@ -380,10 +385,12 @@ as proof that every occurrence is equivalent. Do not edit matches mechanically.
                 lines.append(f"…[只显示前 {MAX_ITEMS} 条]")
             return ToolResult(
                 content=_bounded("\n".join(lines)),
-                data={"locations": locations[:MAX_ITEMS],
-                      "total": len(locations),
-                      "outside_workspace": outside,
-                      "server": server.name},
+                data=cast(ToolExecutionData, {
+                    "locations": locations[:MAX_ITEMS],
+                    "total": len(locations),
+                    "outside_workspace": outside,
+                    "server": server.name,
+                }),
             )
         except (ValueError, OSError, LSPError) as exc:
             return self.format_error(exc)
@@ -434,8 +441,10 @@ def _extract_diagnostics(result: Any) -> list[dict[str, Any]]:
 def _format_diagnostic(
     item: Mapping[str, Any], path: Path, workspace: Path,
 ) -> str:
-    range_value = item.get("range") if isinstance(item.get("range"), dict) else {}
-    start = range_value.get("start") if isinstance(range_value.get("start"), dict) else {}
+    raw_range = item.get("range")
+    range_value: Mapping[str, Any] = raw_range if isinstance(raw_range, dict) else {}
+    raw_start = range_value.get("start")
+    start: Mapping[str, Any] = raw_start if isinstance(raw_start, dict) else {}
     line = int(start.get("line", 0)) + 1
     column = int(start.get("character", 0)) + 1
     severity = _severity_name(item.get("severity"))

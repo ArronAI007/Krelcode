@@ -43,6 +43,7 @@ from .signing import (
     verify_plugin,
 )
 from .trust import (
+    PluginTrustError,
     PluginTrustPolicy,
     PluginTrustStore,
 )
@@ -338,8 +339,12 @@ class PluginCatalogMixin:
             for name, reason in resolution.blocked.items():
                 blocked.setdefault(name, reason)
             for diagnostic in resolution.diagnostics:
-                manifest = manifests.get(diagnostic.plugin)
-                path = manifest.path if manifest is not None else self.workspace_root
+                diagnostic_manifest = manifests.get(diagnostic.plugin)
+                path = (
+                    diagnostic_manifest.path
+                    if diagnostic_manifest is not None
+                    else self.workspace_root
+                )
                 message = diagnostic.message
                 if not any(
                     issue.path == path and issue.message == message for issue in issues
@@ -684,4 +689,3 @@ class PluginCatalogMixin:
         scope: str = "user",
     ) -> PluginLifecycleResult:
         return await self.install(source, scope=scope, replace=True)
-

@@ -17,7 +17,7 @@ import socket
 import ssl
 import zlib
 from dataclasses import dataclass, field
-from typing import Callable, Mapping, Optional, Sequence
+from typing import Awaitable, Callable, Mapping, Optional, Sequence
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 DEFAULT_MAX_BYTES = 2 * 1024 * 1024
@@ -113,8 +113,12 @@ class SafeHttpClient:
         allowed_ports: Sequence[int] = DEFAULT_ALLOWED_PORTS,
         allow_private: bool = False,
         resolver: Optional[Callable[[str, int], Sequence[str]]] = None,
-        transport: Optional[Callable[[ValidatedUrl, Mapping[str, str], int, float],
-                                     RawHttpResponse | "Awaitable[RawHttpResponse]"]] = None,
+        transport: Optional[
+            Callable[
+                [ValidatedUrl, Mapping[str, str], int, float],
+                RawHttpResponse | Awaitable[RawHttpResponse],
+            ]
+        ] = None,
     ) -> None:
         if max_bytes < 1 or timeout <= 0 or max_redirects < 0:
             raise ValueError("Web HTTP 限制必须为正数")
@@ -259,9 +263,9 @@ class SafeHttpClient:
     ) -> RawHttpResponse:
         if self._transport is not None:
             result = self._transport(validated, headers, max_bytes, timeout)
-            if hasattr(result, "__await__"):
-                result = await result
-            return result
+            if isinstance(result, RawHttpResponse):
+                return result
+            return await result
         return await asyncio.to_thread(
             self._blocking_transport, validated, headers, max_bytes, timeout)
 
@@ -303,11 +307,12 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
 
     def connect(self) -> None:
         raw = socket.create_connection((self._address, self.port), self.timeout)
-        if self._tunnel_host:
+        if self._tunnel_host:  # type: ignore[attr-defined]
             self.sock = raw
-            self._tunnel()
+            self._tunnel()  # type: ignore[attr-defined]
             raw = self.sock
-        self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
+        self.sock = self._context.wrap_socket(  # type: ignore[attr-defined]
+            raw, server_hostname=self.host)
 
 
 def _request_pinned(

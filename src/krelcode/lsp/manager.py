@@ -41,6 +41,7 @@ class LSPServerConfig:
         if not isinstance(value, Mapping):
             raise ValueError(f"LSP server {name!r} 必须是 table")
         raw_command = value.get("command")
+        command: tuple[str, ...]
         if isinstance(raw_command, str):
             command = (raw_command,)
         elif isinstance(raw_command, Sequence):
@@ -48,6 +49,7 @@ class LSPServerConfig:
         else:
             command = ()
         raw_args = value.get("args") or ()
+        args: tuple[str, ...]
         if isinstance(raw_args, str):
             args = (raw_args,)
         elif isinstance(raw_args, Sequence):
@@ -55,6 +57,7 @@ class LSPServerConfig:
         else:
             args = ()
         raw_ext = value.get("extensions") or ()
+        extensions: tuple[str, ...]
         if isinstance(raw_ext, str):
             extensions = (raw_ext,)
         elif isinstance(raw_ext, Sequence):
@@ -134,7 +137,7 @@ class LSPManager:
         workspace_root: str | Path,
         options: Optional[LSPOptions] = None,
         *,
-        client_factory=None,
+        client_factory: Optional[Any] = None,
         environ: Optional[Mapping[str, str]] = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()

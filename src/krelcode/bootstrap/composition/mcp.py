@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Mapping, Optional, Sequence
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Sequence
 
-from ._deps import *  # noqa: F401,F403
+from krelcode.core.messages import Message
+from krelcode.llm.base import LLMProvider, collect
 
 
 def build_mcp_sampler(
@@ -33,7 +35,9 @@ def build_mcp_sampler(
             msgs.append(Msg.system(str(system_prompt)))
         for m in messages or []:
             content = m.get("content") or {}
-            text = content.get("text", "") if isinstance(content, dict) else str(content)
+            text = (
+                content.get("text", "") if isinstance(content, dict) else str(content)
+            )
             if m.get("role") == "assistant":
                 msgs.append(Msg.assistant(text))
             else:
@@ -60,4 +64,3 @@ def compose_mcp_config(
     if isinstance(configured, dict):
         merged.update(configured)
     return merged
-

@@ -52,7 +52,6 @@ internal_uses = [
   "src/krelcode/benchmarks/behavior_session.py",
   "src/krelcode/benchmarks/prompt_fixture.py",
   "src/krelcode/benchmarks/prompt_scenarios.py",
-  "src/krelcode/bootstrap/composition/_deps.py",
   "src/krelcode/bootstrap/parser.py",
   "src/krelcode/subagent/manager.py",
 ]
@@ -109,7 +108,6 @@ internal_uses = [
   "src/krelcode/benchmarks/behavior_session.py",
   "src/krelcode/benchmarks/prompt_fixture.py",
   "src/krelcode/benchmarks/prompt_scenarios.py",
-  "src/krelcode/bootstrap/composition/_deps.py",
 ]
 
 [[facades]]
@@ -225,7 +223,6 @@ internal_uses = [
   "src/krelcode/benchmarks/behavior_session.py",
   "src/krelcode/benchmarks/prompt_fixture.py",
   "src/krelcode/benchmarks/prompt_scenarios.py",
-  "src/krelcode/bootstrap/composition/_deps.py",
 ]
 
 [[facades]]
@@ -277,7 +274,6 @@ internal_uses = [
   "src/krelcode/benchmarks/behavior_session.py",
   "src/krelcode/benchmarks/prompt_fixture.py",
   "src/krelcode/benchmarks/prompt_scenarios.py",
-  "src/krelcode/bootstrap/composition/_deps.py",
   "src/krelcode/review.py",
   "src/krelcode/security_review/prompt.py",
   "src/krelcode/session/commands/handlers/command_ops.py",
@@ -340,7 +336,6 @@ internal_uses = [
   "src/krelcode/benchmarks/prompt_fixture.py",
   "src/krelcode/benchmarks/prompt_helpers.py",
   "src/krelcode/benchmarks/prompt_scenarios.py",
-  "src/krelcode/bootstrap/composition/_deps.py",
   "src/krelcode/output_styles.py",
   "src/krelcode/session/commands/handlers/command_ops.py",
   "src/krelcode/session/commands/handlers/configuration_ops.py",
@@ -431,7 +426,6 @@ internal_uses = [
   "src/krelcode/bootstrap/application.py",
   "src/krelcode/bootstrap/application_stages/context.py",
   "src/krelcode/bootstrap/application_stages/core.py",
-  "src/krelcode/bootstrap/composition/_deps.py",
   "src/krelcode/bootstrap/composition/graph.py",
   "src/krelcode/bootstrap/parser.py",
   "src/krelcode/review.py",
@@ -467,9 +461,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/bootstrap/composition/_deps.py",
 ]
 
 [[facades]]
@@ -521,7 +514,6 @@ deprecated_in = "0.81.0"
 remove_in = "1.0.0"
 internal_use = true
 internal_uses = [
-  "src/krelcode/bootstrap/composition/_deps.py",
   "src/krelcode/session/commands/handlers/command_ops.py",
   "src/krelcode/session/commands/handlers/configuration_ops.py",
   "src/krelcode/session/commands/handlers/context_ops.py",
@@ -624,9 +616,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/bootstrap/composition/_deps.py",
 ]
 
 [[facades]]
@@ -663,7 +654,6 @@ deprecated_in = "0.81.0"
 remove_in = "1.0.0"
 internal_use = true
 internal_uses = [
-  "src/krelcode/bootstrap/composition/_deps.py",
   "src/krelcode/session/commands/handlers/prompt_surface_ops.py",
 ]
 
@@ -703,9 +693,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/bootstrap/composition/_deps.py",
 ]
 
 [[facades]]
@@ -771,7 +760,6 @@ internal_use = true
 internal_uses = [
   "src/krelcode/benchmarks/behavior_session.py",
   "src/krelcode/bootstrap/application_stages/extensions.py",
-  "src/krelcode/bootstrap/composition/_deps.py",
   "src/krelcode/review.py",
   "src/krelcode/security_review/runner.py",
   "src/krelcode/security_review/surfaces.py",
@@ -842,7 +830,6 @@ internal_uses = [
   "src/krelcode/benchmarks/prompt_scenarios.py",
   "src/krelcode/bootstrap/application.py",
   "src/krelcode/bootstrap/application_stages/core.py",
-  "src/krelcode/bootstrap/composition/_deps.py",
   "src/krelcode/bootstrap/composition/graph.py",
   "src/krelcode/session/controller.py",
   "src/krelcode/session/lifecycle.py",
@@ -1000,7 +987,6 @@ internal_uses = [
   "src/krelcode/benchmarks/behavior_session.py",
   "src/krelcode/benchmarks/prompt_fixture.py",
   "src/krelcode/benchmarks/prompt_scenarios.py",
-  "src/krelcode/bootstrap/composition/_deps.py",
   "src/krelcode/subagent/manager.py",
 ]
 
@@ -1114,7 +1100,6 @@ internal_use = true
 internal_uses = [
   "src/krelcode/benchmarks/behavior_advanced_scenarios.py",
   "src/krelcode/benchmarks/prompt_scenarios.py",
-  "src/krelcode/bootstrap/composition/_deps.py",
   "src/krelcode/session/bootstrap.py",
   "src/krelcode/session/compact_checkpoint.py",
   "src/krelcode/session/lifecycle.py",

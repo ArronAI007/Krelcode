@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from ._deps import *  # noqa: F401,F403
+import argparse
+from typing import Any, Callable, Dict
+
+from krelcode.core.messages import Message, ToolCall
+from krelcode.llm.base import LLMProvider
+from krelcode.llm.providers.mock import MockProvider
+from krelcode.llm.registry import create_provider, resolve_settings
+from krelcode.llm.retry import RetryingProvider, RetryPolicy
 
 
 def _default_log(message: str) -> None:
@@ -19,7 +26,9 @@ def build_llm(
         return MockProvider(
             scripted=[
                 Message.assistant(
-                    tool_calls=[ToolCall(id="call_demo_1", name="get_time", arguments={})]
+                    tool_calls=[
+                        ToolCall(id="call_demo_1", name="get_time", arguments={})
+                    ]
                 ),
                 "（mock 演示）我刚通过 get_time 工具查到了当前时间——这就是完整的 "
                 "tool-call 循环：LLM 请求调用 → 审批 → 执行 → 结果回填 → LLM 总结。",
@@ -35,10 +44,14 @@ def build_llm(
     )
     provider = create_provider(settings)
     if args.retries > 0:
-        def on_retry(attempt: int, delay: float, error: BaseException) -> None:
-            log(f"[retry] LLM 调用失败（{type(error).__name__}: {error}），"
-                f"第 {attempt} 次重试，{delay:g}s 后…")
-        provider = RetryingProvider(
-            provider, RetryPolicy(max_retries=args.retries), on_retry=on_retry)
-    return provider
 
+        def on_retry(attempt: int, delay: float, error: BaseException) -> None:
+            log(
+                f"[retry] LLM 调用失败（{type(error).__name__}: {error}），"
+                f"第 {attempt} 次重试，{delay:g}s 后…"
+            )
+
+        provider = RetryingProvider(
+            provider, RetryPolicy(max_retries=args.retries), on_retry=on_retry
+        )
+    return provider

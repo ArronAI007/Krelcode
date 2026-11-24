@@ -2,9 +2,26 @@
 
 from __future__ import annotations
 
-from typing import cast
+import argparse
+from pathlib import Path
+from typing import Any, Dict, Optional, cast
 
-from ._deps import *  # noqa: F401,F403
+from krelcode.config import load_managed_config
+from krelcode.contracts.tool import PermissionMode, RunMode
+from krelcode.core.events import EventBus
+from krelcode.enterprise.policy import (
+    EnterprisePolicy,
+    effective_permission_mode,
+    load_enterprise_policy,
+)
+from krelcode.safety.policy import (
+    AllowAllPolicy,
+    ApprovalPolicy,
+    Approver,
+    EnterpriseGuardPolicy,
+    SandboxPolicy,
+)
+from krelcode.safety.sandbox import ExecutionSandbox
 
 
 def build_policy(
@@ -20,8 +37,7 @@ def build_policy(
     if enterprise_policy is None:
         # A direct embedder must not be able to convert project/user TOML
         # into enterprise authority.  The managed layer is the only source.
-        managed = load_enterprise_policy(
-            load_managed_config(workspace=workspace_root))
+        managed = load_enterprise_policy(load_managed_config(workspace=workspace_root))
     else:
         managed = enterprise_policy
     managed.validate_cli(args)
@@ -34,7 +50,8 @@ def build_policy(
     ui_section = (config or {}).get("ui") or {}
     configured_review = (
         bool(ui_section.get("diff_review", True))
-        if isinstance(ui_section, dict) else True
+        if isinstance(ui_section, dict)
+        else True
     )
     review_writes = bool(
         configured_review
@@ -49,7 +66,8 @@ def build_policy(
         bus=bus,
         auto_approve=bool(
             getattr(args, "auto_approve", False)
-            and (not managed.enabled or managed.allow_auto_approve)),
+            and (not managed.enabled or managed.allow_auto_approve)
+        ),
         workspace_root=workspace_root,
         review_writes=review_writes,
         managed_policy=managed if managed.enabled else None,
@@ -112,7 +130,9 @@ def _disabled_tools(config: Dict[str, Any]) -> frozenset[str]:
 
 
 def build_execution_sandbox(
-    args: argparse.Namespace, config: Dict[str, Any], workspace_root: Path,
+    args: argparse.Namespace,
+    config: Dict[str, Any],
+    workspace_root: Path,
 ) -> Optional[ExecutionSandbox]:
     """显式 CLI > TOML [sandbox] > auto；--no-sandbox 同时关闭运行时隔离。"""
     if getattr(args, "no_sandbox", False):
@@ -122,7 +142,9 @@ def build_execution_sandbox(
         section = {}
     backend = getattr(args, "sandbox_backend", None) or section.get("backend", "auto")
     network_arg = getattr(args, "sandbox_network", None)
-    network = bool(section.get("network", False)) if network_arg is None else bool(network_arg)
-    return ExecutionSandbox(
-        workspace_root, backend=str(backend), network=network)
-
+    network = (
+        bool(section.get("network", False))
+        if network_arg is None
+        else bool(network_arg)
+    )
+    return ExecutionSandbox(workspace_root, backend=str(backend), network=network)

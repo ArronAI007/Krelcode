@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Optional
 
-from .registry import PluginRegistryError
-from .trust import PluginTrustError
+from .models import PluginIssue, PluginRecord
+from .registry import PluginRegistryError, load_registry
+from .trust import PluginTrustError, PluginTrustPolicy, PluginTrustStore
+
 
 class PluginPresentationMixin:
+    if TYPE_CHECKING:
+        enabled: bool
+        trust_store: PluginTrustStore
+        trust_policy: PluginTrustPolicy
+        _records: tuple[PluginRecord, ...]
+        _issues: tuple[PluginIssue, ...]
+
+        def roots(self) -> tuple[Path, ...]: ...
+
     def registry_lines(self) -> tuple[str, ...]:
         registries = self.trust_store.registries()
         if not registries:

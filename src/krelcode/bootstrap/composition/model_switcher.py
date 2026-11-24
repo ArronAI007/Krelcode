@@ -2,9 +2,37 @@
 
 from __future__ import annotations
 
-from typing import Callable, List, Optional, Protocol, Sequence, Tuple
+import argparse
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
-from ._deps import *  # noqa: F401,F403
+from krelcode.agent.context.compression import (
+    DEFAULT_MAX_TOKENS as DEFAULT_CONTEXT_BUDGET,
+)
+from krelcode.agent.pricing import default_budget_for
+from krelcode.agent.prompt.fragments import (
+    PromptFragmentRegistry,
+    refresh_registry_snapshot,
+    replace_base_fragments,
+)
+from krelcode.agent.prompt.prompt_parity import load_prompt_baseline
+from krelcode.agent.prompts import (
+    prompt_calibration_paths_from_config,
+    prompt_profile_from_config,
+    prompt_release_id_from_config,
+    resolve_prompt_profile,
+)
+from krelcode.agent.turn.loop import AgentLoop
+from krelcode.agent.usage import UsageTracker
+from krelcode.contracts.tool import Tool
+from krelcode.core.errors import ConfigError
+from krelcode.core.messages import Message
+from krelcode.core.redact import SecretRedactor
+from krelcode.enterprise.policy import EnterprisePolicy
+from krelcode.llm.base import LLMProvider
+from krelcode.llm.registry import create_provider, resolve_settings
+from krelcode.llm.retry import RetryingProvider, RetryPolicy
+
 from ...agent.prompt.prompt_release import ModelProfileCalibration
 from ...core.hooks import HookPort
 
@@ -65,7 +93,9 @@ def build_model_switcher(
             )
             inner = create_provider(settings)
             if getattr(inner, "api_key", None) is None:
-                return f"切换失败: {provider_name} 缺少 API key（设置对应环境变量后重试）"
+                return (
+                    f"切换失败: {provider_name} 缺少 API key（设置对应环境变量后重试）"
+                )
             provider: LLMProvider = inner
             if args.retries > 0:
                 provider = RetryingProvider(
@@ -73,14 +103,16 @@ def build_model_switcher(
                     RetryPolicy(max_retries=args.retries),
                     on_retry=lambda a, d, e: print(
                         f"[retry] LLM 调用失败（{type(e).__name__}），"
-                        f"第 {a} 次重试，{d:g}s 后…"),
+                        f"第 {a} 次重试，{d:g}s 后…"
+                    ),
                 )
         except Exception as exc:
             return f"切换失败: {type(exc).__name__}: {exc}"
 
         try:
             calibration_records = load_prompt_calibrations(
-                config, loop.tool_context.workspace_root)
+                config, loop.tool_context.workspace_root
+            )
             profile_resolution = resolve_prompt_profile(
                 inner,
                 getattr(inner, "model", ""),
@@ -151,8 +183,7 @@ def load_prompt_calibrations(
         try:
             baseline = load_prompt_baseline(source)
         except ValueError as exc:
-            raise ConfigError(
-                f"Prompt calibration 加载失败: {source}: {exc}") from exc
+            raise ConfigError(f"Prompt calibration 加载失败: {source}: {exc}") from exc
         calibrations.append(baseline.calibration)
     return tuple(calibrations)
 

@@ -11,7 +11,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Awaitable, Iterable
 
-from ..contracts.tool import Tool, ToolResult
+from ..contracts.tool import Tool, ToolContext, ToolResult
 
 
 class PluginLoadError(RuntimeError):
@@ -44,10 +44,9 @@ class NamespacedTool:
         self.required_feature = getattr(tool, "required_feature", None)
         self.run_modes = getattr(tool, "run_modes", None)
 
-    async def execute(self, args: dict[str, Any], ctx) -> ToolResult:
-        result = self._tool.execute(args, ctx)
-        if inspect.isawaitable(result):
-            result = await result
+    async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        pending: object = self._tool.execute(args, ctx)
+        result: object = await pending if inspect.isawaitable(pending) else pending
         if not isinstance(result, ToolResult):
             raise TypeError(
                 f"插件工具 {self.plugin_name}/{self.source_name} 必须返回 ToolResult")

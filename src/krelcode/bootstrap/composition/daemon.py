@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import argparse
 from typing import TYPE_CHECKING
 
-from ._deps import *  # noqa: F401,F403
+from krelcode.core.redact import SecretRedactor
+from krelcode.mcp.supervisor import MCPSupervisor
+
 from ...agent.prompt_surface_contract import PromptSurfaceExecutor
-from .mcp import build_mcp_roots, build_mcp_sampler, compose_mcp_config
 from ..parser import build_parser as _build_parser
+from .mcp import build_mcp_roots, build_mcp_sampler, compose_mcp_config
 from .runtime import build_loop
 
 if TYPE_CHECKING:
@@ -27,7 +30,6 @@ async def build_daemon_agent_runtime(
 ) -> "DaemonAgentRuntime":
     """Composition-root factory for daemon-owned subagent runtimes."""
     from ...daemon.server import DaemonAgentRuntime
-
     from ...mcp.supervisor import MCPSupervisor
 
     argv = ["--workspace", str(request.workspace_root)]
@@ -63,8 +65,9 @@ async def build_daemon_agent_runtime(
         plugins = loop.services.extensions.plugins
         if plugins is None:
             raise RuntimeError("插件服务未初始化")
-        await supervisor.sync(compose_mcp_config(
-            request.config, dict(plugins.mcp_servers)))
+        await supervisor.sync(
+            compose_mcp_config(request.config, dict(plugins.mcp_servers))
+        )
         loop.update_runtime_state(mcp_supervisor=supervisor)
         loop.sync_context_attachments(include_mcp=True)
     return DaemonAgentRuntime(
@@ -72,4 +75,3 @@ async def build_daemon_agent_runtime(
         agents=agents,
         mcp_supervisor=supervisor,
     )
-

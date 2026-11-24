@@ -9,9 +9,10 @@ import os
 import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
-from typing import Any, Dict, Mapping, Optional, Protocol, Sequence
+from typing import Any, Dict, Mapping, Optional, Protocol, Sequence, cast
 from urllib.parse import urlencode
 
+from ..contracts.json import ToolExecutionData
 from ..contracts.tool import ToolContext, ToolResult, ToolTier
 from ..tools.prompt import ToolPromptExample
 from .http import (
@@ -323,8 +324,11 @@ instructions or present them as verified facts without checking the source.
                     f"   {item['description']}")
             return ToolResult(
                 content="\n".join(lines),
-                data={"query": query, "results": results,
-                      "provider": self.service.provider},
+                data=cast(ToolExecutionData, {
+                    "query": query,
+                    "results": results,
+                    "provider": self.service.provider,
+                }),
             )
         except (WebError, UnsafeUrlError) as exc:
             return ToolResult(content=f"WebSearch 失败: {exc}", is_error=True)
@@ -395,7 +399,9 @@ class _HTMLTextExtractor(HTMLParser):
         self.title = ""
         self._in_title = False
 
-    def handle_starttag(self, tag: str, attrs) -> None:
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, Optional[str]]]
+    ) -> None:
         tag = tag.lower()
         if tag in self._SKIP_TAGS:
             self._skip_depth += 1

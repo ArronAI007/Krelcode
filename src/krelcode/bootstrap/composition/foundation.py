@@ -2,10 +2,49 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple, cast
+import argparse
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
-from ._deps import *  # noqa: F401,F403
+from krelcode.agent.context import ContextOptions, build_workspace_context_bundle
+from krelcode.agent.context.compression import (
+    DEFAULT_MAX_TOKENS as DEFAULT_CONTEXT_BUDGET,
+)
+from krelcode.agent.context.compression import ContextManager
+from krelcode.agent.pricing import default_budget_for
+from krelcode.agent.prompts import (
+    prompt_authoring_enabled_from_config,
+    prompt_profile_from_config,
+    prompt_release_id_from_config,
+    resolve_prompt_profile,
+)
+from krelcode.agent.rules import RuleLoader
+from krelcode.browser import BrowserOptions, BrowserRuntime
+from krelcode.config import load_managed_config
+from krelcode.contracts.service_ports import PrincipalPort
+from krelcode.contracts.tool import RuntimeSnapshot, Tool, ToolContext
+from krelcode.core.events import EventBus
+from krelcode.core.redact import SecretRedactor
+from krelcode.enterprise.policy import (
+    EnterprisePolicy,
+    PolicyViolation,
+    load_enterprise_policy,
+)
+from krelcode.jobs import ShellJobManager
+from krelcode.llm.base import LLMProvider
+from krelcode.lsp.manager import LSPManager, LSPOptions
+from krelcode.plugins.signing import PluginSignatureError
+from krelcode.plugins.trust import PluginTrustError, PluginTrustStore
+from krelcode.safety.policy import ApprovalPolicy, Approver
+from krelcode.safety.sandbox import ExecutionSandbox
+from krelcode.session.commands.custom import CustomCommandManager
+from krelcode.session.memory import MemoryStore
+from krelcode.skills import build_skill_tools
+from krelcode.tools.builtin.database_migration import MigrationOptions
+from krelcode.tools.builtin.notebook import NotebookOptions
+from krelcode.web.tools import WebOptions, WebRuntime
+
 from ...agent.context.workspace import WorkspaceContext
 from ...agent.prompt.prompt_release import ModelProfileCalibration
 from ...agent.prompts import PromptProfileResolution
@@ -81,8 +120,7 @@ async def build_runtime_foundation(
     """Build policy, model, context, extension and execution foundations."""
     workspace_root = Path(args.workspace).resolve()
     if enterprise_policy is None:
-        policy = load_enterprise_policy(
-            load_managed_config(workspace=workspace_root))
+        policy = load_enterprise_policy(load_managed_config(workspace=workspace_root))
     else:
         policy = enterprise_policy
     policy.validate_cli(args)
@@ -103,7 +141,8 @@ async def build_runtime_foundation(
     workspace_context: Optional[WorkspaceContext] = None
     if not args.no_context:
         workspace_context = await build_workspace_context_bundle(
-            workspace_root, options=context_options, rule_loader=rule_loader)
+            workspace_root, options=context_options, rule_loader=rule_loader
+        )
         _log_rule_issues(workspace_context, log)
     prompt_authoring_enabled = prompt_authoring_enabled_from_config(config)
     prompt_profile_setting = prompt_profile_from_config(config)
@@ -120,10 +159,12 @@ async def build_runtime_foundation(
     base_skill_paths = configured_skill_paths(args, config)
     custom_commands = build_custom_command_manager(config, workspace_root)
     plugin_manager = await _build_plugin_plane(
-        args, config, workspace_root, policy=policy, log=log)
+        args, config, workspace_root, policy=policy, log=log
+    )
     plugin_tools = cast(List[Tool], list(plugin_manager.tools))
     skill_manager = build_skill_manager(
-        args, config, plugin_paths=list(plugin_manager.skill_paths))
+        args, config, plugin_paths=list(plugin_manager.skill_paths)
+    )
     skill_tools = build_skill_tools(skill_manager) if skill_manager.enabled else []
     _log_extension_issues(plugin_manager, skill_manager, plugin_tools, log)
     context_manager: Optional[ContextManager] = None
@@ -135,7 +176,8 @@ async def build_runtime_foundation(
             or DEFAULT_CONTEXT_BUDGET
         )
         context_manager = ContextManager(
-            llm, max_tokens=context_budget, redactor=redactor)
+            llm, max_tokens=context_budget, redactor=redactor
+        )
     sandbox = build_execution_sandbox(args, config, workspace_root)
     _log_sandbox(sandbox, log)
     tool_context = ToolContext(
@@ -148,16 +190,19 @@ async def build_runtime_foundation(
             features=_configured_features(config),
             disabled_tools=_disabled_tools(config),
             managed_tool_allowlist=(
-                frozenset(policy.allowed_tools) if policy.allowed_tools else None),
+                frozenset(policy.allowed_tools) if policy.allowed_tools else None
+            ),
             managed_tool_denylist=(
-                frozenset(policy.disabled_tools) if policy.disabled_tools else None),
+                frozenset(policy.disabled_tools) if policy.disabled_tools else None
+            ),
         ),
         enterprise_policy=policy,
         principal=principal,
     )
     daemon_options = resolve_daemon_options(args, config)
     daemon_owned = daemon_options.enabled and not bool(
-        getattr(args, "daemon_worker", False))
+        getattr(args, "daemon_worker", False)
+    )
     shell_jobs: object
     if daemon_owned:
         from ...daemon.client import DaemonJobManager
@@ -171,7 +216,8 @@ async def build_runtime_foundation(
         )
     else:
         shell_jobs = ShellJobManager(
-            bus, workspace_root=workspace_root, redactor=redactor)
+            bus, workspace_root=workspace_root, redactor=redactor
+        )
     approval_policy = build_policy(
         args,
         workspace_root,
@@ -181,9 +227,11 @@ async def build_runtime_foundation(
         enterprise_policy=policy,
     )
     lsp_manager = LSPManager(
-        workspace_root, options=LSPOptions.from_config(config.get("lsp")))
+        workspace_root, options=LSPOptions.from_config(config.get("lsp"))
+    )
     web_runtime, browser_runtime, notebook_options, migration_options = (
-        _build_feature_runtimes(args, config))
+        _build_feature_runtimes(args, config)
+    )
     return RuntimeFoundation(
         workspace_root=workspace_root,
         enterprise_policy=policy,
@@ -231,7 +279,8 @@ async def _build_plugin_plane(
 ) -> PluginManager:
     try:
         plugin_manager = build_plugin_manager(
-            args, config, workspace_root, enterprise_policy=policy)
+            args, config, workspace_root, enterprise_policy=policy
+        )
         await plugin_manager.load()
         return plugin_manager
     except (PluginTrustError, PluginSignatureError) as exc:
@@ -240,8 +289,7 @@ async def _build_plugin_plane(
             load=False,
         )
         log(f"[plugins] 信任库无效，插件系统已 fail-closed 禁用: {exc}")
-        return PluginManager(
-            workspace_root, enabled=False, trust_store=empty_store)
+        return PluginManager(workspace_root, enabled=False, trust_store=empty_store)
 
 
 def _log_rule_issues(
@@ -255,7 +303,8 @@ def _log_rule_issues(
         log(
             f"[rules] 已加载 {rule_bundle.entry_count} 个入口"
             f" / {rule_bundle.import_count} 个导入"
-            f"（{rule_bundle.chars} chars）")
+            f"（{rule_bundle.chars} chars）"
+        )
     for issue in rule_bundle.issues:
         log(f"[rules] 跳过 {issue.code}: {issue.path}: {issue.message}")
 
@@ -268,18 +317,23 @@ def _log_extension_issues(
 ) -> None:
     if skill_manager.enabled:
         if skill_manager.list():
-            log("[skills] 已加载 "
+            log(
+                "[skills] 已加载 "
                 + ", ".join(skill.name for skill in skill_manager.list())
-                + f"（{len(skill_manager.list())} 个）")
+                + f"（{len(skill_manager.list())} 个）"
+            )
         for skill_issue in skill_manager.issues:
             log(f"[skills] 跳过无效 skill: {skill_issue.path}: {skill_issue.message}")
     if plugin_manager.enabled:
         if plugin_manager.records():
-            log("[plugins] 已发现 "
+            log(
+                "[plugins] 已发现 "
                 + ", ".join(
                     f"{record.name}@{record.version}[{record.status}]"
-                    for record in plugin_manager.records())
-                + f"（{len(plugin_tools)} 个工具）")
+                    for record in plugin_manager.records()
+                )
+                + f"（{len(plugin_tools)} 个工具）"
+            )
         for plugin_issue in plugin_manager.issues:
             log(f"[plugins] 跳过问题: {plugin_issue.path}: {plugin_issue.message}")
 
@@ -292,21 +346,22 @@ def _log_sandbox(
         return
     log(
         f"[sandbox] backend={sandbox.backend} "
-        f"network={'on' if sandbox.network else 'off'}")
+        f"network={'on' if sandbox.network else 'off'}"
+    )
     if sandbox.backend == "static":
-        log("[sandbox] 警告：OS 隔离后端不可用，当前为静态护栏模式"
-            "（无法抵御解释器中的动态绕过）")
+        log(
+            "[sandbox] 警告：OS 隔离后端不可用，当前为静态护栏模式"
+            "（无法抵御解释器中的动态绕过）"
+        )
 
 
 def _build_feature_runtimes(
     args: argparse.Namespace,
     config: Dict[str, Any],
 ) -> tuple[WebRuntime, BrowserRuntime, NotebookOptions, MigrationOptions]:
-    web_options = WebOptions.from_config(
-        config.get("web"), config.get("web_search"))
+    web_options = WebOptions.from_config(config.get("web"), config.get("web_search"))
     if getattr(args, "no_web", False):
-        web_options = replace(
-            web_options, enabled=False, search_enabled=False)
+        web_options = replace(web_options, enabled=False, search_enabled=False)
     web_runtime = WebRuntime.from_options(web_options)
     browser_options = BrowserOptions.from_config(config.get("browser"))
     if getattr(args, "no_web", False) or getattr(args, "no_browser", False):

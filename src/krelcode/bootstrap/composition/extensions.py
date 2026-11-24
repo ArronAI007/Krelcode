@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
-from ._deps import *  # noqa: F401,F403
+import argparse
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from krelcode.enterprise.policy import EnterprisePolicy
+from krelcode.hooks import HookSpec, parse_hooks
+from krelcode.plugins import PluginManager
+from krelcode.plugins.trust import PluginTrustPolicy
+from krelcode.session.commands.custom import CustomCommandManager
+from krelcode.skills import BUILTIN_SKILL_ROOT, SkillManager
 
 
 def configured_skill_paths(
-    args: argparse.Namespace, config: Dict[str, Any],
+    args: argparse.Namespace,
+    config: Dict[str, Any],
 ) -> list[Any]:
     """Return explicit Skill roots ordered below plugin/CLI overrides."""
     skill_config = config.get("skills") or {}
@@ -25,8 +35,9 @@ def build_skill_manager(
 ) -> SkillManager:
     """Build SkillManager with plugin roots before explicit CLI/project roots."""
     skill_config = config.get("skills") or {}
-    enabled = (not getattr(args, "no_skills", False)
-               and bool(skill_config.get("enabled", True)))
+    enabled = not getattr(args, "no_skills", False) and bool(
+        skill_config.get("enabled", True)
+    )
     explicit_paths = configured_skill_paths(args, config)
     return SkillManager(
         Path(args.workspace).resolve(),
@@ -59,8 +70,7 @@ def build_plugin_manager(
     trust_section = section.get("trust")
     if trust_section is not None and not isinstance(trust_section, dict):
         trust_section = None
-    trust_policy = PluginTrustPolicy.from_config(
-        section, trust_section=trust_section)
+    trust_policy = PluginTrustPolicy.from_config(section, trust_section=trust_section)
     trust_store_path = section.get("trust_store")
     if trust_store_path:
         configured_store = Path(str(trust_store_path)).expanduser()
@@ -78,7 +88,8 @@ def build_plugin_manager(
 
 
 def build_custom_command_manager(
-    config: Dict[str, Any], workspace_root: Path,
+    config: Dict[str, Any],
+    workspace_root: Path,
 ) -> CustomCommandManager:
     section = config.get("commands") or {}
     if not isinstance(section, dict):
@@ -97,7 +108,8 @@ def compose_hook_specs(
     raw_hooks = config.get("hooks") or []
     if not isinstance(raw_hooks, list):
         raw_hooks = []
-    return parse_hooks({
-        "hooks": [*raw_hooks, *plugin_hooks],
-    })
-
+    return parse_hooks(
+        {
+            "hooks": [*raw_hooks, *plugin_hooks],
+        }
+    )
