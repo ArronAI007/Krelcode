@@ -52,6 +52,16 @@ class RuntimeLoopPort(Protocol):
     _active_tool_pool: object | None
 
 
+def _update_loop_state(loop: object, **values: object) -> None:
+    """Use the explicit state boundary, with a lightweight host fallback."""
+    update = getattr(loop, "update_runtime_state", None)
+    if callable(update):
+        update(**values)
+        return
+    for name, value in values.items():
+        object.__setattr__(loop, name, value)
+
+
 class RuntimePermissionManager:
     """权限模式的唯一写入口，确保下一轮工具池与当前轮策略同时更新。"""
 
@@ -115,15 +125,18 @@ class RuntimePermissionManager:
         # 本 turn 的工具池已经固化，但策略层仍应读取最新模式；否则运行中
         # Shift-Tab 会出现“界面已切换、实际审批仍沿用旧模式”的假象。
         turn_context = self.loop._turn_tool_context
-        self.loop._turn_tool_context = replace(
-            turn_context,
-            runtime=replace(
-                turn_context.runtime, permission_mode=mode),
+        _update_loop_state(
+            self.loop,
+            _turn_tool_context=replace(
+                turn_context,
+                runtime=replace(
+                    turn_context.runtime, permission_mode=mode),
+            ),
         )
         # Capability filtering is part of the same permission boundary.  Drop
         # the turn pool so the next model/tool step is rebuilt from the new
         # runtime snapshot instead of advertising a stale write capability.
-        self.loop._active_tool_pool = None
+        _update_loop_state(self.loop, _active_tool_pool=None)
         sync = getattr(self.loop, "sync_context_attachments", None)
         if callable(sync):
             sync(

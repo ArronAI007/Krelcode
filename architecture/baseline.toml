@@ -22,7 +22,7 @@ max_unlisted_lines = 800
 "agent/context/compact_summary.py" = 859
 "agent/context/compression.py" = 862
 "agent/context/context_checkpoint.py" = 1037
-"agent/prompt/fragments.py" = 881
+"agent/prompt/fragments.py" = 880
 "agent/prompt/prompt_authoring.py" = 890
 "agent/prompt/prompt_parity.py" = 1011
 "agent/prompt/prompt_plan.py" = 852
@@ -40,22 +40,22 @@ max_unlisted_lines = 800
 
 
 [loop_dynamic_access.limits."bootstrap/composition/daemon.py"]
-assignments = 1
+assignments = 0
 getattr = 1
 setattr = 0
 
 [loop_dynamic_access.limits."bootstrap/composition/runtime.py"]
-assignments = 35
+assignments = 1
 getattr = 4
 setattr = 0
 
 [loop_dynamic_access.limits."bootstrap/composition/services.py"]
-assignments = 11
+assignments = 4
 getattr = 1
 setattr = 0
 
 [loop_dynamic_access.limits."bootstrap/application.py"]
-assignments = 8
+assignments = 1
 getattr = 2
 setattr = 0
 
@@ -65,7 +65,7 @@ getattr = 4
 setattr = 0
 
 [loop_dynamic_access.limits."session/commands/handlers/context_ops.py"]
-assignments = 3
+assignments = 0
 getattr = 33
 setattr = 0
 
@@ -80,17 +80,17 @@ getattr = 3
 setattr = 0
 
 [loop_dynamic_access.limits."agent/context/context_checkpoint.py"]
-assignments = 17
+assignments = 0
 getattr = 15
 setattr = 0
 
 [loop_dynamic_access.limits."session/restore.py"]
-assignments = 5
+assignments = 0
 getattr = 11
 setattr = 0
 
 [loop_dynamic_access.limits."session/lifecycle.py"]
-assignments = 2
+assignments = 0
 getattr = 11
 setattr = 0
 
@@ -100,7 +100,7 @@ getattr = 5
 setattr = 0
 
 [loop_dynamic_access.limits."ui/conversation_host.py"]
-assignments = 2
+assignments = 1
 getattr = 1
 setattr = 0
 
@@ -125,12 +125,12 @@ getattr = 7
 setattr = 0
 
 [loop_dynamic_access.limits."session/rewind.py"]
-assignments = 3
+assignments = 0
 getattr = 4
 setattr = 0
 
 [loop_dynamic_access.limits."session/compact_checkpoint.py"]
-assignments = 3
+assignments = 0
 getattr = 3
 setattr = 0
 
@@ -140,7 +140,7 @@ getattr = 3
 setattr = 0
 
 [loop_dynamic_access.limits."session/bootstrap.py"]
-assignments = 1
+assignments = 0
 getattr = 3
 setattr = 0
 
@@ -180,12 +180,12 @@ getattr = 1
 setattr = 0
 
 [loop_dynamic_access.limits."subagent/manager.py"]
-assignments = 12
+assignments = 0
 getattr = 1
 setattr = 0
 
 [loop_dynamic_access.limits."agent/prompt/fragments.py"]
-assignments = 2
+assignments = 0
 getattr = 0
 setattr = 0
 
@@ -195,17 +195,17 @@ getattr = 0
 setattr = 0
 
 [loop_dynamic_access.limits."safety/runtime.py"]
-assignments = 2
+assignments = 0
 getattr = 2
 setattr = 0
 
 [loop_dynamic_access.limits."security_review/runner.py"]
-assignments = 2
+assignments = 1
 getattr = 0
 setattr = 0
 
 [loop_dynamic_access.limits."review.py"]
-assignments = 2
+assignments = 1
 getattr = 0
 setattr = 0
 
@@ -215,21 +215,21 @@ getattr = 2
 setattr = 0
 
 [loop_dynamic_access.limits."benchmarks/behavior_advanced_scenarios.py"]
-assignments = 1
+assignments = 0
 getattr = 0
-setattr = 2
+setattr = 1
 
 [loop_dynamic_access.limits."benchmarks/behavior_session.py"]
 assignments = 0
 getattr = 1
-setattr = 12
+setattr = 0
 
 [loop_dynamic_access.limits."benchmarks/prompt_fixture.py"]
-assignments = 9
+assignments = 0
 getattr = 0
 setattr = 0
 
 [loop_dynamic_access.limits."benchmarks/prompt_scenarios.py"]
-assignments = 3
+assignments = 0
 getattr = 0
 setattr = 0

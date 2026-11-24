@@ -262,14 +262,16 @@ class _BenchmarkFixture:
             compact_checkpoint_store=compact_store,
             working_context_store=working,
         )
-        loop.prompt_registry = registry
-        loop.prompt_snapshot = snapshot
-        loop.workspace_context = self.workspace
-        loop.context_options = self.options
-        loop.context_engine = "v3"
-        loop.context_enabled = True
-        loop.rule_loader = self.rule_loader
-        loop.memory_store = self.memory
-        loop.skill_manager = None
+        loop.update_runtime_state(
+            prompt_registry=registry,
+            prompt_snapshot=snapshot,
+            workspace_context=self.workspace,
+            context_options=self.options,
+            context_engine="v3",
+            context_enabled=True,
+            rule_loader=self.rule_loader,
+            memory_store=self.memory,
+            skill_manager=None,
+        )
         loop.sync_context_attachments(include_mcp=False)
         return loop

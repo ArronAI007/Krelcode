@@ -820,8 +820,7 @@ def _workspace_fragment(section: ContextSection) -> PromptFragment:
 
 def apply_prompt_snapshot(loop: "PromptSnapshotHostPort[PromptSnapshot, RegistryT]", snapshot: PromptSnapshot) -> None:
     """把 registry 快照写回 loop.history 的 system 消息。"""
-    loop.prompt_snapshot = snapshot
-    loop.skill_base_prompt = snapshot.text
+    loop.update_runtime_state(prompt_snapshot=snapshot, skill_base_prompt=snapshot.text)
     message = snapshot.system_message()
     if loop.history and loop.history[0].role == "system":
         loop.history[0] = message

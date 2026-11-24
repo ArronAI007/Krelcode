@@ -624,7 +624,10 @@ def refresh_prompt_surfaces(
     registry = getattr(loop, "prompt_surface_registry", None)
     if not isinstance(registry, PromptSurfaceRegistry):
         registry = PromptSurfaceRegistry()
-        setattr(loop, "prompt_surface_registry", registry)
+        if hasattr(loop, "update_runtime_state"):
+            loop.update_runtime_state(prompt_surface_registry=registry)
+        else:  # compatibility for lightweight prompt hosts
+            setattr(loop, "prompt_surface_registry", registry)
 
     snapshot = getattr(loop, "prompt_snapshot", None)
     system_prompt = str(getattr(snapshot, "text", "") or "")

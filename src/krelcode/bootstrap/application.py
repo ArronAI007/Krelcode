@@ -174,7 +174,7 @@ async def create_application(
                 redactor=redactor,
             )
             auditor.attach(loop.bus)
-            loop.auditor = auditor
+            loop.update_runtime_state(auditor=auditor)
         except AuditError as exc:
             print(f"企业审计错误: {exc}", file=sys.stderr)
             return 2
@@ -189,7 +189,7 @@ async def create_application(
         elicitor=elicitor,
         redactor=redactor,
         prompt_surface_registry=loop.prompt_surface_registry)
-    loop.mcp_supervisor = supervisor
+    loop.update_runtime_state(mcp_supervisor=supervisor)
     def merged_mcp_config(source: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         active = current_config if source is None else source
         return compose_mcp_config(
@@ -273,7 +273,7 @@ async def create_application(
         loop.tool_context.workspace_root,
         hook_context_provider=collect_hook_context,
     )
-    loop.command_registry = input_processor.command_registry
+    loop.update_runtime_state(command_registry=input_processor.command_registry)
     sync_custom_commands(input_processor.command_registry, custom_commands)
     sync_plugin_commands(input_processor.command_registry, loop.plugin_manager)
     sync_skill_commands(input_processor.command_registry, loop.skill_manager)
@@ -295,7 +295,7 @@ async def create_application(
             loop, hooks=hooks, mcp_supervisor=supervisor)
         return result
 
-    loop.extension_refresh = refresh_extensions
+    loop.update_runtime_state(extension_refresh=refresh_extensions)
     async def refresh_mcp_prompt_commands() -> None:
         sync_mcp_prompt_commands(input_processor.command_registry, supervisor)
         refresh_extensions()
@@ -316,7 +316,7 @@ async def create_application(
         refresh_extensions()
         return custom_commands
 
-    loop.custom_commands_reload = reload_custom_commands
+    loop.update_runtime_state(custom_commands_reload=reload_custom_commands)
 
     base_plugin_reload = loop.plugin_reload
 
@@ -331,7 +331,7 @@ async def create_application(
         refresh_extensions()
         return records
 
-    loop.plugin_reload = reload_plugins
+    loop.update_runtime_state(plugin_reload=reload_plugins)
     if args.auto_commit:
         committer = AutoCommitter(loop.tool_context.workspace_root)
         if await committer.is_git_repo():
@@ -347,7 +347,7 @@ async def create_application(
         run_mode=resolve_run_mode(args).value,
         policy_allowed=enterprise_policy.allow_telemetry,
     )
-    loop.telemetry = telemetry_runtime
+    loop.update_runtime_state(telemetry=telemetry_runtime)
     telemetry_runtime.attach(loop.bus)
 
     extensions = ExtensionRuntime(

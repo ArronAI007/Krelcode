@@ -264,6 +264,8 @@ class ContextTurnHostPort(_EventHostPort, _ToolPoolHostPort, Protocol):
         variables: dict[str, str],
     ) -> "HookResult": ...
 
+    def update_runtime_state(self, **values: object) -> None: ...
+
 
 class ModelTurnHostPort(_EventHostPort, _ToolPoolHostPort, Protocol):
     """State required to stream one model response."""

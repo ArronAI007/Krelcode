@@ -114,7 +114,7 @@ class SessionLifecycle:
         )
         recorder.attach(self.loop.bus)
         recorder.flush_history()
-        self.loop.session_recorder = recorder
+        self.loop.update_runtime_state(session_recorder=recorder)
         self.session_path = path
         if self.runtime is not None:
             self.runtime.bind_session(path.stem)
@@ -151,7 +151,7 @@ class SessionLifecycle:
         parent_id = self.session_path.stem if self.session_path else ""
         source_session_id = parent_id
         if history is not None:
-            self.loop.history = list(history)
+            self.loop.update_runtime_state(history=list(history))
         rebuild = getattr(self.loop, "rebuild_working_context", None)
         if callable(rebuild):
             rebuild()

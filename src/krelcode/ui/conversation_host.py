@@ -124,7 +124,7 @@ class ConversationHost:
         if self.memory_store is None:
             self.memory_store = MemoryStore(
                 self.loop.tool_context.workspace_root, redactor=redactor)
-            self.loop.memory_store = self.memory_store
+            self.loop.update_runtime_state(memory_store=self.memory_store)
         else:
             self.memory_store.redactor = redactor
         sync_memory_fragment(self.loop, self.memory_store)

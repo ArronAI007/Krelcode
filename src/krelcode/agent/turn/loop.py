@@ -66,6 +66,7 @@ from krelcode.agent.turn.tool_turn import ToolBatchExecutor
 from krelcode.agent.turn.runtime_ports import (
     ContextManagerPort, ContextTurnHostPort, ModelTurnHostPort, ToolTurnHostPort,
 )
+from krelcode.agent.turn.runtime_state import AgentRuntimeState, RuntimeStateHost
 from krelcode.agent.context.working_context import WorkingContextSnapshot, WorkingContextStore
 from krelcode.agent.context.working_context_source import WorkingContextSource
 from krelcode.agent.turn.workflows import TaskWorkflowSelection, select_task_workflow
@@ -95,7 +96,7 @@ INTERRUPTED_NOTE = "[已被用户中止]"
 STEERING_PREFIX = "[用户插话] "
 
 
-class AgentLoop:
+class AgentLoop(RuntimeStateHost):
     """Turn orchestration facade.
 
     Model streaming, context assembly and tool batch execution live in
@@ -112,12 +113,6 @@ class AgentLoop:
         "runtime_snapshot_provider", "hook_port", "user_input_port",
         "step_gate",
     })
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        object.__setattr__(self, name, value)
-        dependencies = self.__dict__.get("dependencies")
-        if dependencies is not None and name in self._DEPENDENCY_ATTRS:
-            setattr(dependencies, name, value)
 
     def __init__(
         self,
@@ -147,6 +142,9 @@ class AgentLoop:
         today_provider: Optional[Callable[[], str]] = None,
         reminder_catalog: Optional[ReminderCatalog] = None,
     ) -> None:
+        # The state container is created before any compatibility attributes
+        # are assigned so ``__setattr__`` can route them into the right group.
+        self._runtime_state = AgentRuntimeState()
         self.llm = llm
         self.registry = registry
         self.tool_context = tool_context

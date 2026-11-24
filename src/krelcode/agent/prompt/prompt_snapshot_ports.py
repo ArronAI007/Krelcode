@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Generic, Optional, Protocol, TypeVar
+from typing import Any, Generic, Optional, Protocol, TypeVar
 
 from krelcode.core.messages import Message
 
@@ -17,6 +17,8 @@ class PromptSnapshotHostPort(Protocol, Generic[SnapshotT, RegistryT]):
     prompt_snapshot: Optional[SnapshotT]
     skill_base_prompt: str
     prompt_registry: Optional[RegistryT]
+
+    def update_runtime_state(self, **values: Any) -> None: ...
 
 
 __all__ = ["PromptSnapshotHostPort", "RegistryT", "SnapshotT"]

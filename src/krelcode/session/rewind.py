@@ -336,23 +336,24 @@ class RewindCoordinator:
                 history_override=history_before,
             )
         else:
-            self.loop.history = self._history_with_current_system(history_before)
+            self.loop.update_runtime_state(
+                history=self._history_with_current_system(history_before))
             if restored_compact is not None:
                 restore_compact_checkpoint(self.loop, restored_compact)
             else:
                 rebuild = getattr(self.loop, "rebuild_working_context", None)
                 if callable(rebuild):
                     rebuild()
-                self.loop.pending_context_refresh = True
+                self.loop.update_runtime_state(pending_context_refresh=True)
             current_plan = getattr(self.loop, "last_context_plan", None)
             if current_plan is None:
                 current_plan = ContextPlanSnapshot()
-            self.loop.last_context_plan = current_plan.restored_for(
+            self.loop.update_runtime_state(last_context_plan=current_plan.restored_for(
                 self.loop.history,
                 "",
                 working_context_sequence=(
                     self.loop.working_context_store.snapshot().sequence),
-            )
+            ))
         self.plan_manager.restore(entry.plan_before)
         self.timeline.truncate_before(turn_index)
 

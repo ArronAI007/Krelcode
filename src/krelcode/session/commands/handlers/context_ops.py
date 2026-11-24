@@ -69,7 +69,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
     if operation == "refresh" and len(parts) == 1:
         manager = ctx.skills or getattr(ctx.loop, "skill_manager", None)
         if manager is not None and getattr(ctx.loop, "skill_manager", None) is None:
-            ctx.loop.skill_manager = manager
+            ctx.loop.update_runtime_state(skill_manager=manager)
         refresh = getattr(ctx.loop, "refresh_workspace_context", None)
         if callable(refresh):
             bundle = await refresh()
@@ -87,7 +87,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         rule_loader = getattr(ctx.loop, "rule_loader", None)
         bundle = await build_workspace_context_bundle(
             ctx.workspace_root, options=options, rule_loader=rule_loader)
-        ctx.loop.workspace_context = bundle
+        ctx.loop.update_runtime_state(workspace_context=bundle)
         if registry is not None:
             registry.replace_group(
                 GROUP_WORKSPACE, workspace_fragments(bundle))
@@ -111,7 +111,7 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             provider=getattr(ctx.loop, "llm", ""),
             model=getattr(getattr(ctx.loop, "llm", None), "model", ""),
         ))
-        ctx.loop.skill_base_prompt = base_prompt
+        ctx.loop.update_runtime_state(skill_base_prompt=base_prompt)
         prompt = (
             manager.apply_to_prompt(base_prompt) if manager is not None
             else base_prompt)

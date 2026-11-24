@@ -53,7 +53,7 @@ async def build_daemon_agent_runtime(request):
         )
         await supervisor.sync(compose_mcp_config(
             request.config, dict(loop.plugin_manager.mcp_servers)))
-        loop.mcp_supervisor = supervisor
+        loop.update_runtime_state(mcp_supervisor=supervisor)
         loop.sync_context_attachments(include_mcp=True)
     return DaemonAgentRuntime(
         loop=loop,

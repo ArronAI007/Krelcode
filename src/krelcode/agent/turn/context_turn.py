@@ -90,43 +90,47 @@ class ContextTurnCoordinator:
 
     def _initialize_observability_state(self) -> None:
         host = self.host
-        host.last_prompt_plan = None
-        host.last_provider_messages = None
-        host.last_context_assembly = None
-        host.last_context_snapshot = None
-        host.previous_context_snapshot = None
-        host.last_context_plan = None
-        host.last_context_cache_ledger = None
-        host.previous_context_cache_ledger = None
-        host.cache_ledger_owner = "main"
-        host.parent_policy_instruction_hash = ""
-        host.last_context_restore = None
-        host.context_integrity = None
-        host.context_workspace_fingerprint = None
-        host.restored_workspace_fingerprint = None
-        host.restored_context_checkpoint_id = ""
-        host.restored_memory_context = ()
-        host.restored_relevant_memory_ids = ()
-        host.pending_context_refresh = False
-        host.context_attachments = ContextAttachmentStore()
-        host.last_attachment_diff = ContextAttachmentDiff(0, 0)
-        host.last_mode_permission_contract = None
-        host.last_microcompact_report = None
-        host.last_compact_checkpoint = None
+        host.update_runtime_state(
+            last_prompt_plan=None,
+            last_provider_messages=None,
+            last_context_assembly=None,
+            last_context_snapshot=None,
+            previous_context_snapshot=None,
+            last_context_plan=None,
+            last_context_cache_ledger=None,
+            previous_context_cache_ledger=None,
+            cache_ledger_owner="main",
+            parent_policy_instruction_hash="",
+            last_context_restore=None,
+            context_integrity=None,
+            context_workspace_fingerprint=None,
+            restored_workspace_fingerprint=None,
+            restored_context_checkpoint_id="",
+            restored_memory_context=(),
+            restored_relevant_memory_ids=(),
+            pending_context_refresh=False,
+            context_attachments=ContextAttachmentStore(),
+            last_attachment_diff=ContextAttachmentDiff(0, 0),
+            last_mode_permission_contract=None,
+            last_microcompact_report=None,
+            last_compact_checkpoint=None,
+        )
 
     def reset(self) -> None:
         host = self.host
-        host.last_prompt_plan = None
-        host.last_provider_messages = None
-        host.last_context_assembly = None
-        host.last_context_snapshot = None
-        host.previous_context_snapshot = None
-        host.last_context_cache_ledger = None
-        host.previous_context_cache_ledger = None
-        host.last_microcompact_report = None
-        host.last_compact_checkpoint = None
+        host.update_runtime_state(
+            last_prompt_plan=None,
+            last_provider_messages=None,
+            last_context_assembly=None,
+            last_context_snapshot=None,
+            previous_context_snapshot=None,
+            last_context_cache_ledger=None,
+            previous_context_cache_ledger=None,
+            last_microcompact_report=None,
+            last_compact_checkpoint=None,
+            last_attachment_diff=ContextAttachmentDiff(0, 0),
+        )
         host.context_attachments.clear()
-        host.last_attachment_diff = ContextAttachmentDiff(0, 0)
 
     async def refresh_workspace_context(self) -> WorkspaceContext:
         """Reload rules and replace only changed environment attachments."""
@@ -138,7 +142,7 @@ class ContextTurnCoordinator:
             options=options,
             rule_loader=rule_loader,
         )
-        host.workspace_context = bundle
+        host.update_runtime_state(workspace_context=bundle)
         registry = getattr(host, "prompt_registry", None)
         if registry is not None:
             rules = workspace_rule_fragments(bundle)
@@ -150,13 +154,13 @@ class ContextTurnCoordinator:
                 sync_rule_fragments(registry, bundle)
                 refresh_registry_snapshot(host)
         self.sync_context_attachments()
-        host.pending_context_refresh = False
+        host.update_runtime_state(pending_context_refresh=False)
         current_plan = getattr(host, "last_context_plan", None)
         if current_plan is not None:
-            host.last_context_plan = replace(
+            host.update_runtime_state(last_context_plan=replace(
                 current_plan,
                 history_digest=history_digest(host.history),
-            )
+            ))
         return bundle
 
     def sync_context_attachments(
@@ -239,7 +243,7 @@ class ContextTurnCoordinator:
                     ))
 
         diff = host.context_attachments.diff(previous)
-        host.last_attachment_diff = diff
+        host.update_runtime_state(last_attachment_diff=diff)
         return diff
 
     def sync_mode_permission_contract(self) -> None:
@@ -259,10 +263,10 @@ class ContextTurnCoordinator:
                     host, "subagent_definition_name", ""),
             )
         except Exception:
-            host.last_mode_permission_contract = None
+            host.update_runtime_state(last_mode_permission_contract=None)
             host.context_attachments.remove(item_id)
             return
-        host.last_mode_permission_contract = contract
+        host.update_runtime_state(last_mode_permission_contract=contract)
         host.context_attachments.upsert(
             mode_permission_contract_attachment(contract))
         host.context_attachments.remove(
@@ -300,7 +304,7 @@ class ContextTurnCoordinator:
             trigger=trigger,
             current_turn_id=host._current_turn_id,
         )
-        host.last_microcompact_report = report
+        host.update_runtime_state(last_microcompact_report=report)
         if report.changed:
             await host._emit(ContextMicrocompacted(
                 trigger=report.trigger,
@@ -343,7 +347,7 @@ class ContextTurnCoordinator:
                 "pre_compact", {"before_tokens": str(before)})
         pre_compact_history = deepcopy(host.history)
         manager.last_compact_result = None
-        host.last_compact_checkpoint = None
+        host.update_runtime_state(last_compact_checkpoint=None)
         changed = await manager.maybe_compress(
             host.history,
             force=force,
@@ -356,7 +360,7 @@ class ContextTurnCoordinator:
         )
         report = manager.last_microcompact_report
         if report is not None and report.changed and not pre_microcompacted:
-            host.last_microcompact_report = report
+            host.update_runtime_state(last_microcompact_report=report)
             await host._emit(ContextMicrocompacted(
                 trigger=report.trigger,
                 before_tokens=report.before_tokens,
@@ -395,7 +399,7 @@ class ContextTurnCoordinator:
                 source_savings=result.savings_dict(),
                 working_context=working,
             )
-            host.last_compact_checkpoint = checkpoint
+            host.update_runtime_state(last_compact_checkpoint=checkpoint)
             if checkpoint is not None:
                 await host._emit(CompactCheckpointCreated(
                     checkpoint_id=checkpoint.id,
@@ -459,8 +463,10 @@ class ContextTurnCoordinator:
             context,
             budget_tokens=DEFAULT_REMINDER_BUDGET_TOKENS,
         )
-        host._turn_reminder_selection = selection
-        host.last_reminder_selection = selection
+        host.update_runtime_state(
+            _turn_reminder_selection=selection,
+            last_reminder_selection=selection,
+        )
         return selection
 
     def current_context_usage_ratio(self) -> float:
@@ -591,21 +597,21 @@ class ContextTurnCoordinator:
             dropped_items=dropped_context_items(host),
             previous=previous_prompt_plan,
         )
-        host.last_prompt_plan = prompt_plan
+        host.update_runtime_state(last_prompt_plan=prompt_plan)
         self.observe_prompt_surfaces(
             prompt_plan, tuple(prompt_specs or ()), step)
         working_snapshot = deps.working_context_store.snapshot()
-        host.last_context_plan = ContextPlanSnapshot.from_assembly(
+        host.update_runtime_state(last_context_plan=ContextPlanSnapshot.from_assembly(
             context_assembly,
             history=host.history,
             turn_id=host._current_turn_id,
             step=step,
             working_context_sequence=working_snapshot.sequence,
             prompt_plan=prompt_plan_snapshot,
-        )
+        ))
         provider_messages = deps.prompt_assembler.provider_messages(
             prompt_plan, tools=tuple(specs or ()))
-        host.last_provider_messages = provider_messages
+        host.update_runtime_state(last_provider_messages=provider_messages)
         messages = list(provider_messages.messages)
         prepared: Optional[PreparedLLMRequest] = None
         prepare = getattr(deps.llm, "prepare_request", None)
@@ -652,10 +658,12 @@ class ContextTurnCoordinator:
             parent_policy_instruction_hash=getattr(
                 host, "parent_policy_instruction_hash", ""),
         ).compared_with(previous)
-        host.previous_context_cache_ledger = previous
-        host.last_context_cache_ledger = current
-        host.last_context_plan = replace(
-            context_plan, cache_ledger=current)
+        host.update_runtime_state(
+            previous_context_cache_ledger=previous,
+            last_context_cache_ledger=current,
+            last_context_plan=replace(
+                context_plan, cache_ledger=current),
+        )
         return current
 
     def request_snapshot(
@@ -747,9 +755,11 @@ class ContextTurnCoordinator:
                     )
 
         host = self.host
-        host.previous_context_snapshot = host.last_context_snapshot
-        host.last_context_assembly = context_assembly
-        host.last_context_snapshot = context_snapshot
+        host.update_runtime_state(
+            previous_context_snapshot=host.last_context_snapshot,
+            last_context_assembly=context_assembly,
+            last_context_snapshot=context_snapshot,
+        )
         ledger = self.finalize_context_cache_ledger(context_snapshot)
         await host._emit(ContextAssembled(
             context_snapshot,

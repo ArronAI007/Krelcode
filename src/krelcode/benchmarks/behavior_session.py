@@ -176,18 +176,20 @@ class BehaviorSession:
             working_context_store=working_context,
             redactor=self.redactor,
         )
-        setattr(loop, "prompt_registry", prompt_registry)
-        setattr(loop, "prompt_snapshot", prompt_snapshot)
-        setattr(loop, "prompt_profile", profile.profile)
-        setattr(loop, "prompt_profile_resolution", profile)
-        setattr(loop, "prompt_profile_name", profile.name)
-        setattr(loop, "context_options", context_options)
-        setattr(loop, "context_engine", "v3")
-        setattr(loop, "context_enabled", True)
-        setattr(loop, "workspace_context", workspace_context)
-        setattr(loop, "rule_loader", rule_loader)
-        setattr(loop, "memory_store", self.memory_store)
-        setattr(loop, "skill_manager", None)
+        loop.update_runtime_state(
+            prompt_registry=prompt_registry,
+            prompt_snapshot=prompt_snapshot,
+            prompt_profile=profile.profile,
+            prompt_profile_resolution=profile,
+            prompt_profile_name=profile.name,
+            context_options=context_options,
+            context_engine="v3",
+            context_enabled=True,
+            workspace_context=workspace_context,
+            rule_loader=rule_loader,
+            memory_store=self.memory_store,
+            skill_manager=None,
+        )
         loop.sync_context_attachments(include_mcp=False)
         apply_prompt_snapshot(loop, prompt_snapshot)
         refresh_prompt_surfaces(loop)

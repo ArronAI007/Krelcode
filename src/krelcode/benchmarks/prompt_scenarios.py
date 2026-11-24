@@ -510,7 +510,7 @@ async def _run_fork(root: Path) -> _ScenarioOutcome:
     sessions.mkdir(parents=True, exist_ok=True)
     source_path = sessions / f"{source_session}.jsonl"
     source_path.write_text("", encoding="utf-8")
-    loop.context_checkpoint_store = store
+    loop.update_runtime_state(context_checkpoint_store=store)
     lifecycle = SessionLifecycle(
         loop,
         sessions,
@@ -594,10 +594,10 @@ async def _run_rewind(root: Path) -> _ScenarioOutcome:
     fixture = _BenchmarkFixture(root)
     loop = fixture.loop
     store = ContextCheckpointStore(fixture.root)
-    loop.context_checkpoint_store = store
+    loop.update_runtime_state(context_checkpoint_store=store)
     coordinator = ContextCheckpointCoordinator(loop=loop, store=store)
     coordinator.attach(loop.bus)
-    loop.context_checkpoint_coordinator = coordinator
+    loop.update_runtime_state(context_checkpoint_coordinator=coordinator)
     controller = SessionController(AgentRuntime(loop))
     await loop.run("rewind first request", turn_id="rewind-1")
     before_second = list(loop.history)

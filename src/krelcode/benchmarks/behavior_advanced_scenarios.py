@@ -158,7 +158,7 @@ async def _run_plan_mode_gate(
         session.loop.tool_context.runtime,
         permission_mode=PermissionMode.PLAN,
     )
-    session.loop._active_tool_pool = None
+    session.loop.update_runtime_state(_active_tool_pool=None)
     session.loop.sync_context_attachments(include_contract=True)
     answer = await session.run_turn(
         "Plan how to change `src/a.py` to return 43. This is a plan-only turn: "
@@ -545,7 +545,7 @@ async def _run_fork_memory_isolation(
     )
     store = ContextCheckpointStore(
         session.workspace_root, redactor=session.redactor)
-    setattr(loop, "context_checkpoint_store", store)
+    loop.update_runtime_state(context_checkpoint_store=store)
     checkpoint = store.record(
         history=loop.history,
         session_id=source_id,

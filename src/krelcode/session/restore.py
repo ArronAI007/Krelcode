@@ -114,9 +114,11 @@ def restore_session(loop: AgentLoop, path: Path, log=print) -> bool:
                 provider=getattr(loop, "llm", ""),
                 model=getattr(getattr(loop, "llm", None), "model", ""),
             ))))
-    loop.history = history
+    loop.update_runtime_state(
+        history=history,
+        pending_context_refresh=True,
+    )
     loop.rebuild_working_context()
-    loop.pending_context_refresh = True
     _refresh_now_if_possible(loop)
     refresh_skill_system_prompt(loop)
     log(f"（已恢复会话 {path}，共 {len(history)} 条消息；旧格式无 ContextCheckpoint）")
@@ -126,7 +128,7 @@ def restore_session(loop: AgentLoop, path: Path, log=print) -> bool:
 def _refresh_now_if_possible(loop: AgentLoop) -> None:
     refresh = getattr(loop, "refresh_workspace_context", None)
     if not callable(refresh):
-        loop.pending_context_refresh = False
+        loop.update_runtime_state(pending_context_refresh=False)
         return
     try:
         asyncio.get_running_loop()
@@ -134,9 +136,9 @@ def _refresh_now_if_possible(loop: AgentLoop) -> None:
         try:
             asyncio.run(refresh())
         except Exception:
-            loop.pending_context_refresh = True
+            loop.update_runtime_state(pending_context_refresh=True)
     else:
-        loop.pending_context_refresh = True
+        loop.update_runtime_state(pending_context_refresh=True)
 
 
 __all__ = ["refresh_skill_system_prompt", "restore_session"]

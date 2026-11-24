@@ -54,7 +54,7 @@ def setup_session(args, loop: AgentLoop, log=print, redactor=None):
         metadata=metadata,
     )
     recorder.attach(loop.bus)
-    loop.session_recorder = recorder
+    loop.update_runtime_state(session_recorder=recorder)
     if memory_store is not None:
         memory_store.bind_session(session_path.stem)
         sync_memory_fragment(loop, memory_store)

@@ -278,7 +278,7 @@ class CompactCheckpointStore:
 
 def restore_compact_checkpoint(loop, checkpoint: CompactCheckpoint) -> FileIntegrity:
     """Restore the exact pre-compact task scene and invalidate stale files."""
-    loop.last_compact_checkpoint = checkpoint
+    loop.update_runtime_state(last_compact_checkpoint=checkpoint)
     store = getattr(loop, "working_context_store", None)
     restore_working = getattr(store, "restore_snapshot", None)
     raw_entries = checkpoint.working_context.get("entries")
@@ -294,12 +294,12 @@ def restore_compact_checkpoint(loop, checkpoint: CompactCheckpoint) -> FileInteg
         store.invalidate_files(
             integrity.stale, reason="compact-file-hash-mismatch")
         snapshot = store.snapshot()
-    loop.context_integrity = integrity
+    loop.update_runtime_state(context_integrity=integrity)
 
     manager = getattr(loop, "context_manager", None)
     if manager is not None:
         manager.rebuild_state(loop.history)
-    loop.pending_context_refresh = True
+    loop.update_runtime_state(pending_context_refresh=True)
     return integrity
 
 

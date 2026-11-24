@@ -526,7 +526,7 @@ def restore_context_checkpoint(
             restored[0] = system
         else:
             restored.insert(0, system)
-    loop.history = restored
+    loop.update_runtime_state(history=restored)
 
     compact = None
     if compact_store is not None and checkpoint.compact_checkpoint_id:
@@ -539,7 +539,7 @@ def restore_context_checkpoint(
         except (TypeError, ValueError):
             summary = None
     if compact is not None:
-        loop.last_compact_checkpoint = compact
+        loop.update_runtime_state(last_compact_checkpoint=compact)
     manager = getattr(loop, "context_manager", None)
     if manager is not None and summary is not None:
         manager.last_summary = summary
@@ -565,12 +565,12 @@ def restore_context_checkpoint(
     if memory_store is not None and memory_query:
         relevant = memory_store.search(memory_query, limit=8)
     rendered_memory = render_memory_context(relevant)
-    loop.restored_memory_context = (rendered_memory,) if rendered_memory else ()
-    loop.restored_relevant_memory_ids = tuple(entry.id for entry in relevant)
-    loop.restored_context_checkpoint_id = checkpoint.id
-    loop.context_integrity = integrity
-    loop.context_workspace_fingerprint = None
-    loop.restored_workspace_fingerprint = checkpoint.workspace
+    loop.update_runtime_state(
+        restored_memory_context=(rendered_memory,) if rendered_memory else (),
+        restored_relevant_memory_ids=tuple(entry.id for entry in relevant),
+        restored_context_checkpoint_id=checkpoint.id, context_integrity=integrity,
+        context_workspace_fingerprint=None, restored_workspace_fingerprint=checkpoint.workspace,
+    )
 
     plan = checkpoint.context_plan or ContextPlanSnapshot()
     previous_ledger = plan.cache_ledger
@@ -596,11 +596,12 @@ def restore_context_checkpoint(
             snapshot.sequence if snapshot is not None else 0),
         invalidations=invalidations,
     )
-    loop.last_context_plan = plan
-    loop.last_context_cache_ledger = (
-        plan.cache_ledger if plan.cache_ledger.has_request_identity else None)
-    loop.previous_context_cache_ledger = None
-    loop.pending_context_refresh = True
+    loop.update_runtime_state(
+        last_context_plan=plan,
+        last_context_cache_ledger=(
+            plan.cache_ledger if plan.cache_ledger.has_request_identity else None),
+        previous_context_cache_ledger=None, pending_context_refresh=True,
+    )
 
     result = ContextRestoreResult(
         checkpoint_id=checkpoint.id,
@@ -614,21 +615,20 @@ def restore_context_checkpoint(
         workspace_refresh_pending=True,
         context_plan=plan,
     )
-    loop.last_context_restore = result
+    loop.update_runtime_state(last_context_restore=result)
     _refresh_now_if_possible(loop)
-    if hasattr(loop, "last_context_restore"):
-        loop.last_context_restore = replace(
-            result,
-            workspace_refresh_pending=bool(
-                getattr(loop, "pending_context_refresh", False)),
-        )
-    return loop.last_context_restore
+    loop.update_runtime_state(last_context_restore=replace(
+        result,
+        workspace_refresh_pending=bool(
+            getattr(loop, "pending_context_refresh", False)),
+    ))
+    return cast(ContextRestoreResult, loop.last_context_restore)
 
 
 def _refresh_now_if_possible(loop: CheckpointLoopPort) -> None:
     refresh = getattr(loop, "refresh_workspace_context", None)
     if not callable(refresh):
-        loop.pending_context_refresh = False
+        loop.update_runtime_state(pending_context_refresh=False)
         return
     try:
         asyncio.get_running_loop()
@@ -637,9 +637,9 @@ def _refresh_now_if_possible(loop: CheckpointLoopPort) -> None:
             asyncio.run(refresh())
         except Exception:
             # The next AgentLoop turn retries; stale context is never injected.
-            loop.pending_context_refresh = True
+            loop.update_runtime_state(pending_context_refresh=True)
         return
-    loop.pending_context_refresh = True
+    loop.update_runtime_state(pending_context_refresh=True)
 
 
 def collect_tracked_files(
