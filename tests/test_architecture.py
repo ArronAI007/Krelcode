@@ -647,13 +647,13 @@ def test_agent_turn_runtime_has_explicit_executor_boundaries():
         "model_turn.py": "ModelTurnExecutor",
     }
     for filename, class_name in expected.items():
-        path = ROOT / "agent" / filename
+        path = ROOT / "agent" / "turn" / filename
         assert path.exists(), filename
         _class_node(path, class_name)
 
 
 def test_agent_loop_is_a_thin_turn_orchestration_facade():
-    path = ROOT / "agent" / "loop.py"
+    path = ROOT / "agent" / "turn" / "loop.py"
     source = path.read_text(encoding="utf-8")
     assert len(source.splitlines()) < 1_000
     # Concrete context/model/tool mechanics must not drift back into the loop.
@@ -683,7 +683,7 @@ def test_runtime_executors_do_not_import_outer_layers():
     forbidden = ("krelcode.ui", "krelcode.session", "krelcode.entrypoints")
     violations = {}
     for filename in ("dependencies.py", "context_turn.py", "tool_turn.py", "model_turn.py"):
-        path = ROOT / "agent" / filename
+        path = ROOT / "agent" / "turn" / filename
         imports = imported_modules(path)
         bad = sorted(
             name for name in imports
@@ -692,3 +692,16 @@ def test_runtime_executors_do_not_import_outer_layers():
         if bad:
             violations[filename] = bad
     assert not violations
+
+
+def test_agent_domain_compatibility_facades_reexport_public_classes():
+    from krelcode.agent.context import ContextOptions
+    from krelcode.agent.context.workspace import ContextOptions as ContextOptionsImpl
+    from krelcode.agent.fragments import PromptFragmentRegistry
+    from krelcode.agent.loop import AgentLoop
+    from krelcode.agent.prompt.fragments import PromptFragmentRegistry as RegistryImpl
+    from krelcode.agent.turn.loop import AgentLoop as AgentLoopImpl
+
+    assert ContextOptions is ContextOptionsImpl
+    assert PromptFragmentRegistry is RegistryImpl
+    assert AgentLoop is AgentLoopImpl

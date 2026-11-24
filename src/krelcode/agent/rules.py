@@ -34,10 +34,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Sequence, Set, Tuple
 
-from ..core.messages import Message
-from ..core.redact import SecretRedactor
-from ..tools.paths import read_text_file
-from ..core.secret_guard import classify_secret_path
+from krelcode.core.messages import Message
+from krelcode.core.redact import SecretRedactor
+from krelcode.tools.paths import read_text_file
+from krelcode.core.secret_guard import classify_secret_path
 
 RULE_FILE_NAMES = ("AGENTS.md", "KRELCODE.md")
 USER_RULE_RELPATH = Path(".krelcode") / "AGENTS.md"

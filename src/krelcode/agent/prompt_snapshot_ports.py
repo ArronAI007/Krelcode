@@ -1,22 +1,16 @@
-"""Minimal host boundary for applying legacy Prompt registry snapshots."""
+"""Compatibility facade for :mod:`krelcode.agent.prompt.prompt_snapshot_ports`."""
 
 from __future__ import annotations
 
-from typing import Generic, Optional, Protocol, TypeVar
+from typing import Any
 
-from ..core.messages import Message
-
-
-
-SnapshotT = TypeVar("SnapshotT")
-RegistryT = TypeVar("RegistryT")
+from .prompt import prompt_snapshot_ports as _impl
+from .prompt.prompt_snapshot_ports import *  # noqa: F401,F403
 
 
-class PromptSnapshotHostPort(Protocol, Generic[SnapshotT, RegistryT]):
-    history: list[Message]
-    prompt_snapshot: Optional[SnapshotT]
-    skill_base_prompt: str
-    prompt_registry: Optional[RegistryT]
+def __getattr__(name: str) -> Any:
+    return getattr(_impl, name)
 
 
-__all__ = ["PromptSnapshotHostPort", "RegistryT", "SnapshotT"]
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(dir(_impl)))

@@ -1,37 +1,16 @@
-"""Content-free inspection of the latest real context assembly.
-
-The command layer and TUI both need to explain which context sources contributed
-to a provider request. This module is intentionally read-only: it never loads
-rules, scans memory files or invokes context sources. It only projects snapshots
-already retained by ``AgentLoop``.
-
-The public ``ContextInspectionService`` facade composes focused snapshot,
-Prompt-plan and runtime-reporting mixins while preserving the original import
-path and method surface.
-"""
+"""Compatibility facade for :mod:`krelcode.agent.context.context_inspection`."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import Any
 
-from .inspection_core import ContextInspectionCoreMixin
-from .inspection_helpers import (
-    _bounded,
-    _int_value,
-    _is_memory_fragment,
-    _join_provenance,
-    _layer_memory_metadata,
-    _short_hash,
-    _signed,
-    _yes_no,
-    _ids,
-)
-from .inspection_prompt import ContextInspectionPromptMixin
-from .inspection_runtime import ContextInspectionRuntimeMixin
+from .context import context_inspection as _impl
+from .context.context_inspection import *  # noqa: F401,F403
 
 
-@dataclass(frozen=True)
-class ContextInspectionService(ContextInspectionRuntimeMixin):
-    """Project the last request's snapshot, plan and assembly into text."""
+def __getattr__(name: str) -> Any:
+    return getattr(_impl, name)
 
-    loop: object
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(dir(_impl)))

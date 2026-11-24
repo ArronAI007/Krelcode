@@ -18,15 +18,15 @@ reason = "Benchmark runners still share report/session helpers in both direction
 max_unlisted_lines = 800
 
 [file_size.limits]
-"agent/compact_summary.py" = 859
-"agent/compression.py" = 862
-"agent/context_checkpoint.py" = 1037
-"agent/fragments.py" = 881
-"agent/prompt_authoring.py" = 890
-"agent/prompt_parity.py" = 1011
-"agent/prompt_plan.py" = 852
-"agent/prompt_release_pipeline.py" = 1376
-"agent/working_context.py" = 863
+"agent/context/compact_summary.py" = 859
+"agent/context/compression.py" = 862
+"agent/context/context_checkpoint.py" = 1037
+"agent/prompt/fragments.py" = 881
+"agent/prompt/prompt_authoring.py" = 890
+"agent/prompt/prompt_parity.py" = 1011
+"agent/prompt/prompt_plan.py" = 852
+"agent/prompt/prompt_release_pipeline.py" = 1376
+"agent/context/working_context.py" = 863
 "benchmarks/acceptance.py" = 1477
 "benchmarks/behavior.py" = 3397
 "benchmarks/prompt.py" = 1559
@@ -81,7 +81,7 @@ assignments = 0
 getattr = 3
 setattr = 0
 
-[loop_dynamic_access.limits."agent/context_checkpoint.py"]
+[loop_dynamic_access.limits."agent/context/context_checkpoint.py"]
 assignments = 17
 getattr = 15
 setattr = 0
@@ -106,22 +106,17 @@ assignments = 2
 getattr = 1
 setattr = 0
 
-[loop_dynamic_access.limits."agent/prompt_surface_catalog.py"]
+[loop_dynamic_access.limits."agent/prompt/prompt_surface_catalog.py"]
 assignments = 0
 getattr = 19
 setattr = 1
 
-[loop_dynamic_access.limits."agent/context_inspection.py"]
-assignments = 0
-getattr = 0
-setattr = 0
-
-[loop_dynamic_access.limits."agent/inspection_core.py"]
+[loop_dynamic_access.limits."agent/context/inspection_core.py"]
 assignments = 0
 getattr = 9
 setattr = 0
 
-[loop_dynamic_access.limits."agent/inspection_runtime.py"]
+[loop_dynamic_access.limits."agent/context/inspection_runtime.py"]
 assignments = 0
 getattr = 2
 setattr = 0
@@ -191,12 +186,12 @@ assignments = 12
 getattr = 1
 setattr = 0
 
-[loop_dynamic_access.limits."agent/fragments.py"]
+[loop_dynamic_access.limits."agent/prompt/fragments.py"]
 assignments = 2
-getattr = 1
+getattr = 0
 setattr = 0
 
-[loop_dynamic_access.limits."agent/runtime.py"]
+[loop_dynamic_access.limits."agent/turn/runtime.py"]
 assignments = 1
 getattr = 0
 setattr = 0

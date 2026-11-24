@@ -1,17 +1,16 @@
-"""Backward-compatible imports for the shared core token estimators."""
+"""Compatibility facade for :mod:`krelcode.agent.context.tokens`."""
 
-from ..core.tokens import (
-    CHARS_PER_TOKEN,
-    estimate_history_tokens,
-    estimate_message_tokens,
-    estimate_text_tokens,
-    is_cjk,
-)
+from __future__ import annotations
 
-__all__ = [
-    "CHARS_PER_TOKEN",
-    "estimate_text_tokens",
-    "estimate_message_tokens",
-    "estimate_history_tokens",
-    "is_cjk",
-]
+from typing import Any
+
+from .context import tokens as _impl
+from .context.tokens import *  # noqa: F401,F403
+
+
+def __getattr__(name: str) -> Any:
+    return getattr(_impl, name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(dir(_impl)))

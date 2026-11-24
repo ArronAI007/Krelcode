@@ -14,8 +14,8 @@ import hashlib
 from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence, Tuple, Union
 
-from ..core.errors import ConfigError
-from .prompt_release import (
+from krelcode.core.errors import ConfigError
+from krelcode.agent.prompt.prompt_release import (
     ModelProfileCalibration,
     ProfileCalibrationResolution,
     PromptRelease,
@@ -401,7 +401,7 @@ def select_prompt_release(release_id: str = "") -> PromptRelease:
 
 
 def _current_contract_identity() -> tuple[str, str, str]:
-    from .prompt_parity import (
+    from krelcode.agent.prompt.prompt_parity import (
         FROZEN_PROMPT_PARITY_SUITE_HASH,
         PROMPT_PARITY_CONTRACT,
     )

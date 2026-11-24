@@ -15,9 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from ..tools.fsutils import is_hidden_file, is_pruned_dir, truncate_middle
-from ..core.git import git_command as _git
-from .rules import (
+from krelcode.tools.fsutils import is_hidden_file, is_pruned_dir, truncate_middle
+from krelcode.core.git import git_command as _git
+from krelcode.agent.context.rules import (
     DEFAULT_IMPORT_MAX_DEPTH,
     DEFAULT_IMPORT_MAX_FILES,
     DEFAULT_RULES_MAX_CHARS,
@@ -26,7 +26,7 @@ from .rules import (
     RuleLimits,
     RuleLoader,
 )
-from .tokens import estimate_text_tokens
+from krelcode.agent.context.tokens import estimate_text_tokens
 
 TREE_MAX_DEPTH = 3
 TREE_MAX_ENTRIES = 150

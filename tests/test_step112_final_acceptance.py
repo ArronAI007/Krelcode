@@ -302,7 +302,10 @@ def test_report_self_check_redacts_prompt_and_credential_content(monkeypatch):
 def test_provider_messages_has_one_production_construction_site():
     offenders = []
     for path in Path("src/krelcode").rglob("*.py"):
-        if path.as_posix().endswith("agent/prompt_assembler.py"):
+        if path.as_posix().endswith((
+            "agent/prompt_assembler.py",
+            "agent/prompt/prompt_assembler.py",
+        )):
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):

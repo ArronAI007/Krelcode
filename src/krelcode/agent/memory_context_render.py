@@ -1,17 +1,16 @@
-"""Render restored Memory entries through the Evidence channel."""
+"""Compatibility facade for :mod:`krelcode.agent.context.memory_context_render`."""
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Any
 
-from .evidence import evidence_record_from_memory, render_evidence_set
-
-
-def render_memory_context(entries: Sequence[object]) -> str:
-    if not entries:
-        return ""
-    records = tuple(evidence_record_from_memory(entry) for entry in entries)
-    return render_evidence_set(records, origin="restored_memory")
+from .context import memory_context_render as _impl
+from .context.memory_context_render import *  # noqa: F401,F403
 
 
-__all__ = ["render_memory_context"]
+def __getattr__(name: str) -> Any:
+    return getattr(_impl, name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(dir(_impl)))
