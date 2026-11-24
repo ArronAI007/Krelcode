@@ -26,7 +26,6 @@ max_unlisted_lines = 800
 "agent/prompt/prompt_plan.py" = 852
 "agent/context/working_context.py" = 863
 "browser/runtime.py" = 860
-"daemon/client.py" = 925
 "daemon/server.py" = 946
 "enterprise/auth.py" = 848
 "llm/base.py" = 816
