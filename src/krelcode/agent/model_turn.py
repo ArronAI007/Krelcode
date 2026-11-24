@@ -8,7 +8,7 @@ soon as their arguments are complete, and returns a completed turn result.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from ..core.events import (
     LLMResponseReceived,
@@ -28,6 +28,7 @@ from ..llm.base import (
 )
 from .context_turn import ContextTurnCoordinator
 from .dependencies import AgentDependencies
+from .runtime_ports import ModelTurnHostPort
 from .tool_turn import ToolBatchExecutor
 
 
@@ -62,7 +63,7 @@ class ModelTurnExecutor:
 
     def __init__(
         self,
-        host: Any,
+        host: ModelTurnHostPort,
         dependencies: AgentDependencies,
         context: ContextTurnCoordinator,
         tools: ToolBatchExecutor,

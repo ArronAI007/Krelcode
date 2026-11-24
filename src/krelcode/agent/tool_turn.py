@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import replace
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from ..core.events import (
     ErrorOccurred,
@@ -36,6 +36,7 @@ from ..core.textutil import truncate_middle
 from ..contracts.tool import ToolResult
 from ..tools.schema import validate_tool_arguments
 from .dependencies import AgentDependencies
+from .runtime_ports import ToolTurnHostPort
 from .streaming_tools import StreamingToolExecutor
 from .tool_pool import TurnToolPool
 from .working_context import compact_tool_metadata
@@ -44,7 +45,11 @@ from .working_context import compact_tool_metadata
 class ToolBatchExecutor:
     """Execute and persist model-requested tools without owning the turn loop."""
 
-    def __init__(self, host: Any, dependencies: AgentDependencies) -> None:
+    def __init__(
+        self,
+        host: ToolTurnHostPort,
+        dependencies: AgentDependencies,
+    ) -> None:
         self.host = host
         self.dependencies = dependencies
 

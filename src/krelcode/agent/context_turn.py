@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import Any, List, Optional
+from typing import List, Optional
 
+from ..core.context_usage import ContextUsageSnapshot
 from ..core.events import (
     CompactCheckpointCreated,
     ContextAssembled,
@@ -38,11 +39,7 @@ from .attachments import (
 from .context import build_workspace_context_bundle
 from .context_cache_ledger import ContextCacheLedger
 from .context_plan import ContextPlanSnapshot, history_digest
-from .context_source import (
-    ContextAssembly,
-    ContextRequest,
-    MemoryContextSource,
-)
+from .context_source import ContextAssembly, ContextRequest, MemoryContextSource
 from .context_usage import build_context_usage_snapshot
 from .dependencies import AgentDependencies
 from .fragments import (
@@ -54,11 +51,8 @@ from .fragments import (
 from .pricing import match_context_window
 from .prompt_assembler import PromptAssemblyRequest
 from .prompt_plan import PromptPlanSnapshot
-from .prompt_surface import (
-    PromptSurfaceRegistry,
-    prompt_content_hash,
-    update_observation,
-)
+from .prompt_surface import PromptSurfaceRegistry, prompt_content_hash, update_observation
+from .runtime_ports import ContextTurnHostPort
 from .reminders import (
     DEFAULT_REMINDER_BUDGET_TOKENS,
     ReminderContext,
@@ -78,14 +72,14 @@ class ContextTurnRequest:
 
     messages: List[Message]
     context_assembly: ContextAssembly
-    snapshot: Any
+    snapshot: ContextUsageSnapshot
     prepared: Optional[PreparedLLMRequest]
 
 
 class ContextTurnCoordinator:
     """Prepare and account for one model request without streaming it."""
 
-    def __init__(self, host: Any, dependencies: AgentDependencies) -> None:
+    def __init__(self, host: ContextTurnHostPort, dependencies: AgentDependencies) -> None:
         self.host = host
         self.dependencies = dependencies
         self._initialize_observability_state()
@@ -107,8 +101,8 @@ class ContextTurnCoordinator:
         host.context_workspace_fingerprint = None
         host.restored_workspace_fingerprint = None
         host.restored_context_checkpoint_id = ""
-        host.restored_memory_context: tuple[str, ...] = ()
-        host.restored_relevant_memory_ids: tuple[str, ...] = ()
+        host.restored_memory_context = ()
+        host.restored_relevant_memory_ids = ()
         host.pending_context_refresh = False
         host.context_attachments = ContextAttachmentStore()
         host.last_attachment_diff = ContextAttachmentDiff(0, 0)
@@ -771,7 +765,7 @@ class ContextTurnCoordinator:
         )
 
 
-def _context_dropped_items(host: Any) -> tuple[str, ...]:
+def _context_dropped_items(host: ContextTurnHostPort) -> tuple[str, ...]:
     workspace = getattr(host, "workspace_context", None)
     items = [
         f"workspace:{item}"

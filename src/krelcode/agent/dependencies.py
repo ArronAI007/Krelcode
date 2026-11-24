@@ -9,15 +9,26 @@ resource (for example the provider after model configuration changes).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Optional
+from pathlib import Path
+from typing import Awaitable, Callable, Optional
 
 from ..core.events import EventBus
 from ..core.hooks import HookPort
 from ..core.interactions import UserInputPort
 from ..core.redact import SecretRedactor
-from ..contracts.tool import ToolContext
+from ..contracts.tool import RuntimeSnapshot, ToolContext
 from ..llm.base import LLMProvider
+from ..safety.policy import ApprovalPolicy
 from ..tools.registry import ToolRegistry
+from .runtime_ports import (
+    CompactCheckpointStorePort,
+    ContextAssemblerPort,
+    ContextManagerPort,
+    PromptAssemblerPort,
+    ReminderCatalogPort,
+    ToolMicrocompactorPort,
+    WorkingContextPort,
+)
 
 
 @dataclass
@@ -28,17 +39,17 @@ class AgentDependencies:
     registry: ToolRegistry
     tool_context: ToolContext
     bus: EventBus
-    context_manager: Any = None
-    context_assembler: Any = None
-    prompt_assembler: Any = None
-    working_context_store: Any = None
-    tool_microcompactor: Any = None
-    compact_checkpoint_store: Any = None
-    reminder_catalog: Any = None
-    policy: Any = None
+    context_assembler: ContextAssemblerPort
+    prompt_assembler: PromptAssemblerPort
+    working_context_store: WorkingContextPort
+    tool_microcompactor: ToolMicrocompactorPort
+    reminder_catalog: ReminderCatalogPort
+    context_manager: Optional[ContextManagerPort] = None
+    compact_checkpoint_store: Optional[CompactCheckpointStorePort] = None
+    policy: Optional[ApprovalPolicy] = None
     redactor: Optional[SecretRedactor] = None
     runtime_snapshot_provider: Optional[
-        Callable[[Any], Any]
+        Callable[[RuntimeSnapshot], RuntimeSnapshot]
     ] = None
     hook_port: Optional[HookPort] = None
     user_input_port: Optional[UserInputPort] = None
@@ -50,7 +61,7 @@ class AgentDependencies:
     token_budget: Optional[int] = None
 
     @property
-    def workspace_root(self):
+    def workspace_root(self) -> Path:
         return self.tool_context.workspace_root
 
 

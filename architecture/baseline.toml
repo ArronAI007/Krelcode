@@ -21,7 +21,6 @@ max_unlisted_lines = 800
 "agent/compact_summary.py" = 863
 "agent/compression.py" = 864
 "agent/context_checkpoint.py" = 1043
-"agent/context_turn.py" = 802
 "agent/fragments.py" = 882
 "agent/prompt_authoring.py" = 890
 "agent/prompt_parity.py" = 1011
