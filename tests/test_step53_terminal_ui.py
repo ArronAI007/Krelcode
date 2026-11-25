@@ -152,6 +152,23 @@ def test_prompt_writer_renders_slash_menu_below_input():
     assert p._suggestions == ()
 
 
+def test_prompt_writer_updates_status_without_redrawing_input_rules():
+    buf = Buf()
+    p = PromptWriter(write=buf.write, enabled=True, color=False)
+    p.show(IDLE_PROMPT)
+    p.set_status("等待模型响应 · 0.1s")
+    before = len(buf.parts)
+
+    for elapsed in ("0.5s", "1.0s", "1.5s", "2.0s"):
+        p.set_status(f"等待模型响应 · {elapsed}")
+
+    status_output = "".join(buf.parts[before:])
+    assert p._rule not in status_output
+    assert "等待模型响应 · 2.0s" in status_output
+    assert status_output.startswith("\r" + p.CURSOR_DOWN * 2)
+    assert status_output.endswith("\r" + p.CURSOR_UP * 2)
+
+
 def test_prompt_writer_finish_leaves_clean_shell_line():
     buf = Buf()
     p = PromptWriter(write=buf.write, enabled=True, color=False)

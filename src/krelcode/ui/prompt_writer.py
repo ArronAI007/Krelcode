@@ -164,8 +164,13 @@ class PromptWriter:
             status = " ".join((status or "").split())
             if status == self._status:
                 return
+            had_status = bool(self._status)
             self._status = status
             if not self.enabled or not self._visible or self._last is None:
+                return
+            if had_status and status:
+                self._update_status_in_place()
+                self._last_status = status
                 return
             text, suggestions, row, column = self._last
             self._render(text, list(suggestions), row, column)
@@ -214,16 +219,35 @@ class PromptWriter:
         input_lines = text.split("\n")
         status_rows: list[str] = []
         if self._status:
-            columns = shutil.get_terminal_size((80, 24)).columns
-            status = _truncate_display(
-                f"  {self._status}", max(1, columns - 1))
-            status_rows.append(
-                f"{DIM}{status}{RESET}" if self._color else status)
+            status_rows.append(self._status_line())
         menu_capacity = max(0, MENU_ROWS - len(status_rows))
         menu = list(suggestions[:menu_capacity])
         menu.extend([""] * (menu_capacity - len(menu)))
         self._input_rows = len(input_lines)
         return [*self._panel_lines, rule, *input_lines, rule, *status_rows, *menu]
+
+    def _status_line(self) -> str:
+        columns = shutil.get_terminal_size((80, 24)).columns
+        status = _truncate_display(
+            f"  {self._status}", max(1, columns - 1))
+        return f"{DIM}{status}{RESET}" if self._color else status
+
+    def _update_status_in_place(self) -> None:
+        """Refresh only the status row, leaving panel and input borders intact."""
+        status_row = len(self._panel_lines) + self._input_rows + 2
+        distance = status_row - self._cursor_row
+        self._write("\r")
+        if distance > 0:
+            self._write(self.CURSOR_DOWN * distance)
+        elif distance < 0:
+            self._write(self.CURSOR_UP * -distance)
+        self._write(self.CLEAR_LINE)
+        self._write(self._status_line())
+        self._write("\r")
+        if distance > 0:
+            self._write(self.CURSOR_UP * distance)
+        elif distance < 0:
+            self._write(self.CURSOR_DOWN * -distance)
 
     def _move_to_top(self) -> None:
         if self._cursor_row > 0:
