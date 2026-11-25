@@ -480,13 +480,38 @@ def test_banner_contains_key_info(tmp_path):
                  write=lines.append, color=False)
     text = "\n".join(lines)
     assert "─" in text
-    assert "Krelcode v" in text
+    assert "██╗" in text and "v0." in text
     assert "model" in text and "openai" in text and "deepseek-flash" in text
     assert "workspace" in text and tmp_path.name in text
     assert "tools" in text and "2" in text
     assert "session" in text and "demo-session" in text
     assert "sandbox" in text and "off" in text
     assert "/help" in text and "/exit" in text
+
+
+def test_banner_uses_compact_title_on_narrow_terminal(tmp_path, monkeypatch):
+    from krelcode.ui import repl_surface
+
+    monkeypatch.setattr(
+        repl_surface.shutil,
+        "get_terminal_size",
+        lambda _fallback=None: os.terminal_size((60, 24)),
+    )
+    loop = SimpleNamespace(
+        llm=SimpleNamespace(name="mock", model="mock-model"),
+        tool_context=SimpleNamespace(workspace_root=tmp_path),
+    )
+    lines = []
+    print_banner(
+        loop,
+        ["get_time"],
+        session_path="/tmp/demo-session.jsonl",
+        write=lines.append,
+        color=False,
+    )
+    text = "\n".join(lines)
+    assert "✻ Krelcode v0." in text
+    assert "██" not in text
 
 
 # -- 助手侧标记 -------------------------------------------------------------------------------

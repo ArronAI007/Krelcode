@@ -1157,7 +1157,8 @@ REPL 仍保留 scrollback 作为对话正文，只把“当前现场”放进输
 这样不会为了全屏 alternate-screen 牺牲流式文本、历史滚动与原编辑器的稳定性。
 常规规则、Skill、Agent、Plugin、Hook 和 Sandbox 加载成功时不逐项打印；启动卡只展示
 模型、工作区、会话、工具与 Sandbox 摘要。空闲状态下 Dock 默认收起，`Ctrl-O`、计划、
-审批或任务运行需要时再展开。
+审批或任务运行需要时再展开。宽终端显示 `KRELCODE` ASCII 字标，窄终端自动回退为
+紧凑单行标题。
 
 ```
 ui/tui/

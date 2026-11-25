@@ -54,6 +54,15 @@ def match_slash_commands(text: str, *, running: bool = False,
 
 QUEUE_USAGE = "用法：/queue | /queue delete <n> | /queue move <n> <m> | /queue clear"
 
+_WORDMARK = (
+    "██╗  ██╗██████╗ ███████╗██╗      ██████╗ ██████╗ ██████╗ ███████╗",
+    "██║ ██╔╝██╔══██╗██╔════╝██║     ██╔════╝██╔═══██╗██╔══██╗██╔════╝",
+    "█████╔╝ ██████╔╝█████╗  ██║     ██║     ██║   ██║██║  ██║█████╗",
+    "██╔═██╗ ██╔══██╗██╔══╝  ██║     ██║     ██║   ██║██║  ██║██╔══╝",
+    "██║  ██╗██║  ██║███████╗███████╗╚██████╗╚██████╔╝██████╔╝███████╗",
+    "╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝",
+)
+
 
 def _format_job_notification(event: ShellJobFinished) -> str:
     mark = {
@@ -227,10 +236,11 @@ def print_banner(loop: AgentLoop, tool_names: Optional[list[str]],
     workspace = loop.tool_context.workspace_root
     columns = shutil.get_terminal_size((80, 24)).columns
     width = max(36, min(columns - 4, 72))
-    title = f"✻ Krelcode v{__version__}"
-    title_rendered = f"{CYAN}{title}{RESET}" if color else title
     divider = "─" * width
     divider_rendered = f"{DIM}{divider}{RESET}" if color else divider
+
+    def accent(text: str) -> str:
+        return f"{CYAN}{text}{RESET}" if color else text
 
     def row(label: str, value: str, path: bool = False) -> None:
         available = max(8, width - 13)
@@ -253,7 +263,15 @@ def print_banner(loop: AgentLoop, tool_names: Optional[list[str]],
     else:
         safety = f"{sandbox_backend} · {sandbox_network}"
 
-    write(f"  {title_rendered}")
+    wordmark_width = max(_display_width(line) for line in _WORDMARK) + 2
+    if columns >= wordmark_width:
+        for line in _WORDMARK:
+            write(f"  {accent(line)}")
+        version = f"v{__version__}"
+        write(f"  {DIM}{version}{RESET}" if color else f"  {version}")
+    else:
+        title = f"✻ Krelcode v{__version__}"
+        write(f"  {accent(title)}")
     write(f"  {divider_rendered}")
     row("model", f"{model} · {provider}")
     row("workspace", str(workspace), path=True)
@@ -263,8 +281,6 @@ def print_banner(loop: AgentLoop, tool_names: Optional[list[str]],
     row("sandbox", safety)
     write(f"  {divider_rendered}")
 
-    def accent(text: str) -> str:
-        return f"{CYAN}{text}{RESET}" if color else text
     write(
         f"  {accent('/help')} 命令 · {accent('Ctrl+O')} 面板 · "
         f"Shift+Tab 权限 · {accent('/exit')} 退出")
