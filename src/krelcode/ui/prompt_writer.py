@@ -158,6 +158,10 @@ class PromptWriter:
     def cursor_row_relative(self) -> int:
         return self._cursor_row
 
+    @property
+    def rendered_rows(self) -> int:
+        return self._rendered_rows
+
     def set_status(self, status: str) -> None:
         """更新输入框下方的单行状态；可见时原地重绘且保留草稿。"""
         with self._lock:

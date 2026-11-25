@@ -173,6 +173,10 @@ class PanelController:
         """Translate a 1-based CPR row into the dock's zero-based top row."""
         self._origin_row = max(0, (cursor_row - 1) - relative_cursor_row)
 
+    def set_prompt_origin(self, terminal_rows: int, rendered_rows: int) -> None:
+        """Infer the dock top from a bottom-anchored prompt without CPR."""
+        self._origin_row = max(0, int(terminal_rows) - int(rendered_rows))
+
     def handle_mouse(self, sequence: bytes | str) -> bool:
         """Handle a decoded SGR click; all mouse reports are consumed."""
         event = parse_sgr_mouse(sequence)

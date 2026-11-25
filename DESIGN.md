@@ -1192,11 +1192,9 @@ PromptWriter [Panel Dock] → 上分隔线 → 输入 → 下分隔线 → 状�
 - **状态栏原位更新**：运行耗时和阶段文本变化时只重写状态行，不再重绘 Panel Dock
   与输入框上下边界，避免高频刷新在滚动区域留下重复分隔线。
 - **可点击组件**：TUI 默认开启 xterm mouse tracking（1000+1006），点击面板或工具行
-  可直接操作；普通拖拽由应用接管，文本选择使用 `Shift + 拖拽`。只有鼠标上报开启时，
-  PromptWriter 才在重绘后发出 CPR 查询；编辑器把
-  `ESC[row;colR` 换算为 Dock 顶行。键盘模式下不发送查询，避免异步 CPR
-  响应变成输入框中的可见转义文本。点击坐标仅用于纯 hitbox 命中，不依赖固定
-  屏幕尺寸。退出/异常路径都关闭 mouse reporting。
+  可直接操作；普通拖拽由应用接管，文本选择使用 `Shift + 拖拽`，状态栏会显示该提示。
+  Dock 顶行根据终端高度与底部锚定 Prompt 的实际渲染行数计算，不发送 CPR 查询，
+  因而不会产生 `ESC[row;colR` 残留文本。退出/异常路径都关闭 mouse reporting。
 - **Shell 快捷模式**：`!cmd` 由 InputProcessor 只做分类，REPL 在空闲时启动窄任务。
   `AgentLoop.execute_direct_tool()` 临时构造与普通 turn 相同的 RuntimeSnapshot、
   TurnToolPool 和 ToolContext，执行 `run_command` 时仍经过参数 schema、Hooks、

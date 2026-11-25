@@ -41,6 +41,12 @@ def test_panel_layout_has_tabs_items_hitboxes_and_cjk_width():
     assert all(display_width(line) <= 60 for line in layout.lines)
 
 
+def test_prompt_origin_is_inferred_from_bottom_without_cpr():
+    controller = PanelController(sample_panels())
+    controller.set_prompt_origin(terminal_rows=24, rendered_rows=11)
+    assert controller.cursor_origin_row == 13
+
+
 def test_panel_layout_truncates_to_narrow_terminal():
     for width in (5, 20):
         layout = render_panel_dock(

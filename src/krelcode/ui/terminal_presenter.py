@@ -252,6 +252,11 @@ class TerminalPresenter:
         if self.controller is None:
             return ""
         progress = view.status_text()
+        if self.tui_mouse:
+            progress = (
+                f"{progress} · Shift+拖拽复制"
+                if progress else "Shift+拖拽复制"
+            )
         if self.review_pager is not None and self.review_pager.active:
             mode = "待审批" if self.review_pager.can_decide else "只读"
             progress = (

@@ -270,23 +270,20 @@ def test_bracketed_paste_reads_once_and_removes_terminal_controls():
     assert paste == "第一行\n[31mred"
 
 
-def test_line_editor_queries_cursor_position_only_for_mouse_reporting():
-    keyboard_prompt = PromptWriter(enabled=False)
-    TerminalLineEditor(
-        keyboard_prompt,
-        match_slash_commands,
-        panels=PanelController(),
-    )
-    assert keyboard_prompt._cursor_probe is False
-
-    mouse_prompt = PromptWriter(enabled=False)
+def test_line_editor_never_sends_cursor_position_queries():
+    parts = []
+    mouse_prompt = PromptWriter(
+        write=parts.append, enabled=True, color=False)
     TerminalLineEditor(
         mouse_prompt,
         match_slash_commands,
         panels=PanelController(),
         mouse_reporting=True,
     )
-    assert mouse_prompt._cursor_probe is True
+    mouse_prompt.show(IDLE_PROMPT)
+    mouse_prompt.update(IDLE_PROMPT + "x", [])
+    assert mouse_prompt._cursor_probe is False
+    assert "\x1b[6n" not in "".join(parts)
 
 
 def test_line_editor_mouse_reporting_is_opt_in(monkeypatch):
