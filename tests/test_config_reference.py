@@ -18,6 +18,15 @@ def test_all_cli_flags_documented():
     assert not missing, f"CONFIG.md 缺少旗标文档: {missing}"
 
 
+def test_tui_mouse_flags_are_explicit_and_default_to_config_resolution():
+    from krelcode.app import build_parser
+
+    parser = build_parser()
+    assert parser.parse_args([]).tui_mouse is None
+    assert parser.parse_args(["--tui-mouse"]).tui_mouse is True
+    assert parser.parse_args(["--no-tui-mouse"]).tui_mouse is False
+
+
 def test_default_max_steps_matches_agent_default():
     from krelcode.agent.loop import DEFAULT_MAX_STEPS
     from krelcode.app import build_parser

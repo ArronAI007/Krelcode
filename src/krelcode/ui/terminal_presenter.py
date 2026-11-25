@@ -61,12 +61,14 @@ class TerminalPresenter:
         redactor: Optional[SecretRedactor] = None,
         history_path: Optional[pathlib.Path] = None,
         persist_history: Optional[bool] = None,
+        tui_mouse: bool = False,
     ) -> None:
         self.loop = loop
         self.tool_names = tool_names
         self.session_path = session_path
         self.input_fn = input_fn
         self.redactor = redactor
+        self.tui_mouse = tui_mouse
         self.workspace_root = loop.tool_context.workspace_root
         self.use_color = auto_color()
         self.prompt = PromptWriter(color=self.use_color)
@@ -146,6 +148,7 @@ class TerminalPresenter:
             panels=self.panel_controller,
             on_diff_pager_change=lambda: self.refresh_panels(
                 queue_size=len(runner.queue)),
+            mouse_reporting=self.tui_mouse,
         )
 
     def show_banner(self) -> None:

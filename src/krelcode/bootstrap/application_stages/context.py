@@ -168,6 +168,14 @@ async def build_application_context(
     except ExperimentError as exc:
         raise BuildStageError(f"实验 profile 错误: {exc}") from exc
 
+    if getattr(args, "tui_mouse", None) is None:
+        ui_config = config.get("ui")
+        args.tui_mouse = (
+            bool(ui_config.get("mouse", False))
+            if isinstance(ui_config, dict)
+            else False
+        )
+
     return ApplicationBuildContext(
         args=args,
         note=note,

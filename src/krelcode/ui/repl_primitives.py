@@ -106,12 +106,14 @@ class TerminalLineEditor:
                  color: bool = False,
                  history: Optional[InputHistory] = None,
                  panels: Optional[PanelController] = None,
-                 on_diff_pager_change: Optional[Callable[[], None]] = None) -> None:
+                 on_diff_pager_change: Optional[Callable[[], None]] = None,
+                 mouse_reporting: bool = False) -> None:
         self._prompt = prompt
         self._suggest = suggest
         self._color = color
         self._history = history if history is not None else InputHistory()
         self._panels = panels
+        self._mouse_reporting = mouse_reporting
         self._diff_pager: Optional[DiffPager] = None
         self._on_diff_pager_change = on_diff_pager_change
         self._pending_input = bytearray()
@@ -160,7 +162,12 @@ class TerminalLineEditor:
         termios.tcsetattr(fd, termios.TCSADRAIN, editor_settings)
         self._set_bracketed_paste(fd, True)
         if self._panels is not None:
-            self._set_mouse_reporting(fd, True)
+            # Mouse reporting captures click-drag and prevents the terminal
+            # emulator's native text selection/copy.  Clear stale state and
+            # only opt in when explicitly requested.
+            self._set_mouse_reporting(fd, False)
+            if self._mouse_reporting:
+                self._set_mouse_reporting(fd, True)
         buffer = EditBuffer()
         search: Optional[HistorySearch] = None
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -221,7 +228,8 @@ class TerminalLineEditor:
                                 cursor[0], self._prompt.cursor_row_relative)
                             self._refresh(prompt_text(), buffer, search=search)
                             continue
-                        if parse_sgr_mouse(sequence) is not None:
+                        if (self._mouse_reporting
+                                and parse_sgr_mouse(sequence) is not None):
                             self._panels.handle_mouse(sequence)
                             self._refresh(prompt_text(), buffer, search=search)
                             continue

@@ -55,6 +55,11 @@ api_key_env = "GEMINI_API_KEY"
 # haiku = "anthropic/claude-haiku-4-5"
 # opus = "anthropic/claude-opus-4-1"
 
+# ---- TUI ----
+# [ui]
+# diff_review = true
+# mouse = false           # true 启用面板点击；会占用终端原生拖拽选择/复制
+
 # ---- 运行时 Sandbox（命令 / Skill 脚本子进程）----
 # [sandbox]
 # backend = "auto"        # auto / static / seatbelt(macOS) / bubblewrap(Linux)

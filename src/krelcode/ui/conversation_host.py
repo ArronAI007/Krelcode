@@ -100,6 +100,7 @@ class ConversationHost:
         input_broker: Optional[UserInputBroker] = None,
         history_path: Optional[Path] = None,
         persist_history: Optional[bool] = None,
+        tui_mouse: bool = False,
     ) -> None:
         if (input_broker is not None
                 and loop.services.core.user_input_port is None):
@@ -126,6 +127,7 @@ class ConversationHost:
         self.plugins_reload = plugins_reload
         self.input_fn = input_fn
         self.redactor = redactor
+        self.tui_mouse = tui_mouse
         self.approval_broker = approval_broker
         self.input_broker = input_broker
         self.processor = input_processor or InputProcessor(
@@ -165,6 +167,7 @@ class ConversationHost:
             redactor=redactor,
             history_path=history_path,
             persist_history=persist_history,
+            tui_mouse=tui_mouse,
         )
         self.runner = ReplSessionRunner(
             self.controller,

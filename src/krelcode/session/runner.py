@@ -232,6 +232,7 @@ async def run_session(
             input_processor=input_processor,
             approval_broker=approval_broker,
             input_broker=user_input_broker,
+            tui_mouse=bool(getattr(args, "tui_mouse", False)),
         )
 
     try:

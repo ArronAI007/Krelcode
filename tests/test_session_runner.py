@@ -125,3 +125,4 @@ def test_interactive_mode_delegates_without_importing_terminal_ui(tmp_path):
     assert received["loop"] is runtime.loop
     assert received["runtime"] is runtime
     assert received["input_processor"] is processor
+    assert received["tui_mouse"] is False

@@ -481,7 +481,7 @@ REPL 内置命令：`/help`、`/history`、`/thinking`（展开最近一轮 Mark
 
 **运行中交互**：`Enter` 提交 Steering（当前 turn 的下一步看到）；`Alt+Enter` 将输入排为下一条独立消息，当前 turn 完成后自动发送；`Shift-Tab` 按 `default → plan → read-only → auto-approve` 快速轮换权限模式；`Esc` / `Ctrl-C` 中止当前任务（历史自动修复，可立即续聊）。空闲时 `Ctrl-C` 只清空当前输入，`Ctrl-D` 或 `/exit` 退出。审批请求由 REPL 前台异步接管，不会与字符级输入 reader 抢占 stdin；`/thinking`、`/plan`、`/permissions`、`/tool-output`、`/queue`、`/agents`、`/jobs` 在任务运行中仍可访问。
 
-**终端 TUI（Step 83/84/93）**：输入框上方增加结构化 Panel Dock，默认包含 `Tasks`、`Activity`、`Context`、`Review`、`Memory` 五个面板；Context 优先展示 `ContextAssembled` 最近一次真实请求的 token 分项、tool schema、cache hash 是否变化、memory 命中、dropped 来源、compact 水位与 checkpoint；Memory 条数使用低刷新频率的磁盘快照，panel redraw 不重复扫描。`Ctrl-O` 进入/切换面板；焦点在面板内时 `←/→` 换 tab、`↑/↓` 选择条目、`Enter` 或 `Esc` 返回输入框，方向键不会误改草稿。真实 TTY 同时启用 SGR 鼠标：可点击 tab 或面板条目。`Review` 面板显示待写入 diff 的文件、增删行数和脱敏/截断状态。
+**终端 TUI（Step 83/84/93）**：输入框上方增加结构化 Panel Dock，默认包含 `Tasks`、`Activity`、`Context`、`Review`、`Memory` 五个面板；Context 优先展示 `ContextAssembled` 最近一次真实请求的 token 分项、tool schema、cache hash 是否变化、memory 命中、dropped 来源、compact 水位与 checkpoint；Memory 条数使用低刷新频率的磁盘快照，panel redraw 不重复扫描。`Ctrl-O` 进入/切换面板；焦点在面板内时 `←/→` 换 tab、`↑/↓` 选择条目、`Enter` 或 `Esc` 返回输入框，方向键不会误改草稿。真实 TTY 默认不启用鼠标上报，保证终端原生拖拽选择与复制可用；需要点击 tab 或面板条目时使用 `krelcode --tui-mouse` 或配置 `[ui].mouse=true`。`Review` 面板显示待写入 diff 的文件、增删行数和脱敏/截断状态。
 
 - `!命令`：Shell 快捷模式。直接执行命令，不发起模型调用，也不写入模型 history；仍完整经过 `run_command`、审批策略、权限规则和运行时 Sandbox，输出进入现有可折叠工具面板。
 - `#内容`：添加 project 记忆，保存到 `<workspace>/.krelcode/memory/entries.jsonl`；`#user: 内容` 写入跨工作区的 `~/.krelcode/memory/entries.jsonl`，`#session: 内容` 写入当前会话专属存储。敏感值在落盘与展示前脱敏。裸 `#` 打开 Memory 面板；`/memory list|scopes|add|remove|pin|unpin|search` 可查看、固定、搜索和维护记忆。

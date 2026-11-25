@@ -21,6 +21,7 @@ from krelcode.ui.render import (
     ASSISTANT_MARK, RESULT_MARK, THINKING_COLLAPSED, THINKING_MARK,
     StreamRenderer,
 )
+from krelcode.ui.tui.controller import PanelController
 
 
 class Buf:
@@ -250,6 +251,60 @@ def test_bracketed_paste_reads_once_and_removes_terminal_controls():
     finally:
         os.close(read_fd)
     assert paste == "第一行\n[31mred"
+
+
+def test_line_editor_mouse_reporting_is_opt_in(monkeypatch):
+    controller = PanelController()
+    calls = []
+
+    def record_mouse(fd, enabled):
+        calls.append(enabled)
+
+    monkeypatch.setattr(
+        TerminalLineEditor,
+        "_set_mouse_reporting",
+        staticmethod(record_mouse),
+    )
+
+    def submit_once(editor):
+        master_fd, slave_fd = pty.openpty()
+        stream = os.fdopen(slave_fd, "r", encoding="utf-8", buffering=1)
+        monkeypatch.setattr(repl.sys, "stdin", stream)
+        monkeypatch.setattr(
+            TerminalLineEditor, "available", property(lambda _self: True))
+
+        def drain():
+            try:
+                while os.read(master_fd, 4096):
+                    pass
+            except OSError:
+                pass
+
+        threading.Thread(target=drain, daemon=True).start()
+        writer = threading.Timer(0.05, os.write, args=(master_fd, b"\r"))
+        writer.start()
+        try:
+            assert editor.readline(lambda: IDLE_PROMPT) == TerminalSubmission("")
+        finally:
+            writer.cancel()
+            stream.close()
+            os.close(master_fd)
+
+    submit_once(TerminalLineEditor(
+        PromptWriter(enabled=False),
+        match_slash_commands,
+        panels=controller,
+    ))
+    assert calls == [False, False]
+
+    calls.clear()
+    submit_once(TerminalLineEditor(
+        PromptWriter(enabled=False),
+        match_slash_commands,
+        panels=controller,
+        mouse_reporting=True,
+    ))
+    assert calls == [False, True, False]
 
 
 def test_line_editor_readline_handles_keys_and_bracketed_paste(monkeypatch):
