@@ -1,5 +1,6 @@
 """CONFIG.md 与实现的一致性守护：每个 CLI 旗标都必须被文档收录。"""
 
+import asyncio
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -25,6 +26,24 @@ def test_tui_mouse_flags_are_explicit_and_default_to_config_resolution():
     assert parser.parse_args([]).tui_mouse is None
     assert parser.parse_args(["--tui-mouse"]).tui_mouse is True
     assert parser.parse_args(["--no-tui-mouse"]).tui_mouse is False
+
+
+def test_tui_mouse_default_is_copy_friendly(tmp_path: Path):
+    from krelcode.app import build_parser
+    from krelcode.bootstrap.application_stages.context import (
+        build_application_context,
+    )
+
+    config_path = tmp_path / "empty.toml"
+    config_path.write_text("", encoding="utf-8")
+    args = build_parser().parse_args([
+        "--mock",
+        "--workspace", str(tmp_path),
+        "--config", str(config_path),
+        "--no-session",
+    ])
+    context = asyncio.run(build_application_context(args))
+    assert context.args.tui_mouse is False
 
 
 def test_default_max_steps_matches_agent_default():

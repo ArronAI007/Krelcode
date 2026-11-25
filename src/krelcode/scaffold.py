@@ -58,7 +58,7 @@ api_key_env = "GEMINI_API_KEY"
 # ---- TUI ----
 # [ui]
 # diff_review = true
-# mouse = true            # 面板/工具行点击；普通选择时按住 Shift 拖拽
+# mouse = false           # true 启用面板/工具行点击；会占用普通拖拽选择
 
 # ---- 运行时 Sandbox（命令 / Skill 脚本子进程）----
 # [sandbox]
