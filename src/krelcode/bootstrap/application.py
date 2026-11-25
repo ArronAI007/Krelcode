@@ -38,7 +38,7 @@ async def create_application(
     if isinstance(built, int):
         return built
     return BootstrappedApplication(
-        args=args, graph=built.graph, note=built.note)
+        args=built.args, graph=built.graph, note=built.note)
 
 
 @dataclass

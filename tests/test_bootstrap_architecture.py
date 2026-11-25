@@ -252,6 +252,7 @@ def test_application_builder_runs_declarative_stages_in_order(monkeypatch):
 
     class FakeContext:
         note = staticmethod(lambda _message: None)
+        args = argparse.Namespace(name="resolved")
 
     class FakeInteractions:
         pass
@@ -319,6 +320,7 @@ def test_application_builder_runs_declarative_stages_in_order(monkeypatch):
     built = asyncio.run(builder_module.build_application(args))
 
     assert built.graph is graph
+    assert built.args is created["context"].args
     assert [event[0] for event in events] == [
         "context",
         "interactions",

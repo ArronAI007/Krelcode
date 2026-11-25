@@ -160,10 +160,10 @@ def build_parser() -> argparse.ArgumentParser:
     tui_mouse_group = p.add_mutually_exclusive_group()
     tui_mouse_group.add_argument(
         "--tui-mouse", dest="tui_mouse", action="store_true", default=None,
-        help="启用 TUI 面板与工具行鼠标点击；默认关闭以保留终端文本选择与复制")
+        help="强制启用 TUI 面板与工具行鼠标点击（默认开启）")
     tui_mouse_group.add_argument(
         "--no-tui-mouse", dest="tui_mouse", action="store_false",
-        help="关闭 TUI 鼠标上报（默认）")
+        help="关闭 TUI 鼠标上报，恢复普通拖拽选择与复制")
     p.add_argument(
         "--experiment-profile", default=None,
         help="本轮消融实验 profile JSON；在启动时校验并冻结，不支持 turn 中热改")

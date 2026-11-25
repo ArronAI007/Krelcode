@@ -24,6 +24,7 @@ from .composition import RuntimeGraph
 class BuiltRuntime:
     """A completed runtime graph ready to be wrapped by an application host."""
 
+    args: argparse.Namespace
     graph: RuntimeGraph
     note: Callable[[str], None]
 
@@ -51,7 +52,7 @@ async def build_application(
         session=session,
         interactions=interactions,
     )
-    return BuiltRuntime(graph=graph, note=context.note)
+    return BuiltRuntime(args=context.args, graph=graph, note=context.note)
 
 
 __all__ = ["BuiltRuntime", "build_application"]
