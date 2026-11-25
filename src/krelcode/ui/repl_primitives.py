@@ -46,6 +46,7 @@ from .tui.controller import PanelController
 from .tui.mouse import (
     MOUSE_DISABLE,
     MOUSE_ENABLE,
+    MouseEvent,
     parse_cursor_position,
     parse_sgr_mouse,
 )
@@ -107,13 +108,15 @@ class TerminalLineEditor:
                  history: Optional[InputHistory] = None,
                  panels: Optional[PanelController] = None,
                  on_diff_pager_change: Optional[Callable[[], None]] = None,
-                 mouse_reporting: bool = False) -> None:
+                 mouse_reporting: bool = False,
+                 on_mouse_click: Optional[Callable[[MouseEvent], bool]] = None) -> None:
         self._prompt = prompt
         self._suggest = suggest
         self._color = color
         self._history = history if history is not None else InputHistory()
         self._panels = panels
         self._mouse_reporting = mouse_reporting
+        self._on_mouse_click = on_mouse_click
         self._diff_pager: Optional[DiffPager] = None
         self._on_diff_pager_change = on_diff_pager_change
         self._pending_input = bytearray()
@@ -231,9 +234,17 @@ class TerminalLineEditor:
                                 cursor[0], self._prompt.cursor_row_relative)
                             self._refresh(prompt_text(), buffer, search=search)
                             continue
-                        if (self._mouse_reporting
-                                and parse_sgr_mouse(sequence) is not None):
-                            self._panels.handle_mouse(sequence)
+                        mouse_event = (
+                            parse_sgr_mouse(sequence)
+                            if self._mouse_reporting else None
+                        )
+                        if mouse_event is not None:
+                            handled = (
+                                self._on_mouse_click(mouse_event)
+                                if self._on_mouse_click is not None else False
+                            )
+                            if not handled:
+                                self._panels.handle_mouse(sequence)
                             self._refresh(prompt_text(), buffer, search=search)
                             continue
                         panel_key = self._panels.key_from_escape(sequence)

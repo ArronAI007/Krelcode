@@ -45,6 +45,7 @@ from .repl_primitives import (
 )
 from .repl_surface import match_slash_commands, print_banner
 from .status_line import StatusLineRenderer, read_git_branch
+from .tui.mouse import MouseEvent
 from .tui.panels import build_panels
 
 
@@ -72,8 +73,14 @@ class TerminalPresenter:
         self.workspace_root = loop.tool_context.workspace_root
         self.use_color = auto_color()
         self.prompt = PromptWriter(color=self.use_color)
+        self._output_row_sequence = 0
+        self._tool_click_anchors: dict[int, int] = {}
         self.renderer = StreamRenderer(
-            write=self._prompt_write, redactor=redactor)
+            write=self._prompt_write,
+            redactor=redactor,
+            on_tool_line=self._register_tool_click_anchor,
+            tool_lines_clickable=self.tui_mouse,
+        )
         self.input_ready = threading.Event()
 
         explicit_history_path = history_path is not None
@@ -118,6 +125,7 @@ class TerminalPresenter:
         # Preserve the current draft while an asynchronous event writes output.
         self.prompt.suspend()
         _stdout_write(text)
+        self._output_row_sequence += text.count("\n")
 
     @property
     def prompt_text(self) -> str:
@@ -149,7 +157,31 @@ class TerminalPresenter:
             on_diff_pager_change=lambda: self.refresh_panels(
                 queue_size=len(runner.queue)),
             mouse_reporting=self.tui_mouse,
+            on_mouse_click=self.handle_transcript_mouse,
         )
+
+    def _register_tool_click_anchor(self, index: int) -> None:
+        self._tool_click_anchors[index] = self._output_row_sequence
+
+    def handle_transcript_mouse(self, event: MouseEvent) -> bool:
+        if not event.is_left_click:
+            return False
+        origin = self.panel_controller.cursor_origin_row
+        if origin is None:
+            return False
+        clicked_row = event.y - 1
+        if clicked_row >= origin:
+            return False
+        distance = origin - clicked_row
+        for index, anchor in reversed(tuple(self._tool_click_anchors.items())):
+            expected = self._output_row_sequence - anchor + 1
+            if distance == expected:
+                self._tool_click_anchors.clear()
+                handled = self.renderer.expand_tool_output(str(index))
+                if handled:
+                    self.prompt.resume_or_show(self.prompt_text)
+                return handled
+        return False
 
     def show_banner(self) -> None:
         print_banner(

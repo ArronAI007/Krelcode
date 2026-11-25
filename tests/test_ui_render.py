@@ -1,15 +1,21 @@
 """ui/render 测试：流式渲染器（注入 write，无真实终端）与 diff 上色。"""
 
+from types import SimpleNamespace
+
 import pytest
 
 from krelcode.core.events import (
     ContextCompressed, ErrorOccurred, LLMStreamDelta, PermissionDenied,
-    RunFinished, RunStarted, ToolCallCompleted, ToolCallStarted,
+    RunFinished, RunStarted, ToolCallCompleted, ToolCallStarted, ToolOutputDelta,
+    ToolProgress,
 )
 from krelcode.core.messages import ToolCall
 from krelcode.ui.render import (
     GREEN, RED, RESET, TOOL_PANEL_BG, StreamRenderer, colorize_diff,
 )
+from krelcode.ui.terminal_presenter import TerminalPresenter
+from krelcode.ui.tui.controller import PanelController
+from krelcode.ui.tui.mouse import MouseEvent
 
 
 class Buffer:
@@ -75,7 +81,7 @@ def test_tool_activity_interrupts_stream():
     assert lines[0] == "⏺ 让我想想"
     assert "⏺ get_time" in lines[1]
     assert "⎿ ✓ get_time #1" in lines[2]
-    assert "输出已折叠（/tool-output 1 展开）" in lines[2]
+    assert "输出已折叠" in lines[2]
     assert "12:00" not in buf.text
     assert lines[3] == "⏺ 现在是12点"
 
@@ -90,6 +96,16 @@ def test_error_and_denied_and_compressed_lines():
     assert "⎿ ✗ rm 被拒绝: 危险命令" in text
     assert "⎿ 历史已压缩: 1000 → 200 tokens" in text
     assert "⎿ ✗ pytest: boom" in text
+
+
+def test_permission_denied_finishes_live_tool_line_before_message():
+    r, buf = make_renderer()
+    tc = ToolCall("c1", "rm", {"path": "important"})
+    r(ToolCallStarted(tc))
+    r(PermissionDenied(tc, "危险命令"))
+    lines = buf.text.splitlines()
+    assert lines[0].startswith("  ⏺ rm · important")
+    assert any("⎿ ✗ rm 被拒绝: 危险命令" in line for line in lines[1:])
 
 
 def test_long_tool_content_truncated():
@@ -119,22 +135,15 @@ def test_multiline_tool_result_preserves_code_layout():
     assert "  │      3→        return 'ok'" in buf.text
 
 
-def test_multiline_tool_arguments_are_indented():
+def test_multiline_tool_arguments_stay_on_one_execution_line():
     r, buf = make_renderer()
     tc = ToolCall("c1", "run_command", {
         "command": "set -e\necho ready\npytest -q",
         "timeout": 60,
     })
     r(ToolCallStarted(tc))
-    assert buf.text == (
-        "  ⏺ run_command(\n"
-        "    command:\n"
-        "      set -e\n"
-        "      echo ready\n"
-        "      pytest -q\n"
-        "    timeout=60\n"
-        "  )\n"
-    )
+    assert buf.text == "  ⏺ run_command · set -e echo ready pytest -q"
+    assert "\n" not in buf.text
 
 
 # -- diff 上色 ---------------------------------------------------------------------------
@@ -166,7 +175,8 @@ def test_tool_outputs_are_numbered_collapsed_and_individually_expandable():
     r(ToolCallCompleted(first, "a.py content", False))
     r(ToolCallStarted(second))
     r(ToolCallCompleted(second, "a.py:1: x", False))
-    assert "#1 · 1 行" in buf.text and "#2 · 1 行" in buf.text
+    assert "#1" in buf.text and "#2" in buf.text
+    assert buf.text.count("1 行") == 2
     assert "a.py content" not in buf.text and "a.py:1: x" not in buf.text
     assert r.expand_tool_output("last")
     assert "a.py:1: x" in buf.text
@@ -181,7 +191,58 @@ def test_tool_call_ids_can_repeat_across_runs():
         r(ToolCallStarted(tc))
         r(ToolCallCompleted(tc, value, False))
     assert len(r.tool_outputs) == 2
-    assert "#1 · 1 行" in buf.text and "#2 · 1 行" in buf.text
+    assert "#1" in buf.text and "#2" in buf.text
+    assert buf.text.count("1 行") == 2
+
+
+def test_live_tool_line_updates_in_place_and_registers_click_target():
+    clicked = []
+    buf = Buffer()
+    r = StreamRenderer(
+        write=buf.write,
+        color=False,
+        on_tool_line=clicked.append,
+        tool_lines_clickable=True,
+    )
+    tc = ToolCall("c1", "run_command", {"command": "pytest -q"})
+    r(ToolCallStarted(tc))
+    r(ToolProgress("c1", "run_command", "命令运行中", {"pid": 7}))
+    r(ToolOutputDelta("c1", "run_command", "PASSED test_a\nPASSED test_b"))
+    r(ToolCallCompleted(tc, "PASSED test_a\nPASSED test_b", False))
+
+    text = buf.text
+    assert "命令运行中" in text
+    assert "PASSED test_b" in text
+    assert "输出已折叠（点击或 /tool-output 1 展开）" in text
+    assert clicked == [1]
+
+
+def test_transcript_click_expands_the_matching_tool_line():
+    class Renderer:
+        def __init__(self):
+            self.expanded = []
+
+        def expand_tool_output(self, selector):
+            self.expanded.append(selector)
+            return True
+
+    presenter = object.__new__(TerminalPresenter)
+    presenter.panel_controller = PanelController()
+    presenter.panel_controller.set_cursor_origin(cursor_row=10, relative_cursor_row=1)
+    presenter._output_row_sequence = 5
+    presenter._tool_click_anchors = {1: 4}
+    presenter.renderer = Renderer()
+    presenter.prompt = type("Prompt", (), {
+        "resume_or_show": lambda self, _fallback: None,
+    })()
+    presenter.state = SimpleNamespace(is_running=False)
+    presenter.use_color = False
+
+    assert presenter.handle_transcript_mouse(
+        MouseEvent(button=0, x=4, y=7, pressed=True))
+    assert presenter.renderer.expanded == ["1"]
+    assert not presenter.handle_transcript_mouse(
+        MouseEvent(button=0, x=4, y=5, pressed=True))
 
 
 def test_tool_output_panel_has_gray_background():

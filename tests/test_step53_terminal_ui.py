@@ -597,10 +597,9 @@ def test_renderer_uses_assistant_side_markers():
     r(LLMStreamDelta("答案"))
     r(RunFinished("答案"))
     text = buf.text
-    assert text.startswith(THINKING_COLLAPSED)
-    assert f"{THINKING_MARK}Thinking…" in text
+    assert THINKING_COLLAPSED in text
+    assert f"{THINKING_MARK}意图识别中…" in text
     assert "正文已折叠" in text
-    assert "下方为工具活动" in text
     assert "先想一下" not in text                   # thinking 默认折叠为一行
     assert f"{ASSISTANT_MARK}答案" in text
     # 不再出现旧式用户侧标签
@@ -616,9 +615,9 @@ def test_tool_lines_use_tree_markers():
     r(ToolCallStarted(tc))
     r(ToolCallCompleted(tc, "exit_code: 0\n/tmp", False))
     text = buf.text
-    assert f"  {ASSISTANT_MARK}run_command(" in text
+    assert f"  {ASSISTANT_MARK}run_command · pwd" in text
     assert f"  {RESULT_MARK}✓ run_command #1" in text
-    assert "输出已折叠（/tool-output 1 展开）" in text
+    assert "输出已折叠" in text
     assert "exit_code: 0" not in text
     assert r.expand_tool_output("1")
     assert "│ exit_code: 0\n" in buf.text and "│ /tmp" in buf.text

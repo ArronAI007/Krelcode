@@ -22,7 +22,7 @@ from krelcode.llm.providers.openai import OpenAIProvider
 from krelcode.safety.policy import AllowAllPolicy
 from krelcode.tools.base import ToolContext
 from krelcode.tools.registry import ToolRegistry
-from krelcode.ui.render import THINKING_COLLAPSED, StreamRenderer
+from krelcode.ui.render import THINKING_COLLAPSED, THINKING_LIVE, StreamRenderer
 
 
 # -- OpenAI 兼容：reasoning_content / reasoning -------------------------------------------------
@@ -154,13 +154,12 @@ def test_renderer_thinking_is_collapsed_to_one_line():
     renderer(RunStarted("q"))
     renderer(LLMThinkingDelta("想一下"))
     renderer(LLMThinkingDelta("再想"))
-    assert buf.text == ""                              # reasoning 正文不实时展开
+    assert buf.text == THINKING_LIVE                   # 只显示一行实时意图状态
     renderer(LLMStreamDelta("回复"))
-    assert buf.text == f"{THINKING_COLLAPSED}\n\n⏺ 回复"
+    assert THINKING_COLLAPSED in buf.text
+    assert buf.text.endswith("\n⏺ 回复")
     assert "想一下" not in buf.text and "再想" not in buf.text
-    assert buf.text.splitlines()[0] == THINKING_COLLAPSED
     assert "正文已折叠" in THINKING_COLLAPSED
-    assert "下方为工具活动" in THINKING_COLLAPSED
 
 
 def test_expand_thinking_preserves_markdown_structure():

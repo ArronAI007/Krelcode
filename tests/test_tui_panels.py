@@ -226,6 +226,49 @@ def test_hidden_idle_dock_opens_with_panel_shortcut():
     assert prompt._panel_lines
 
 
+def test_line_editor_routes_mouse_clicks_to_transcript_callback(monkeypatch):
+    import os
+    import pty
+    import threading
+
+    from krelcode.ui import repl as repl_module
+    from krelcode.ui.repl import PromptWriter, TerminalLineEditor, TerminalSubmission
+
+    clicks = []
+    editor = TerminalLineEditor(
+        PromptWriter(enabled=False),
+        lambda _text: [],
+        panels=PanelController(sample_panels()),
+        mouse_reporting=True,
+        on_mouse_click=lambda event: clicks.append(event) or True,
+    )
+    master_fd, slave_fd = pty.openpty()
+    stream = os.fdopen(slave_fd, "r", encoding="utf-8", buffering=1)
+    monkeypatch.setattr(repl_module.sys, "stdin", stream)
+    monkeypatch.setattr(
+        TerminalLineEditor, "available", property(lambda _self: True))
+
+    def drain():
+        try:
+            while os.read(master_fd, 4096):
+                pass
+        except OSError:
+            pass
+
+    threading.Thread(target=drain, daemon=True).start()
+    threading.Timer(
+        0.05, os.write,
+        args=(master_fd, b"\x1b[<0;12;7M\r"),
+    ).start()
+    try:
+        assert editor.readline(lambda: "❯ ") == TerminalSubmission("")
+    finally:
+        stream.close()
+        os.close(master_fd)
+    assert len(clicks) == 1
+    assert (clicks[0].x, clicks[0].y) == (12, 7)
+
+
 def test_panel_layout_scrolls_to_keyboard_selection():
     items = tuple(
         PanelItem(f"i{index}", f"task-{index}") for index in range(8)

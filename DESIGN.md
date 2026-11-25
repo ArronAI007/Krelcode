@@ -429,7 +429,8 @@ version、commands、errors、handoff notes 或其他扩展字段。缺少字段
 ## 交互与会话（Step 8）
 
 - **StreamRenderer**（ui/render.py）：EventBus 订阅者，LLMStreamDelta 逐字流式打印
-  （助手文本用 `⏺`，工具结果用 `⎿`）；工具活动/审批/压缩事件打断流式行后续接；
+  （助手文本用 `⏺`，工具结果用 `⎿`）；意图识别和每个工具执行各占一行，执行中的
+  工具行原地刷新命令、进度和最新输出，完成后替换为结果摘要；工具活动/审批/压缩事件打断流式行后续接；
   RunFinished 兜底打印未经流式的系统消息（max_steps/卡死中止），并避免模型自带
   尾部换行时产生空行。write/color 可注入，测试无需终端
 - **REPL**（ui/conversation_host.py + ui/terminal_presenter.py）：`run_repl` 仅构造
@@ -1185,6 +1186,8 @@ PromptWriter [Panel Dock] → 上分隔线 → 输入 → 下分隔线 → 状�
 - **流式绘制互斥**：模型文本/思考增量写入期间，状态轮询只更新缓存，不恢复 Panel
   Dock 与输入框；`RunFinished` 后的状态更新再统一恢复。这样周期状态刷新不会把
   面板插进尚未结束的回答正文。
+- **交互式工具行**：启用 `--tui-mouse` 时，完成后的工具行可按屏幕位置命中并展开
+  完整输出；未启用鼠标时继续使用 `/tool-output <编号>`，保留终端原生文本选择。
 - **状态栏原位更新**：运行耗时和阶段文本变化时只重写状态行，不再重绘 Panel Dock
   与输入框上下边界，避免高频刷新在滚动区域留下重复分隔线。
 - **可点击组件**：TUI 默认关闭鼠标上报，避免 xterm mouse tracking（1000+1006）劫持

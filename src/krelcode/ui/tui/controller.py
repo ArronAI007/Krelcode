@@ -32,6 +32,10 @@ class PanelController:
         return self._layout
 
     @property
+    def cursor_origin_row(self) -> Optional[int]:
+        return self._origin_row
+
+    @property
     def active_panel(self) -> Optional[Panel]:
         return next(
             (panel for panel in self._panels if panel.id == self.active_id),

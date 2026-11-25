@@ -176,16 +176,18 @@ def test_run_command_streams_chunks_before_process_exit(tmp_path):
     assert any("命令结束" in message for message, _ in progress)
 
 
-def test_renderer_caches_output_delta_without_auto_expanding():
+def test_renderer_caches_output_delta_and_previews_only_latest_line():
     parts = []
     renderer = StreamRenderer(write=parts.append, color=False)
     call = ToolCall("c1", "run_command", {"command": "printf secret"})
     renderer(RunStarted("q"))
     renderer(ToolCallStarted(call))
-    renderer(ToolOutputDelta("c1", "run_command", "live payload", "combined"))
+    renderer(ToolOutputDelta(
+        "c1", "run_command", "first line\nlatest line", "combined"))
 
-    assert renderer.tool_outputs[0].content == "live payload"
-    assert "live payload" not in "".join(parts)
+    assert renderer.tool_outputs[0].content == "first line\nlatest line"
+    assert "latest line" in "".join(parts)
+    assert "first line" not in "".join(parts)
     assert renderer.tool_outputs[0].expanded is False
 
 

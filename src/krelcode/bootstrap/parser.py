@@ -160,7 +160,7 @@ def build_parser() -> argparse.ArgumentParser:
     tui_mouse_group = p.add_mutually_exclusive_group()
     tui_mouse_group.add_argument(
         "--tui-mouse", dest="tui_mouse", action="store_true", default=None,
-        help="启用 TUI 面板鼠标点击；默认关闭以保留终端文本选择与复制")
+        help="启用 TUI 面板与工具行鼠标点击；默认关闭以保留终端文本选择与复制")
     tui_mouse_group.add_argument(
         "--no-tui-mouse", dest="tui_mouse", action="store_false",
         help="关闭 TUI 鼠标上报（默认）")

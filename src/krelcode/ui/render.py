@@ -11,8 +11,9 @@ import os
 import re
 import sys
 import textwrap
+import time
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Dict, Mapping, Optional
 
 from ..core.redact import SecretRedactor
@@ -62,8 +63,9 @@ TOOL_PANEL_FG = "\x1b[38;5;252m"
 ASSISTANT_MARK = "⏺ "
 RESULT_MARK = "⎿ "
 THINKING_MARK = "✻ "
+THINKING_LIVE = f"{THINKING_MARK}意图识别中…"
 THINKING_COLLAPSED = (
-    f"{THINKING_MARK}Thinking…（正文已折叠；下方为工具活动，/thinking 展开）"
+    f"{THINKING_MARK}意图识别完成（正文已折叠，/thinking 展开）"
 )
 
 TOOL_ARGUMENT_INLINE_LIMIT = 100
@@ -74,6 +76,7 @@ TOOL_OUTPUT_EXPANDED_CHARS = 12_000
 TOOL_OUTPUT_DISPLAY_WIDTH = 120
 TOOL_PANEL_WIDTH = 78
 TOOL_OUTPUT_INDENT = "    "
+REWRITE_LINE = "\r\x1b[2K"
 
 
 @dataclass
@@ -85,6 +88,10 @@ class ToolOutputRecord:
     content: str = ""
     is_error: Optional[bool] = None
     expanded: bool = False
+    started_at: float = field(default_factory=time.monotonic)
+    finished_at: Optional[float] = None
+    progress: str = ""
+    last_output: str = ""
 
 
 def auto_color() -> bool:
@@ -197,6 +204,17 @@ def _wrap_tool_content(text: str, width: int = TOOL_OUTPUT_DISPLAY_WIDTH) -> lis
     return lines
 
 
+def _truncate_text(text: str, limit: int) -> str:
+    plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+    printable = "".join(
+        char for char in plain
+        if char.isprintable() or char == "\t"
+    )
+    if len(printable) <= limit:
+        return printable
+    return printable[:max(0, limit - 1)] + "…"
+
+
 def _visible_width(text: str) -> int:
     """终端可见宽度；忽略 ANSI，CJK 宽字符按 2 列计算。"""
     plain = re.sub(r"\x1b\[[0-9;]*m", "", text)
@@ -249,6 +267,8 @@ class StreamRenderer:
         write: Optional[Callable[[str], None]] = None,
         color: Optional[bool] = None,
         redactor: Optional[SecretRedactor] = None,
+        on_tool_line: Optional[Callable[[int], None]] = None,
+        tool_lines_clickable: bool = False,
     ) -> None:
         self._raw_write = write or _default_write
         self._redactor = redactor
@@ -256,16 +276,24 @@ class StreamRenderer:
         self._streaming = False
         self._thinking = False
         self._thinking_summary_shown = False
+        self._thinking_line_live = False
         self._at_line_start = True
+        self._on_tool_line = on_tool_line
+        self._tool_lines_clickable = tool_lines_clickable
         # 仅 UI 层保留最近一轮完整 thinking；绝不写入 AgentLoop.history。
         self.thinking_text = ""
         self.tool_outputs: list[ToolOutputRecord] = []
         self._tool_by_call_id: Dict[str, ToolOutputRecord] = {}
+        self._live_tool_key: Optional[str] = None
 
     @property
     def output_active(self) -> bool:
         """Whether model text or reasoning is currently being written."""
-        return self._streaming or self._thinking
+        return (
+            self._streaming
+            or self._thinking
+            or self._live_tool_key is not None
+        )
 
     def _write(self, s: str) -> None:
         # 所有终端输出都经此出口：脱敏后统一写出
@@ -287,6 +315,7 @@ class StreamRenderer:
     def __call__(self, event: AgentEvent) -> None:
         if isinstance(event, RunStarted):
             # 新一轮开始前清空缓存；上一轮的 thinking 在 idle 期间仍可展开。
+            self._finish_live_tool_line()
             self._end_thinking()
             self._end_stream_only()
             self.thinking_text = ""
@@ -303,33 +332,43 @@ class StreamRenderer:
                 if self.thinking_text:
                     self.thinking_text = self.thinking_text.rstrip("\n") + "\n\n"
                 self._thinking = True
+                if not self._thinking_summary_shown:
+                    self._thinking_line_live = True
+                    line = f"{DIM}{THINKING_LIVE}{RESET}" if self._color else THINKING_LIVE
+                    self._write(line)
             # 默认不输出 reasoning 正文；只缓存原始 Markdown，等待 /thinking。
             self.thinking_text += event.text
             return
         # 任何非思考事件：先把本轮折叠状态收束为一行。
         self._end_thinking()
         if isinstance(event, LLMStreamDelta):
+            self._finish_live_tool_line()
             if not self._streaming:
                 self._write(self._mark(ASSISTANT_MARK))
                 self._streaming = True
             self._write(event.text)
         elif isinstance(event, ToolCallStarted):
             self.end_stream()
-            self._register_tool_call(event.tool_call)
-            self._render_tool_call(event)
+            record = self._register_tool_call(event.tool_call)
+            self._start_live_tool_line(record)
         elif isinstance(event, ToolOutputDelta):
-            self._append_tool_output(event)
+            output_record = self._append_tool_output(event)
+            if output_record is not None:
+                self._refresh_live_tool_line(output_record)
         elif isinstance(event, ToolCallCompleted):
             self.end_stream()
             self._render_tool_result(event)
         elif isinstance(event, ToolProgress):
-            # 短进度只进入 SessionViewState / 状态栏，避免污染正文。
-            return
+            progress_record = self._tool_by_call_id.get(event.tool_call_id)
+            if progress_record is not None:
+                progress_record.progress = " ".join(event.message.split())
+                self._refresh_live_tool_line(progress_record)
         elif isinstance(event, QueryPhaseChanged):
             return
         elif isinstance(event, PlanUpdated):
             return
         elif isinstance(event, UserInputRequested):
+            self._finish_live_tool_line()
             self.end_stream()
             self._write(f"  {self._mark(ASSISTANT_MARK)}{event.prompt}\n")
             for index, option in enumerate(event.options, 1):
@@ -341,20 +380,24 @@ class StreamRenderer:
         elif isinstance(event, UserInputResolved):
             return
         elif isinstance(event, PermissionDenied):
+            self._finish_live_tool_line()
             self.end_stream()
             self._write(
                 f"  {self._mark(RESULT_MARK)}✗ {event.tool_call.name} 被拒绝: {event.reason}\n")
         elif isinstance(event, HookTriggered):
             if event.system_message:
+                self._finish_live_tool_line()
                 self.end_stream()
                 self._write(
                     f"  {self._mark(RESULT_MARK)}hook {event.trigger}: "
                     f"{event.system_message}\n")
         elif isinstance(event, UserSteered):
+            self._finish_live_tool_line()
             self.end_stream()
             preview = event.text if len(event.text) <= 60 else event.text[:60] + "…"
             self._write(f"  {self._mark(RESULT_MARK)}插话已注入: {preview}\n")
         elif isinstance(event, SubagentSpawned):
+            self._finish_live_tool_line()
             self.end_stream()
             task = event.task if len(event.task) <= 60 else event.task[:60] + "…"
             definition = f" [{event.definition}]" if event.definition else ""
@@ -364,12 +407,14 @@ class StreamRenderer:
         elif isinstance(event, SubagentStateChanged):
             # 终态由 SubagentFinished 单独渲染，避免同一状态打印两遍。
             if event.status in {"paused", "running"}:
+                self._finish_live_tool_line()
                 self.end_stream()
                 reason = f": {event.reason}" if event.reason else ""
                 self._write(
                     f"  {self._mark(RESULT_MARK)}agent {event.agent_id} "
                     f"{event.status}{reason}\n")
         elif isinstance(event, SubagentFinished):
+            self._finish_live_tool_line()
             self.end_stream()
             detail = f": {event.preview}" if event.preview else ""
             self._write(
@@ -382,6 +427,7 @@ class StreamRenderer:
             # Microcompaction is visible in panels/JSONL; keep the answer surface clean.
             return
         elif isinstance(event, ContextCompressed):
+            self._finish_live_tool_line()
             self.end_stream()
             generation = (
                 f" · generation {event.generation}"
@@ -391,10 +437,12 @@ class StreamRenderer:
                 f"{event.before_tokens} → {event.after_tokens} tokens"
                 f"{generation}\n")
         elif isinstance(event, ErrorOccurred):
+            self._finish_live_tool_line()
             self.end_stream()
             self._write(
                 f"  {self._mark(RESULT_MARK)}✗ {event.context}: {event.error}\n")
         elif isinstance(event, RunFinished):
+            self._finish_live_tool_line()
             if self._streaming:
                 self._ensure_newline()
                 self._streaming = False
@@ -417,13 +465,16 @@ class StreamRenderer:
         if not self._thinking:
             return
         self._thinking = False
+        live = self._thinking_line_live
+        self._thinking_line_live = False
         if not self._thinking_summary_shown and self.thinking_text.strip():
             summary = THINKING_COLLAPSED
             if self._color:
                 summary = f"{DIM}{summary}{RESET}"
-            # 空行明确分隔“思考正文”和后续工具活动，避免工具输出看起来
-            # 像是 Thinking 展开后的内容。
-            self._write(summary + "\n\n")
+            if live:
+                self._write(REWRITE_LINE + summary + "\n")
+            else:
+                self._write(summary + "\n")
             self._thinking_summary_shown = True
 
     def expand_thinking(self) -> bool:
@@ -445,14 +496,15 @@ class StreamRenderer:
             record = self._register_tool_call(event.tool_call)
         record.content = self._redact(event.content)
         record.is_error = event.is_error
-        status = self._tool_status(record)
-        line_count = len(record.content.splitlines()) if record.content else 0
-        char_count = len(record.content)
-        detail = f"{line_count} 行 / {char_count} 字符" if record.content else "无输出"
-        self._write(
-            f"  {self._mark(RESULT_MARK)}{status} {event.tool_call.name} "
-            f"#{record.index} · {detail} · 输出已折叠"
-            f"（/tool-output {record.index} 展开）\n")
+        record.finished_at = time.monotonic()
+        line = self._tool_result_line(record)
+        if self._live_tool_key == self._tool_key(event.tool_call):
+            self._write(REWRITE_LINE + line + "\n")
+            self._live_tool_key = None
+        else:
+            self._write(line + "\n")
+        if self._on_tool_line is not None:
+            self._on_tool_line(record.index)
 
     def _redact(self, text: str) -> str:
         return self._redactor.redact(text) if self._redactor is not None else text
@@ -471,15 +523,19 @@ class StreamRenderer:
     def _tool_key(tool_call: ToolCall) -> str:
         return tool_call.id or f"object:{id(tool_call)}"
 
-    def _append_tool_output(self, event: ToolOutputDelta) -> None:
+    def _append_tool_output(self, event: ToolOutputDelta) -> Optional[ToolOutputRecord]:
         """缓存增量输出，但绝不自动展开或打印正文。"""
         if not event.text:
-            return
+            return None
         record = self._tool_by_call_id.get(event.tool_call_id)
         if record is None:
             tool_call = ToolCall(event.tool_call_id, event.tool_name, {})
             record = self._register_tool_call(tool_call)
         record.content += self._redact(event.text)
+        lines = [line.strip() for line in record.content.splitlines() if line.strip()]
+        if lines:
+            record.last_output = _truncate_text(lines[-1], 72)
+        return record
 
     def _tool_status(self, record: ToolOutputRecord) -> str:
         if record.is_error is None:
@@ -566,15 +622,88 @@ class StreamRenderer:
     def clear_tool_outputs(self) -> None:
         self.tool_outputs.clear()
         self._tool_by_call_id.clear()
+        self._live_tool_key = None
 
-    def _render_tool_call(self, event: ToolCallStarted) -> None:
-        name = event.tool_call.name
-        arguments = _format_tool_arguments(event.tool_call.arguments)
-        prefix = f"  {self._mark(ASSISTANT_MARK)}"
-        if "\n" not in arguments:
-            self._write(f"{prefix}{name}({arguments})\n")
+    @staticmethod
+    def _tool_summary(record: ToolOutputRecord) -> str:
+        arguments = record.tool_call.arguments
+        summary = ""
+        for key in ("command", "path", "pattern", "query", "task"):
+            value = arguments.get(key)
+            if isinstance(value, str) and value.strip():
+                summary = " ".join(value.split())
+                break
+        if not summary and arguments:
+            summary = " ".join(_format_tool_arguments(arguments).split())
+        return _truncate_text(summary, 72)
+
+    @classmethod
+    def _tool_goal(cls, record: ToolOutputRecord) -> str:
+        summary = cls._tool_summary(record)
+        return f"{record.tool_call.name} · {summary}" if summary else record.tool_call.name
+
+    def _tool_running_line(self, record: ToolOutputRecord) -> str:
+        details = [self._tool_goal(record)]
+        if record.progress:
+            details.append(record.progress)
+        if record.last_output:
+            details.append(record.last_output)
+        return (
+            f"  {self._mark(ASSISTANT_MARK)}"
+            + " · ".join(details)
+        )
+
+    def _tool_result_line(self, record: ToolOutputRecord) -> str:
+        status = self._tool_status(record)
+        line_count = len(record.content.splitlines()) if record.content else 0
+        char_count = len(record.content)
+        detail = f"{line_count} 行 / {char_count} 字符" if record.content else "无输出"
+        elapsed = max(
+            0.0,
+            (record.finished_at or time.monotonic()) - record.started_at,
+        )
+        summary = self._tool_summary(record)
+        goal = (
+            f"{record.tool_call.name} #{record.index} · {summary}"
+            if summary else f"{record.tool_call.name} #{record.index}"
+        )
+        action = (
+            f"点击或 /tool-output {record.index} 展开"
+            if self._tool_lines_clickable
+            else f"/tool-output {record.index} 展开"
+        )
+        return (
+            f"  {self._mark(RESULT_MARK)}{status} "
+            f"{goal}"
+            f" · {elapsed:.1f}s · {detail} · "
+            f"输出已折叠（{action}）"
+        )
+
+    def _start_live_tool_line(self, record: ToolOutputRecord) -> None:
+        self._finish_live_tool_line()
+        self._live_tool_key = self._tool_key(record.tool_call)
+        self._write(self._tool_running_line(record))
+
+    def _refresh_live_tool_line(self, record: ToolOutputRecord) -> None:
+        if self._live_tool_key != self._tool_key(record.tool_call):
             return
-        self._write(f"{prefix}{name}(\n")
-        for line in arguments.splitlines():
-            self._write(f"{TOOL_OUTPUT_INDENT}{line}\n")
-        self._write("  )\n")
+        self._write(REWRITE_LINE + self._tool_running_line(record))
+
+    def _finish_live_tool_line(self) -> None:
+        if self._live_tool_key is None:
+            return
+        record = next(
+            (
+                item for item in self.tool_outputs
+                if self._tool_key(item.tool_call) == self._live_tool_key
+            ),
+            None,
+        )
+        if record is not None:
+            record.finished_at = record.finished_at or time.monotonic()
+            self._write(REWRITE_LINE + self._tool_result_line(record) + "\n")
+            if self._on_tool_line is not None:
+                self._on_tool_line(record.index)
+        else:
+            self._write("\n")
+        self._live_tool_key = None
