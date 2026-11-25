@@ -31,6 +31,7 @@ from .repl_primitives import (
     _truncate_display,
     auto_color,
 )
+from .render import HERMES_BLUE
 
 _BUILTIN_COMMANDS = builtin_command_registry()
 SLASH_COMMANDS = tuple(
@@ -242,6 +243,9 @@ def print_banner(loop: AgentLoop, tool_names: Optional[list[str]],
     def accent(text: str) -> str:
         return f"{CYAN}{text}{RESET}" if color else text
 
+    def brand(text: str) -> str:
+        return f"{HERMES_BLUE}{text}{RESET}" if color else text
+
     def row(label: str, value: str, path: bool = False) -> None:
         available = max(8, width - 13)
         if path and _display_width(value) > available:
@@ -266,12 +270,12 @@ def print_banner(loop: AgentLoop, tool_names: Optional[list[str]],
     wordmark_width = max(_display_width(line) for line in _WORDMARK) + 2
     if columns >= wordmark_width:
         for line in _WORDMARK:
-            write(f"  {accent(line)}")
+            write(f"  {brand(line)}")
         version = f"v{__version__}"
         write(f"  {DIM}{version}{RESET}" if color else f"  {version}")
     else:
         title = f"✻ Krelcode v{__version__}"
-        write(f"  {accent(title)}")
+        write(f"  {brand(title)}")
     write(f"  {divider_rendered}")
     row("model", f"{model} · {provider}")
     row("workspace", str(workspace), path=True)

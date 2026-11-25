@@ -46,6 +46,7 @@ from ..core.events import (
 GREEN = "\x1b[32m"
 RED = "\x1b[31m"
 CYAN = "\x1b[36m"
+HERMES_BLUE = "\x1b[38;2;0;0;242m"
 DIM = "\x1b[2m"
 BOLD = "\x1b[1m"
 RESET = "\x1b[0m"

@@ -1158,7 +1158,8 @@ REPL 仍保留 scrollback 作为对话正文，只把“当前现场”放进输
 常规规则、Skill、Agent、Plugin、Hook 和 Sandbox 加载成功时不逐项打印；启动卡只展示
 模型、工作区、会话、工具与 Sandbox 摘要。空闲状态下 Dock 默认收起，`Ctrl-O`、计划、
 审批或任务运行需要时再展开。宽终端显示 `KRELCODE` ASCII 字标，窄终端自动回退为
-紧凑单行标题。
+紧凑单行标题；字标使用 Hermes 首页品牌蓝 `#0000F2` 真彩色，其他提示仍沿用原有
+青色层级。
 
 ```
 ui/tui/

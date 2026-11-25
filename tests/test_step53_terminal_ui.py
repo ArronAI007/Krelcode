@@ -514,6 +514,26 @@ def test_banner_uses_compact_title_on_narrow_terminal(tmp_path, monkeypatch):
     assert "██" not in text
 
 
+def test_banner_uses_hermes_blue_for_wordmark_only(tmp_path):
+    from krelcode.ui import repl_surface
+
+    loop = SimpleNamespace(
+        llm=SimpleNamespace(name="mock", model="mock-model"),
+        tool_context=SimpleNamespace(workspace_root=tmp_path),
+    )
+    lines = []
+    print_banner(
+        loop,
+        ["get_time"],
+        session_path="/tmp/demo-session.jsonl",
+        write=lines.append,
+        color=True,
+    )
+    text = "\n".join(lines)
+    assert repl_surface.HERMES_BLUE in text
+    assert "\x1b[36m██" not in text
+
+
 # -- 助手侧标记 -------------------------------------------------------------------------------
 
 def test_renderer_uses_assistant_side_markers():
