@@ -1159,7 +1159,9 @@ REPL 仍保留 scrollback 作为对话正文，只把“当前现场”放进输
 模型、工作区、会话、工具与 Sandbox 摘要。空闲状态下 Dock 默认收起，`Ctrl-O`、计划、
 审批或任务运行需要时再展开。宽终端显示 `KRELCODE` ASCII 字标，窄终端自动回退为
 紧凑单行标题；字标复刻 Hermes TUI 默认 Logo 的三段式金色渐变
-`#FFD700 → #FFBF00 → #CD7F32`，其他提示仍沿用原有青色层级。
+`#FFD700 → #FFBF00 → #CD7F32`，其他提示仍沿用原有青色层级。终端明确支持
+truecolor 时使用 RGB；Apple Terminal 等有限调色板环境自动映射为 ANSI-256
+`220 → 214 → 173`，避免真彩色序列被降级成黑色。
 
 ```
 ui/tui/

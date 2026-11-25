@@ -6,6 +6,7 @@ process host.  ``ui.repl`` re-exports them for compatibility.
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -31,7 +32,14 @@ from .repl_primitives import (
     _truncate_display,
     auto_color,
 )
-from .render import HERMES_AMBER, HERMES_BRONZE, HERMES_GOLD
+from .render import (
+    HERMES_AMBER,
+    HERMES_AMBER_256,
+    HERMES_BRONZE,
+    HERMES_BRONZE_256,
+    HERMES_GOLD,
+    HERMES_GOLD_256,
+)
 
 _BUILTIN_COMMANDS = builtin_command_registry()
 SLASH_COMMANDS = tuple(
@@ -73,6 +81,23 @@ _WORDMARK_COLORS = (
     HERMES_BRONZE,
     HERMES_BRONZE,
 )
+
+_WORDMARK_COLORS_256 = (
+    HERMES_GOLD_256,
+    HERMES_GOLD_256,
+    HERMES_AMBER_256,
+    HERMES_AMBER_256,
+    HERMES_BRONZE_256,
+    HERMES_BRONZE_256,
+)
+
+
+def _wordmark_colors() -> tuple[str, ...]:
+    color_term = os.environ.get("COLORTERM", "").strip().lower()
+    terminal_program = os.environ.get("TERM_PROGRAM", "").strip().lower()
+    if color_term in {"truecolor", "24bit"} and terminal_program != "apple_terminal":
+        return _WORDMARK_COLORS
+    return _WORDMARK_COLORS_256
 
 
 def _format_job_notification(event: ShellJobFinished) -> str:
@@ -279,7 +304,7 @@ def print_banner(loop: AgentLoop, tool_names: Optional[list[str]],
 
     wordmark_width = max(_display_width(line) for line in _WORDMARK) + 2
     if columns >= wordmark_width:
-        for line, tone in zip(_WORDMARK, _WORDMARK_COLORS):
+        for line, tone in zip(_WORDMARK, _wordmark_colors()):
             write(f"  {brand(line, tone)}")
         version = f"v{__version__}"
         write(f"  {DIM}{version}{RESET}" if color else f"  {version}")

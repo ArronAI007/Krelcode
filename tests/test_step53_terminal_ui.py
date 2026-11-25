@@ -514,9 +514,14 @@ def test_banner_uses_compact_title_on_narrow_terminal(tmp_path, monkeypatch):
     assert "██" not in text
 
 
-def test_banner_uses_hermes_logo_gradient_for_wordmark_only(tmp_path):
+def test_banner_uses_hermes_logo_gradient_for_wordmark_only(
+    tmp_path,
+    monkeypatch,
+):
     from krelcode.ui import repl_surface
 
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
     loop = SimpleNamespace(
         llm=SimpleNamespace(name="mock", model="mock-model"),
         tool_context=SimpleNamespace(workspace_root=tmp_path),
@@ -535,6 +540,33 @@ def test_banner_uses_hermes_logo_gradient_for_wordmark_only(tmp_path):
     assert repl_surface.HERMES_BRONZE in text
     assert "\x1b[38;2;0;0;242m" not in text
     assert "\x1b[36m██" not in text
+
+
+def test_banner_uses_ansi256_gradient_on_limited_color_terminals(
+    tmp_path,
+    monkeypatch,
+):
+    from krelcode.ui import repl_surface
+
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    monkeypatch.setenv("TERM_PROGRAM", "Apple_Terminal")
+    loop = SimpleNamespace(
+        llm=SimpleNamespace(name="mock", model="mock-model"),
+        tool_context=SimpleNamespace(workspace_root=tmp_path),
+    )
+    lines = []
+    print_banner(
+        loop,
+        ["get_time"],
+        session_path="/tmp/demo-session.jsonl",
+        write=lines.append,
+        color=True,
+    )
+    text = "\n".join(lines)
+    assert repl_surface.HERMES_GOLD_256 in text
+    assert repl_surface.HERMES_AMBER_256 in text
+    assert repl_surface.HERMES_BRONZE_256 in text
+    assert "\x1b[38;2;" not in text
 
 
 # -- 助手侧标记 -------------------------------------------------------------------------------
