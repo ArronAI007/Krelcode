@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from typing import Optional, Sequence, cast
 from ... import __version__
 from ...agent.turn.runtime import AgentRuntime
 from ...config import load_config_layers
+from ...contracts.runtime import RunMode
 from ...core.errors import ConfigError
 from ...core.redact import SecretRedactor
 from ...enterprise.audit import AuditError, ComplianceAuditor
@@ -22,6 +24,7 @@ from ...observability.settings import ObservabilityOptions
 from ...mcp.supervisor import MCPSupervisor
 from ...agent.turn.runtime_services import MCPServicePort, RuntimeServiceBinderPort
 from ...safety.sandbox import SandboxError
+from ...webui.service import WebUIOptions, WebUIService
 from ...session.elicitation_bridge import MCPElicitationBridge
 from ...agent.prompt.prompt_surface_contract import PromptSurfaceExecutor
 from ..composition import (
@@ -51,6 +54,7 @@ class CoreServices:
     redactor: SecretRedactor
     auditor: Optional[ComplianceAuditor]
     observability: Optional[ObservabilitySink]
+    webui: Optional[WebUIService]
     config: RuntimeConfigComposer
     binder: RuntimeServiceBinder
 
@@ -202,6 +206,21 @@ async def build_core_services(
         )
         await observability.start()
         observability.attach(loop.bus)
+    webui_options = WebUIOptions.from_args_and_config(
+        context.args,
+        context.config,
+        interactive=(
+            context.run_mode is RunMode.REPL and sys.stdin.isatty()
+        ),
+    )
+    webui = (
+        WebUIService(
+            loop.tool_context.workspace_root,
+            webui_options,
+            note=context.note,
+        )
+        if webui_options.enabled else None
+    )
     return CoreServices(
         loop=loop,
         subagents=subagents,
@@ -210,6 +229,7 @@ async def build_core_services(
         redactor=redactor,
         auditor=auditor,
         observability=observability,
+        webui=webui,
         config=composer,
         binder=binder,
     )

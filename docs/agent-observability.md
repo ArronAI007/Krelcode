@@ -6,7 +6,7 @@ Web UI 不是 CLI 内部的一个渲染分支，而是与 CLI/TUI、SDK、IDE �
 
 ```text
                    ┌── CLI / TUI       krelcode
-                   ├── Web UI          krelcode-web
+                   ├── Web UI          CLI 生命周期内的同步前端
 AgentRuntime ──────┼── Python/TS SDK   stream-json
   EventBus         ├── VS Code
   Session API      └── JetBrains
@@ -34,10 +34,24 @@ Agent 默认把脱敏后的观测事件写到当前 workspace：
 krelcode
 ```
 
-独立启动 Web 前端：
+执行 `krelcode` 进入交互式 REPL 时，会在同一 CLI 进程内自动启动 Web 前端并打印一次性
+token URL；不需要额外命令。服务随 CLI 启动，并在 CLI 退出时关闭。headless、pipe 与
+stream-json 默认不监听端口：
+
+```toml
+[webui]
+enabled = "auto"      # auto / true / false
+host = "127.0.0.1"    # 只允许 loopback
+port = 8765
+port_scan = 10
+open_browser = false
+```
+
+也可以按本轮覆盖：
 
 ```bash
-krelcode-web --workspace /path/to/project
+krelcode --webui       # 强制启动
+krelcode --no-webui    # 关闭
 ```
 
 服务只允许绑定 loopback，启动时生成随机 token。浏览器第一次通过带 token 的 URL 打开后，

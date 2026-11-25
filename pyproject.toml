@@ -31,7 +31,6 @@ syntax = [
 
 [project.scripts]
 krelcode = "krelcode.entrypoints.cli:main"
-krelcode-web = "krelcode.webui.server:main"
 
 [build-system]
 requires = ["setuptools>=68"]

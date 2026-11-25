@@ -419,7 +419,8 @@ auto_threshold = 0.80                # auto 模式晋级阈值；冲突候选永
 krelcode --observability                    # 显式开启本轮本地事件记录
 krelcode --no-observability                 # 显式关闭本轮事件记录
 krelcode --experiment-profile ./profile.json # 启动时校验并冻结实验 profile
-krelcode-web --workspace .                  # 启动独立 Web UI（与 CLI 并列）
+krelcode --webui                           # 强制随当前 CLI 启动 Web UI
+krelcode --no-webui                        # 关闭随 CLI 自动启动的 Web UI
 ```
 
 [observability]                     # 独立 Web UI 的共享事件底座
@@ -430,6 +431,13 @@ max_collection_items = 100
 include_text_previews = true         # false 时不记录 prompt/工具正文预览
 # experiment_profile = "~/.krelcode/experiments/active.json"
 # false 可禁用默认 active-experiment.json 的自动读取
+
+[webui]                              # 与当前 CLI 生命周期同步的本地 Web 前端
+enabled = "auto"                     # auto / true / false；auto 仅在交互式 REPL 启动
+host = "127.0.0.1"                   # 只允许 loopback
+port = 8765
+port_scan = 10                       # 8765 被占用时向后尝试的端口数
+open_browser = false                 # true 时启动 CLI 后自动打开浏览器
 
 [features]
 enabled = []                         # 启用的功能开关名；工具池可按开关过滤

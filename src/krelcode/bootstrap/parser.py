@@ -150,6 +150,13 @@ def build_parser() -> argparse.ArgumentParser:
     observability_group.add_argument(
         "--no-observability", dest="observability", action="store_false",
         help="关闭本轮 Agent 观测事件日志")
+    webui_group = p.add_mutually_exclusive_group()
+    webui_group.add_argument(
+        "--webui", dest="webui", action="store_true", default=None,
+        help="强制随当前 CLI 启动 loopback Web UI；默认交互式 REPL 自动启动")
+    webui_group.add_argument(
+        "--no-webui", dest="webui", action="store_false",
+        help="关闭随当前 CLI 同步启动的 Web UI")
     p.add_argument(
         "--experiment-profile", default=None,
         help="本轮消融实验 profile JSON；在启动时校验并冻结，不支持 turn 中热改")

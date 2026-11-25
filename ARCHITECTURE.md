@@ -194,7 +194,7 @@ profile，而不是让 Web 进入 CLI 渲染链或 AgentLoop：
 
 ```text
                        ┌── CLI / TUI
-AgentRuntime + EventBus├── Web UI (localhost HTTP + SSE)
+AgentRuntime + EventBus├── Web UI (CLI 生命周期内 localhost HTTP + SSE)
                        ├── SDK / stream-json
                        └── IDE adapters
           │
@@ -213,6 +213,7 @@ ObservabilitySink
 - `RunManifest` 在运行前冻结 provider/model/config/tool catalog/experiment hash；
 - Web 修改实验 profile 后只影响下一轮进程，turn 中途禁止热改；
 - Sandbox、Permission、Network、auto-approve 和 managed policy 不在消融白名单；
+- Web UI 不提供独立启动命令；交互式 `krelcode` 在同一进程内托管 Gateway，并随 CLI 关闭；
 - Web Gateway 只绑定 loopback，使用随机 token 兑换 `HttpOnly + SameSite=Strict` cookie；
 - CLI 与 Web 共享 EventEnvelope schema，后续 SDK/IDE 可复用同一 SSE/JSONL 投影。
 

@@ -238,3 +238,129 @@ def test_observability_options_are_bounded() -> None:
     assert options.queue_size == 64
     assert options.max_string_chars == 100_000
     assert options.max_collection_items == 1
+
+
+def test_webui_options_follow_interactive_cli_auto_mode() -> None:
+    from krelcode.webui.service import WebUIOptions
+
+    auto = {"webui": {"enabled": "auto"}}
+    disabled = WebUIOptions.from_args_and_config(
+        argparse.Namespace(webui=None), auto, interactive=False)
+    enabled = WebUIOptions.from_args_and_config(
+        argparse.Namespace(webui=None), auto, interactive=True)
+    forced = WebUIOptions.from_args_and_config(
+        argparse.Namespace(webui=True), auto, interactive=False)
+    off = WebUIOptions.from_args_and_config(
+        argparse.Namespace(webui=False), {"webui": {"enabled": True}},
+        interactive=True)
+    assert not disabled.enabled
+    assert enabled.enabled
+    assert forced.enabled
+    assert not off.enabled
+
+
+def test_webui_service_is_background_and_closes_with_cli(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    from krelcode.webui import service as service_module
+
+    stopped = threading.Event()
+
+    class FakeServer:
+        def __init__(self, address, store, token) -> None:
+            self.server_address = ("127.0.0.1", 9876)
+
+        def serve_forever(self, *, poll_interval: float) -> None:
+            stopped.wait(2)
+
+        def shutdown(self) -> None:
+            stopped.set()
+
+        def server_close(self) -> None:
+            return
+
+    monkeypatch.setattr(service_module, "DashboardHTTPServer", FakeServer)
+    notes: list[str] = []
+    options = service_module.WebUIOptions(
+        enabled=True, host="127.0.0.1", port=9876, port_scan=1)
+    service = service_module.WebUIService(
+        tmp_path, options, note=notes.append, token="test-token")
+    assert service.start()
+    assert service.running
+    assert "token=test-token" in service.url
+    service.close()
+    assert not service.running
+    assert any("已同步启动" in note for note in notes)
+
+
+def test_bootstrapped_application_owns_webui_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from krelcode.bootstrap import application as application_module
+    from krelcode.bootstrap.application import BootstrappedApplication
+    from krelcode.bootstrap.composition import (
+        CoreRuntime,
+        ExtensionRuntime,
+        RuntimeGraph,
+    )
+
+    events: list[str] = []
+
+    class FakeRuntime:
+        async def close(self) -> None:
+            events.append("runtime.close")
+
+    class FakeTelemetry:
+        async def close(self) -> None:
+            events.append("telemetry.close")
+
+    class FakeWebUI:
+        def start(self) -> bool:
+            events.append("webui.start")
+            return True
+
+        def close(self) -> None:
+            events.append("webui.close")
+
+    async def fake_run_session(*args: object, **kwargs: object) -> int:
+        events.append("session.run")
+        return 0
+
+    monkeypatch.setattr(application_module, "run_session", fake_run_session)
+    graph = RuntimeGraph(
+        core=CoreRuntime(
+            runtime=FakeRuntime(),
+            supervisor=None,
+            checkpoints=None,
+            usage=object(),
+            model_switch=None,
+            redactor=object(),
+            input_processor=None,
+            approval_broker=None,
+            input_broker=None,
+            hooks=None,
+            telemetry_runtime=FakeTelemetry(),
+            auditor=None,
+            loop=object(),
+            webui=FakeWebUI(),
+        ),
+        extensions=ExtensionRuntime(
+            plugin_manager=object(),
+            skill_manager=object(),
+            agent_definitions=object(),
+            extension_registry=object(),
+            custom_commands=object(),
+            refresh=lambda: (),
+            reload_skills=lambda: None,
+            reload_plugins=lambda: None,
+            reload_custom_commands=lambda: None,
+        ),
+    )
+    app = BootstrappedApplication(
+        args=argparse.Namespace(), graph=graph, note=lambda message: None)
+    assert asyncio.run(app.run()) == 0
+    asyncio.run(app.close())
+    assert events == ["webui.start", "session.run", "webui.close", "telemetry.close", "runtime.close"]

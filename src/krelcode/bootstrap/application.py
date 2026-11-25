@@ -112,6 +112,8 @@ class BootstrappedApplication:
 
     async def run(self) -> int:
         core = self.graph.core
+        if core.webui is not None:
+            core.webui.start()
         return await run_session(
             self.args,
             core.runtime,
@@ -136,6 +138,8 @@ class BootstrappedApplication:
             return
         self._closed = True
         core = self.graph.core
+        if core.webui is not None:
+            core.webui.close()
         await core.telemetry_runtime.close()
         if core.observability is not None:
             await core.observability.close()

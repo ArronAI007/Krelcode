@@ -56,6 +56,14 @@ class ObservabilityRuntimePort(Protocol):
     async def close(self) -> None: ...
 
 
+class WebUIRuntimePort(Protocol):
+    """Lifecycle surface for the CLI-hosted Web frontend."""
+
+    def start(self) -> bool: ...
+
+    def close(self) -> None: ...
+
+
 @dataclass(frozen=True)
 class CoreRuntime:
     """Core services required to run and close one application instance."""
@@ -74,6 +82,7 @@ class CoreRuntime:
     auditor: Optional[AuditorPort]
     loop: AgentLoop
     observability: Optional[ObservabilityRuntimePort] = None
+    webui: Optional[WebUIRuntimePort] = None
 
 
 @dataclass(frozen=True)
@@ -106,4 +115,5 @@ __all__ = [
     "ObservabilityRuntimePort",
     "RuntimeGraph",
     "TelemetryRuntimePort",
+    "WebUIRuntimePort",
 ]

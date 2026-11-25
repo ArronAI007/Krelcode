@@ -71,15 +71,13 @@ krelcode               # 进入 REPL
 
 Web UI 是 CLI 的并列前端，不是 REPL 渲染分支。Agent 默认写入本地脱敏事件日志：
 
-```bash
-krelcode-web --workspace /path/to/project
-```
-
-浏览器打开启动信息中的 loopback URL，可查看 Live Timeline、Context/Cache、工具与
-Memory/Compact 事件，并从安全白名单中配置下一轮消融实验。服务不会暴露公网，也不允许
-修改 Sandbox、权限、网络或 auto-approve 等安全底线。
+交互式执行 `krelcode` 时会自动同步启动 loopback Web UI，并打印一次性 token URL。
+Web 与当前 CLI Run 使用同一事件流，不需要单独启动命令。服务随 CLI 生命周期启动和关闭，
+不会暴露公网，也不允许修改 Sandbox、权限、网络或 auto-approve 等安全底线。
 
 ```bash
+krelcode --no-webui                         # 不启动同步 Web UI
+krelcode --webui                            # 非 auto 场景强制启动 Web UI
 krelcode --no-observability                 # 本轮不记录观测事件
 krelcode --experiment-profile ./profile.json # 启动时冻结实验配置
 ```

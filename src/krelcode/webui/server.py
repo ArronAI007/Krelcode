@@ -1,26 +1,22 @@
-"""Independent localhost HTTP/SSE frontend for Krelcode.
+"""Localhost HTTP/SSE frontend hosted by the CLI lifecycle.
 
-This process is a peer of the CLI/TUI.  It consumes the shared observability
-journal and experiment profile format; it never imports AgentLoop, mutates a
-running turn, or affects permission/sandbox policy.
+The Web UI remains a separate presentation adapter.  It consumes the shared
+observability journal and experiment profile format; it never imports
+AgentLoop, mutates a running turn, or affects permission/sandbox policy.
 """
 
 from __future__ import annotations
 
-import argparse
 import hmac
-import ipaddress
 import json
-import secrets
 import sys
 import time
 import traceback
-import webbrowser
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence, cast
+from typing import Any, Mapping, Sequence, cast
 from urllib.parse import parse_qs, urlsplit
 
 from krelcode.observability.experiments import (
@@ -358,78 +354,4 @@ def _query_int(
     return max(minimum, min(parsed, maximum))
 
 
-def _loopback_host(host: str) -> str:
-    normalized = str(host or "").strip().lower()
-    if normalized == "localhost":
-        return "127.0.0.1"
-    try:
-        address = ipaddress.ip_address(normalized)
-    except ValueError as exc:
-        raise ValueError("Web UI 只允许绑定 loopback 地址") from exc
-    if not address.is_loopback:
-        raise ValueError("Web UI 只允许绑定 loopback 地址")
-    return str(address)
-
-
-def run_server(
-    workspace: Path,
-    *,
-    host: str = "127.0.0.1",
-    port: int = 8765,
-    open_browser: bool = False,
-    token: Optional[str] = None,
-) -> int:
-    bound_host = _loopback_host(host)
-    store = DashboardStore(workspace)
-    server_token = token or secrets.token_urlsafe(32)
-    server = DashboardHTTPServer((bound_host, int(port)), store, server_token)
-    actual_host = str(server.server_address[0])
-    actual_port = int(server.server_address[1])
-    url = f"http://{actual_host}:{actual_port}/?token={server_token}"
-    print(f"Krelcode Web UI: http://{actual_host}:{actual_port}/")
-    print("仅监听本机 loopback；首次打开需要一次性 token。按 Ctrl-C 停止。")
-    if open_browser:
-        webbrowser.open(url)
-    else:
-        print(f"一次性打开链接: {url}")
-    try:
-        server.serve_forever(poll_interval=0.5)
-    except KeyboardInterrupt:
-        print("\nKrelcode Web UI 已停止。")
-    finally:
-        server.server_close()
-    return 0
-
-
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="krelcode-web",
-        description="Krelcode 独立 Web 可观测与消融实验 UI",
-    )
-    parser.add_argument(
-        "--workspace", default=".", help="要观测的工作区（默认当前目录）")
-    parser.add_argument(
-        "--host", default="127.0.0.1",
-        help="监听地址，只允许 loopback（默认 127.0.0.1）")
-    parser.add_argument("--port", type=int, default=8765, help="监听端口")
-    parser.add_argument(
-        "--no-open-browser", action="store_true",
-        help="只打印带 token 的本地 URL，不自动打开浏览器")
-    args = parser.parse_args(argv)
-    try:
-        return run_server(
-            Path(args.workspace).expanduser().resolve(),
-            host=args.host,
-            port=args.port,
-            open_browser=not args.no_open_browser,
-        )
-    except (OSError, ValueError) as exc:
-        print(f"krelcode-web 错误: {exc}", file=sys.stderr)
-        return 1
-
-
-__all__ = ["DashboardHTTPServer", "main", "run_server"]
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+__all__ = ["DashboardHTTPServer"]
