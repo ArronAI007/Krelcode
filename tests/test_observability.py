@@ -225,6 +225,18 @@ def test_web_auth_origin_and_profile_write_contract(tmp_path: Path) -> None:
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_web_server_connection_errors_never_corrupt_cli_terminal(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from krelcode.webui.server import DashboardHTTPServer
+
+    server = object.__new__(DashboardHTTPServer)
+    server.handle_error(object(), ("127.0.0.1", 51079))
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
 def test_observability_options_are_bounded() -> None:
     options = ObservabilityOptions.from_args_and_config(
         argparse.Namespace(observability=None),

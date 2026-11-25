@@ -9,9 +9,7 @@ from __future__ import annotations
 
 import hmac
 import json
-import sys
 import time
-import traceback
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -50,6 +48,20 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.store = store
         self.token = token
         super().__init__(server_address, DashboardHandler)
+
+    def handle_error(
+        self,
+        request: object,
+        client_address: tuple[str, int],
+    ) -> None:
+        """Keep Web client failures out of the CLI's terminal renderer.
+
+        ``ThreadingHTTPServer`` writes uncaught request exceptions, including
+        normal browser disconnects, directly to stderr.  The Web UI shares that
+        terminal with the interactive prompt, so writing the traceback corrupts
+        cursor tracking and leaves panel content inside assistant output.
+        """
+        del request, client_address
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -161,7 +173,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             return
         except Exception as exc:
-            traceback.print_exc(file=sys.stderr)
             self._send_json(
                 {"error": f"internal_error: {type(exc).__name__}"},
                 HTTPStatus.INTERNAL_SERVER_ERROR,
