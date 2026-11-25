@@ -28,7 +28,13 @@ from ...core.messages import Message
 from ...contracts.json import JsonObject
 
 if TYPE_CHECKING:
-    from ...agent.turn.runtime_services import AgentServices
+    from ...agent.context.workspace import WorkspaceContext
+    from ...agent.prompt.fragments import PromptFragmentRegistry, PromptSnapshot
+    from ...agent.prompt.prompt_models import PromptPlan
+    from ...agent.prompt.prompt_surface import PromptSurfaceDescriptor
+    from ...agent.prompts import PromptProfileResolution
+    from ...agent.turn.runtime_services import AgentServices, SkillServicePort
+    from ...agent.turn.runtime_state import AgentRuntimeState
 
 
 @runtime_checkable
@@ -90,37 +96,27 @@ class CompactPreviewPort(Protocol):
 
 @runtime_checkable
 class CommandLoopPort(Protocol):
-    """Runtime state and operations command handlers may touch directly."""
+    """Typed runtime surface exposed to slash-command handlers."""
+
+    history: list[Message]
+    prompt_profile_resolution: "PromptProfileResolution | None"
+    auxiliary_prompt_surfaces: tuple["PromptSurfaceDescriptor", ...]
+    last_prompt_plan: "PromptPlan | None"
+    prompt_registry: Optional["PromptFragmentRegistry"]
+    prompt_snapshot: Optional["PromptSnapshot"]
+    skill_base_prompt: str
 
     @property
     def services(self) -> "AgentServices": ...
 
     @property
-    def history(self) -> list[Message]: ...
-
-    @property
-    def prompt_profile_resolution(self) -> Optional[Any]: ...
-
-    @property
     def prompt_profile_name(self) -> str: ...
 
     @property
-    def auxiliary_prompt_surfaces(self) -> Sequence[Any]: ...
-
-    @property
-    def last_prompt_plan(self) -> Optional[Any]: ...
-
-    @property
-    def runtime_state(self) -> Any: ...
+    def runtime_state(self) -> "AgentRuntimeState": ...
 
     @property
     def policy(self) -> object: ...
-
-    @property
-    def prompt_registry(self) -> Optional[Any]: ...
-
-    @property
-    def prompt_snapshot(self) -> Optional[Any]: ...
 
     @property
     def workspace_context(self) -> object: ...
@@ -129,14 +125,10 @@ class CommandLoopPort(Protocol):
     def context_manager(self) -> Optional[ContextManagerPort]: ...
 
     @property
-    def skill_manager(self) -> Optional["SkillManagerPort"]: ...
+    def skill_manager(self) -> Optional["SkillServicePort"]: ...
 
-    @property
-    def skill_base_prompt(self) -> str: ...
-
-    def update_runtime_state(self, **values: object) -> None: ...
     def current_tool_pool(self) -> ToolPoolPort: ...
-    async def refresh_workspace_context(self) -> Any: ...
+    async def refresh_workspace_context(self) -> "WorkspaceContext": ...
     def reset(self) -> None: ...
     async def compress_context(
         self,

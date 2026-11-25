@@ -332,23 +332,26 @@ def _ends_in_loop(node: ast.AST) -> bool:
     )
 
 
-def _assigns_loop_attribute(target: ast.AST) -> bool:
-    if isinstance(target, ast.Attribute):
-        return _ends_in_loop(target.value)
-    if isinstance(target, (ast.Tuple, ast.List)):
-        return any(_assigns_loop_attribute(item) for item in target.elts)
-    return False
-
-
 def loop_dynamic_access_counts(path: Path) -> dict[str, int]:
-    counts = {"assignments": 0, "getattr": 0, "setattr": 0}
+    """Count reflective loop access that bypasses the typed state view."""
+    counts = {"getattr": 0, "setattr": 0, "dynamic_update": 0, "dict_access": 0}
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if any(_assigns_loop_attribute(target) for target in targets):
-                counts["assignments"] += 1
-        if not isinstance(node, ast.Call) or not node.args:
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr == "__dict__"
+            and _ends_in_loop(node.value)
+        ):
+            counts["dict_access"] += 1
+        if not isinstance(node, ast.Call):
+            continue
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "update_runtime_state"
+            and _ends_in_loop(node.func.value)
+        ):
+            counts["dynamic_update"] += 1
+        if not node.args:
             continue
         if not _ends_in_loop(node.args[0]):
             continue
@@ -356,6 +359,8 @@ def loop_dynamic_access_counts(path: Path) -> dict[str, int]:
             counts["getattr"] += 1
         elif isinstance(node.func, ast.Name) and node.func.id == "setattr":
             counts["setattr"] += 1
+        elif isinstance(node.func, ast.Name) and node.func.id == "vars":
+            counts["dict_access"] += 1
     return counts
 
 
@@ -386,7 +391,7 @@ def test_loop_dynamic_access_is_forbidden():
 
 
 def test_runtime_state_groups_do_not_expose_any_typed_fields():
-    path = ROOT / "agent" / "turn" / "runtime_state.py"
+    path = ROOT / "agent" / "turn" / "runtime_state_models.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     state_classes = {
         "TurnRuntimeState",
@@ -404,9 +409,11 @@ def test_runtime_state_groups_do_not_expose_any_typed_fields():
             for item in ast.walk(annotation)
         )
 
+    found: set[str] = set()
     for node in tree.body:
         if not isinstance(node, ast.ClassDef) or node.name not in state_classes:
             continue
+        found.add(node.name)
         for item in node.body:
             if not isinstance(item, ast.AnnAssign):
                 continue
@@ -414,6 +421,24 @@ def test_runtime_state_groups_do_not_expose_any_typed_fields():
             if uses_any(item.annotation):
                 field_name = ast.unparse(item.target)
                 violations[f"{node.name}.{field_name}"] = annotation
+    assert found == state_classes, sorted(state_classes - found)
+    assert not violations, violations
+
+
+def test_runtime_state_has_no_reflective_fallback_api():
+    """Typed properties are the only compatibility surface for loop state."""
+    violations: dict[str, list[str]] = {}
+    for path in sorted((ROOT / "agent" / "turn").glob("runtime_state*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        bad: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == "StateGroup":
+                bad.append(f"{path.name}:StateGroup")
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.name in {"__getattr__", "__setattr__", "update_runtime_state"}:
+                    bad.append(f"{path.name}:{node.name}")
+        if bad:
+            violations[path.name] = bad
     assert not violations, violations
 
 

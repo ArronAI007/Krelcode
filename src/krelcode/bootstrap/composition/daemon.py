@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from krelcode.core.redact import SecretRedactor
 from krelcode.mcp.supervisor import MCPSupervisor
 
 from ...agent.prompt_surface_contract import PromptSurfaceExecutor
+from ...agent.turn.runtime_services import MCPServicePort
 from ..parser import build_parser as _build_parser
 from .mcp import build_mcp_roots, build_mcp_sampler, compose_mcp_config
 from .runtime import build_loop
@@ -68,7 +69,7 @@ async def build_daemon_agent_runtime(
         await supervisor.sync(
             compose_mcp_config(request.config, dict(plugins.mcp_servers))
         )
-        loop.update_runtime_state(mcp_supervisor=supervisor)
+        loop.mcp_supervisor = cast(MCPServicePort, supervisor)
         loop.sync_context_attachments(include_mcp=True)
     return DaemonAgentRuntime(
         loop=loop,

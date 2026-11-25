@@ -166,32 +166,15 @@ class AgentLoop(RuntimeStateHost):
         self.repeat_failure_limit = repeat_failure_limit
         self.tool_output_inline_limit = tool_output_inline_limit
         self.token_budget = token_budget
-        self.runtime_snapshot_provider = runtime_snapshot_provider
+        self.services.core.runtime_snapshot_provider = runtime_snapshot_provider
         self.step_gate = step_gate
 
-        # Mutable state owned by this loop.
-        self.context_engine = str(
+        # Mutable state is initialized by AgentRuntimeState.  Only constructor
+        # inputs override the typed defaults here.
+        self.runtime_state.context.context_engine = str(
             getattr(self.services.context.assembler, "engine", "v3") or "v3")
-        self.last_reminder_selection: Optional[ReminderSelection] = None
-        self._turn_reminder_selection: Optional[ReminderSelection] = None
-        self._turn_requested_reminder_ids: tuple[str, ...] = ()
-        self.runtime_context: List[str] = []
-        self._token_total = 0
-        self._failure_counts: Dict[str, int] = {}
-        self._turn_intent = TurnIntent()
-        self._turn_workflow: Optional[TaskWorkflowSelection] = None
-        self._active_tool_pool: Optional[TurnToolPool] = None
-        self._turn_tool_context = tool_context
-        self._turn_abort_signal = TurnAbortSignal()
-        self._turn_counter = count(1)
-        self._direct_counter = count(1)
-        self._current_turn_id = ""
-        self._input_counter: Iterator[int] = count(1)
-        self._turn_prepared = False
-        self.pending_context_refresh = False
-        self.workspace_context: Optional[WorkspaceContext] = None
-        self.steering_queue: asyncio.Queue[SteeringInput | str] = asyncio.Queue()
-        self.history: List[Message] = (
+        self.runtime_state.turn.turn_tool_context = tool_context
+        self.runtime_state.turn.history = (
             [Message.system(system_prompt)] if system_prompt else []
         )
 
@@ -535,6 +518,10 @@ class AgentLoop(RuntimeStateHost):
 
     def _current_context_usage_ratio(self) -> float:
         return self.context_coordinator.current_context_usage_ratio()
+
+    def invalidate_tool_pool(self) -> None:
+        """Drop the current capability snapshot after a permission change."""
+        self.runtime_state.turn.active_tool_pool = None
 
     def abort_current_turn(self, reason: str = "用户中止") -> None:
         """向正在执行的工具广播协作式取消；Task.cancel 仍由 Runtime 负责。"""

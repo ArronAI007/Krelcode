@@ -34,6 +34,13 @@ from krelcode.agent.prompt.prompt_release_pipeline import (
 )
 from krelcode.agent.prompt.prompt_surface_catalog import refresh_prompt_surfaces
 from krelcode.agent.turn.loop import AgentLoop
+from krelcode.agent.turn.runtime_services import (
+    BrowserRuntimeServicePort,
+    MCPServicePort,
+    OutputStyleServicePort,
+    PluginServicePort,
+    WebRuntimeServicePort,
+)
 from krelcode.contracts.service_ports import PrincipalPort
 from krelcode.contracts.tool import Tool, ToolDescriptor, ToolSource
 from krelcode.enterprise.policy import EnterprisePolicy
@@ -370,36 +377,32 @@ async def build_loop(
     # Subagent instruction inheritance compares rule/policy hashes from the
     # parent's latest real request; history remains intentionally separate.
     manager.cache_ledger_provider = lambda: loop.last_context_cache_ledger
-    loop.update_runtime_state(
-        prompt_release_pipeline=prompt_release_pipeline,
-        prompt_release_approval_service=prompt_release_approval_service,
-        skill_manager=skill_manager,
-        plugin_manager=plugin_manager,
-        custom_command_manager=custom_commands,
-        agent_definitions=agent_definitions,
-        base_skill_paths=tuple(base_skill_paths),
-        prompt_registry=prompt_registry,
-        prompt_profile=prompt_profile_resolution.profile,
-        prompt_profile_resolution=prompt_profile_resolution,
-        prompt_profile_name=prompt_profile_resolution.name,
-        prompt_profile_config=prompt_profile_setting,
-        prompt_authoring_enabled=prompt_authoring_enabled,
-        context_options=context_options,
-        context_engine=context_options.engine,
-        context_enabled=not args.no_context,
-        workspace_context=workspace_context,
-        rule_loader=rule_loader,
-        directory_rule_source=directory_rule_source,
-        lsp_manager=lsp_manager,
-        output_style_manager=output_style_manager,
-        web_runtime=web_runtime,
-        browser_runtime=browser_runtime,
-        notebook_options=notebook_options,
-        migration_options=migration_options,
-        status_line_renderer=StatusLineRenderer(
-            StatusLineOptions.from_config(config.get("status_line"))
-        ),
-    )
+    loop.prompt_release_pipeline = prompt_release_pipeline
+    loop.prompt_release_approval_service = prompt_release_approval_service
+    loop.skill_manager = skill_manager
+    loop.plugin_manager = cast(PluginServicePort, plugin_manager)
+    loop.custom_command_manager = custom_commands
+    loop.agent_definitions = agent_definitions
+    loop.base_skill_paths = tuple(str(path) for path in base_skill_paths)
+    loop.prompt_registry = prompt_registry
+    loop.prompt_profile = prompt_profile_resolution.profile
+    loop.prompt_profile_resolution = prompt_profile_resolution
+    loop.prompt_profile_name = prompt_profile_resolution.name
+    loop.prompt_profile_config = prompt_profile_setting
+    loop.prompt_authoring_enabled = prompt_authoring_enabled
+    loop.context_options = context_options
+    loop.context_engine = context_options.engine
+    loop.context_enabled = not args.no_context
+    loop.workspace_context = workspace_context
+    loop.rule_loader = rule_loader
+    loop.directory_rule_source = directory_rule_source
+    loop.lsp_manager = lsp_manager
+    loop.output_style_manager = cast(OutputStyleServicePort, output_style_manager)
+    loop.web_runtime = cast(WebRuntimeServicePort, web_runtime)
+    loop.browser_runtime = cast(BrowserRuntimeServicePort, browser_runtime)
+    loop.notebook_options = notebook_options
+    loop.migration_options = migration_options
+    loop.status_line_renderer = StatusLineRenderer(StatusLineOptions.from_config(config.get('status_line')))
     loop.sync_context_attachments(include_mcp=False)
     context_coordinator = None
     if context_checkpoint_store is not None:
@@ -416,12 +419,7 @@ async def build_loop(
     from ...review import review_prompt_surface
     from ...security_review.surfaces import security_review_prompt_surface
 
-    loop.update_runtime_state(
-        auxiliary_prompt_surfaces=(
-            review_prompt_surface(),
-            security_review_prompt_surface(),
-        ),
-    )
+    loop.auxiliary_prompt_surfaces = (review_prompt_surface(), security_review_prompt_surface())
     refresh_prompt_surfaces(loop)
 
     suggest_threshold, auto_threshold = resolve_auto_memory_thresholds(args, config)
@@ -435,10 +433,10 @@ async def build_loop(
         log=log,
     )
     auto_memory.attach(bus)
-    loop.update_runtime_state(auto_memory=auto_memory)
+    loop.auto_memory = auto_memory
 
     extension_registry = ExtensionRegistry()
-    loop.update_runtime_state(extension_registry=extension_registry)
+    loop.extension_registry = extension_registry
 
     def refresh_extensions_basic() -> Tuple[ExtensionRecord, ...]:
         result = replace_runtime_extensions(
@@ -476,10 +474,8 @@ async def build_loop(
         refresh_extensions_basic()
         return records
 
-    loop.update_runtime_state(
-        extension_refresh=refresh_extensions_basic,
-        plugin_reload=reload_plugins,
-    )
+    loop.extension_refresh = refresh_extensions_basic
+    loop.plugin_reload = reload_plugins
     services = RuntimeServices(
         redactor=redactor,
         enterprise_policy=policy,

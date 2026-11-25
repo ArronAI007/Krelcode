@@ -32,8 +32,8 @@ def fake_loop(tmp_path, mode=PermissionMode.DEFAULT):
         tool_context=ctx,
         _turn_tool_context=ctx,
         _active_tool_pool=None,
+        invalidate_tool_pool=lambda: None,
         sync_context_attachments=lambda **_: None,
-        update_runtime_state=lambda **values: loop.__dict__.update(values),
     )
     return loop
 

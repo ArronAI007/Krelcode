@@ -57,8 +57,7 @@ class AgentRuntime:
         self._query: Optional[QuerySession] = None
         self._closed = False
         self.query_engine = QueryEngine(loop)
-        loop.update_runtime_state(
-            runtime_snapshot_provider=self._runtime_snapshot)
+        loop.runtime_snapshot_provider = self._runtime_snapshot
 
     def _runtime_snapshot(self, base: RuntimeSnapshot) -> RuntimeSnapshot:
         """每轮开始时刷新 MCP 健康状态，其余配置保持不可变快照。"""

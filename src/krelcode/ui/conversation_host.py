@@ -103,7 +103,7 @@ class ConversationHost:
     ) -> None:
         if (input_broker is not None
                 and loop.services.core.user_input_port is None):
-            loop.update_runtime_state(user_input_port=input_broker)
+            loop.user_input_port = input_broker
         self.runtime = runtime or AgentRuntime(
             loop,
             subagents=subagents,
@@ -151,7 +151,7 @@ class ConversationHost:
         if configured_memory is None:
             self.memory_store = MemoryStore(
                 self.loop.tool_context.workspace_root, redactor=redactor)
-            self.loop.update_runtime_state(memory_store=self.memory_store)
+            self.loop.memory_store = self.memory_store
         else:
             self.memory_store = cast(MemoryStore, configured_memory)
             self.memory_store.redactor = redactor

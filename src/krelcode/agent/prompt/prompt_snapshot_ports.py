@@ -2,30 +2,22 @@
 
 from __future__ import annotations
 
-from typing import Any, Generic, Optional, Protocol, TypeVar
+from typing import Generic, Optional, Protocol, TypeVar
 
 from krelcode.core.messages import Message
 
 
 
-SnapshotT = TypeVar("SnapshotT", covariant=True)
-RegistryT = TypeVar("RegistryT", covariant=True)
+SnapshotT = TypeVar("SnapshotT")
+RegistryT = TypeVar("RegistryT")
 
 
 class PromptSnapshotHostPort(Protocol, Generic[SnapshotT, RegistryT]):
-    @property
-    def history(self) -> list[Message]: ...
+    history: list[Message]
+    prompt_snapshot: Optional[SnapshotT]
+    skill_base_prompt: str
+    prompt_registry: Optional[RegistryT]
 
-    @property
-    def prompt_snapshot(self) -> Optional[SnapshotT]: ...
-
-    @property
-    def skill_base_prompt(self) -> str: ...
-
-    @property
-    def prompt_registry(self) -> Optional[RegistryT]: ...
-
-    def update_runtime_state(self, **values: Any) -> None: ...
 
 
 __all__ = ["PromptSnapshotHostPort", "RegistryT", "SnapshotT"]

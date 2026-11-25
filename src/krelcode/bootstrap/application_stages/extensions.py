@@ -5,6 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Tuple, cast
 
+from ...agent.turn.runtime_services import (
+    CommandServicePort,
+    ExtensionRegistryServicePort,
+    PluginServicePort,
+    SkillServicePort,
+)
+
 from ...agent.prompt_surface_catalog import refresh_prompt_surfaces
 from ...extensions import ExtensionRecord, ExtensionRegistry, replace_runtime_extensions
 from ...plugins import PluginManager, PluginRecord
@@ -50,18 +57,23 @@ def build_extension_services(
     registry = context_services.input_processor.command_registry
     custom_commands = cast(CustomCommandManager, loop.custom_command_manager)
 
-    loop.update_runtime_state(command_registry=registry)
+    loop.command_registry = cast(CommandServicePort, registry)
     sync_custom_commands(registry, custom_commands)
     sync_plugin_commands(registry, loop.plugin_manager)
     sync_skill_commands(registry, loop.skill_manager)
     sync_mcp_prompt_commands(registry, supervisor)
 
+    plugin_manager = cast(PluginManager, loop.plugin_manager)
+    skill_manager = cast(SkillManager, loop.skill_manager)
+    agent_definitions = cast(AgentDefinitionManager, loop.agent_definitions)
+    extension_registry = cast(ExtensionRegistry, loop.extension_registry)
+
     def refresh_extensions() -> Tuple[ExtensionRecord, ...]:
         result = replace_runtime_extensions(
-            loop.extension_registry,
-            plugins=loop.plugin_manager,
-            skills=loop.skill_manager,
-            agents=loop.agent_definitions,
+            extension_registry,
+            plugins=plugin_manager,
+            skills=skill_manager,
+            agents=agent_definitions,
             tools=loop.registry,
             commands=registry,
             hooks=context_services.hooks,
@@ -75,7 +87,7 @@ def build_extension_services(
         )
         return result
 
-    loop.update_runtime_state(extension_refresh=refresh_extensions)
+    loop.extension_refresh = refresh_extensions
 
     async def refresh_mcp_prompt_commands() -> None:
         sync_mcp_prompt_commands(registry, supervisor)
@@ -85,7 +97,7 @@ def build_extension_services(
     refresh_extensions()
 
     def reload_skills() -> SkillReloadReport:
-        report = cast(SkillReloadReport, loop.skill_manager.reload())
+        report = skill_manager.reload()
         refresh_skill_system_prompt(loop)
         sync_skill_commands(registry, loop.skill_manager)
         refresh_extensions()
@@ -97,7 +109,7 @@ def build_extension_services(
         refresh_extensions()
         return custom_commands
 
-    loop.update_runtime_state(custom_commands_reload=reload_custom_commands)
+    loop.custom_commands_reload = reload_custom_commands
 
     base_plugin_reload = cast(
         Callable[[], Awaitable[Tuple[PluginRecord, ...]]],
@@ -115,12 +127,12 @@ def build_extension_services(
         refresh_extensions()
         return records
 
-    loop.update_runtime_state(plugin_reload=reload_plugins)
+    loop.plugin_reload = reload_plugins
     return ExtensionServices(
-        plugin_manager=loop.plugin_manager,
-        skill_manager=loop.skill_manager,
-        agent_definitions=loop.agent_definitions,
-        extension_registry=loop.extension_registry,
+        plugin_manager=plugin_manager,
+        skill_manager=skill_manager,
+        agent_definitions=agent_definitions,
+        extension_registry=extension_registry,
         custom_commands=custom_commands,
         refresh=refresh_extensions,
         reload_skills=cast(SkillReloadPort, reload_skills),

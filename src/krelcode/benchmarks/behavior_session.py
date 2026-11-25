@@ -176,20 +176,18 @@ class BehaviorSession:
             working_context_store=working_context,
             redactor=self.redactor,
         )
-        loop.update_runtime_state(
-            prompt_registry=prompt_registry,
-            prompt_snapshot=prompt_snapshot,
-            prompt_profile=profile.profile,
-            prompt_profile_resolution=profile,
-            prompt_profile_name=profile.name,
-            context_options=context_options,
-            context_engine="v3",
-            context_enabled=True,
-            workspace_context=workspace_context,
-            rule_loader=rule_loader,
-            memory_store=self.memory_store,
-            skill_manager=None,
-        )
+        loop.prompt_registry = prompt_registry
+        loop.prompt_snapshot = prompt_snapshot
+        loop.prompt_profile = profile.profile
+        loop.prompt_profile_resolution = profile
+        loop.prompt_profile_name = profile.name
+        loop.context_options = context_options
+        loop.context_engine = 'v3'
+        loop.context_enabled = True
+        loop.workspace_context = workspace_context
+        loop.rule_loader = rule_loader
+        loop.memory_store = self.memory_store
+        loop.skill_manager = None
         loop.sync_context_attachments(include_mcp=False)
         apply_prompt_snapshot(loop, prompt_snapshot)
         refresh_prompt_surfaces(loop)

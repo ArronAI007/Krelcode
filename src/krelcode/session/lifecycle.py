@@ -155,7 +155,7 @@ class SessionLifecycle:
         parent_id = self.session_path.stem if self.session_path else ""
         source_session_id = parent_id
         if history is not None:
-            self.loop.update_runtime_state(history=list(history))
+            self.loop.history = list(history)
         self.loop.rebuild_working_context()
         path = new_session_path(self.sessions_dir)
         memory_store = self.loop.services.session.memory

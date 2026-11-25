@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping, Optional, Sequence, cast
 
-from krelcode.agent.context.context_checkpoint_ports import WorkingContextPort
+from krelcode.agent.context.context_ports import WorkingContextPort
 from krelcode.agent.context.context_plan import ContextPlanSnapshot, history_digest
 from krelcode.agent.value_utils import nonnegative_float, nonnegative_int
 from krelcode.core.codec import history_from_dicts, history_to_dicts

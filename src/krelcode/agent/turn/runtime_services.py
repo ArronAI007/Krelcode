@@ -199,6 +199,15 @@ class OutputStyleServicePort(Protocol):
     def status_lines(self) -> Sequence[str]: ...
 
 
+class RuntimeServiceBinderPort(Protocol):
+    @property
+    def redactor(self) -> "SecretRedactor": ...
+
+    def add_secret(self, secret: Optional[str]) -> None: ...
+
+    def add_secrets(self, secrets: Sequence[str]) -> None: ...
+
+
 class ExtensionRegistryServicePort(Protocol):
     def status_lines(
         self,
@@ -219,6 +228,8 @@ class TelemetryConfigServicePort(Protocol):
 
 class TelemetryServicePort(Protocol):
     config: TelemetryConfigServicePort
+
+    def set_identity(self, provider: str, model: str) -> None: ...
 
     def status(self) -> Mapping[str, object]: ...
 
@@ -337,91 +348,6 @@ class AgentServices:
     extensions: ExtensionRuntimeServices
     session: SessionRuntimeServices
 
-    def has_field(self, name: str) -> bool:
-        return name in _SERVICE_FIELDS
-
-    def get_field(self, name: str, default: Any = None) -> Any:
-        location = _SERVICE_FIELDS.get(name)
-        if location is None:
-            return default
-        group_name, field_name = location
-        group = getattr(self, group_name)
-        return getattr(group, field_name, default)
-
-    def set_field(self, name: str, value: Any) -> None:
-        location = _SERVICE_FIELDS.get(name)
-        if location is None:
-            raise AttributeError(name)
-        group_name, field_name = location
-        group = getattr(self, group_name)
-        setattr(group, field_name, value)
-
-    def update(self, **values: Any) -> None:
-        for name, value in values.items():
-            self.set_field(name, value)
-
-
-# Legacy attribute name -> (service group, typed field).  This is the only
-# allowed translation table for the compatibility view; new production code
-# must use ``loop.services.<group>.<field>`` directly.
-_SERVICE_FIELDS: dict[str, tuple[str, str]] = {
-    "llm": ("core", "llm"),
-    "registry": ("core", "registry"),
-    "tool_context": ("core", "tool_context"),
-    "bus": ("core", "bus"),
-    "policy": ("core", "policy"),
-    "redactor": ("core", "redactor"),
-    "hook_port": ("core", "hook_port"),
-    "user_input_port": ("core", "user_input_port"),
-    "runtime_snapshot_provider": ("core", "runtime_snapshot_provider"),
-    "context_manager": ("context", "manager"),
-    "context_assembler": ("context", "assembler"),
-    "working_context_store": ("context", "working_context"),
-    "tool_microcompactor": ("context", "tool_microcompactor"),
-    "reminder_catalog": ("context", "reminder_catalog"),
-    "compact_checkpoint_store": ("context", "compact_checkpoint"),
-    "context_checkpoint_store": ("context", "checkpoint"),
-    "context_checkpoint_coordinator": ("context", "checkpoint_coordinator"),
-    "rule_loader": ("context", "rule_loader"),
-    "directory_rule_source": ("context", "directory_rule_source"),
-    "prompt_assembler": ("prompt", "assembler"),
-    "prompt_registry": ("prompt", "registry"),
-    "prompt_surface_registry": ("prompt", "surface_registry"),
-    "skill_manager": ("extensions", "skills"),
-    "plugin_manager": ("extensions", "plugins"),
-    "command_registry": ("extensions", "commands"),
-    "agent_definitions": ("extensions", "agents"),
-    "mcp_supervisor": ("extensions", "mcp"),
-    "custom_command_manager": ("extensions", "custom_commands"),
-    "output_style_manager": ("extensions", "output_styles"),
-    "lsp_manager": ("extensions", "lsp"),
-    "web_runtime": ("extensions", "web"),
-    "browser_runtime": ("extensions", "browser"),
-    "auto_memory": ("extensions", "auto_memory"),
-    "telemetry": ("extensions", "telemetry"),
-    "auditor": ("extensions", "auditor"),
-    "extension_registry": ("extensions", "extension_registry"),
-    "base_skill_paths": ("extensions", "base_skill_paths"),
-    "extension_refresh": ("extensions", "extension_refresh"),
-    "plugin_reload": ("extensions", "plugin_reload"),
-    "custom_commands_reload": ("extensions", "custom_commands_reload"),
-    "notebook_options": ("extensions", "notebook_options"),
-    "migration_options": ("extensions", "migration_options"),
-    "status_line_renderer": ("extensions", "status_line_renderer"),
-    "prompt_release_pipeline": ("extensions", "prompt_release_pipeline"),
-    "prompt_release_approval_service": (
-        "extensions", "prompt_release_approval_service"),
-    "runtime_service_binder": ("extensions", "runtime_service_binder"),
-    "runtime_services": ("extensions", "runtime_services"),
-    "memory_store": ("session", "memory"),
-    "session_recorder": ("session", "recorder"),
-    "principal": ("session", "principal"),
-    "enterprise_policy": ("session", "enterprise_policy"),
-}
-
-
-SERVICE_FIELD_NAMES = frozenset(_SERVICE_FIELDS)
-
 
 __all__ = [
     "AgentDefinitionServicePort",
@@ -439,10 +365,10 @@ __all__ = [
     "MemoryEntryServicePort",
     "MemoryServicePort",
     "PluginServicePort",
+    "RuntimeServiceBinderPort",
     "OutputStyleEntryServicePort",
     "OutputStyleServicePort",
     "PromptRuntimeServices",
-    "SERVICE_FIELD_NAMES",
     "SessionRecorderPort",
     "SessionRuntimeServices",
     "SkillServicePort",

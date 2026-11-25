@@ -37,15 +37,13 @@ def test_runtime_state_groups_are_the_owned_source_of_truth(tmp_path: Path):
     assert loop.services.context.working_context is loop.working_context_store
     assert loop.services.prompt.assembler is loop.prompt_assembler
 
-    loop.update_runtime_state(
-        pending_context_refresh=True,
-        prompt_profile_name="deepseek",
-        skill_manager=skill_manager,
-        memory_store=memory_store,
-        status_line_renderer=status_renderer,
-        base_skill_paths=("skills",),
-        extension_refresh=extension_refresh,
-    )
+    loop.pending_context_refresh = True
+    loop.prompt_profile_name = "deepseek"
+    loop.skill_manager = skill_manager
+    loop.memory_store = memory_store
+    loop.status_line_renderer = status_renderer
+    loop.base_skill_paths = ("skills",)
+    loop.extension_refresh = extension_refresh
 
     assert loop.runtime_state.context.pending_context_refresh is True
     assert loop.pending_context_refresh is True
@@ -59,30 +57,15 @@ def test_runtime_state_groups_are_the_owned_source_of_truth(tmp_path: Path):
     assert loop.skill_manager is skill_manager
     assert loop.memory_store is memory_store
     assert loop.status_line_renderer is status_renderer
-    assert not loop.runtime_state.has_field("skill_manager")
-    assert not loop.runtime_state.has_field("memory_store")
-    assert not loop.runtime_state.has_field("status_line_renderer")
-    assert not loop.runtime_state.has_field("extension_refresh")
 
 
-def test_runtime_state_update_keeps_dependency_container_in_sync(tmp_path: Path):
+def test_runtime_service_assignment_keeps_dependency_container_in_sync(tmp_path: Path):
     loop = _loop(tmp_path)
     original = loop.dependencies.llm
     replacement = MockProvider(scripted=["replacement"])
 
-    loop.update_runtime_state(llm=replacement)
+    loop.llm = replacement
 
     assert loop.dependencies.llm is replacement
     assert loop.runtime_state.turn.current_turn_id == ""
     assert original is not replacement
-
-
-def test_runtime_state_update_rejects_unknown_attributes(tmp_path: Path):
-    loop = _loop(tmp_path)
-
-    try:
-        loop.update_runtime_state(not_an_owned_field=True)
-    except AttributeError as exc:
-        assert str(exc) == "not_an_owned_field"
-    else:
-        raise AssertionError("unknown runtime state was accepted")

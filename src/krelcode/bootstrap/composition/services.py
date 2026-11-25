@@ -98,22 +98,18 @@ class RuntimeServiceBinder:
         self._bind_persistence(loop)
         self._bind_redaction(loop, subagents)
         self._bind_policy(loop, subagents)
-        loop.update_runtime_state(
-            runtime_service_binder=self,
-            runtime_services=self.services,
-        )
+        loop.runtime_service_binder = self
+        loop.runtime_services = self.services
         if loop.services.prompt.registry is not None:
             sync_memory_fragment(loop, self.services.persistence.memory_store)
 
     def _bind_persistence(self, loop: AgentLoop) -> None:
         persistence = self.services.persistence
-        loop.update_runtime_state(
-            memory_store=persistence.memory_store,
-            context_checkpoint_store=persistence.context_checkpoint_store,
-            context_checkpoint_coordinator=(persistence.context_checkpoint_coordinator),
-            working_context_store=persistence.working_context_store,
-            compact_checkpoint_store=persistence.compact_checkpoint_store,
-        )
+        loop.memory_store = persistence.memory_store
+        loop.context_checkpoint_store = persistence.context_checkpoint_store
+        loop.context_checkpoint_coordinator = persistence.context_checkpoint_coordinator
+        loop.working_context_store = persistence.working_context_store
+        loop.compact_checkpoint_store = persistence.compact_checkpoint_store
         loop.tool_context.shell_jobs = cast(
             Optional[ShellJobManagerPort], persistence.shell_jobs
         )
@@ -124,7 +120,7 @@ class RuntimeServiceBinder:
         subagents: Optional[object],
     ) -> None:
         redactor = self.services.redactor
-        loop.update_runtime_state(redactor=redactor)
+        loop.redactor = redactor
         loop.services.context.working_context.redactor = redactor.redact
         if self.services.context_manager is not None:
             self.services.context_manager.redactor = redactor
@@ -158,11 +154,9 @@ class RuntimeServiceBinder:
     ) -> None:
         enterprise_policy = self.services.enterprise_policy
         principal = self.services.principal
-        loop.update_runtime_state(
-            policy=self.services.approval_policy,
-            enterprise_policy=enterprise_policy,
-            principal=principal,
-        )
+        loop.policy = self.services.approval_policy
+        loop.enterprise_policy = enterprise_policy
+        loop.principal = principal
         loop.tool_context.enterprise_policy = enterprise_policy
         loop.tool_context.principal = principal
         if subagents is None:

@@ -49,7 +49,8 @@ class RuntimeLoopPort(Protocol):
 
     tool_context: ToolContext
     _turn_tool_context: ToolContext
-    def update_runtime_state(self, **values: object) -> None: ...
+
+    def invalidate_tool_pool(self) -> None: ...
 
     def sync_context_attachments(
         self,
@@ -125,13 +126,8 @@ class RuntimePermissionManager:
         # 本 turn 的工具池已经固化，但策略层仍应读取最新模式；否则运行中
         # Shift-Tab 会出现“界面已切换、实际审批仍沿用旧模式”的假象。
         turn_context = self.loop._turn_tool_context
-        self.loop.update_runtime_state(
-            _turn_tool_context=replace(
-                turn_context,
-                runtime=replace(turn_context.runtime, permission_mode=mode),
-            ),
-            _active_tool_pool=None,
-        )
+        self.loop._turn_tool_context = replace(turn_context, runtime=replace(turn_context.runtime, permission_mode=mode))
+        self.loop.invalidate_tool_pool()
         # Capability filtering is part of the same permission boundary.  Drop
         # the turn pool so the next model/tool step is rebuilt from the new
         # runtime snapshot instead of advertising a stale write capability.

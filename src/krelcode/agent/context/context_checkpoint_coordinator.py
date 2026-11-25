@@ -130,7 +130,7 @@ class ContextCheckpointCoordinator:
     ) -> Optional[ContextCheckpoint]:
         root = Path(self.loop.tool_context.workspace_root)
         plan = (
-            cast(ContextPlanSnapshot, self.loop.last_context_plan)
+            self.loop.last_context_plan
             if self.loop.last_context_plan is not None
             else None
         )

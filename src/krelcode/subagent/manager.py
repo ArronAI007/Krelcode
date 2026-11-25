@@ -30,6 +30,7 @@ from ..agent.fragments import (
     apply_prompt_snapshot,
 )
 from ..agent.loop import DEFAULT_MAX_STEPS, AgentLoop
+from ..agent.turn.runtime_state import InstructionLayerPort
 from ..agent.tool_pool import normalize_tool_allowlist
 from ..agent.prompt_release import ModelProfileCalibration
 from ..agent.prompts import PROMPT_PROFILE_AUTO, resolve_prompt_profile
@@ -399,33 +400,28 @@ class SubagentManager(SubagentReadMixin):
             step_gate=control.wait_if_paused,
             working_context_store=own_working_context,
         )
-        loop.update_runtime_state(
-            prompt_registry=prompt_registry,
-            prompt_profile=prompt_resolution.profile,
-            prompt_profile_resolution=prompt_resolution,
-            prompt_profile_name=prompt_resolution.name,
-            subagent_definition_name=(
-                definition_obj.name if definition_obj is not None else ""),
-        )
+        loop.prompt_registry = prompt_registry
+        loop.prompt_profile = prompt_resolution.profile
+        loop.prompt_profile_resolution = prompt_resolution
+        loop.prompt_profile_name = prompt_resolution.name
+        loop.subagent_definition_name = definition_obj.name if definition_obj is not None else ''
         apply_prompt_snapshot(loop, prompt_snapshot)
 
         effective_task = task
         forked = bool(fork_context)
-        loop.update_runtime_state(
-            subagent_instruction_layers=instruction_bundle.layers,
-            inherited_memory_ids=memory_ids,
-            parent_history_inherited=False,
+        loop.subagent_instruction_layers = cast(
+            tuple[InstructionLayerPort, ...], instruction_bundle.layers
         )
+        loop.inherited_memory_ids = memory_ids
+        loop.parent_history_inherited = False
         parent_ledger = (
             self.cache_ledger_provider()
             if self.cache_ledger_provider is not None else None
         )
         parent_policy_hash = str(getattr(
             parent_ledger, "policy_instruction_hash", "") or "")
-        loop.update_runtime_state(
-            cache_ledger_owner=f"subagent:{agent_id}",
-            parent_policy_instruction_hash=parent_policy_hash,
-        )
+        loop.cache_ledger_owner = f'subagent:{agent_id}'
+        loop.parent_policy_instruction_hash = parent_policy_hash
 
         context_store_directory = (
             tool_context.workspace_root / ".krelcode" / "context-checkpoints"
@@ -436,7 +432,7 @@ class SubagentManager(SubagentReadMixin):
             redactor=self.redactor,
             directory=context_store_directory,
         )
-        loop.update_runtime_state(context_checkpoint_store=child_context_store)
+        loop.context_checkpoint_store = child_context_store
         child_context_coordinator = ContextCheckpointCoordinator(
             loop=loop,
             store=child_context_store,
@@ -446,8 +442,7 @@ class SubagentManager(SubagentReadMixin):
             capture_workspace=False,
         )
         child_context_coordinator.attach(child_bus)
-        loop.update_runtime_state(
-            context_checkpoint_coordinator=child_context_coordinator)
+        loop.context_checkpoint_coordinator = child_context_coordinator
 
         feed = AgentFeed(
             agent_id,

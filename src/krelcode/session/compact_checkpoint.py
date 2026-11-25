@@ -21,6 +21,8 @@ from ..core.redact import SecretRedactor
 from ..contracts.tool import ToolContext
 from .codec import history_from_dicts, history_to_dicts
 if TYPE_CHECKING:
+    from ..agent.context.context_checkpoint_models import FileIntegrity
+    from ..agent.turn.runtime_ports import CompactCheckpointResultPort
     from ..agent.turn.runtime_services import AgentServices
 
 
@@ -40,11 +42,13 @@ _SUPPORTED_COMPACT_CHECKPOINT_VERSIONS = {1, COMPACT_CHECKPOINT_VERSION}
 class CompactCheckpointHostPort(Protocol):
     history: list[Message]
     tool_context: ToolContext
+    last_compact_checkpoint: "CompactCheckpointResultPort | None"
+    context_integrity: "FileIntegrity | None"
+    pending_context_refresh: bool
 
     @property
     def services(self) -> object: ...
 
-    def update_runtime_state(self, **values: object) -> None: ...
     def rebuild_working_context(self) -> object: ...
 
 
@@ -303,7 +307,7 @@ def restore_compact_checkpoint(
     checkpoint: CompactCheckpoint,
 ) -> FileIntegrity:
     """Restore the exact pre-compact task scene and invalidate stale files."""
-    loop.update_runtime_state(last_compact_checkpoint=checkpoint)
+    loop.last_compact_checkpoint = checkpoint
     services = cast("AgentServices", loop.services)
     store = services.context.working_context
     raw_entries = checkpoint.working_context.get("entries")
@@ -319,12 +323,12 @@ def restore_compact_checkpoint(
         store.invalidate_files(
             integrity.stale, reason="compact-file-hash-mismatch")
         snapshot = store.snapshot()
-    loop.update_runtime_state(context_integrity=integrity)
+    loop.context_integrity = integrity
 
     manager = services.context.manager
     if manager is not None:
         manager.rebuild_state(loop.history)
-    loop.update_runtime_state(pending_context_refresh=True)
+    loop.pending_context_refresh = True
     return integrity
 
 

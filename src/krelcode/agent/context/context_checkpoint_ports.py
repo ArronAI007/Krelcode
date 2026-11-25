@@ -2,46 +2,32 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Protocol, Sequence
 
+from krelcode.agent.context.context_ports import (
+    WorkingContextPort,
+    WorkingEntryPort,
+)
 from krelcode.core.events import EventBus
 from krelcode.core.messages import Message
 from krelcode.contracts.tool import ToolContext
+
+if TYPE_CHECKING:
+    from krelcode.agent.context.compression import ContextManager
+    from krelcode.agent.context.context_cache_ledger import ContextCacheLedger
+    from krelcode.agent.context.working_context import WorkingContextSnapshot
+    from krelcode.agent.context.context_checkpoint_models import (
+        ContextRestoreResult,
+        FileIntegrity,
+        WorkspaceFingerprint,
+    )
+    from krelcode.agent.context.context_plan import ContextPlanSnapshot
+    from krelcode.agent.turn.runtime_ports import CompactCheckpointResultPort
 
 class ContextPlanPort(Protocol):
     @property
     def full_hash(self) -> str: ...
     def as_dict(self) -> Mapping[str, object]: ...
-
-
-class WorkingEntryPort(Protocol):
-    @property
-    def kind(self) -> str: ...
-    @property
-    def content(self) -> str: ...
-    @property
-    def metadata(self) -> Mapping[str, object]: ...
-
-
-class WorkingContextPort(Protocol):
-    @property
-    def text(self) -> str: ...
-    @property
-    def count(self) -> int: ...
-    @property
-    def entries(self) -> Sequence[WorkingEntryPort]: ...
-    @property
-    def truncated(self) -> bool: ...
-    @property
-    def dropped_entries(self) -> int: ...
-    @property
-    def counts_by_kind(self) -> Mapping[str, int]: ...
-    @property
-    def sequence(self) -> int: ...
-    @property
-    def token_count(self) -> int: ...
-
-    def as_checkpoint_record(self) -> Mapping[str, object]: ...
 
 
 class MemoryEntryPort(Protocol):
@@ -197,64 +183,28 @@ class CheckpointLoopPort(Protocol):
     @property
     def services(self) -> CheckpointRuntimeServicesPort: ...
 
-    @property
-    def history(self) -> list[Message]: ...
-
-    @property
-    def skill_base_prompt(self) -> str: ...
-
-    @property
-    def tool_context(self) -> ToolContext: ...
-
-    @property
-    def context_manager(self) -> Optional[ContextManagerRestorePort]: ...
-
+    history: list[Message]
+    skill_base_prompt: str
+    tool_context: ToolContext
+    context_manager: Optional["ContextManager"]
     @property
     def working_context_store(self) -> WorkingStorePort: ...
+    last_compact_checkpoint: Optional[CompactCheckpointResultPort]
+    last_context_restore: Optional["ContextRestoreResult"]
+    last_context_plan: Optional["ContextPlanSnapshot"]
+    last_context_cache_ledger: Optional["ContextCacheLedger"]
+    previous_context_cache_ledger: Optional["ContextCacheLedger"]
+    pending_context_refresh: bool
+    restored_memory_context: tuple[str, ...]
+    restored_relevant_memory_ids: tuple[str, ...]
+    restored_context_checkpoint_id: str
+    context_integrity: Optional["FileIntegrity"]
+    context_workspace_fingerprint: Optional["WorkspaceFingerprint"]
+    restored_workspace_fingerprint: Optional["WorkspaceFingerprint"]
+    bus: EventBus
+    prompt_profile_config: str
 
-    @property
-    def last_compact_checkpoint(self) -> Optional[CompactCheckpointPort]: ...
-
-    @property
-    def last_context_restore(self) -> Optional[object]: ...
-
-    @property
-    def last_context_plan(self) -> Optional[ContextPlanPort]: ...
-
-    @property
-    def last_context_cache_ledger(self) -> object: ...
-
-    @property
-    def previous_context_cache_ledger(self) -> object: ...
-
-    @property
-    def pending_context_refresh(self) -> bool: ...
-
-    @property
-    def restored_memory_context(self) -> tuple[str, ...]: ...
-
-    @property
-    def restored_relevant_memory_ids(self) -> tuple[str, ...]: ...
-
-    @property
-    def restored_context_checkpoint_id(self) -> str: ...
-
-    @property
-    def context_integrity(self) -> object: ...
-
-    @property
-    def context_workspace_fingerprint(self) -> object: ...
-
-    @property
-    def restored_workspace_fingerprint(self) -> object: ...
-
-    @property
-    def bus(self) -> EventBus: ...
-
-    @property
-    def prompt_profile_config(self) -> object: ...
-
-    def rebuild_working_context(self) -> WorkingContextPort: ...
+    def rebuild_working_context(self) -> "WorkingContextSnapshot": ...
     def sync_context_attachments(
         self,
         *,
@@ -265,7 +215,6 @@ class CheckpointLoopPort(Protocol):
         include_reminders: bool = True,
     ) -> object: ...
     async def refresh_workspace_context(self) -> object: ...
-    def update_runtime_state(self, **values: object) -> None: ...
 
 
 __all__ = [

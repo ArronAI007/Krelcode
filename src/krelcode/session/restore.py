@@ -119,10 +119,8 @@ def restore_session(
                 provider=services.core.llm,
                 model=getattr(services.core.llm, "model", ""),
             ))))
-    loop.update_runtime_state(
-        history=history,
-        pending_context_refresh=True,
-    )
+    loop.history = history
+    loop.pending_context_refresh = True
     loop.rebuild_working_context()
     _refresh_now_if_possible(loop)
     refresh_skill_system_prompt(loop)
@@ -137,9 +135,9 @@ def _refresh_now_if_possible(loop: CheckpointLoopPort) -> None:
         try:
             asyncio.run(loop.refresh_workspace_context())
         except Exception:
-            loop.update_runtime_state(pending_context_refresh=True)
+            loop.pending_context_refresh = True
     else:
-        loop.update_runtime_state(pending_context_refresh=True)
+        loop.pending_context_refresh = True
 
 
 __all__ = ["refresh_skill_system_prompt", "restore_session"]

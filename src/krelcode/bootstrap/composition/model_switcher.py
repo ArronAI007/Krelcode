@@ -128,11 +128,9 @@ def build_model_switcher(
             subagents.prompt_profile = prompt_profile_from_config(config)
             subagents.prompt_release_id = prompt_release_id_from_config(config)
             subagents.prompt_calibrations = calibration_records
-        loop.update_runtime_state(
-            prompt_profile=profile_resolution.profile,
-            prompt_profile_resolution=profile_resolution,
-            prompt_profile_name=profile_resolution.name,
-        )
+        loop.prompt_profile = profile_resolution.profile
+        loop.prompt_profile_resolution = profile_resolution
+        loop.prompt_profile_name = profile_resolution.name
         prompt_note = ""
         registry = loop.prompt_registry
         if isinstance(registry, PromptFragmentRegistry):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional, Sequence, cast
 
 from ...agent.runtime import AgentRuntime
 from ...config import load_config_layers
@@ -14,6 +14,7 @@ from ...enterprise.audit import AuditError, ComplianceAuditor
 from ...enterprise.auth import AuthError
 from ...enterprise.policy import EnterprisePolicyError, PolicyViolation
 from ...mcp.supervisor import MCPSupervisor
+from ...agent.turn.runtime_services import MCPServicePort, RuntimeServiceBinderPort
 from ...safety.sandbox import SandboxError
 from ...session.elicitation_bridge import MCPElicitationBridge
 from ...agent.prompt_surface_contract import PromptSurfaceExecutor
@@ -70,7 +71,10 @@ async def build_core_services(
     except ConfigError as exc:
         raise BuildStageError(f"配置错误: {exc}") from exc
 
-    binder = loop.runtime_service_binder
+    binder_port = loop.runtime_service_binder
+    if binder_port is None:
+        raise BuildStageError("运行时服务绑定器未初始化")
+    binder = cast(RuntimeServiceBinder, binder_port)
     redactor = binder.redactor
     binder.add_secret(getattr(loop.llm, "api_key", None))
     if context.sso_client is not None:
@@ -93,7 +97,7 @@ async def build_core_services(
                 redactor=redactor,
             )
             auditor.attach(loop.bus)
-            loop.update_runtime_state(auditor=auditor)
+            loop.auditor = auditor
         except AuditError as exc:
             raise BuildStageError(f"企业审计错误: {exc}") from exc
 
@@ -115,7 +119,7 @@ async def build_core_services(
         prompt_surface_registry=loop.prompt_surface_registry,
         prompt_surface_executor=PromptSurfaceExecutor(),
     )
-    loop.update_runtime_state(mcp_supervisor=supervisor)
+    loop.mcp_supervisor = cast(MCPServicePort, supervisor)
     composer = RuntimeConfigComposer(loop, context.config)
     if not context.args.no_mcp:
         await supervisor.sync(composer.merged_mcp_config())

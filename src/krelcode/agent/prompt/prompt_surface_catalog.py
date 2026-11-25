@@ -32,6 +32,9 @@ from krelcode.agent.tokens import estimate_text_tokens
 from krelcode.agent.workflows import DEFAULT_TASK_WORKFLOW_CATALOG, TaskClassification
 
 if TYPE_CHECKING:
+    from .fragments import PromptSnapshot
+    from .prompt_models import PromptPlan
+    from ..prompts import PromptProfileResolution
     from krelcode.agent.turn.runtime_services import AgentServices
     from krelcode.core.messages import Message
 
@@ -44,11 +47,11 @@ class PromptSurfaceHostPort(Protocol):
 
     services: "AgentServices"
     history: list["Message"]
-    prompt_snapshot: object | None
-    prompt_profile_resolution: object | None
+    prompt_snapshot: "PromptSnapshot" | None
+    prompt_profile_resolution: "PromptProfileResolution" | None
     prompt_profile_name: str
-    auxiliary_prompt_surfaces: Sequence[PromptSurfaceDescriptor]
-    last_prompt_plan: object | None
+    auxiliary_prompt_surfaces: tuple[PromptSurfaceDescriptor, ...]
+    last_prompt_plan: "PromptPlan" | None
 
 
 def _scope_values(source: str) -> tuple[str, str]:

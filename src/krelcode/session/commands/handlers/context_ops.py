@@ -65,35 +65,35 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
     if operation == "refresh" and len(parts) == 1:
         if ctx.skills is not None:
             services.extensions.skills = ctx.skills
-        bundle = await ctx.loop.refresh_workspace_context()
+        refreshed_workspace = await ctx.loop.refresh_workspace_context()
         lines = ["  [context] 工作区规则与环境附件已刷新"]
-        lines.extend(f"  {line}" for line in bundle.summary_lines())
+        lines.extend(f"  {line}" for line in refreshed_workspace.summary_lines())
         diff = state.context.last_attachment_diff
         if diff is not None:
             lines.extend(f"  {line}" for line in diff.summary_lines())
-        snapshot = state.prompt.prompt_snapshot
-        if snapshot is not None:
-            lines.extend(f"  {line}" for line in snapshot.summary_lines())
+        prompt_snapshot = state.prompt.prompt_snapshot
+        if prompt_snapshot is not None:
+            lines.extend(f"  {line}" for line in prompt_snapshot.summary_lines())
         return _ok(*lines)
 
     if operation == "attachments" and len(parts) == 1:
         store = state.context.context_attachments
         if store is None:
             return _ok("  （Context Attachment Store 未启用）")
-        snapshot = store.snapshot()
+        attachment_snapshot = store.snapshot()
         lines = [
-            f"  [attachments] {len(snapshot.items)} 个"
-            f" · generation {snapshot.generation}"
-            f" · {snapshot.total_tokens} tokens",
+            f"  [attachments] {len(attachment_snapshot.items)} 个"
+            f" · generation {attachment_snapshot.generation}"
+            f" · {attachment_snapshot.total_tokens} tokens",
         ]
-        for item in snapshot.items:
+        for item in attachment_snapshot.items:
             lines.append(
                 f"  {item.id} · {item.kind.value} · revision {item.revision}"
                 f" · {item.layer} · {item.tokens} tokens · dynamic")
         diff = state.context.last_attachment_diff
         if diff is not None and diff.changed:
             lines.extend(f"  {line}" for line in diff.summary_lines())
-        if not snapshot.items:
+        if not attachment_snapshot.items:
             lines.append("  （当前没有动态附件）")
         return _ok(*lines)
 
@@ -183,19 +183,22 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             return _ok("  用法: /context fragments [source]")
         source = parts[1] if len(parts) == 2 else ""
         fragments = registry.list(source=source)
-        enabled_count = sum(1 for item in fragments if registry.is_enabled(item))
+        enabled_count = sum(
+            1 for fragment in fragments if registry.is_enabled(fragment)
+        )
         label = f"source={source}" if source else "all sources"
         lines = [
             f"  [fragments] {enabled_count}/{len(fragments)} enabled"
             f" · {label} · generation {registry.generation}",
         ]
-        for item in fragments:
-            state = "on " if registry.is_enabled(item) else "off"
-            cache_state = "cache" if item.cacheable else "dynamic"
-            toggle = "" if item.toggleable else " · locked"
+        for fragment in fragments:
+            fragment_state = "on " if registry.is_enabled(fragment) else "off"
+            cache_state = "cache" if fragment.cacheable else "dynamic"
+            toggle = "" if fragment.toggleable else " · locked"
             lines.append(
-                f"  [{state}] {item.id} · {item.source} · {item.group}"
-                f" · {item.tokens} tokens · {cache_state}{toggle} · {item.title}")
+                f"  [{fragment_state}] {fragment.id} · {fragment.source}"
+                f" · {fragment.group} · {fragment.tokens} tokens"
+                f" · {cache_state}{toggle} · {fragment.title}")
         if not fragments:
             lines.append("  （没有匹配的 fragment）")
         return _ok(*lines)
@@ -212,21 +215,21 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
                 kind, count = registry.set_enabled(target, enabled)
         except (KeyError, ValueError) as exc:
             return _ok(f"  [fragments] {exc}")
-        snapshot = refresh_registry_snapshot(ctx.loop)
-        state = "enabled" if enabled else "disabled"
-        lines = [f"  [fragments] {state} {kind}: {target} ({count})"]
-        if snapshot is not None:
-            lines.extend(f"  {line}" for line in snapshot.summary_lines())
+        fragment_snapshot = refresh_registry_snapshot(ctx.loop)
+        fragment_state = "enabled" if enabled else "disabled"
+        lines = [f"  [fragments] {fragment_state} {kind}: {target} ({count})"]
+        if fragment_snapshot is not None:
+            lines.extend(f"  {line}" for line in fragment_snapshot.summary_lines())
         return _ok(*lines)
 
     if operation == "reset" and len(parts) == 1:
         if registry is None:
             return _ok("  （Prompt Fragment Registry 未启用）")
         registry.reset_overrides()
-        snapshot = refresh_registry_snapshot(ctx.loop)
+        reset_snapshot = refresh_registry_snapshot(ctx.loop)
         lines = ["  [fragments] 已清除全部手动启停设置"]
-        if snapshot is not None:
-            lines.extend(f"  {line}" for line in snapshot.summary_lines())
+        if reset_snapshot is not None:
+            lines.extend(f"  {line}" for line in reset_snapshot.summary_lines())
         return _ok(*lines)
 
     if operation == "cache" and len(parts) == 1:
@@ -249,12 +252,12 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
                 f"  volatile fragments: {', '.join(cache_meta.volatile_fragments) or '(none)'}",
             ]
         elif registry is not None:
-            snapshot = registry.snapshot()
-            cache_meta = snapshot.cache
+            registry_snapshot = registry.snapshot()
+            cache_meta = registry_snapshot.cache
             lines[0:0] = [
                 f"  [cache] prompt stable prefix {cache_meta.offset} chars"
                 f" · {cache_meta.stable_tokens} tokens"
-                f" · generation {snapshot.generation}",
+                f" · generation {registry_snapshot.generation}",
                 f"  stable fragments: {', '.join(cache_meta.stable_fragments) or '(none)'}",
                 f"  volatile fragments: {', '.join(cache_meta.volatile_fragments) or '(none)'}",
             ]
@@ -302,73 +305,73 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
             "/context enable|disable|toggle <id|source> | "
             "/context reset | /context cache | /context refresh")
 
-    snapshot = state.context.last_context_snapshot
-    if snapshot is not None:
+    context_snapshot = state.context.last_context_snapshot
+    if context_snapshot is not None:
         budget = (
-            f"{snapshot.budget_tokens} tokens"
-            if snapshot.budget_tokens else "未启用压缩")
+            f"{context_snapshot.budget_tokens} tokens"
+            if context_snapshot.budget_tokens else "未启用压缩")
         window = (
-            f"{snapshot.model_context_window} tokens"
-            if snapshot.model_context_window else "未知")
+            f"{context_snapshot.model_context_window} tokens"
+            if context_snapshot.model_context_window else "未知")
         reserve = (
-            f"{snapshot.output_reserve_tokens} tokens"
-            if snapshot.model_context_window else "未知")
+            f"{context_snapshot.output_reserve_tokens} tokens"
+            if context_snapshot.model_context_window else "未知")
         ratio = (
-            f"{snapshot.usage_ratio:.1%}"
-            if snapshot.usage_ratio is not None else "未知")
+            f"{context_snapshot.usage_ratio:.1%}"
+            if context_snapshot.usage_ratio is not None else "未知")
         sources = " · ".join(
             f"{name} {tokens}"
             for name, tokens in sorted(
-                snapshot.source_tokens.items(),
+                context_snapshot.source_tokens.items(),
                 key=lambda item: (-item[1], item[0]))[:8]
         ) or "（空）"
         lines = [
-            f"  [context] 最近组装请求 · {snapshot.turn_id or '(unknown turn)'}"
-            f" · Step {snapshot.step}",
-            f"  输入估算: {snapshot.estimated_input_tokens} tokens"
+            f"  [context] 最近组装请求 · {context_snapshot.turn_id or '(unknown turn)'}"
+            f" · Step {context_snapshot.step}",
+            f"  输入估算: {context_snapshot.estimated_input_tokens} tokens"
             f" · 压缩预算: {budget} · 使用率: {ratio}",
-            f"  请求: {snapshot.provider or '(unknown)'}"
-            f" · wire {snapshot.wire_fidelity}"
-            f" · body {snapshot.request_body_bytes} bytes"
-            f" / {snapshot.request_body_tokens} tokens"
-            f" · {'fits' if snapshot.input_fits else 'over budget'}",
+            f"  请求: {context_snapshot.provider or '(unknown)'}"
+            f" · wire {context_snapshot.wire_fidelity}"
+            f" · body {context_snapshot.request_body_bytes} bytes"
+            f" / {context_snapshot.request_body_tokens} tokens"
+            f" · {'fits' if context_snapshot.input_fits else 'over budget'}",
             f"  模型窗口: {window} · 输出/安全保留: {reserve}"
-            f" · provider 输出上限: {snapshot.output_limit_tokens or '未知'}",
-            f"  分项: system {snapshot.system_tokens}"
-            f" · workspace {snapshot.workspace_tokens}"
-            f" · memory {snapshot.memory_tokens}"
-            f" · history {snapshot.history_tokens}"
-            f" · runtime {snapshot.runtime_tokens}"
-            f" · tool schema {snapshot.tool_schema_tokens}"
-            f" · overhead {snapshot.overhead_tokens}",
-            f"  缓存: {snapshot.cache_mode}"
-            f" · requested {snapshot.cache_requested_mode or 'unknown'}"
-            f" · {snapshot.cache_negotiation_reason or 'unavailable'}"
-            f" · stable blocks {snapshot.stable_system_block_count}"
-            f" · dynamic blocks {snapshot.dynamic_system_block_count}"
-            f" · stable {snapshot.stable_tokens}"
-            f" · volatile {snapshot.volatile_tokens}"
-            f" · boundary {snapshot.cache_boundary_chars} chars"
-            f" · segments {snapshot.cache_segment_count}",
+            f" · provider 输出上限: {context_snapshot.output_limit_tokens or '未知'}",
+            f"  分项: system {context_snapshot.system_tokens}"
+            f" · workspace {context_snapshot.workspace_tokens}"
+            f" · memory {context_snapshot.memory_tokens}"
+            f" · history {context_snapshot.history_tokens}"
+            f" · runtime {context_snapshot.runtime_tokens}"
+            f" · tool schema {context_snapshot.tool_schema_tokens}"
+            f" · overhead {context_snapshot.overhead_tokens}",
+            f"  缓存: {context_snapshot.cache_mode}"
+            f" · requested {context_snapshot.cache_requested_mode or 'unknown'}"
+            f" · {context_snapshot.cache_negotiation_reason or 'unavailable'}"
+            f" · stable blocks {context_snapshot.stable_system_block_count}"
+            f" · dynamic blocks {context_snapshot.dynamic_system_block_count}"
+            f" · stable {context_snapshot.stable_tokens}"
+            f" · volatile {context_snapshot.volatile_tokens}"
+            f" · boundary {context_snapshot.cache_boundary_chars} chars"
+            f" · segments {context_snapshot.cache_segment_count}",
             f"  cache capabilities: "
-            f"{', '.join(snapshot.cache_supported_modes) or '(unknown)'}"
-            f" · max breakpoints {snapshot.cache_max_breakpoints}"
-            f" · fallback {'yes' if snapshot.cache_fallback else 'no'}",
-            f"  breakpoint planner: {snapshot.cache_breakpoint_strategy or '未启用'}"
-            f" · selected {snapshot.cache_breakpoint_count}"
-            f"/{snapshot.cache_max_breakpoints}"
-            f" · skipped {snapshot.cache_breakpoint_skipped_count}"
+            f"{', '.join(context_snapshot.cache_supported_modes) or '(unknown)'}"
+            f" · max breakpoints {context_snapshot.cache_max_breakpoints}"
+            f" · fallback {'yes' if context_snapshot.cache_fallback else 'no'}",
+            f"  breakpoint planner: {context_snapshot.cache_breakpoint_strategy or '未启用'}"
+            f" · selected {context_snapshot.cache_breakpoint_count}"
+            f"/{context_snapshot.cache_max_breakpoints}"
+            f" · skipped {context_snapshot.cache_breakpoint_skipped_count}"
             f" · minimum "
-            f"{snapshot.cache_breakpoint_plan.get('minimum_cacheable_tokens', 0)}"
+            f"{context_snapshot.cache_breakpoint_plan.get('minimum_cacheable_tokens', 0)}"
             f" tokens",
-            f"  stable hash: {snapshot.stable_hash or '(none)'}",
-            f"  dynamic hash: {snapshot.dynamic_hash or '(none)'}",
-            f"  evidence channel: {snapshot.evidence_block_count} blocks"
-            f" · hash {snapshot.evidence_hash or '(none)'}",
-            f"  cache_control boundary: {snapshot.cache_control_boundary} chars",
-            f"  full hash: {snapshot.full_hash or '(none)'}",
-            f"  工具 {snapshot.tool_count} 个 · fragment {snapshot.fragment_count} 个"
-            f" · source {snapshot.source_count} 个",
+            f"  stable hash: {context_snapshot.stable_hash or '(none)'}",
+            f"  dynamic hash: {context_snapshot.dynamic_hash or '(none)'}",
+            f"  evidence channel: {context_snapshot.evidence_block_count} blocks"
+            f" · hash {context_snapshot.evidence_hash or '(none)'}",
+            f"  cache_control boundary: {context_snapshot.cache_control_boundary} chars",
+            f"  full hash: {context_snapshot.full_hash or '(none)'}",
+            f"  工具 {context_snapshot.tool_count} 个 · fragment {context_snapshot.fragment_count} 个"
+            f" · source {context_snapshot.source_count} 个",
             f"  来源: {sources}",
         ]
         tool_messages = sum(
@@ -389,18 +392,18 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
                 f" · {micro.before_tokens} → {micro.after_tokens} tokens"
                 f" · summary {micro.summarized_count}"
                 f" · reference {micro.referenced_count}")
-        if snapshot.dropped_items:
-            lines.append("  已裁剪: " + ", ".join(snapshot.dropped_items))
-        bundle = state.context.workspace_context
-        if bundle is not None and bundle.omitted:
-            lines.append("  工作区未注入: " + ", ".join(bundle.omitted))
+        if context_snapshot.dropped_items:
+            lines.append("  已裁剪: " + ", ".join(context_snapshot.dropped_items))
+        workspace_bundle = state.context.workspace_context
+        if workspace_bundle is not None and workspace_bundle.omitted:
+            lines.append("  工作区未注入: " + ", ".join(workspace_bundle.omitted))
         inspection = ContextInspectionService(ctx.loop)
         memory_ids, memory_scopes, memory_tokens = inspection.memory_metadata()
         scopes_text = " · ".join(
             f"{scope} {count}" for scope, count in sorted(memory_scopes.items()))
         lines.append(
             f"  Memory 命中: {len(memory_ids)} 条"
-            f" · {memory_tokens or snapshot.memory_tokens} tokens"
+            f" · {memory_tokens or context_snapshot.memory_tokens} tokens"
             f" · {scopes_text or '(none)'}")
         lines.append(f"  cache hash changed: {inspection.cache_change_text()}")
         return _ok(*lines)
@@ -416,9 +419,9 @@ async def handle_context(ctx: CommandContext) -> CommandResult:
         f"（含 {tool_messages} 条工具结果） · 估算 {total} tokens"
         f" · 预算 {budget_text}",
     ]
-    bundle = state.context.workspace_context
-    if bundle is not None:
-        lines.extend(f"  {line}" for line in bundle.summary_lines())
+    workspace_bundle = state.context.workspace_context
+    if workspace_bundle is not None:
+        lines.extend(f"  {line}" for line in workspace_bundle.summary_lines())
     runtime_context = state.turn.runtime_context
     if runtime_context:
         lines.append(f"  运行时 Hook 上下文: {len(runtime_context)} 段")

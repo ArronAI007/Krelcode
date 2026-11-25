@@ -6,7 +6,7 @@ import argparse
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, cast
 
 from ...agent.loop import AgentLoop
 from ...config import load_config_layers, load_managed_config
@@ -21,6 +21,7 @@ from ...enterprise.policy import (
     load_enterprise_policy,
 )
 from ...hooks import HookSpec
+from ...plugins import PluginManager
 from ..composition import (
     compose_hook_specs,
     compose_mcp_config,
@@ -69,16 +70,16 @@ class RuntimeConfigComposer:
         source: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         active = self.current_config if source is None else source
-        return compose_mcp_config(
-            active, dict(self.loop.plugin_manager.mcp_servers))
+        plugins = cast(PluginManager, self.loop.plugin_manager)
+        return compose_mcp_config(active, dict(plugins.mcp_servers))
 
     def merged_hook_specs(
         self,
         source: Optional[Dict[str, Any]] = None,
     ) -> list[HookSpec]:
         active = self.current_config if source is None else source
-        return compose_hook_specs(
-            active, self.loop.plugin_manager.hook_definitions)
+        plugins = cast(PluginManager, self.loop.plugin_manager)
+        return compose_hook_specs(active, plugins.hook_definitions)
 
 
 def _validate_stream_json_args(args: argparse.Namespace) -> None:

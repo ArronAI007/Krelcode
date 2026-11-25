@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, cast
 
 from ...agent.usage import UsageTracker
 from ...session.autocommit import AutoCommitter
 from ...session.checkpoint import CheckpointManager
 from ...session.commands.ports import ModelSwitchPort
+from ...agent.turn.runtime_services import TelemetryServicePort
 from ...telemetry import TelemetryRuntime, build_telemetry_runtime
 from ..composition import build_model_switcher
 from .context import ApplicationBuildContext
@@ -66,7 +67,7 @@ async def build_session_services(
         run_mode=context.run_mode.value,
         policy_allowed=context.enterprise_policy.allow_telemetry,
     )
-    loop.update_runtime_state(telemetry=telemetry_runtime)
+    loop.telemetry = cast(TelemetryServicePort, telemetry_runtime)
     telemetry_runtime.attach(loop.bus)
 
     return SessionServices(
