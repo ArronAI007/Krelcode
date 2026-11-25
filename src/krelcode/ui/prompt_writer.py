@@ -285,15 +285,19 @@ class PromptWriter:
         self._last_status = self._status
 
     def submitted(self, *, raw: bool = True) -> None:
-        """保留输入框，清掉菜单区，把输出光标放到下边界之后。"""
+        """Keep the submitted input, clear the menu, and return to its end."""
         with self._lock:
             was_visible = self.enabled and self._visible
             if was_visible:
                 self._move_to_top()
-                rows_down = max(0, self._rendered_rows - 1 - self._cursor_row)
                 self._write("\r")
-                if rows_down > 0:
-                    self._write(self.CURSOR_DOWN * rows_down)
+                after_content = (
+                    len(self._panel_lines)
+                    + self._input_rows
+                    + 2
+                    + (1 if self._status else 0)
+                )
+                self._write(self.CURSOR_DOWN * after_content)
                 self._write(self.CLEAR_BELOW)
             self._visible = False
             self._last = None

@@ -467,6 +467,25 @@ def test_prompt_submission_resets_output_column_to_zero():
     assert submitted_output.endswith(p.CURSOR_DOWN * 3 + p.CLEAR_BELOW)
 
 
+def test_prompt_submission_clears_slash_menu_without_blank_rows():
+    buf = Buf()
+    p = PromptWriter(write=buf.write, enabled=True, color=False)
+    p.show(IDLE_PROMPT)
+    p.set_status("权限 default")
+    p.update(
+        IDLE_PROMPT + "/exit",
+        ["  /exit      退出 Krelcode"],
+    )
+    before = len(buf.parts)
+
+    p.submitted(raw=True)
+
+    submitted_output = "".join(buf.parts[before:])
+    assert submitted_output.endswith(
+        p.CURSOR_DOWN * 4 + p.CLEAR_BELOW)
+    assert p.CURSOR_DOWN * 9 not in submitted_output
+
+
 # -- 启动横幅 ---------------------------------------------------------------------------------
 
 def test_banner_contains_key_info(tmp_path):
