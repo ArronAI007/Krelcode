@@ -208,6 +208,24 @@ def test_line_editor_panel_focus_is_modal_and_enter_returns_to_prompt(monkeypatc
         os.close(master_fd)
 
 
+def test_hidden_idle_dock_opens_with_panel_shortcut():
+    from krelcode.ui.repl import PromptWriter, TerminalLineEditor
+
+    controller = PanelController(sample_panels())
+    controller.set_dock_visible(False)
+    prompt = PromptWriter(enabled=False)
+    prompt.show("❯ ")
+    editor = TerminalLineEditor(prompt, lambda _text: [], panels=controller)
+
+    editor._refresh("❯ ", [])
+    assert prompt._panel_lines == ()
+
+    assert controller.handle_key("ctrl-o")
+    editor._refresh("❯ ", [])
+    assert controller.dock_visible
+    assert prompt._panel_lines
+
+
 def test_panel_layout_scrolls_to_keyboard_selection():
     items = tuple(
         PanelItem(f"i{index}", f"task-{index}") for index in range(8)

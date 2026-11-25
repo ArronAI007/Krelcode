@@ -183,6 +183,7 @@ class TerminalPresenter:
         if self.review_pager is not None and self.review_pager.active:
             overlay = self.review_pager.render(
                 columns, max(8, terminal.lines - 8), color=self.use_color)
+            self.panel_controller.set_dock_visible(True)
             self.prompt.set_panels(overlay)
             return
         memory_cache = self.memory_cache
@@ -203,7 +204,16 @@ class TerminalPresenter:
         )
         self.panel_controller.set_panels(panels)
         layout = self.panel_controller.render(columns)
-        self.prompt.set_panels(layout.lines)
+        dock_visible = (
+            self.state.is_running
+            or bool(self.state.plan_items)
+            or self.panel_controller.focused
+            or bool(self.quick_status)
+            or (self.approval_review is not None)
+            or (self.git_review is not None)
+        )
+        self.panel_controller.set_dock_visible(dock_visible)
+        self.prompt.set_panels(layout.lines if dock_visible else ())
 
     def render_status(self, view: SessionViewState) -> str:
         """Build a status line without touching disk on every redraw."""

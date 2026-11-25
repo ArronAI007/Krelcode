@@ -7,6 +7,7 @@ process host.  ``ui.repl`` re-exports them for compatibility.
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .. import __version__
@@ -27,7 +28,6 @@ from .repl_primitives import (
     ReplControl,
     TerminalSubmission,
     _display_width,
-    _pad_display,
     _truncate_display,
     auto_color,
 )
@@ -219,43 +219,55 @@ def print_banner(loop: AgentLoop, tool_names: Optional[list[str]],
                  session_path: Optional[str] = None,
                  write: Callable[[str], None] = print,
                  color: Optional[bool] = None) -> None:
-    """启动信息卡片：模型、工作区、工具与会话，保持主流 coding agent 风格。"""
+    """Print a compact, low-noise startup card."""
     if color is None:
         color = auto_color()
     provider = getattr(loop.llm, "name", "?")
     model = getattr(loop.llm, "model", "?")
     workspace = loop.tool_context.workspace_root
     columns = shutil.get_terminal_size((80, 24)).columns
-    inner = max(36, min(columns - 4, 96))
+    width = max(36, min(columns - 4, 72))
     title = f"✻ Krelcode v{__version__}"
     title_rendered = f"{CYAN}{title}{RESET}" if color else title
-    fill = max(0, inner - _display_width(title) - 3)
-
-    write(f"  ╭─ {title_rendered} " + "─" * fill + "╮")
+    divider = "─" * width
+    divider_rendered = f"{DIM}{divider}{RESET}" if color else divider
 
     def row(label: str, value: str, path: bool = False) -> None:
-        available = inner - 14
+        available = max(8, width - 13)
         if path and _display_width(value) > available:
             value = "…" + value[-(available - 1):]
         else:
             value = _truncate_display(value, available)
-        label_text = f"{label:<10}"
+        label_text = f"{label:<9}"
         rendered_label = f"{DIM}{label_text}{RESET}" if color else label_text
-        write(f"  │ {_pad_display(rendered_label + value, inner - 2)} │")
+        write(f"  {rendered_label} {value}")
 
-    row("provider", f"{provider} · {model}")
+    sandbox = getattr(loop.tool_context, "sandbox", None)
+    sandbox_backend = str(getattr(sandbox, "backend", "") or "off")
+    sandbox_network = (
+        "network on" if bool(getattr(sandbox, "network", False))
+        else "network off"
+    )
+    if sandbox_backend == "static":
+        safety = f"static (limited) · {sandbox_network}"
+    else:
+        safety = f"{sandbox_backend} · {sandbox_network}"
+
+    write(f"  {title_rendered}")
+    write(f"  {divider_rendered}")
+    row("model", f"{model} · {provider}")
     row("workspace", str(workspace), path=True)
-    row("tools", f"{len(tool_names or [])} 个 · /tools 查看")
     if session_path:
-        row("session", session_path, path=True)
-    write("  ╰" + "─" * inner + "╯")
+        row("session", Path(session_path).stem)
+    row("tools", f"{len(tool_names or [])} 个")
+    row("sandbox", safety)
+    write(f"  {divider_rendered}")
 
     def accent(text: str) -> str:
         return f"{CYAN}{text}{RESET}" if color else text
-    write("")
-    write(f"  {accent('/help')} 查看命令 · Shift-Tab 切换权限 · Ctrl-O 面板 · "
-          f"↑/↓ 历史 · Ctrl-R 搜索 · {accent('@路径')} 引用文件 · "
-          f"{accent('!命令')} Shell · {accent('#记忆')} 记忆 · {accent('/exit')} 退出")
+    write(
+        f"  {accent('/help')} 命令 · {accent('Ctrl+O')} 面板 · "
+        f"Shift+Tab 权限 · {accent('/exit')} 退出")
     write("")
 
 

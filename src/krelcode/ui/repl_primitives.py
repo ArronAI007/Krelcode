@@ -563,7 +563,10 @@ class TerminalLineEditor:
             cursor_column += _display_width(prompt_text)
         if self._panels is not None:
             layout = self._panels.render(max(1, columns - 1))
-            self._prompt.set_panels(layout.lines, redraw=False)
+            self._prompt.set_panels(
+                layout.lines if self._panels.dock_visible else (),
+                redraw=False,
+            )
         self._prompt.update(
             "\n".join(rendered_lines),
             lines,

@@ -193,11 +193,6 @@ async def build_loop(
     agent_definitions = AgentDefinitionManager(
         workspace_root, extra_paths=plugin_manager.agent_paths
     )
-    if agent_definitions.list():
-        log(
-            "[agents] 已加载 Agent Definition: "
-            + ", ".join(item.name for item in agent_definitions.list())
-        )
     for agent_issue in agent_definitions.issues:
         log(f"[agents] 跳过无效定义: {agent_issue.path}: {agent_issue.message}")
 

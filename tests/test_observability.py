@@ -305,7 +305,8 @@ def test_webui_service_is_background_and_closes_with_cli(
     assert "token=test-token" in service.url
     service.close()
     assert not service.running
-    assert any("已同步启动" in note for note in notes)
+    assert notes == [
+        "[webui] 本地控制台: http://127.0.0.1:9876/?token=test-token"]
 
 
 def test_bootstrapped_application_owns_webui_lifecycle(

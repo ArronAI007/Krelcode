@@ -53,11 +53,6 @@ def build_context_services(
             hooks.replace_specs(specs)
         loop.set_hook_port(hooks)
         core.subagents.hook_port = hooks
-        if specs:
-            context.note(
-                f"[hooks] 已加载 {len(specs)} 个钩子: "
-                + ", ".join(sorted({hook.on for hook in specs})))
-
     def refresh_hooks() -> None:
         ensure_hooks(core.config.merged_hook_specs())
 

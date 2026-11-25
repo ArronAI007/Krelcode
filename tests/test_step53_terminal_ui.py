@@ -475,15 +475,17 @@ def test_banner_contains_key_info(tmp_path):
         tool_context=SimpleNamespace(workspace_root=tmp_path),
     )
     lines = []
-    print_banner(loop, ["get_time", "run_command"], session_path="/tmp/s.jsonl",
+    print_banner(loop, ["get_time", "run_command"],
+                 session_path="/tmp/demo-session.jsonl",
                  write=lines.append, color=False)
     text = "\n".join(lines)
-    assert "╭─" in text and "╰" in text
+    assert "─" in text
     assert "Krelcode v" in text
-    assert "provider" in text and "openai" in text and "deepseek-flash" in text
+    assert "model" in text and "openai" in text and "deepseek-flash" in text
     assert "workspace" in text and tmp_path.name in text
     assert "tools" in text and "2" in text
-    assert "session" in text and "/tmp/s.jsonl" in text
+    assert "session" in text and "demo-session" in text
+    assert "sandbox" in text and "off" in text
     assert "/help" in text and "/exit" in text
 
 

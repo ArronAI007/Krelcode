@@ -16,6 +16,7 @@ class PanelController:
         self._panels: tuple[Panel, ...] = tuple(panels)
         self.active_id = self._panels[0].id if self._panels else ""
         self.focused = False
+        self._dock_visible = True
         self._selected: dict[str, int] = {
             panel.id: 0 for panel in self._panels if panel.focusable
         }
@@ -40,6 +41,13 @@ class PanelController:
     @property
     def selected_index(self) -> int:
         return self._selected.get(self.active_id, 0)
+
+    @property
+    def dock_visible(self) -> bool:
+        return self._dock_visible
+
+    def set_dock_visible(self, visible: bool) -> None:
+        self._dock_visible = bool(visible)
 
     def set_panels(self, panels: Iterable[Panel]) -> None:
         """Replace view data while preserving a valid tab and selection."""
@@ -68,6 +76,7 @@ class PanelController:
             return False
         self.active_id = panel.id
         self.focused = True
+        self._dock_visible = True
         return True
 
     def blur(self) -> None:
@@ -81,6 +90,7 @@ class PanelController:
             return False
         self.active_id = panel_id
         self.focused = True
+        self._dock_visible = True
         return True
 
     def switch_panel(self, delta: int) -> bool:
@@ -176,6 +186,7 @@ class PanelController:
         if hit is None:
             self.focused = False
             return True
+        self._dock_visible = True
         if hit.item_id:
             self.active_id = hit.panel_id
             panel = self.active_panel

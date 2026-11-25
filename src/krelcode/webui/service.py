@@ -126,12 +126,9 @@ class WebUIService:
             actual_port = int(server.server_address[1])
             display_host = f"[{actual_host}]" if ":" in actual_host else actual_host
             self._url = f"http://{display_host}:{actual_port}/?token={self.token}"
-            self.note(f"[webui] 已同步启动: http://{display_host}:{actual_port}/")
-            self.note("[webui] 使用命令行输出中的一次性 token URL 打开；不会开放公网")
             if self.options.open_browser:
                 webbrowser.open(self._url)
-            else:
-                self.note(f"[webui] 一次性打开链接: {self._url}")
+            self.note(f"[webui] 本地控制台: {self._url}")
             return True
         suffix = f": {last_error}" if last_error else ""
         self.note(f"[webui] 无法启动本地服务，CLI 继续运行{suffix}")

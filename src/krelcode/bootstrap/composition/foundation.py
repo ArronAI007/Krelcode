@@ -179,7 +179,6 @@ async def build_runtime_foundation(
             llm, max_tokens=context_budget, redactor=redactor
         )
     sandbox = build_execution_sandbox(args, config, workspace_root)
-    _log_sandbox(sandbox, log)
     tool_context = ToolContext(
         workspace_root=workspace_root,
         sandbox=sandbox,
@@ -299,12 +298,6 @@ def _log_rule_issues(
     rule_bundle = workspace_context.rule_bundle
     if rule_bundle is None:
         return
-    if rule_bundle.content:
-        log(
-            f"[rules] 已加载 {rule_bundle.entry_count} 个入口"
-            f" / {rule_bundle.import_count} 个导入"
-            f"（{rule_bundle.chars} chars）"
-        )
     for issue in rule_bundle.issues:
         log(f"[rules] 跳过 {issue.code}: {issue.path}: {issue.message}")
 
@@ -316,43 +309,11 @@ def _log_extension_issues(
     log: Callable[[str], None],
 ) -> None:
     if skill_manager.enabled:
-        if skill_manager.list():
-            log(
-                "[skills] 已加载 "
-                + ", ".join(skill.name for skill in skill_manager.list())
-                + f"（{len(skill_manager.list())} 个）"
-            )
         for skill_issue in skill_manager.issues:
             log(f"[skills] 跳过无效 skill: {skill_issue.path}: {skill_issue.message}")
     if plugin_manager.enabled:
-        if plugin_manager.records():
-            log(
-                "[plugins] 已发现 "
-                + ", ".join(
-                    f"{record.name}@{record.version}[{record.status}]"
-                    for record in plugin_manager.records()
-                )
-                + f"（{len(plugin_tools)} 个工具）"
-            )
         for plugin_issue in plugin_manager.issues:
             log(f"[plugins] 跳过问题: {plugin_issue.path}: {plugin_issue.message}")
-
-
-def _log_sandbox(
-    sandbox: Optional[ExecutionSandbox],
-    log: Callable[[str], None],
-) -> None:
-    if sandbox is None:
-        return
-    log(
-        f"[sandbox] backend={sandbox.backend} "
-        f"network={'on' if sandbox.network else 'off'}"
-    )
-    if sandbox.backend == "static":
-        log(
-            "[sandbox] 警告：OS 隔离后端不可用，当前为静态护栏模式"
-            "（无法抵御解释器中的动态绕过）"
-        )
 
 
 def _build_feature_runtimes(
