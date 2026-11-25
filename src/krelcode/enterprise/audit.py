@@ -22,7 +22,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 
 from ..core.events import (
     AgentEvent,
@@ -245,7 +245,7 @@ class ComplianceAuditor:
         self.enabled = bool(
             enabled and self.config.enabled and self.config.mode != "off")
         self.max_record_bytes = max(1_024, int(max_record_bytes or 64_000))
-        self._unsub: Optional[object] = None
+        self._unsub: Optional[Callable[[], None]] = None
         self._lock = threading.Lock()
         self._sequence = 0
         self._prev_hash = "0" * 64
@@ -506,8 +506,11 @@ def _verify_record(
         return False, "缺少 event_id", previous_hash, previous_seq
     if not str(record.get("type", "") or "").strip():
         return False, "缺少 event type", previous_hash, previous_seq
+    seq_raw = record.get("seq")
+    if not isinstance(seq_raw, (int, str)):
+        return False, "缺少合法 seq", previous_hash, previous_seq
     try:
-        seq = int(record.get("seq"))
+        seq = int(seq_raw)
     except (TypeError, ValueError):
         return False, "缺少合法 seq", previous_hash, previous_seq
     if seq != previous_seq + 1:

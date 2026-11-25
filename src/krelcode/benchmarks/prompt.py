@@ -11,7 +11,7 @@ import argparse
 import sys
 import json
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from .prompt_cases import BENCHMARK_CASES
 from .prompt_fixture import _BenchmarkFixture, _BenchmarkProvider
@@ -101,7 +101,9 @@ def _compact_summary_json() -> str:
 class PromptBenchmarkRunner(_CorePromptBenchmarkRunner):
     """Compatibility runner whose handler globals remain monkeypatchable."""
 
-    def _scenario_handlers(self):
+    def _scenario_handlers(
+        self,
+    ) -> dict[PromptBenchmarkMode, Callable[[Path], object]]:
         return {
             PromptBenchmarkMode.MAIN: _run_main,
             PromptBenchmarkMode.HEADLESS: _run_headless,

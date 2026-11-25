@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Mapping, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from .agent.prompt.fragments import (
     GROUP_SYSTEM,
@@ -222,8 +222,8 @@ class OutputStyleManager:
         self.issues.clear()
         if not self.enabled:
             return self
-        for style in BUILTIN_OUTPUT_STYLES:
-            self._styles[style.name] = style
+        for builtin_style in BUILTIN_OUTPUT_STYLES:
+            self._styles[builtin_style.name] = builtin_style
         roots = [
             (self.config.home / ".krelcode" / "output-styles", "user", 100),
             (self.workspace_root / ".krelcode" / "output-styles", "project", 200),
@@ -237,7 +237,8 @@ class OutputStyleManager:
                 if resolved in seen_paths:
                     continue
                 seen_paths.add(resolved)
-                style = self._load_style(path, scope, priority)
+                style: Optional[OutputStyle] = self._load_style(
+                    path, scope, priority)
                 if style is not None:
                     candidates.append(style)
         # Higher scope wins; equal-priority styles are deterministic by path.

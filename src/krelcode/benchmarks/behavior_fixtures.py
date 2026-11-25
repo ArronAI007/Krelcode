@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from .behavior_helpers import _write
-from ..session.memory import MemoryKind, MemoryScope
+from ..session.memory_models import MemoryKind, MemoryScope
 from .behavior_models import MemorySeed
 
 

@@ -199,9 +199,34 @@ class CompactSummaryResultPort(Protocol):
     """Content-free summary identity exposed by a compact checkpoint."""
 
     @property
+    def goal(self) -> str: ...
+
+    @property
+    def files(self) -> Sequence["CompactFileResultPort"]: ...
+
+    @property
+    def tests(self) -> Sequence["CompactTestResultPort"]: ...
+
+    @property
+    def next_steps(self) -> Sequence[str]: ...
+
+    @property
+    def source(self) -> str: ...
+
+    @property
     def digest(self) -> str: ...
 
     def as_dict(self) -> Mapping[str, object]: ...
+
+
+class CompactFileResultPort(Protocol):
+    @property
+    def path(self) -> str: ...
+
+
+class CompactTestResultPort(Protocol):
+    @property
+    def status(self) -> str: ...
 
 
 class ContextRestoreResultPort(Protocol):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from ..agent.turn.loop import AgentLoop
 from ..agent.prompt.prompt_surface_catalog import refresh_prompt_surfaces
@@ -19,6 +19,8 @@ from ..llm.registry import create_provider, resolve_settings
 from ..llm.retry import RetryPolicy, RetryingProvider
 from ..safety.policy import SandboxPolicy
 from ..contracts.tool import PermissionMode, RunMode, RuntimeSnapshot, ToolContext
+from ..contracts.prompt_surface import PromptSurfaceResult
+from ..core.events import AgentEvent
 from .prompt import (
     SECURITY_REVIEW_SYSTEM_PROMPT,
     build_security_review_input,
@@ -57,7 +59,7 @@ class _SecurityReviewSummary:
         self.tools_used: List[str] = []
         self.denied = 0
 
-    def on_event(self, event) -> None:
+    def on_event(self, event: AgentEvent) -> None:
         if isinstance(event, ToolCallCompleted):
             self.tools_used.append(event.tool_call.name)
         elif isinstance(event, PermissionDenied):
@@ -66,7 +68,7 @@ class _SecurityReviewSummary:
 
 def build_security_review_llm(
     args: argparse.Namespace,
-    config: dict,
+    config: dict[str, Any],
 ) -> LLMProvider:
     if getattr(args, "mock", False) or getattr(args, "provider", None) == "mock":
         return MockProvider(
@@ -206,14 +208,19 @@ async def run_security_review(
     async def run_surface(safe_prompt: object) -> str:
         return await loop.run(str(safe_prompt))
 
+    def observe_surface(
+        _surface_id: str, result: PromptSurfaceResult,
+    ) -> None:
+        observe_surface_result(
+            loop.services.prompt.surface_registry, result)
+
     surface = await PromptSurfaceExecutor().execute(
         "aux:security-review",
         SECURITY_REVIEW_SURFACE_CONTRACT,
         review_input.prompt,
         run_surface,
         redactor=redactor,
-        observer=lambda _surface_id, result: observe_surface_result(
-            loop.services.prompt.surface_registry, result),
+        observer=observe_surface,
     )
 
     report: Optional[SecurityReviewReport] = None

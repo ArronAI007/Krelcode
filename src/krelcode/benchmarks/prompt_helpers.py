@@ -8,7 +8,7 @@ from typing import Mapping
 
 from ..agent.context.context_cache_ledger import ContextCacheLedger
 from ..agent.prompt.fragments import LAYER_L7_EVIDENCE
-from ..agent.prompt.prompt_plan import PromptPlanSnapshot
+from ..agent.prompt.prompt_plan import PromptFragmentSnapshot, PromptPlanSnapshot
 from ..core.messages import Message
 from ..llm.base import PreparedLLMRequest
 from .prompt_models import PromptBenchmarkCheck, PromptBenchmarkMetric
@@ -50,7 +50,7 @@ def _check(
 
 def _memory_fragments(
     plan: PromptPlanSnapshot,
-):
+) -> tuple[PromptFragmentSnapshot, ...]:
     return tuple(
         fragment for fragment in plan.fragments
         if fragment.layer == LAYER_L7_EVIDENCE
@@ -76,7 +76,7 @@ def _rule_order(plan: PromptPlanSnapshot) -> tuple[str, ...]:
         for index, fragment in enumerate(plan.fragments)
         if fragment.id in _RULE_ORDER
     }
-    return tuple(sorted(positions, key=positions.get))
+    return tuple(sorted(positions, key=lambda item: positions[item]))
 
 
 def _rule_order_is_stable(

@@ -48,21 +48,4 @@ testpaths = ["tests"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = [
-    "src/krelcode/core",
-    "src/krelcode/contracts",
-    "src/krelcode/llm",
-    "src/krelcode/safety",
-    "src/krelcode/tools",
-    "src/krelcode/mcp",
-    "src/krelcode/plugins",
-    "src/krelcode/skills",
-    "src/krelcode/web",
-    "src/krelcode/lsp",
-    "src/krelcode/daemon",
-    "src/krelcode/agent",
-    "src/krelcode/session",
-    "src/krelcode/subagent",
-    "src/krelcode/bootstrap",
-    "src/krelcode/ui",
-]
+files = ["src/krelcode"]

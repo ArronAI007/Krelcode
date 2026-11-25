@@ -19,6 +19,8 @@ def _mapping(value: object) -> Mapping[str, object]:
 
 
 def _integer(value: object) -> int:
+    if not isinstance(value, (int, float, str)):
+        return 0
     try:
         return max(0, int(value or 0))
     except (TypeError, ValueError):
@@ -26,6 +28,8 @@ def _integer(value: object) -> int:
 
 
 def _float(value: object) -> float:
+    if not isinstance(value, (int, float, str)):
+        return 0.0
     try:
         return max(0.0, float(value or 0.0))
     except (TypeError, ValueError):
@@ -90,9 +94,16 @@ def render_nightly_summary(path: Path | str) -> str:
             f"- Baseline hash: `{str(gate.get('baseline_hash', '?'))[:12]}`",
             f"- Suite hash: `{str(gate.get('report_suite_hash', '?'))[:12]}`",
         ])
+        checks_raw = gate.get("checks", ())
+        checks = (
+            checks_raw
+            if isinstance(checks_raw, Sequence)
+            and not isinstance(checks_raw, (str, bytes))
+            else ()
+        )
         failed_checks = [
             str(item.get("id", "?"))
-            for item in gate.get("checks", ())
+            for item in checks
             if isinstance(item, Mapping) and not bool(item.get("passed", False))
         ]
         if failed_checks:

@@ -503,7 +503,7 @@ ROOT_MODULE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
         "agent", "config", "core", "enterprise", "llm", "safety", "telemetry",
     }),
     "extensions": frozenset(),
-    "hooks": frozenset({"agent", "core", "safety"}),
+    "hooks": frozenset({"agent", "contracts", "core", "safety"}),
     "output_styles": frozenset({"agent"}),
     "review": frozenset({
         "agent", "config", "contracts", "core", "llm", "safety", "tools",

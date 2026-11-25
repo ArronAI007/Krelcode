@@ -14,24 +14,7 @@ def test_runtime_stays_dependency_free_and_dev_extra_is_explicit():
     assert set(project["optional-dependencies"]["dev"]) == {"pytest", "mypy"}
     mypy = pyproject["tool"]["mypy"]
     assert mypy["strict"] is True
-    assert mypy["files"] == [
-        "src/krelcode/core",
-        "src/krelcode/contracts",
-        "src/krelcode/llm",
-        "src/krelcode/safety",
-        "src/krelcode/tools",
-        "src/krelcode/mcp",
-        "src/krelcode/plugins",
-        "src/krelcode/skills",
-        "src/krelcode/web",
-        "src/krelcode/lsp",
-        "src/krelcode/daemon",
-        "src/krelcode/agent",
-        "src/krelcode/session",
-        "src/krelcode/subagent",
-        "src/krelcode/bootstrap",
-        "src/krelcode/ui",
-    ]
+    assert mypy["files"] == ["src/krelcode"]
 
 
 def test_primary_ci_covers_required_platforms_and_guarantees():

@@ -49,7 +49,7 @@ class SessionLifecycle:
         self,
         loop: AgentLoop,
         sessions_dir: Optional[Path],
-        session_path: Optional[str] = None,
+        session_path: Path | str | None = None,
         *,
         runtime: Optional[AgentRuntime] = None,
         redactor: Optional[SecretRedactor] = None,

@@ -20,10 +20,11 @@ from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Deque, Dict, List, Optional
+from typing import BinaryIO, Deque, Dict, List, Optional
 
 from ..core.events import (
     EventBus,
+    AgentEvent,
     ShellJobFinished,
     ShellJobOutput,
     ShellJobStarted,
@@ -120,7 +121,7 @@ class _JobRuntime:
     started_at: float
     proc: asyncio.subprocess.Process
     log_path: Path
-    log_handle: Optional[object] = None
+    log_handle: Optional[BinaryIO] = None
     status: ShellJobStatus = ShellJobStatus.RUNNING
     ended_at: Optional[float] = None
     exit_code: Optional[int] = None
@@ -130,8 +131,8 @@ class _JobRuntime:
     buffer_chars: int = 0
     chunks: Deque[_OutputChunk] = field(default_factory=deque)
     condition: asyncio.Condition = field(default_factory=asyncio.Condition)
-    reader_task: Optional[asyncio.Task] = None
-    wait_task: Optional[asyncio.Task] = None
+    reader_task: Optional[asyncio.Task[None]] = None
+    wait_task: Optional[asyncio.Task[None]] = None
     log_bytes: int = 0
     log_capped: bool = False
 
@@ -539,7 +540,7 @@ class ShellJobManager:
     def _redact(self, text: str) -> str:
         return self.redactor.redact(text) if self.redactor is not None else text
 
-    async def _safe_emit(self, event) -> None:
+    async def _safe_emit(self, event: AgentEvent) -> None:
         try:
             await self.bus.emit(event)
         except Exception:

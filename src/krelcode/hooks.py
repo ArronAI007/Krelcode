@@ -41,6 +41,8 @@ from .core.events import (
 )
 from .core.hooks import HookResult
 from .core.messages import ToolCall
+from .core.redact import SecretRedactor
+from .contracts.prompt_surface import PromptSurfaceResult
 from .core.process import (
     current_process_platform,
     quote_shell_value,
@@ -142,6 +144,7 @@ def parse_hooks(config: Dict[str, Any]) -> List[HookSpec]:
             http_config = {}
         url = item.get("url", http_config.get("url"))
         headers_raw = item.get("headers", http_config.get("headers", {}))
+        headers: tuple[tuple[str, str], ...]
         if isinstance(headers_raw, dict):
             headers = tuple(
                 (str(key), str(value)) for key, value in headers_raw.items())
@@ -168,6 +171,7 @@ def parse_hooks(config: Dict[str, Any]) -> List[HookSpec]:
         ):
             continue
         raw_tools = item.get("tools", item.get("tool", ()))
+        tools: tuple[str, ...]
         if isinstance(raw_tools, str):
             tools = (raw_tools,)
         elif isinstance(raw_tools, (list, tuple)):
@@ -201,14 +205,14 @@ class HookRunner:
         self,
         workspace_root: Path,
         specs: List[HookSpec],
-        log=print,
+        log: Callable[[str], object] = print,
         *,
         executions: Optional[List[Dict[str, Any]]] = None,
-        redactor=None,
+        redactor: Optional[SecretRedactor] = None,
         prompt_runner: Optional[
             Callable[[str, Dict[str, Any]], Awaitable[str]]
         ] = None,
-        prompt_surface_registry=None,
+        prompt_surface_registry: object | None = None,
     ) -> None:
         self.root = Path(workspace_root)
         self.specs = list(specs)
@@ -283,7 +287,7 @@ class HookRunner:
             return [("subagent_feed", {
                 **base,
                 "agent_id": event.agent_id,
-                "sequence": event.sequence,
+                "sequence": str(event.sequence),
                 "kind": event.kind,
                 "text": event.text[:OUTPUT_PREVIEW],
             })]
@@ -518,7 +522,8 @@ class HookRunner:
         variables: Dict[str, str],
         payload: Dict[str, Any],
     ) -> tuple[Optional[int], str, str]:
-        if self._prompt_runner is None:
+        prompt_runner = self._prompt_runner
+        if prompt_runner is None:
             raise RuntimeError("Prompt Hook 未配置模型执行器")
         probe = self._render_prompt(spec.prompt, variables)
         prompt = (
@@ -537,10 +542,14 @@ class HookRunner:
                     data.get("payload", {}), ensure_ascii=False, sort_keys=True),
             )
             safe_payload = data.get("payload", {})
-            return await self._prompt_runner(
+            return await prompt_runner(
                 rendered_prompt,
                 safe_payload if isinstance(safe_payload, dict) else {},
             )
+
+        def observe(_surface_id: str, surface_result: PromptSurfaceResult) -> None:
+            observe_surface_result(
+                self._prompt_surface_registry, surface_result)
 
         try:
             index = self.specs.index(spec) + 1
@@ -553,8 +562,7 @@ class HookRunner:
             {"prompt": prompt, "payload": payload},
             run_surface,
             redactor=self._redactor,
-            observer=lambda _surface_id, surface_result: observe_surface_result(
-                self._prompt_surface_registry, surface_result),
+            observer=observe,
         )
         if not result.ok:
             raise RuntimeError(

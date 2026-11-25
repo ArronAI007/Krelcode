@@ -14,10 +14,16 @@ import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, cast
 
 from krelcode.bootstrap.parser import build_parser
 from krelcode.core.errors import ConfigError
 
+if TYPE_CHECKING:
+    from krelcode.config import ConfigBundle
+    from krelcode.daemon.client import DaemonClient
+    from krelcode.enterprise.auth import SSOConfig
+    from krelcode.enterprise.policy import EnterprisePolicy
 
 
 
@@ -69,7 +75,7 @@ def _run_init(args: argparse.Namespace) -> int:
     return 0
 
 
-def _daemon_client(args: argparse.Namespace):
+def _daemon_client(args: argparse.Namespace) -> "DaemonClient":
     from krelcode.daemon.client import DaemonClient
 
     config_path = Path(args.config).expanduser() if args.config else None
@@ -296,7 +302,9 @@ def _run_agents(args: argparse.Namespace) -> int:
         return 1
 
 
-def _load_enterprise_config(args: argparse.Namespace):
+def _load_enterprise_config(
+    args: argparse.Namespace,
+) -> tuple["ConfigBundle", "EnterprisePolicy"]:
     from krelcode.config import load_config_layers, load_managed_config
     from krelcode.enterprise.policy import load_enterprise_policy
 
@@ -316,7 +324,10 @@ def _load_enterprise_config(args: argparse.Namespace):
     return bundle, policy
 
 
-def _sso_config_for_args(args: argparse.Namespace, policy):
+def _sso_config_for_args(
+    args: argparse.Namespace,
+    policy: "EnterprisePolicy",
+) -> "SSOConfig":
     from krelcode.enterprise.auth import SSOConfig
 
     raw = dict(getattr(policy, "raw_sso", {}) or {})
@@ -601,7 +612,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             from krelcode.bootstrap.main import async_main
 
-        return asyncio.run(async_main(args))
+        entrypoint = cast(
+            Callable[[argparse.Namespace], Coroutine[Any, Any, Any]], async_main)
+        return int(asyncio.run(entrypoint(args)))
     except KeyboardInterrupt:
         # asyncio.run() has already cancelled the task and cleaned resources.
         return 130

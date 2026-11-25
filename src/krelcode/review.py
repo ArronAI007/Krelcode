@@ -22,8 +22,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .agent.prompt.cyber_risk import prepend_cyber_risk_prompt
 from .agent.turn.loop import AgentLoop
-from .agent.prompt.prompt_surface import PromptSurfaceDescriptor, PromptSurfaceKind
-from .agent.prompt.prompt_surface_catalog import prompt_content_hash, refresh_prompt_surfaces
+from .agent.prompt.prompt_surface import (
+    PromptSurfaceDescriptor,
+    PromptSurfaceKind,
+    prompt_content_hash,
+)
+from .agent.prompt.prompt_surface_catalog import refresh_prompt_surfaces
 from .agent.prompt.prompt_surface_contract import (
     REVIEW_SURFACE_CONTRACT,
     PromptSurfaceExecutor,
@@ -32,7 +36,8 @@ from .agent.prompt.prompt_surface_contract import (
 from .agent.usage import UsageTracker
 from .core.evidence import InstructionSource, SourceRole
 from .core.tokens import estimate_text_tokens
-from .core.events import EventBus, PermissionDenied, ToolCallCompleted
+from .contracts.prompt_surface import PromptSurfaceResult
+from .core.events import AgentEvent, EventBus, PermissionDenied, ToolCallCompleted
 from .core.redact import SecretRedactor
 from .core.textutil import truncate_middle
 from .llm.base import LLMProvider
@@ -152,7 +157,7 @@ class _ReviewSummary:
         self.tools_used: List[str] = []
         self.denied = 0
 
-    def on_event(self, event) -> None:
+    def on_event(self, event: AgentEvent) -> None:
         if isinstance(event, ToolCallCompleted):
             self.tools_used.append(event.tool_call.name)
         elif isinstance(event, PermissionDenied):
@@ -212,14 +217,19 @@ async def run_review(args: argparse.Namespace, llm: Optional[LLMProvider] = None
     async def run_surface(safe_prompt: object) -> str:
         return await loop.run(str(safe_prompt))
 
+    def observe_surface(
+        _surface_id: str, result: PromptSurfaceResult,
+    ) -> None:
+        observe_surface_result(
+            loop.services.prompt.surface_registry, result)
+
     surface_result = await PromptSurfaceExecutor().execute(
         "aux:review",
         REVIEW_SURFACE_CONTRACT,
         prompt,
         run_surface,
         redactor=redactor,
-        observer=lambda _surface_id, result: observe_surface_result(
-            loop.services.prompt.surface_registry, result),
+        observer=observe_surface,
     )
     if not surface_result.ok:
         message = surface_result.error or surface_result.status

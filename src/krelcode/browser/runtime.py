@@ -266,10 +266,10 @@ class PlaywrightBrowserBackend:
         self.http = http
         self.max_bytes = int(max_bytes)
         self.timeout = float(timeout)
-        self._playwright = None
-        self._browser = None
-        self._manager = None
-        self._sessions: dict[str, Any] = {}
+        self._playwright: Any = None
+        self._browser: Any = None
+        self._manager: Any = None
+        self._sessions: dict[str, tuple[Any, Any]] = {}
         self._lock = asyncio.Lock()
 
     async def open(
@@ -284,7 +284,7 @@ class PlaywrightBrowserBackend:
             java_script_enabled=True,
         )
 
-        async def guard(route, request):
+        async def guard(route: Any, request: Any) -> None:
             try:
                 parsed = urlsplit(request.url)
                 if parsed.scheme.lower() not in {"http", "https"}:
@@ -381,7 +381,7 @@ class PlaywrightBrowserBackend:
             if self._browser is not None:
                 return
             try:
-                from playwright.async_api import async_playwright
+                from playwright.async_api import async_playwright  # type: ignore[import-not-found]
             except ImportError as exc:
                 raise BrowserBackendError(
                     "playwright 后端未安装；运行 "
@@ -398,15 +398,14 @@ class PlaywrightBrowserBackend:
                 raise BrowserBackendError(
                     "Chromium 启动失败；请运行 `playwright install chromium`") from exc
 
-    def _session(self, session_id: str):
+    def _session(self, session_id: str) -> tuple[Any, Any]:
         record = self._sessions.get(session_id)
         if record is None:
             raise BrowserSessionError(f"浏览器会话不存在或已关闭: {session_id}")
         return record
 
-    async def _snapshot_page(
-        self, session_id: str, page, context, *, max_chars: int,
-    ) -> BrowserPage:
+    async def _snapshot_page(self, session_id: str, page: Any, context: Any,
+                             *, max_chars: int) -> BrowserPage:
         title = await page.title()
         body_text = await page.evaluate(
             "(limit) => (document.body && document.body.innerText || '').slice(0, limit)",
@@ -590,7 +589,7 @@ class _PageParser(HTMLParser):
         self._in_title = False
         self._active: Optional[dict[str, Any]] = None
 
-    def handle_starttag(self, tag: str, attrs) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
         tag = tag.lower()
         values = {str(key).lower(): str(value or "") for key, value in attrs}
         if tag in self._SKIP_TAGS:

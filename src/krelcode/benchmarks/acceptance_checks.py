@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Mapping
+from typing import Mapping, Protocol
 
 from .acceptance_models import (
     AcceptanceCheckResult,
     AcceptanceCheckStatus,
     AcceptanceRequirement,
 )
+
+
+class _ReportMetricsPort(Protocol):
+    def metric_summary(self) -> dict[str, dict[str, object]]: ...
+
+    def mode_summary(self) -> dict[str, dict[str, object]]: ...
 
 
 def _check(
@@ -69,13 +75,19 @@ def _timestamp_is_fresh(
     return -300.0 <= age <= max_age_seconds
 
 
-def _report_metric(report, metric_name: str) -> Mapping[str, object]:
+def _report_metric(
+    report: _ReportMetricsPort,
+    metric_name: str,
+) -> Mapping[str, object]:
     metrics = report.metric_summary()
     value = metrics.get(metric_name, {})
     return value if isinstance(value, Mapping) else {}
 
 
-def _report_mode(report, mode_name: str) -> Mapping[str, object]:
+def _report_mode(
+    report: _ReportMetricsPort,
+    mode_name: str,
+) -> Mapping[str, object]:
     modes = report.mode_summary()
     value = modes.get(mode_name, {})
     return value if isinstance(value, Mapping) else {}

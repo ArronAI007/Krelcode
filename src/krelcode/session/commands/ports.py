@@ -491,6 +491,9 @@ class RewindResultPort(Protocol):
     def target_index(self) -> int: ...
 
     @property
+    def target_turn_id(self) -> str: ...
+
+    @property
     def label(self) -> str: ...
 
     @property
@@ -498,6 +501,9 @@ class RewindResultPort(Protocol):
 
     @property
     def files(self) -> RewindFilesPort: ...
+
+    @property
+    def context_checkpoint_id(self) -> str: ...
 
 
 @runtime_checkable

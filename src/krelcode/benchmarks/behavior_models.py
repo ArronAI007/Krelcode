@@ -5,9 +5,11 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Mapping, Sequence
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 from ..core.events import (
+    AgentEvent,
     ContextCompressed,
     EventBus,
     LLMResponseReceived,
@@ -15,7 +17,7 @@ from ..core.events import (
     ToolCallStarted,
 )
 from ..core.messages import ToolCall
-from ..session.memory import MemoryKind, MemoryScope
+from ..session.memory_models import MemoryKind, MemoryScope
 
 
 BEHAVIOR_BENCHMARK_SCHEMA_VERSION = 4
@@ -80,7 +82,7 @@ class BehaviorCase:
     id: str
     description: str
     seed: Callable[[Path, Path], tuple[MemorySeed, ...]]
-    execute: Callable[["BehaviorSession"], Awaitable["BehaviorOutcome"]]
+    execute: Callable[[Any], Awaitable["BehaviorOutcome"]]
     expected_workflow: str = ""
 
     def as_dict(self) -> dict[str, str]:
@@ -157,7 +159,7 @@ class BehaviorEventObserver:
     def attach(self, bus: EventBus) -> Callable[[], None]:
         return bus.subscribe(self.on_event)
 
-    def on_event(self, event) -> None:
+    def on_event(self, event: AgentEvent) -> None:
         if isinstance(event, ToolCallStarted):
             self._calls.append(_LiveToolCall(
                 call=event.tool_call, started_at=time.monotonic()))
@@ -448,10 +450,21 @@ def _report_mapping(value: object, label: str) -> Mapping[str, object]:
 
 
 def _report_int(value: object, label: str) -> int:
+    if not isinstance(value, (int, float, str)):
+        raise ValueError(f"{label} 必须是整数")
     try:
         return int(value or 0)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{label} 必须是整数") from exc
+
+
+def _report_float(value: object, label: str) -> float:
+    if not isinstance(value, (int, float, str)):
+        raise ValueError(f"{label} 必须是数字")
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} 必须是数字") from exc
 
 
 def _report_sequence(value: object, label: str) -> Sequence[object]:
@@ -471,7 +484,9 @@ def _behavior_report_from_mapping(payload: Mapping[str, object]) -> BehaviorRepo
     """
     if payload.get("kind") != "live_model_behavior":
         raise ValueError("不是 live_model_behavior 报告")
-    if int(payload.get("schema_version", 0) or 0) != BEHAVIOR_BENCHMARK_SCHEMA_VERSION:
+    if _report_int(
+        payload.get("schema_version"), "schema_version"
+    ) != BEHAVIOR_BENCHMARK_SCHEMA_VERSION:
         raise ValueError("live benchmark report schema 不兼容")
     profile = dict(_report_mapping(payload.get("profile", {}), "profile"))
     results: list[BehaviorTrialResult] = []
@@ -531,7 +546,8 @@ def _behavior_report_from_mapping(payload: Mapping[str, object]) -> BehaviorRepo
                 str(key): _report_int(value, f"usage.{key}")
                 for key, value in usage_raw.items()
             },
-            cost_usd=None if cost is None else float(cost),
+            cost_usd=(
+                None if cost is None else _report_float(cost, "cost_usd")),
             duration_ms=max(0, _report_int(
                 item.get("duration_ms"), "duration_ms")),
             error=str(item.get("error", "") or ""),

@@ -22,7 +22,8 @@ from ..agent.context.context_checkpoint import (
     restore_context_checkpoint,
 )
 from ..session.lifecycle import SessionLifecycle
-from ..session.memory import MemoryKind, MemoryScope, MemoryStore
+from ..session.memory import MemoryStore
+from ..session.memory_models import MemoryKind, MemoryScope
 from ..tools.registry import ToolRegistry
 from .behavior_helpers import (
     _answer_has_int,
@@ -44,6 +45,12 @@ from .behavior_session import BehaviorSession
 
 
 class _MCPPromptInjectionSupervisor:
+    def status(self) -> list[object]:
+        return []
+
+    async def close_all(self) -> None:
+        return None
+
     def server_instructions(self) -> tuple[tuple[str, str], ...]:
         return ((
             "benchmark-server",

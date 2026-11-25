@@ -7,7 +7,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, TypeVar, cast
 
 from ..agent.prompts import (
     CURRENT_PROMPT_RELEASE,
@@ -40,12 +40,18 @@ from ..agent.prompt.prompt_parity import (
     load_prompt_baseline,
     save_prompt_baseline,
 )
+from ..agent.prompt.prompt_release import ModelProfileCalibration
+from .acceptance_models import FinalAcceptanceReport
+from .tuning import PromptTuningReport
 from .report_store import (
     DEFAULT_BEHAVIOR_REPORT_PATH,
     aggregate_behavior_report_files,
     save_behavior_report,
 )
 from .suite import BENCHMARK_SUITES, BenchmarkSuiteError, resolve_suite, shard_cases
+
+
+T = TypeVar("T")
 
 
 def _safe_error(
@@ -62,8 +68,11 @@ def _safe_error(
     return f"{type(error).__name__}: {message[:limit]}"
 
 
-def _configured_prompt_calibrations(config, workspace: Path):
-    calibrations = []
+def _configured_prompt_calibrations(
+    config: Mapping[str, object] | None,
+    workspace: Path,
+) -> tuple[ModelProfileCalibration, ...]:
+    calibrations: list[ModelProfileCalibration] = []
     for raw_path in prompt_calibration_paths_from_config(config):
         source = Path(raw_path).expanduser()
         if not source.is_absolute():
@@ -217,11 +226,11 @@ def _parity_payload(
     report: BehaviorReport,
     *,
     include_content: bool,
-    tuning_report=None,
+    tuning_report: PromptTuningReport | None = None,
     gate: PromptParityGateResult | None = None,
     baseline_path: str = "",
     report_path: str = "",
-    final_acceptance=None,
+    final_acceptance: FinalAcceptanceReport | None = None,
 ) -> object:
     benchmark = report.as_dict(include_content=include_content)
     if (
@@ -246,10 +255,10 @@ def _parity_payload(
     return payload
 
 
-def _loaded_attr(module_name: str, name: str, fallback):
+def _loaded_attr(module_name: str, name: str, fallback: T) -> T:
     """Read an already-loaded compatibility facade without importing it."""
     module = sys.modules.get(module_name)
-    return getattr(module, name, fallback) if module is not None else fallback
+    return cast(T, getattr(module, name, fallback)) if module is not None else fallback
 
 
 def run_live_command(args: argparse.Namespace) -> int:

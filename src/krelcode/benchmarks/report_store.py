@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import TYPE_CHECKING, Mapping, Sequence
 
 from ..agent.prompt.prompt_benchmark_report import (
     BEHAVIOR_REPORT_KIND,
@@ -19,6 +19,9 @@ from ..agent.prompt.prompt_benchmark_report import (
     DEFAULT_BEHAVIOR_REPORT_PATH,
     load_behavior_report_summary,
 )
+
+if TYPE_CHECKING:
+    from .behavior_models import BehaviorReport
 
 
 def _mapping(value: object) -> Mapping[str, object]:
@@ -63,7 +66,7 @@ def save_behavior_report(report: object, path: Path | str) -> Path:
     return destination
 
 
-def load_behavior_report(path: Path | str) -> object:
+def load_behavior_report(path: Path | str) -> "BehaviorReport":
     """Load one strict, content-light live report for aggregation."""
     source = Path(path).expanduser()
     try:
@@ -87,7 +90,7 @@ def aggregate_behavior_report_files(
     paths: Sequence[Path | str],
     *,
     require_complete: bool = True,
-) -> object:
+) -> "BehaviorReport":
     """Merge deterministic shard reports without trusting summary counters."""
     from .behavior_reporting import aggregate_behavior_reports
 

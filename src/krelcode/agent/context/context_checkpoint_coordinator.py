@@ -219,7 +219,7 @@ class ContextCheckpointCoordinator:
 
     def _session_id(self) -> str:
         runtime = self.loop.tool_context.runtime
-        return str(getattr(runtime, "session_id", "") or "")
+        return str(runtime.session_id or "")
 
 
 def _memory_query(history: Sequence[Message]) -> str:

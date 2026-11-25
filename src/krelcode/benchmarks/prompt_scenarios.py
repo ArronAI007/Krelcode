@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import contextlib
 import hashlib
@@ -11,7 +12,6 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Mapping, Sequence
 from unittest.mock import patch
 
@@ -19,6 +19,7 @@ from ..agent.context.compression import ContextManager
 from ..agent.context import ContextOptions, ContextSection, WorkspaceContext
 from ..agent.context.context_assembler import ContextAssembler
 from ..agent.context.context_cache_ledger import ContextCacheLedger
+from ..agent.context.context_plan import ContextPlanSnapshot
 from ..agent.context.context_source import default_context_sources
 from ..agent.prompt.cyber_risk import cyber_risk_fragment
 from ..agent.prompt.fragments import LAYER_L7_EVIDENCE, PromptFragmentRegistry, base_fragment, sync_rule_fragments
@@ -26,19 +27,30 @@ from ..agent.turn.loop import AgentLoop
 from ..agent.prompt.prompt_plan import PromptPlanSnapshot
 from ..agent.rules import RuleLoader
 from ..agent.turn.runtime import AgentRuntime
+from ..agent.usage import UsageTracker
 from ..core.tokens import estimate_text_tokens
 from ..agent.context.working_context import WorkingContextStore
 from ..core.events import EventBus
 from ..core.messages import Message
 from ..core.redact import SecretRedactor
-from ..llm.base import EvidenceChannel, PreparedLLMRequest, ProviderCapabilities, StreamFinished, TextDelta, resolve_evidence_channel, resolve_system_prompt_blocks
+from ..llm.base import (
+    EvidenceChannel,
+    LLMEvent,
+    PreparedLLMRequest,
+    ProviderCapabilities,
+    StreamFinished,
+    TextDelta,
+    resolve_evidence_channel,
+    resolve_system_prompt_blocks,
+)
 from ..safety.policy import AllowAllPolicy
 from ..sdk import KrelcodeClient, KrelcodeOptions
 from ..session.compact_checkpoint import CompactCheckpointStore
 from ..agent.context.context_checkpoint import ContextCheckpointCoordinator, ContextCheckpointStore, WorkspaceFingerprint, hash_tracked_files, restore_context_checkpoint
 from ..session.controller import SessionController
 from ..session.lifecycle import SessionLifecycle
-from ..session.memory import MemoryKind, MemoryScope, MemoryStore
+from ..session.memory import MemoryStore
+from ..session.memory_models import MemoryKind, MemoryScope
 from ..session.runner import run_session
 from ..session.runtime_ports import SessionRuntimePorts
 from ..session.stream_json_runner import run_stream_json_session
@@ -65,12 +77,33 @@ from .prompt_models import (
 )
 
 
+def _require_context_plan(loop: AgentLoop) -> ContextPlanSnapshot:
+    plan = loop.last_context_plan
+    if plan is None:
+        raise AssertionError("benchmark turn did not produce a context plan")
+    return plan
+
+
+def _require_ledger(plan: ContextPlanSnapshot) -> ContextCacheLedger:
+    ledger = plan.cache_ledger
+    if ledger is None:
+        raise AssertionError("benchmark context plan has no cache ledger")
+    return ledger
+
+
+def _require_prepared(provider: _BenchmarkProvider) -> PreparedLLMRequest:
+    prepared = provider.last_prepared
+    if prepared is None:
+        raise AssertionError("benchmark provider has no prepared request")
+    return prepared
+
+
 async def _run_main(root: Path) -> _ScenarioOutcome:
     fixture = _BenchmarkFixture(root)
     loop = fixture.loop
     prompt = "请解释 `src/a.py`"
     await loop.run(prompt, turn_id="benchmark-main-1")
-    first_plan = loop.last_context_plan.prompt_plan
+    first_plan = _require_context_plan(loop).prompt_plan
     fixture.memory.add(
         "A second benchmark evidence item must never become an instruction.",
         scope=MemoryScope.PROJECT,
@@ -78,7 +111,7 @@ async def _run_main(root: Path) -> _ScenarioOutcome:
         source="benchmark-followup",
     )
     await loop.run(prompt, turn_id="benchmark-main-2")
-    second_plan = loop.last_context_plan.prompt_plan
+    second_plan = _require_context_plan(loop).prompt_plan
     second_ledger = loop.last_context_cache_ledger
 
     checks = [
@@ -108,7 +141,7 @@ async def _run_main(root: Path) -> _ScenarioOutcome:
             PromptBenchmarkMetric.PROVIDER_HASH_EXACT,
             second_ledger is not None
             and _provider_hash_is_exact(
-                second_plan, second_ledger, fixture.provider.last_prepared),
+                second_plan, second_ledger, _require_prepared(fixture.provider)),
             "ledger digest matched the exact prepared provider body",
         ),
     ]
@@ -131,7 +164,7 @@ async def _run_headless(root: Path) -> _ScenarioOutcome:
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         rc = await run_session(
-            SimpleNamespace(
+            argparse.Namespace(
                 message="explain src/a.py",
                 output_format="text",
                 resume=None,
@@ -145,7 +178,7 @@ async def _run_headless(root: Path) -> _ScenarioOutcome:
             redactor=SecretRedactor(),
             log=lambda _line: None,
         )
-    plan = fixture.loop.last_context_plan.prompt_plan
+    plan = _require_context_plan(fixture.loop).prompt_plan
     ledger = fixture.loop.last_context_cache_ledger
     checks = [
         _check(
@@ -163,7 +196,7 @@ async def _run_headless(root: Path) -> _ScenarioOutcome:
             PromptBenchmarkMetric.PROVIDER_HASH_EXACT,
             ledger is not None
             and _provider_hash_is_exact(
-                plan, ledger, fixture.provider.last_prepared),
+                plan, ledger, _require_prepared(fixture.provider)),
             "headless ledger matched the exact provider body",
         ),
     ]
@@ -203,7 +236,7 @@ async def _run_stream_json(root: Path) -> _ScenarioOutcome:
     last = assembled[-1] if assembled else {}
     snapshot = last.get("snapshot") or {}
     ledger = last.get("ledger") or {}
-    plan = fixture.loop.last_context_plan.prompt_plan
+    plan = _require_context_plan(fixture.loop).prompt_plan
     checks = [
         _check(
             PromptBenchmarkMetric.STABLE_PREFIX_ISOLATED,
@@ -217,7 +250,7 @@ async def _run_stream_json(root: Path) -> _ScenarioOutcome:
             PromptBenchmarkMetric.PROVIDER_HASH_EXACT,
             bool(ledger.get("provider_request_digest"))
             and ledger.get("provider_request_digest")
-            == fixture.provider.last_prepared.payload_digest
+            == _require_prepared(fixture.provider).payload_digest
             and ledger.get("wire_fidelity") == "exact",
             "stream-json ledger matched the exact provider body",
         ),
@@ -319,7 +352,7 @@ async def _run_subagent(root: Path) -> _ScenarioOutcome:
             "review src/a.py benchmark evidence", fork_context=True)
         handle = await manager.wait("a1", timeout=10)
     child = handle.loop
-    plan = child.last_context_plan.prompt_plan
+    plan = _require_context_plan(child).prompt_plan
     ledger = child.last_context_cache_ledger
     inherited = [
         fragment for fragment in plan.fragments
@@ -365,7 +398,7 @@ async def _run_subagent(root: Path) -> _ScenarioOutcome:
             PromptBenchmarkMetric.PROVIDER_HASH_EXACT,
             ledger is not None
             and _provider_hash_is_exact(
-                plan, ledger, fixture.provider.last_prepared),
+                plan, ledger, _require_prepared(fixture.provider)),
             "subagent ledger matched its exact provider body",
         ),
     ]
@@ -400,7 +433,7 @@ async def _run_resume(root: Path) -> _ScenarioOutcome:
     fixture = _BenchmarkFixture(root)
     loop = fixture.loop
     await loop.run("resume benchmark task", turn_id="resume-source")
-    original_plan = loop.last_context_plan
+    original_plan = _require_context_plan(loop)
     store = ContextCheckpointStore(fixture.root)
     checkpoint = store.record(
         history=loop.history,
@@ -427,7 +460,7 @@ async def _run_resume(root: Path) -> _ScenarioOutcome:
         memory_store=fixture.memory,
     )
     await resumed.refresh_workspace_context()
-    restored_plan = resumed.last_context_plan
+    restored_plan = _require_context_plan(resumed)
     restored_ledger = resumed.last_context_cache_ledger
     live_sections = {
         section.name for section in getattr(resumed.workspace_context, "sections", ())
@@ -447,7 +480,7 @@ async def _run_resume(root: Path) -> _ScenarioOutcome:
             restored_ledger is not None
             and bool(restored_ledger.provider_request_digest)
             and restored_ledger.provider_request_digest
-            == original_plan.cache_ledger.provider_request_digest,
+            == _require_ledger(original_plan).provider_request_digest,
             "resume retained the source provider request identity",
         ),
         _check(
@@ -466,7 +499,7 @@ async def _run_resume(root: Path) -> _ScenarioOutcome:
         restored_plan.matches_history(resumed.history)
         and bool(result.integrity.stale)
         and "workspace-refresh"
-        in result.context_plan.cache_ledger.resume_invalidations,
+        in _require_ledger(result.context_plan).resume_invalidations,
         "resume restored history and invalidated stale workspace context",
     ))
     return _ScenarioOutcome(
@@ -478,8 +511,9 @@ async def _run_resume(root: Path) -> _ScenarioOutcome:
             "stale_files": len(result.integrity.stale),
             "memory_ids": list(result.memory_ids),
             "resume_invalidations": list(
-                result.context_plan.cache_ledger.resume_invalidations),
-            "restored_from": result.context_plan.cache_ledger.restored_from_checkpoint_id,
+                _require_ledger(result.context_plan).resume_invalidations),
+            "restored_from": _require_ledger(
+                result.context_plan).restored_from_checkpoint_id,
             "live_workspace_sections": sorted(live_sections),
             "old_git_state_present": "git" in live_sections,
         },
@@ -503,7 +537,7 @@ async def _run_fork(root: Path) -> _ScenarioOutcome:
         history=loop.history,
         session_id=source_session,
         turn_id="fork-source",
-        context_plan=loop.last_context_plan,
+        context_plan=_require_context_plan(loop),
     )
     assert checkpoint is not None
     sessions = fixture.root / ".krelcode" / "sessions"
@@ -545,12 +579,11 @@ async def _run_fork(root: Path) -> _ScenarioOutcome:
         entry.id for entry in fixture.memory.list(
             limit=0, scopes=(MemoryScope.SESSION,))
     }
-    restored_plan = loop.last_context_plan
+    restored_plan = _require_context_plan(loop)
     checks = [
         _check(
             PromptBenchmarkMetric.STABLE_PREFIX_ISOLATED,
-            restored_plan is not None
-            and bool(restored_plan.stable_hash)
+            bool(restored_plan.stable_hash)
             and not any(
                 fragment.stable
                 for fragment in restored_plan.prompt_plan.fragments
@@ -560,8 +593,7 @@ async def _run_fork(root: Path) -> _ScenarioOutcome:
         ),
         _check(
             PromptBenchmarkMetric.MEMORY_NOT_INSTRUCTION,
-            restored_plan is not None
-            and _memory_is_evidence(restored_plan.prompt_plan),
+            _memory_is_evidence(restored_plan.prompt_plan),
             "fork memory remained evidence",
         ),
         _check(
@@ -576,9 +608,8 @@ async def _run_fork(root: Path) -> _ScenarioOutcome:
     ]
     return _ScenarioOutcome(
         checks=checks,
-        prompt_plan=restored_plan.prompt_plan if restored_plan else None,
-        ledger=(
-            restored_plan.cache_ledger if restored_plan is not None else None),
+        prompt_plan=restored_plan.prompt_plan,
+        ledger=restored_plan.cache_ledger,
         facts={
             "source_checkpoint_id": checkpoint.id,
             "fork_checkpoint_id": copied.id,
@@ -603,8 +634,8 @@ async def _run_rewind(root: Path) -> _ScenarioOutcome:
     before_second = list(loop.history)
     await loop.run("rewind second request", turn_id="rewind-2")
     result = controller.rewind.rewind(2)
-    plan = loop.last_context_plan
-    ledger = loop.last_context_cache_ledger
+    plan = _require_context_plan(loop)
+    ledger = _require_ledger(_require_context_plan(loop))
     checks = [
         _check(
             PromptBenchmarkMetric.COMPACT_RECOVERABLE,
@@ -689,8 +720,8 @@ async def _run_compact(root: Path) -> _ScenarioOutcome:
     # compacting the same summary again.
     manager.max_tokens = 4_096
     await loop.run("continue after compact", turn_id="compact-next")
-    plan = loop.last_context_plan.prompt_plan
-    ledger = loop.last_context_cache_ledger
+    plan = _require_context_plan(loop).prompt_plan
+    ledger = _require_ledger(_require_context_plan(loop))
     context_store = ContextCheckpointStore(fixture.root)
     restore_point = context_store.record(
         history=pre_compact,
@@ -698,7 +729,7 @@ async def _run_compact(root: Path) -> _ScenarioOutcome:
         turn_id="compact-before",
         compact_checkpoint_id=checkpoint.id,
         compact_summary=checkpoint.summary.as_dict(),
-        context_plan=loop.last_context_plan,
+        context_plan=_require_context_plan(loop),
     )
     assert restore_point is not None
     restored_manager = ContextManager(
@@ -714,7 +745,7 @@ async def _run_compact(root: Path) -> _ScenarioOutcome:
     checks = [
         _check(
             PromptBenchmarkMetric.COMPACT_RECOVERABLE,
-            summary.goal
+            bool(summary.goal)
             and any(item.path == "src/a.py" for item in summary.files)
             and any(item.status == "passed" for item in summary.tests)
             and "run the full test suite" in summary.next_steps
@@ -741,7 +772,7 @@ async def _run_compact(root: Path) -> _ScenarioOutcome:
             PromptBenchmarkMetric.PROVIDER_HASH_EXACT,
             ledger is not None
             and _provider_hash_is_exact(
-                plan, ledger, provider.last_prepared),
+                plan, ledger, _require_prepared(provider)),
             "post-compact provider request matched the ledger digest",
         ),
     ]
@@ -762,10 +793,6 @@ async def _run_compact(root: Path) -> _ScenarioOutcome:
     )
 
 
-class _UsageTrackerFactory:
-    """Small late-binding helper so importing benchmarks stays side-effect free."""
-
-    def __new__(cls):
-        from ..agent.usage import UsageTracker
-
-        return UsageTracker()
+def _UsageTrackerFactory() -> UsageTracker:
+    """Small factory retained as a monkeypatch seam for compatibility."""
+    return UsageTracker()

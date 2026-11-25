@@ -13,7 +13,7 @@ import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from .acceptance_checks import (
     _check,
@@ -39,6 +39,18 @@ from .acceptance_models import (
     _content_light_violations,
     _hash_payload,
 )
+from .behavior_models import BehaviorReport
+from .prompt_models import PromptBenchmarkReport
+from ..agent.prompt.prompt_parity import PromptParityGateResult
+
+
+def _metric_int(value: object) -> int:
+    if not isinstance(value, (int, float, str, bytes, bytearray)):
+        return 0
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 class FinalAcceptanceRunner:
@@ -48,7 +60,7 @@ class FinalAcceptanceRunner:
         self,
         contract: FinalAcceptanceContract = FINAL_ACCEPTANCE_CONTRACT,
         *,
-        offline_report=None,
+        offline_report: PromptBenchmarkReport | None = None,
         workspace: Path | None = None,
         entrypoint_probe: Callable[[], tuple[bool, str, Mapping[str, object]]] | None = None,
     ) -> None:
@@ -62,8 +74,8 @@ class FinalAcceptanceRunner:
         *,
         include_sdk: bool = True,
         sdk_timeout: float = 30.0,
-        live_gate=None,
-        live_report=None,
+        live_gate: PromptParityGateResult | None = None,
+        live_report: BehaviorReport | None = None,
         live_max_age_seconds: float = FINAL_ACCEPTANCE_LIVE_MAX_AGE_SECONDS,
     ) -> FinalAcceptanceReport:
         started = time.monotonic()
@@ -143,7 +155,12 @@ class FinalAcceptanceRunner:
             duration_ms=max(0, int((time.monotonic() - started) * 1000)),
         )
 
-    def _run_offline(self, *, include_sdk: bool, sdk_timeout: float):
+    def _run_offline(
+        self,
+        *,
+        include_sdk: bool,
+        sdk_timeout: float,
+    ) -> PromptBenchmarkReport:
         from .prompt_cases import BENCHMARK_CASES
         from .prompt_models import PromptBenchmarkMode
         from .prompt_runner import PromptBenchmarkRunner
@@ -224,8 +241,8 @@ class FinalAcceptanceRunner:
         *,
         probes: Mapping[str, tuple[bool, str, Mapping[str, object]]],
         offline_error: str,
-        live_gate,
-        live_report,
+        live_gate: PromptParityGateResult | None,
+        live_report: BehaviorReport | None,
         live_max_age_seconds: float,
     ) -> AcceptanceCheckResult:
         if requirement.id in probes:
@@ -259,7 +276,7 @@ class FinalAcceptanceRunner:
     def _offline_check(
         self,
         requirement: AcceptanceRequirement,
-        report,
+        report: PromptBenchmarkReport,
     ) -> AcceptanceCheckResult:
         passed = bool(getattr(report, "passed", False))
         evidence: dict[str, object] = {
@@ -296,14 +313,15 @@ class FinalAcceptanceRunner:
             passed = passed and bool(metric.get("passed"))
             detail = "compact checkpoint and handoff recovery passed"
         elif requirement.id == "session-resume-fork-rewind":
-            modes = (
+            session_modes = (
                 _report_mode(report, "resume"),
                 _report_mode(report, "fork"),
                 _report_mode(report, "rewind"),
             )
             passed = passed and all(
-                bool(item.get("covered")) and int(item.get("failed", 0) or 0) == 0
-                for item in modes
+                bool(item.get("covered"))
+                and _metric_int(item.get("failed")) == 0
+                for item in session_modes
             )
             detail = "resume, fork and rewind production surfaces passed"
         elif requirement.id == "subagent-context-isolation":
@@ -317,7 +335,8 @@ class FinalAcceptanceRunner:
         elif requirement.id == "all-execution-surfaces":
             modes = report.mode_summary()
             passed = passed and len(modes) == 9 and all(
-                bool(item.get("covered")) and int(item.get("failed", 0) or 0) == 0
+                bool(item.get("covered"))
+                and _metric_int(item.get("failed")) == 0
                 for item in modes.values()
             )
             detail = "all nine execution surfaces passed"
@@ -336,8 +355,8 @@ class FinalAcceptanceRunner:
         self,
         requirement: AcceptanceRequirement,
         *,
-        live_gate,
-        live_report,
+        live_gate: PromptParityGateResult | None,
+        live_report: BehaviorReport | None,
         max_age_seconds: float,
     ) -> AcceptanceCheckResult:
         if live_gate is None:
@@ -460,10 +479,10 @@ class FinalAcceptanceRunner:
             issues.append("case-manifest")
         for case_id in PROMPT_PARITY_CONTRACT.required_case_ids:
             value = case_summary.get(case_id, {})
-            trials = int(value.get("trials", 0) or 0)
+            trials = _metric_int(value.get("trials"))
             if (
                 trials < PROMPT_PARITY_CONTRACT.minimum_trials
-                or int(value.get("failed", 0) or 0) != 0
+                or _metric_int(value.get("failed")) != 0
                 or not bool(value.get("stable", False))
                 or not bool(value.get("pass_at_k", False))
             ):
@@ -528,7 +547,11 @@ class FinalAcceptanceRunner:
             return FinalAcceptanceStatus.PENDING_LIVE
         return FinalAcceptanceStatus.ACCEPTED
 
-    def _fingerprints(self, live_gate, live_report=None) -> dict[str, object]:
+    def _fingerprints(
+        self,
+        live_gate: PromptParityGateResult | None,
+        live_report: BehaviorReport | None = None,
+    ) -> dict[str, object]:
         from ..agent.prompts import (
             CURRENT_PROMPT_RELEASE,
             FROZEN_PROMPT_RELEASE_HASH,
@@ -570,7 +593,7 @@ class FinalAcceptanceRunner:
 
     # -- runtime probes ---------------------------------------------------------
 
-    def _probe_entrypoints(self):
+    def _probe_entrypoints(self) -> tuple[bool, str, Mapping[str, object]]:
         if self.entrypoint_probe is not None:
             return self.entrypoint_probe()
         # Exercise the real process boundary without importing it from the
@@ -608,12 +631,12 @@ class FinalAcceptanceRunner:
             "full_path_exit_code": full.returncode,
         }
 
-    def _probe_provider(self):
+    def _probe_provider(self) -> tuple[bool, str, Mapping[str, object]]:
         from ..core.messages import Message
-        from ..llm.base import StreamFinished, TextDelta
+        from ..llm.base import LLMEvent, StreamFinished, TextDelta
         from ..llm.providers.mock import MockProvider
 
-        async def collect_events():
+        async def collect_events() -> list[LLMEvent]:
             provider = MockProvider(scripted=["acceptance"], chunk_size=2)
             return [
                 event async for event in provider.stream(
@@ -630,7 +653,7 @@ class FinalAcceptanceRunner:
             "stream_finished": finished,
         }
 
-    def _probe_tool_pool(self):
+    def _probe_tool_pool(self) -> tuple[bool, str, Mapping[str, object]]:
         from ..agent.turn.tool_pool import TurnToolPool
         from ..contracts.tool import PermissionMode, RuntimeSnapshot
         from ..tools.builtin.read_file import ReadFileTool
@@ -653,13 +676,14 @@ class FinalAcceptanceRunner:
                 )
             )
         )
+        descriptor = pool.descriptor("read_file")
         return passed, "dynamic tool pool filtered mutation and preserved identity", {
             "eligible": len(pool.names()),
             "excluded": len(pool.excluded_items()),
-            "read_only": bool(pool.descriptor("read_file").read_only),
+            "read_only": bool(descriptor and descriptor.read_only),
         }
 
-    def _probe_extensions(self):
+    def _probe_extensions(self) -> tuple[bool, str, Mapping[str, object]]:
         from ..extensions import ExtensionKind, ExtensionRegistry
         from ..session.commands.types import CommandSource
 
@@ -680,7 +704,7 @@ class FinalAcceptanceRunner:
             "command_sources": len(command_sources),
         }
 
-    def _probe_safety(self):
+    def _probe_safety(self) -> tuple[bool, str, Mapping[str, object]]:
         from ..agent.turn.tool_pool import TurnToolPool
         from ..safety.policy import classify_protected_path
         from ..contracts.tool import PermissionMode, RuntimeSnapshot
@@ -699,7 +723,7 @@ class FinalAcceptanceRunner:
             "plan_mutation_excluded": pool.get("write_file") is None,
         }
 
-    def _probe_secret_paths(self):
+    def _probe_secret_paths(self) -> tuple[bool, str, Mapping[str, object]]:
         from ..core.secret_guard import classify_secret_path
 
         secret_paths = (".env", "credentials.json", ".ssh/id_rsa", "token.json")
@@ -715,7 +739,7 @@ class FinalAcceptanceRunner:
             "normal_source_allowed": safe_path,
         }
 
-    def _probe_commands(self):
+    def _probe_commands(self) -> tuple[bool, str, Mapping[str, object]]:
         from ..session.commands.builtin import builtin_command_registry
 
         registry = builtin_command_registry()
@@ -733,7 +757,7 @@ class FinalAcceptanceRunner:
             "missing": tuple(missing),
         }
 
-    def _probe_prompt_release(self):
+    def _probe_prompt_release(self) -> tuple[bool, str, Mapping[str, object]]:
         from ..agent.prompts import (
             CURRENT_PROMPT_RELEASE,
             FROZEN_PROMPT_RELEASE_HASH,

@@ -37,6 +37,8 @@ from .acceptance_models import (
     _hash_payload,
 )
 from .acceptance_runner import FinalAcceptanceRunner
+from .behavior_models import BehaviorReport
+from ..agent.prompt.prompt_parity import PromptParityGateResult
 
 
 def run_offline_acceptance(
@@ -45,8 +47,8 @@ def run_offline_acceptance(
     include_sdk: bool = True,
     sdk_timeout: float = 30.0,
     workspace: Path | None = None,
-    live_gate=None,
-    live_report=None,
+    live_gate: PromptParityGateResult | None = None,
+    live_report: BehaviorReport | None = None,
     live_max_age_seconds: float = FINAL_ACCEPTANCE_LIVE_MAX_AGE_SECONDS,
 ) -> int:
     report = FinalAcceptanceRunner(workspace=workspace).run(

@@ -124,7 +124,10 @@ async def build_security_review_input(
     mode = "staged" if staged else "working-tree"
     safe_focus = str(focus or "").strip()
     changed = _changed_files(diff)
-    redact = (lambda value: redactor.redact(value)) if redactor else (lambda value: value)
+
+    def redact(value: str) -> str:
+        return redactor.redact(value) if redactor is not None else value
+
     safe_focus = redact(safe_focus)
     safe_diff = redact(truncate_middle(diff, MAX_SECURITY_DIFF_CHARS))
     safe_untracked = redact(truncate_middle(

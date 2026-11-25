@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from ..core.redact import redact_obvious_secrets
 from ..contracts.tool import ToolContext, ToolResult, ToolTier
@@ -22,7 +22,7 @@ MAX_SCREENSHOT_PATH_CHARS = 500
 class _BrowserTool:
     tool_tier = ToolTier.DISCOVERABLE
     prompt_version = "1"
-    runtime: Optional[BrowserRuntime] = None
+    runtime: BrowserRuntime
 
     def _error(self, prefix: str, exc: Exception) -> ToolResult:
         return ToolResult(

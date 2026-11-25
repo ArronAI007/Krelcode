@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 __all__ = [
     "BEHAVIOR_BENCHMARK_SCHEMA_VERSION",
     "BEHAVIOR_CASES",
@@ -80,7 +82,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name not in __all__:
         raise AttributeError(name)
     if (

@@ -285,9 +285,15 @@ class SecurityReviewReport:
                 raw, SECURITY_REVIEW_REPORT_SCHEMA, label="security report")
         except PromptSurfaceSchemaError as exc:
             raise SecurityReviewReportError(str(exc)) from exc
+        findings_raw = raw.get("findings", ())
         findings = tuple(
             _finding_from_dict(item)
-            for item in raw.get("findings", ())
+            for item in (
+                findings_raw
+                if isinstance(findings_raw, Sequence)
+                and not isinstance(findings_raw, (str, bytes))
+                else ()
+            )
             if isinstance(item, Mapping)
         )
         coverage_raw = raw.get("coverage")

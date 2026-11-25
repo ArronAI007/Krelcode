@@ -6,11 +6,20 @@ from typing import Mapping, Protocol
 
 
 class BehaviorReportPort(Protocol):
-    passed: bool
-    profile: Mapping[str, object]
-    schema_version: int
-    provider: str
-    model: str
+    @property
+    def passed(self) -> bool: ...
+
+    @property
+    def profile(self) -> Mapping[str, object]: ...
+
+    @property
+    def schema_version(self) -> int: ...
+
+    @property
+    def provider(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
 
     def case_summary(self) -> Mapping[str, Mapping[str, object]]: ...
 

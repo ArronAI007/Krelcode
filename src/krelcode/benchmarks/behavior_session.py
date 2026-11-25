@@ -32,7 +32,8 @@ from ..llm.base import LLMProvider
 from ..safety.policy import SandboxPolicy
 from ..safety.sandbox import ExecutionSandbox
 from ..session.lifecycle import SessionLifecycle
-from ..session.memory import MemoryKind, MemoryScope, MemoryStore
+from ..session.memory import MemoryStore
+from ..session.memory_models import MemoryKind, MemoryScope
 from ..contracts.tool import PermissionMode, RunMode, RuntimeSnapshot, ToolContext
 from ..tools.registry import ToolRegistry
 from .behavior_models import (
@@ -261,16 +262,23 @@ class BehaviorSession:
             "full_hash": plan.full_hash[:16],
         }
         registry = loop.services.prompt.surface_registry
-        health = getattr(registry, "health", lambda: {})()
+        health = registry.health()
         if isinstance(health, Mapping):
-            facts["prompt_surfaces"] = int(health.get("surfaces", 0) or 0)
-            facts["observed_prompt_surfaces"] = int(
-                health.get("observed", 0) or 0)
-            facts["stale_prompt_surfaces"] = int(
-                health.get("stale", 0) or 0)
-            facts["prompt_surface_contract_failures"] = int(
-                health.get("contract_failures", 0) or 0)
-        snapshot = getattr(registry, "snapshot", None)
-        if callable(snapshot):
-            facts["prompt_surface_hash"] = snapshot().content_hash[:16]
+            facts["prompt_surfaces"] = _metric_int(health.get("surfaces"))
+            facts["observed_prompt_surfaces"] = _metric_int(
+                health.get("observed"))
+            facts["stale_prompt_surfaces"] = _metric_int(
+                health.get("stale"))
+            facts["prompt_surface_contract_failures"] = _metric_int(
+                health.get("contract_failures"))
+        facts["prompt_surface_hash"] = registry.snapshot().content_hash[:16]
         return facts
+
+
+def _metric_int(value: object) -> int:
+    if not isinstance(value, (int, float, str, bytes, bytearray)):
+        return 0
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return 0

@@ -8,7 +8,7 @@ import os
 import tempfile
 from collections import deque
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import AsyncIterator, Mapping, Sequence
 
 from ..agent.context.compression import ContextManager
 from ..agent.context import ContextOptions, ContextSection, WorkspaceContext
@@ -25,6 +25,7 @@ from ..core.messages import Message
 from ..core.redact import SecretRedactor
 from ..llm.base import (
     EvidenceChannel,
+    LLMEvent,
     PreparedLLMRequest,
     ProviderCapabilities,
     StreamFinished,
@@ -34,7 +35,8 @@ from ..llm.base import (
 )
 from ..safety.policy import AllowAllPolicy
 from ..session.compact_checkpoint import CompactCheckpointStore
-from ..session.memory import MemoryKind, MemoryScope, MemoryStore
+from ..session.memory import MemoryStore
+from ..session.memory_models import MemoryKind, MemoryScope
 from ..contracts.tool import ToolContext
 from ..tools.registry import ToolRegistry
 from .prompt_helpers import _message_payload
@@ -113,7 +115,10 @@ class _BenchmarkProvider:
         self.last_prepared = prepared
         return prepared
 
-    async def stream_prepared(self, prepared: PreparedLLMRequest):
+    async def stream_prepared(
+        self,
+        prepared: PreparedLLMRequest,
+    ) -> AsyncIterator[LLMEvent]:
         self.executed.append(prepared)
         text = self._responses.popleft() if self._responses else self.default_response
         yield TextDelta(text)
@@ -125,7 +130,7 @@ class _BenchmarkProvider:
         tools: Sequence[Mapping[str, object]] | None = None,
         *,
         evidence: EvidenceChannel | None = None,
-    ):
+    ) -> AsyncIterator[LLMEvent]:
         prepared = self.prepare_request(messages, tools, evidence=evidence)
         async for event in self.stream_prepared(prepared):
             yield event

@@ -9,7 +9,7 @@ import time
 import uuid
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Callable, Coroutine, Mapping, Optional, Sequence
 
 from .. import __version__
 from ..core.events import (
@@ -90,7 +90,7 @@ class TelemetryRuntime:
             config.preferences_path)
         self.transport = transport
         self._bus: Optional[EventBus] = None
-        self._unsubscribe = None
+        self._unsubscribe: Optional[Callable[[], None]] = None
         self._task: Optional[asyncio.Task[None]] = None
         self._background: set[asyncio.Task[None]] = set()
         self._flush_lock = asyncio.Lock()
@@ -145,8 +145,8 @@ class TelemetryRuntime:
             "data": dict(data or {}),
         }
 
-    def _spawn(self, awaitable) -> asyncio.Task[None]:
-        task = asyncio.create_task(awaitable)
+    def _spawn(self, awaitable: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
+        task: asyncio.Task[None] = asyncio.create_task(awaitable)
         self._background.add(task)
         task.add_done_callback(self._background.discard)
         return task

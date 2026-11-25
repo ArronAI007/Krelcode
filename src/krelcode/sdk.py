@@ -21,6 +21,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from itertools import count
 from pathlib import Path
+from types import TracebackType
 from typing import Any, AsyncIterator, Mapping, Optional, Sequence
 
 from .core.process import process_isolation_kwargs, stop_process_tree
@@ -271,8 +272,8 @@ class KrelcodeClient:
             self.options = KrelcodeOptions(workspace=workspace, **kwargs)
 
         self._process: Optional[asyncio.subprocess.Process] = None
-        self._stdout_task: Optional[asyncio.Task] = None
-        self._stderr_task: Optional[asyncio.Task] = None
+        self._stdout_task: Optional[asyncio.Task[None]] = None
+        self._stderr_task: Optional[asyncio.Task[None]] = None
         self._request_queues: dict[str, asyncio.Queue[Any]] = {}
         self._control_queue: asyncio.Queue[Any] = asyncio.Queue()
         self._stderr_lines: deque[str] = deque(maxlen=200)
@@ -306,7 +307,12 @@ class KrelcodeClient:
         await self.start()
         return self
 
-    async def __aexit__(self, exc_type, exc, tb) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         await self.close()
 
     async def start(self) -> "KrelcodeClient":

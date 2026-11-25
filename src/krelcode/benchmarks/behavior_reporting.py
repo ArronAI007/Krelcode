@@ -41,9 +41,10 @@ def aggregate_behavior_reports(
             raise ValueError("benchmark shard schema 不一致")
         if (report.provider, report.model) != (first.provider, first.model):
             raise ValueError("benchmark shard provider/model 不一致")
-        for key in comparable_keys:
-            if report.profile.get(key) != first.profile.get(key):
-                raise ValueError(f"benchmark shard profile 不一致: {key}")
+        for profile_key in comparable_keys:
+            if report.profile.get(profile_key) != first.profile.get(profile_key):
+                raise ValueError(
+                    f"benchmark shard profile 不一致: {profile_key}")
 
     expected_trials = _report_int(first.profile.get("trials", 0), "profile.trials")
     expected_suite_size = _report_int(
@@ -55,11 +56,11 @@ def aggregate_behavior_reports(
         if shard:
             shard_labels.append(shard)
         for result in report.results:
-            key = (result.case_id, result.trial)
-            if key in by_key:
+            result_key = (result.case_id, result.trial)
+            if result_key in by_key:
                 raise ValueError(
                     f"benchmark shard 重叠: {result.case_id} trial {result.trial}")
-            by_key[key] = result
+            by_key[result_key] = result
     if not by_key:
         raise ValueError("benchmark shard 不包含结果")
 

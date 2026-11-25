@@ -26,7 +26,7 @@ import webbrowser
 from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Protocol, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Protocol, Tuple
 
 
 class AuthError(RuntimeError):
@@ -105,10 +105,8 @@ class SSOConfig:
             raise AuthError("enterprise.sso 必须是 TOML table")
         enabled = _as_bool(raw.get("enabled"), bool(raw.get("issuer")))
         scopes_raw = raw.get("scopes", ("openid", "profile", "email"))
-        if isinstance(scopes_raw, str):
-            scopes = (scopes_raw,)
-        else:
-            scopes = tuple(str(item).strip() for item in scopes_raw or () if str(item).strip())
+        scopes = ((scopes_raw,) if isinstance(scopes_raw, str) else tuple(
+            str(item).strip() for item in scopes_raw or () if str(item).strip()))
         token_dir_raw = str(raw.get("token_dir", "") or "").strip()
         token_dir = (Path(token_dir_raw).expanduser() if token_dir_raw else
                      (Path(home or Path.home()).expanduser() / ".krelcode" / "auth"))
@@ -475,6 +473,7 @@ class _CallbackServer:
             name="krelcode-oidc-callback")
         self.thread.start()
         host, port = self.server.server_address[:2]
+        if isinstance(host, bytes): host = host.decode("ascii", "replace")
         return f"http://{host}:{port}/callback"
 
     def receive(self) -> Mapping[str, str]:
@@ -721,7 +720,7 @@ class OIDCClient:
         *,
         open_browser: bool = True,
         callback_timeout: Optional[float] = None,
-        authorization_url_callback=None,
+        authorization_url_callback: Optional[Callable[[str], object]] = None,
     ) -> TokenSet:
         """Run the browser callback flow and persist a private token set."""
         discovery = await self.discovery()

@@ -64,7 +64,7 @@ jobs:
       - name: Run architecture tests
         run: python -m pytest -q tests/test_architecture.py tests/test_compatibility_facades.py
 
-      - name: Typecheck core contracts
+      - name: Typecheck all Python source
         run: python -m mypy
 
       - name: Run full test suite
