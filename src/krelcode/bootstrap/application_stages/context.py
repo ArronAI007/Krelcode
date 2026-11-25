@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,11 @@ from ...enterprise.policy import (
     load_enterprise_policy,
 )
 from ...hooks import HookSpec
+from ...observability.experiments import (
+    AppliedExperiment,
+    ExperimentError,
+    load_and_apply_profile,
+)
 from ...plugins import PluginManager
 from ..composition import (
     compose_hook_specs,
@@ -49,6 +55,7 @@ class ApplicationBuildContext:
     principal: Optional[PrincipalPort]
     sso_client: Optional[OIDCClient]
     run_mode: RunMode
+    experiment: Optional[AppliedExperiment] = None
 
     @property
     def input_format(self) -> str:
@@ -113,6 +120,10 @@ async def build_application_context(
 ) -> ApplicationBuildContext:
     """Validate CLI input, load layered policy, and resolve SSO identity."""
     _validate_stream_json_args(args)
+    # Experiment overlays are build-local: a Web UI edit affects the next
+    # process, never a running turn, and managed security policy is loaded
+    # from the unmodified layered configuration below.
+    args = argparse.Namespace(**vars(args))
     note = _build_note(args)
     config_path = Path(args.config).expanduser() if args.config else None
     try:
@@ -125,7 +136,7 @@ async def build_application_context(
     if config_path is not None and not config_bundle.sources:
         raise BuildStageError(f"配置错误: 指定的配置文件不存在: {config_path}")
 
-    config = config_bundle.data
+    config = copy.deepcopy(config_bundle.data)
     try:
         # ``--config`` is an exclusive user configuration, never an
         # enterprise-policy bypass. Managed policy is therefore loaded
@@ -151,6 +162,12 @@ async def build_application_context(
     except (ConfigError, EnterprisePolicyError, PolicyViolation, AuthError) as exc:
         raise BuildStageError(f"企业策略/SSO 错误: {exc}") from exc
 
+    try:
+        experiment = load_and_apply_profile(
+            args, config, workspace=Path(args.workspace))
+    except ExperimentError as exc:
+        raise BuildStageError(f"实验 profile 错误: {exc}") from exc
+
     return ApplicationBuildContext(
         args=args,
         note=note,
@@ -160,6 +177,7 @@ async def build_application_context(
         principal=principal,
         sso_client=sso_client,
         run_mode=resolve_run_mode(args),
+        experiment=experiment,
     )
 
 

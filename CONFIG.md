@@ -413,6 +413,24 @@ mode = "suggest"                     # off / suggest / auto；默认只入队，
 suggest_threshold = 0.55             # 候选入队阈值
 auto_threshold = 0.80                # auto 模式晋级阈值；冲突候选永不自动晋级
 
+### Observability / 消融实验 CLI
+
+```bash
+krelcode --observability                    # 显式开启本轮本地事件记录
+krelcode --no-observability                 # 显式关闭本轮事件记录
+krelcode --experiment-profile ./profile.json # 启动时校验并冻结实验 profile
+krelcode-web --workspace .                  # 启动独立 Web UI（与 CLI 并列）
+```
+
+[observability]                     # 独立 Web UI 的共享事件底座
+enabled = true                       # 写入 .krelcode/observability/；--no-observability 可关闭
+queue_size = 4096                    # 有界异步队列；满时丢弃并形成 sequence gap
+max_string_chars = 4000              # 单字段正文预览上限，写入前仍统一脱敏
+max_collection_items = 100
+include_text_previews = true         # false 时不记录 prompt/工具正文预览
+# experiment_profile = "~/.krelcode/experiments/active.json"
+# false 可禁用默认 active-experiment.json 的自动读取
+
 [features]
 enabled = []                         # 启用的功能开关名；工具池可按开关过滤
 

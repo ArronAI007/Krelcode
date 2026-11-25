@@ -32,6 +32,7 @@ def build_runtime_graph(
             hooks=context.hooks,
             telemetry_runtime=session.telemetry_runtime,
             auditor=core.auditor,
+            observability=core.observability,
             loop=core.loop,
         ),
         extensions=ExtensionRuntime(

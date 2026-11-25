@@ -454,8 +454,9 @@ PACKAGE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "bootstrap": frozenset({
         "agent", "browser", "config", "contracts", "core", "daemon",
         "enterprise", "extensions", "hooks", "jobs", "llm", "lsp", "mcp",
-        "output_styles", "plugins", "review", "safety", "security_review",
-        "session", "skills", "subagent", "telemetry", "tools", "ui", "web",
+        "observability", "output_styles", "plugins", "review", "safety",
+        "security_review", "session", "skills", "subagent", "telemetry",
+        "tools", "ui", "web",
     }),
     "contracts": frozenset({"core"}),
     "llm": frozenset({"core"}),
@@ -481,6 +482,8 @@ PACKAGE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "ui": frozenset({"agent", "core", "safety", "session"}),
     "daemon": frozenset({"app", "config", "core", "jobs", "safety", "subagent"}),
     "telemetry": frozenset({"core"}),
+    "observability": frozenset({"core"}),
+    "webui": frozenset({"observability"}),
     "benchmarks": frozenset({
         "agent", "app", "bootstrap", "config", "contracts", "core",
         "extensions", "llm", "safety", "sdk", "session", "subagent", "tools",

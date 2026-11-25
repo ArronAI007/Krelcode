@@ -48,6 +48,14 @@ class AuditorPort(Protocol):
     def detach(self) -> None: ...
 
 
+class ObservabilityRuntimePort(Protocol):
+    """Lifecycle surface for the isolated local event journal."""
+
+    async def start(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+
 @dataclass(frozen=True)
 class CoreRuntime:
     """Core services required to run and close one application instance."""
@@ -65,6 +73,7 @@ class CoreRuntime:
     telemetry_runtime: TelemetryRuntimePort
     auditor: Optional[AuditorPort]
     loop: AgentLoop
+    observability: Optional[ObservabilityRuntimePort] = None
 
 
 @dataclass(frozen=True)
@@ -94,6 +103,7 @@ __all__ = [
     "AuditorPort",
     "CoreRuntime",
     "ExtensionRuntime",
+    "ObservabilityRuntimePort",
     "RuntimeGraph",
     "TelemetryRuntimePort",
 ]

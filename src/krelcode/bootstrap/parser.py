@@ -143,6 +143,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="允许 Sandbox 子进程访问网络（默认关闭）")
     p.add_argument("--no-sandbox", action="store_true",
                    help="关闭审批策略与运行时 Sandbox（AllowAll，仅建议在隔离环境中使用）")
+    observability_group = p.add_mutually_exclusive_group()
+    observability_group.add_argument(
+        "--observability", dest="observability", action="store_true", default=None,
+        help="启用本地 Agent 观测事件日志（默认: [observability].enabled 或开启）")
+    observability_group.add_argument(
+        "--no-observability", dest="observability", action="store_false",
+        help="关闭本轮 Agent 观测事件日志")
+    p.add_argument(
+        "--experiment-profile", default=None,
+        help="本轮消融实验 profile JSON；在启动时校验并冻结，不支持 turn 中热改")
     p.add_argument("--memory-mode", choices=("off", "suggest", "auto"), default=None,
                    help="Auto Memory 模式（默认: [memory].mode 或 suggest；"
                         "suggest 仅入队等待 /memory review）")

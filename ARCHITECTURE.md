@@ -186,3 +186,34 @@ typed event 中的稳定类别和计数，再转换为分桶值。consent 位于
 endpoint、采样率与队列参数，不能把项目自动变成采集源。managed `allow_telemetry=false`
 在 runtime 与 CLI 两个边界执行。队列、consent、install ID 与 export 均使用原子私有写入并
 拒绝 symlink；遥测故障 fail-open，不影响 Agent 主任务。
+
+## 17. 独立 Web UI / Agent Observability（新增）
+
+Web UI 与 CLI/TUI 是并列前端，共同消费 `AgentRuntime`、`EventBus`、Session 与实验
+profile，而不是让 Web 进入 CLI 渲染链或 AgentLoop：
+
+```text
+                       ┌── CLI / TUI
+AgentRuntime + EventBus├── Web UI (localhost HTTP + SSE)
+                       ├── SDK / stream-json
+                       └── IDE adapters
+          │
+          ▼
+ObservabilitySink
+  ├─ EventProjector + SecretRedactor
+  ├─ bounded asyncio queue
+  └─ .krelcode/observability/runs/<id>/{manifest,events}.jsonl
+```
+
+关键边界：
+
+- `observability/` 只依赖 core 事件契约；`webui/` 只依赖 observability；
+- Sink 的同步 EventBus handler 只做投影、脱敏和入队，磁盘 I/O 在后台任务执行；
+- 队列满、磁盘错误、投影错误和 SSE 断连都不向 Agent 主流程传播；
+- `RunManifest` 在运行前冻结 provider/model/config/tool catalog/experiment hash；
+- Web 修改实验 profile 后只影响下一轮进程，turn 中途禁止热改；
+- Sandbox、Permission、Network、auto-approve 和 managed policy 不在消融白名单；
+- Web Gateway 只绑定 loopback，使用随机 token 兑换 `HttpOnly + SameSite=Strict` cookie；
+- CLI 与 Web 共享 EventEnvelope schema，后续 SDK/IDE 可复用同一 SSE/JSONL 投影。
+
+这使可观测性和消融实验属于运行时基础设施，而呈现与交互仍保持可替换。

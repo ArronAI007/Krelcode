@@ -67,6 +67,26 @@ krelcode doctor        # 环境自检：Python/key/配置/git/工作区/Sandbox/
 krelcode               # 进入 REPL
 ```
 
+### Agent Web 可观测与消融实验
+
+Web UI 是 CLI 的并列前端，不是 REPL 渲染分支。Agent 默认写入本地脱敏事件日志：
+
+```bash
+krelcode-web --workspace /path/to/project
+```
+
+浏览器打开启动信息中的 loopback URL，可查看 Live Timeline、Context/Cache、工具与
+Memory/Compact 事件，并从安全白名单中配置下一轮消融实验。服务不会暴露公网，也不允许
+修改 Sandbox、权限、网络或 auto-approve 等安全底线。
+
+```bash
+krelcode --no-observability                 # 本轮不记录观测事件
+krelcode --experiment-profile ./profile.json # 启动时冻结实验配置
+```
+
+Storage：`.krelcode/observability/runs/<run-id>/{manifest.json,events.jsonl}`。详细设计见
+[docs/agent-observability.md](docs/agent-observability.md)。
+
 ### 持久化后台 Job 与子代理
 
 默认仍使用兼容的进程内 manager。需要让 dev server、长测试或子代理在 REPL 退出后继续运行：

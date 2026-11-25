@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Krelcode Agent Observatory</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">K</div>
+        <div>
+          <h1>Krelcode</h1>
+          <p>Agent Observatory</p>
+        </div>
+      </div>
+      <div class="sidebar-heading">
+        <span>Runs</span>
+        <button id="refresh-runs" class="icon-button" title="刷新">↻</button>
+      </div>
+      <div id="run-list" class="run-list">
+        <div class="empty">暂无 Agent run</div>
+      </div>
+      <div class="sidebar-foot">
+        <span class="dot" id="server-dot"></span>
+        <span id="server-status">连接中…</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">LOCAL OBSERVABILITY</p>
+          <h2 id="run-title">选择一个 Run</h2>
+          <p id="run-subtitle" class="muted">Agent 事件、Context、工具与实验开关</p>
+        </div>
+        <div class="run-badge" id="run-badge">IDLE</div>
+      </header>
+
+      <div id="error-banner" class="error-banner hidden"></div>
+
+      <section class="metrics" id="metrics">
+        <article class="metric"><span>状态</span><strong id="m-status">—</strong></article>
+        <article class="metric"><span>Token</span><strong id="m-tokens">—</strong></article>
+        <article class="metric"><span>工具调用</span><strong id="m-tools">—</strong></article>
+        <article class="metric"><span>耗时</span><strong id="m-duration">—</strong></article>
+        <article class="metric"><span>事件</span><strong id="m-events">—</strong></article>
+        <article class="metric"><span>缺口 / 错误</span><strong id="m-health">—</strong></article>
+      </section>
+
+      <nav class="tabs">
+        <button class="tab active" data-tab="timeline">Live Timeline</button>
+        <button class="tab" data-tab="context">Context</button>
+        <button class="tab" data-tab="experiments">Experiments</button>
+      </nav>
+
+      <section id="panel-timeline" class="panel active">
+        <div class="panel-toolbar">
+          <div class="filters" id="filters">
+            <button class="filter active" data-kind="all">全部</button>
+            <button class="filter" data-kind="model">Model</button>
+            <button class="filter" data-kind="tool">Tools</button>
+            <button class="filter" data-kind="context">Context</button>
+            <button class="filter" data-kind="memory">Memory</button>
+            <button class="filter" data-kind="mcp">MCP</button>
+            <button class="filter" data-kind="subagent">Subagent</button>
+            <button class="filter" data-kind="error">Errors</button>
+          </div>
+          <label class="toggle-label"><input id="auto-scroll" type="checkbox" checked> 自动滚动</label>
+        </div>
+        <div id="timeline" class="timeline">
+          <div class="empty">选择左侧 Run 查看事件。</div>
+        </div>
+      </section>
+
+      <section id="panel-context" class="panel">
+        <div class="two-column">
+          <article class="card">
+            <div class="card-title">最新 Context 装配</div>
+            <div id="context-summary" class="kv empty">暂无 context_assembled 事件</div>
+          </article>
+          <article class="card">
+            <div class="card-title">Cache Boundary</div>
+            <div id="cache-summary" class="kv empty">等待 Context 数据</div>
+          </article>
+        </div>
+        <article class="card">
+          <div class="card-title">Context Sources</div>
+          <div id="context-sources" class="source-bars empty">暂无来源分布</div>
+        </article>
+        <article class="card">
+          <div class="card-title">最近 Compact / Memory</div>
+          <div id="context-events" class="mini-events empty">暂无事件</div>
+        </article>
+      </section>
+
+      <section id="panel-experiments" class="panel">
+        <div class="experiment-header">
+          <div>
+            <h3>运行前消融开关</h3>
+            <p>配置只影响下一轮 Agent 进程；当前 Run 的配置已冻结。安全策略、权限、Sandbox 和网络不可作为消融开关。</p>
+          </div>
+          <button id="save-profile" class="primary-button">保存下一轮 Profile</button>
+        </div>
+        <div id="profile-meta" class="profile-meta"></div>
+        <div id="knobs" class="knob-grid"></div>
+        <div id="profile-warnings" class="warnings hidden"></div>
+      </section>
+    </main>
+  </div>
+  <template id="empty-template"><div class="empty">—</div></template>
+  <script src="/app.js"></script>
+</body>
+</html>

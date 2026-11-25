@@ -137,6 +137,8 @@ class BootstrappedApplication:
         self._closed = True
         core = self.graph.core
         await core.telemetry_runtime.close()
+        if core.observability is not None:
+            await core.observability.close()
         if core.auditor is not None:
             core.auditor.detach()
         if core.approval_broker is not None:

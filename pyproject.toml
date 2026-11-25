@@ -31,6 +31,7 @@ syntax = [
 
 [project.scripts]
 krelcode = "krelcode.entrypoints.cli:main"
+krelcode-web = "krelcode.webui.server:main"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -40,7 +41,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-krelcode = ["builtin_skills/**/SKILL.md"]
+krelcode = ["builtin_skills/**/SKILL.md", "webui/static/*.html", "webui/static/*.css", "webui/static/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

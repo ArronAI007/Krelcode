@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence, cast
 
+from ... import __version__
 from ...agent.turn.runtime import AgentRuntime
 from ...config import load_config_layers
 from ...core.errors import ConfigError
@@ -13,6 +16,9 @@ from ...core.redact import SecretRedactor
 from ...enterprise.audit import AuditError, ComplianceAuditor
 from ...enterprise.auth import AuthError
 from ...enterprise.policy import EnterprisePolicyError, PolicyViolation
+from ...observability import ObservabilitySink, RunManifest
+from ...observability.models import stable_hash
+from ...observability.settings import ObservabilityOptions
 from ...mcp.supervisor import MCPSupervisor
 from ...agent.turn.runtime_services import MCPServicePort, RuntimeServiceBinderPort
 from ...safety.sandbox import SandboxError
@@ -44,6 +50,7 @@ class CoreServices:
     supervisor: MCPSupervisor
     redactor: SecretRedactor
     auditor: Optional[ComplianceAuditor]
+    observability: Optional[ObservabilitySink]
     config: RuntimeConfigComposer
     binder: RuntimeServiceBinder
 
@@ -147,6 +154,54 @@ async def build_core_services(
         mcp_supervisor=supervisor,
         mcp_reload=reload_mcp,
     )
+    observability: Optional[ObservabilitySink] = None
+    options = ObservabilityOptions.from_args_and_config(
+        context.args, context.config)
+    if options.enabled:
+        tool_names = tuple(sorted(loop.registry.names()))
+        experiment = context.experiment
+        provider_name = str(
+            getattr(loop.llm, "name", type(loop.llm).__name__))
+        model_name = str(getattr(loop.llm, "model", "") or "")
+        run_id = (
+            f"{int(time.time())}-{uuid.uuid4().hex[:12]}"
+        )
+        manifest = RunManifest(
+            run_id=run_id,
+            started_at=time.time(),
+            workspace_root=str(loop.tool_context.workspace_root.resolve()),
+            code_version=__version__,
+            provider=provider_name,
+            model=model_name,
+            run_mode=context.run_mode.value,
+            permission_mode=loop.tool_context.runtime.permission_mode.value,
+            config_hash=stable_hash(context.config),
+            tool_catalog_hash=stable_hash(tool_names),
+            tool_names=tool_names,
+            experiment_id=experiment.profile.id if experiment else "",
+            experiment_name=experiment.profile.name if experiment else "",
+            experiment_hash=(
+                experiment.profile_hash if experiment is not None else ""),
+            experiment_knobs=(
+                dict(experiment.profile.knobs)
+                if experiment is not None else {}),
+            metadata={
+                "experiment_warnings": list(experiment.warnings)
+                if experiment is not None else [],
+            },
+        )
+        observability = ObservabilitySink(
+            loop.tool_context.workspace_root,
+            manifest,
+            redactor,
+            queue_size=options.queue_size,
+            max_string_chars=options.max_string_chars,
+            max_collection_items=options.max_collection_items,
+            include_text_previews=options.include_text_previews,
+            on_drop=context.note,
+        )
+        await observability.start()
+        observability.attach(loop.bus)
     return CoreServices(
         loop=loop,
         subagents=subagents,
@@ -154,6 +209,7 @@ async def build_core_services(
         supervisor=supervisor,
         redactor=redactor,
         auditor=auditor,
+        observability=observability,
         config=composer,
         binder=binder,
     )
