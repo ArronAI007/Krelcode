@@ -1177,9 +1177,10 @@ PromptWriter [Panel Dock] → 上分隔线 → 输入 → 下分隔线 → 状�
   吞掉 Ctrl-O。面板未聚焦时方向键、Shift-Tab、Tab、历史搜索等旧语义完全不变。
 - **可点击组件**：TUI 默认关闭鼠标上报，避免 xterm mouse tracking（1000+1006）劫持
   终端原生拖拽选择与复制；仅在 `--tui-mouse` 或 `[ui].mouse=true` 时显式启用点击。
-  PromptWriter 在重绘后
-  发出 CPR 查询，编辑器把 `ESC[row;colR` 换算为 Dock 顶行；点击坐标仅用于纯
-  hitbox 命中，不依赖固定屏幕尺寸。退出/异常路径都关闭 mouse reporting。
+  只有启用鼠标点击时，PromptWriter 才在重绘后发出 CPR 查询；编辑器把
+  `ESC[row;colR` 换算为 Dock 顶行。键盘模式下不发送查询，避免异步 CPR
+  响应变成输入框中的可见转义文本。点击坐标仅用于纯 hitbox 命中，不依赖固定
+  屏幕尺寸。退出/异常路径都关闭 mouse reporting。
 - **Shell 快捷模式**：`!cmd` 由 InputProcessor 只做分类，REPL 在空闲时启动窄任务。
   `AgentLoop.execute_direct_tool()` 临时构造与普通 turn 相同的 RuntimeSnapshot、
   TurnToolPool 和 ToolContext，执行 `run_command` 时仍经过参数 schema、Hooks、

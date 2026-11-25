@@ -118,7 +118,10 @@ class TerminalLineEditor:
         self._on_diff_pager_change = on_diff_pager_change
         self._pending_input = bytearray()
         if panels is not None:
-            prompt.set_cursor_probe(True)
+            # CPR is only needed to translate mouse hit-test coordinates.
+            # Querying it for keyboard-only panels produces asynchronous
+            # ESC[row;columnR input that some terminals expose as stray text.
+            prompt.set_cursor_probe(mouse_reporting)
 
     def set_diff_pager(self, pager: Optional[DiffPager]) -> None:
         self._diff_pager = pager
