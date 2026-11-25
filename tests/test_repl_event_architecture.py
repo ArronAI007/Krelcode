@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 from krelcode.agent.loop import AgentLoop
 from krelcode.agent.query import QueryEvent
@@ -34,6 +35,7 @@ from krelcode.tools.registry import ToolRegistry
 from krelcode.ui.approval import ApprovalBroker
 from krelcode.ui.render import StreamRenderer
 from krelcode.ui.repl import IDLE_PROMPT, PromptWriter
+from krelcode.ui.terminal_presenter import TerminalPresenter
 
 
 def envelope(event, sequence: int = 0, turn_id: str = "turn-1") -> QueryEvent:
@@ -185,6 +187,51 @@ def test_renderer_caches_output_delta_without_auto_expanding():
     assert renderer.tool_outputs[0].content == "live payload"
     assert "live payload" not in "".join(parts)
     assert renderer.tool_outputs[0].expanded is False
+
+
+def test_renderer_reports_active_output_until_final_event():
+    renderer = StreamRenderer(write=lambda _text: None, color=False)
+
+    renderer(RunStarted("question"))
+    assert not renderer.output_active
+    renderer(LLMStreamDelta("partial"))
+    assert renderer.output_active
+    renderer(RunFinished("partial"))
+    assert not renderer.output_active
+
+
+def test_terminal_status_does_not_restore_dock_during_live_output():
+    class Prompt:
+        def __init__(self) -> None:
+            self.resumes = 0
+
+        def set_status(self, _status: str) -> None:
+            return
+
+        def retarget_prompt(self, _old: str, _new: str) -> None:
+            return
+
+        def resume_or_show(self, _fallback: str) -> None:
+            self.resumes += 1
+
+    presenter = object.__new__(TerminalPresenter)
+    presenter.state = SimpleNamespace(is_running=True)
+    presenter.controller = object()
+    presenter.runner = SimpleNamespace(queue=[])
+    presenter.renderer = SimpleNamespace(output_active=True)
+    presenter.prompt = Prompt()
+    presenter.use_color = False
+    presenter.status_cache = "status"
+    presenter.last_status_draw = 0.0
+    presenter.refresh_panels = lambda **_kwargs: None
+    presenter.render_status = lambda _view: "status"
+
+    presenter.refresh_status(presenter.state, force=True)
+    assert presenter.prompt.resumes == 0
+
+    presenter.renderer.output_active = False
+    presenter.refresh_status(presenter.state, force=True)
+    assert presenter.prompt.resumes == 1
 
 
 def test_prompt_writer_status_and_suspend_preserve_draft(monkeypatch):

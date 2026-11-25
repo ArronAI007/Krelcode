@@ -258,7 +258,10 @@ class TerminalPresenter:
         if view.is_running:
             self.prompt.retarget_prompt(
                 self.styled_prompt(False), self.styled_prompt(True))
-            self.prompt.resume_or_show(self.prompt_text)
+            # Stream output owns the cursor while tokens are arriving.  The
+            # next status update after RunFinished restores the dock and input.
+            if not self.renderer.output_active:
+                self.prompt.resume_or_show(self.prompt_text)
         else:
             self.prompt.retarget_prompt(
                 self.styled_prompt(True), self.styled_prompt(False))

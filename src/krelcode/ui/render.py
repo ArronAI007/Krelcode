@@ -256,6 +256,11 @@ class StreamRenderer:
         self.tool_outputs: list[ToolOutputRecord] = []
         self._tool_by_call_id: Dict[str, ToolOutputRecord] = {}
 
+    @property
+    def output_active(self) -> bool:
+        """Whether model text or reasoning is currently being written."""
+        return self._streaming or self._thinking
+
     def _write(self, s: str) -> None:
         # 所有终端输出都经此出口：脱敏后统一写出
         if self._redactor is not None:

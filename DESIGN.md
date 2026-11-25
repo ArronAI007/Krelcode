@@ -1175,6 +1175,9 @@ PromptWriter [Panel Dock] → 上分隔线 → 输入 → 下分隔线 → 状�
 - **键盘导航**：`Ctrl-O` 是唯一入口；面板获得焦点后为模态导航，左右切换 tab、上下
   移动选择、Enter/Esc 回到输入框。cbreak 模式显式禁用 `VDISCARD`，否则终端驱动会
   吞掉 Ctrl-O。面板未聚焦时方向键、Shift-Tab、Tab、历史搜索等旧语义完全不变。
+- **流式绘制互斥**：模型文本/思考增量写入期间，状态轮询只更新缓存，不恢复 Panel
+  Dock 与输入框；`RunFinished` 后的状态更新再统一恢复。这样周期状态刷新不会把
+  面板插进尚未结束的回答正文。
 - **可点击组件**：TUI 默认关闭鼠标上报，避免 xterm mouse tracking（1000+1006）劫持
   终端原生拖拽选择与复制；仅在 `--tui-mouse` 或 `[ui].mouse=true` 时显式启用点击。
   只有启用鼠标点击时，PromptWriter 才在重绘后发出 CPR 查询；编辑器把
