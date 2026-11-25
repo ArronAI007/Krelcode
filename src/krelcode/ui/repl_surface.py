@@ -31,7 +31,7 @@ from .repl_primitives import (
     _truncate_display,
     auto_color,
 )
-from .render import HERMES_BLUE
+from .render import HERMES_AMBER, HERMES_BRONZE, HERMES_GOLD
 
 _BUILTIN_COMMANDS = builtin_command_registry()
 SLASH_COMMANDS = tuple(
@@ -62,6 +62,16 @@ _WORDMARK = (
     "██╔═██╗ ██╔══██╗██╔══╝  ██║     ██║     ██║   ██║██║  ██║██╔══╝",
     "██║  ██╗██║  ██║███████╗███████╗╚██████╗╚██████╔╝██████╔╝███████╗",
     "╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝",
+)
+
+# Hermes TUI's default six-line logo uses primary, accent, border twice each.
+_WORDMARK_COLORS = (
+    HERMES_GOLD,
+    HERMES_GOLD,
+    HERMES_AMBER,
+    HERMES_AMBER,
+    HERMES_BRONZE,
+    HERMES_BRONZE,
 )
 
 
@@ -243,8 +253,8 @@ def print_banner(loop: AgentLoop, tool_names: Optional[list[str]],
     def accent(text: str) -> str:
         return f"{CYAN}{text}{RESET}" if color else text
 
-    def brand(text: str) -> str:
-        return f"{HERMES_BLUE}{text}{RESET}" if color else text
+    def brand(text: str, tone: str = HERMES_GOLD) -> str:
+        return f"{tone}{text}{RESET}" if color else text
 
     def row(label: str, value: str, path: bool = False) -> None:
         available = max(8, width - 13)
@@ -269,8 +279,8 @@ def print_banner(loop: AgentLoop, tool_names: Optional[list[str]],
 
     wordmark_width = max(_display_width(line) for line in _WORDMARK) + 2
     if columns >= wordmark_width:
-        for line in _WORDMARK:
-            write(f"  {brand(line)}")
+        for line, tone in zip(_WORDMARK, _WORDMARK_COLORS):
+            write(f"  {brand(line, tone)}")
         version = f"v{__version__}"
         write(f"  {DIM}{version}{RESET}" if color else f"  {version}")
     else:

@@ -514,7 +514,7 @@ def test_banner_uses_compact_title_on_narrow_terminal(tmp_path, monkeypatch):
     assert "██" not in text
 
 
-def test_banner_uses_hermes_blue_for_wordmark_only(tmp_path):
+def test_banner_uses_hermes_logo_gradient_for_wordmark_only(tmp_path):
     from krelcode.ui import repl_surface
 
     loop = SimpleNamespace(
@@ -530,7 +530,10 @@ def test_banner_uses_hermes_blue_for_wordmark_only(tmp_path):
         color=True,
     )
     text = "\n".join(lines)
-    assert repl_surface.HERMES_BLUE in text
+    assert repl_surface.HERMES_GOLD in text
+    assert repl_surface.HERMES_AMBER in text
+    assert repl_surface.HERMES_BRONZE in text
+    assert "\x1b[38;2;0;0;242m" not in text
     assert "\x1b[36m██" not in text
 
 
