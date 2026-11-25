@@ -154,7 +154,9 @@ def test_panel_view_builder_surfaces_plan_activity_context_and_memory():
     assert "step · 2" in activity and "shell ·" in activity
     context = " ".join(item.label for item in by_id["context"].items)
     assert "1234/8000" in context and "fragments · 4" in context
-    assert by_id["memory"].items[0].id == "memory-empty"
+    memory_item = by_id["memory"].items[0]
+    assert memory_item.id == "memory-empty"
+    assert memory_item.detail == "输入 #内容 添加"
 
 
 def test_prompt_writer_renders_panel_dock_above_input():

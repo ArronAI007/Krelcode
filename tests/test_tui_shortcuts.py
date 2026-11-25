@@ -169,6 +169,27 @@ def test_repl_memory_shortcut_supports_user_and_session_scopes(
     assert "[session/note]" in out
 
 
+def test_empty_memory_shortcut_uses_one_line_hint(tmp_path, capsys):
+    loop = make_loop(tmp_path)
+    calls = 0
+
+    async def inputs(_prompt):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return "#"
+        if calls == 2:
+            return "/exit"
+        raise EOFError
+
+    assert asyncio.run(run_repl(
+        loop, input_fn=inputs, persist_history=False)) == 0
+    out = capsys.readouterr().out
+    assert "暂无记忆" in out
+    assert "#user: / #project: / #session:" in out
+    assert "memory-empty" not in out
+
+
 def test_exit_during_shell_approval_cancels_direct_task(tmp_path):
     from krelcode.ui.approval import ApprovalBroker
 

@@ -129,10 +129,7 @@ def sync_memory_fragment(
 def memory_lines(entries: Iterable[MemoryEntry]) -> list[str]:
     items = tuple(entries)
     if not items:
-        return [
-            "当前没有记忆",
-            "输入 #内容 添加项目记忆；#user: / #project: / #session: 可指定作用域",
-        ]
+        return ["当前没有记忆；输入 #内容 添加项目记忆"]
     scopes = {coerce_memory_scope(entry.scope) for entry in items}
     heading = (
         "项目记忆" if scopes == {MemoryScope.PROJECT} else "记忆")

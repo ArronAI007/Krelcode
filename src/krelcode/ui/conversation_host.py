@@ -573,9 +573,15 @@ class ConversationHost:
 
                 if action.kind is InputKind.MEMORY:
                     if not action.text:
-                        prompt.hide()
                         memory_cache = self.presenter.memory_cache
                         entries = memory_cache.entries if memory_cache else ()
+                        if not entries:
+                            notice(
+                                "⎿ 暂无记忆 · 输入 #内容 添加项目记忆；"
+                                "#user: / #project: / #session: 指定作用域")
+                            restore_prompt()
+                            continue
+                        prompt.hide()
                         for line in memory_lines(entries):
                             print(f"  {line}")
                         self.presenter.panel_controller.focus("memory")

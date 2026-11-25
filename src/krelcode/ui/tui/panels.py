@@ -260,7 +260,7 @@ def build_panels(
     if not memory_items:
         memory_items.append(PanelItem(
             "memory-empty", "暂无记忆",
-            "#内容 / #user: / #project: / #session:", "○"))
+            "输入 #内容 添加", "○"))
 
     review_items: list[PanelItem] = []
     if diff_review is not None and diff_review.files:

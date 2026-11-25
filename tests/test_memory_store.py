@@ -117,6 +117,12 @@ def test_memory_lines_show_most_recent_first(tmp_path):
     assert rendered[2].endswith("first")
 
 
+def test_empty_memory_lines_use_one_compact_actionable_hint():
+    assert memory_lines(()) == [
+        "当前没有记忆；输入 #内容 添加项目记忆",
+    ]
+
+
 def test_memory_scopes_use_separate_files_and_structured_records(tmp_path):
     store = make_store(tmp_path, session_id="session-86")
 
