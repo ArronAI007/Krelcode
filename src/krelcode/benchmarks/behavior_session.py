@@ -7,24 +7,24 @@ import os
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
-from ..agent.attachments import ContextAttachmentKind, attachment_id
-from ..agent.compression import ContextManager
+from ..agent.context.attachments import ContextAttachmentKind, attachment_id
+from ..agent.context.compression import ContextManager
 from ..agent.context import ContextOptions, build_workspace_context_bundle
-from ..agent.context_assembler import ContextAssembler
-from ..agent.context_source import default_context_sources
-from ..agent.cyber_risk import cyber_risk_fragment
-from ..agent.fragments import (
+from ..agent.context.context_assembler import ContextAssembler
+from ..agent.context.context_source import default_context_sources
+from ..agent.prompt.cyber_risk import cyber_risk_fragment
+from ..agent.prompt.fragments import (
     PromptFragmentRegistry,
     apply_prompt_snapshot,
     base_fragments,
     sync_rule_fragments,
 )
-from ..agent.loop import AgentLoop
+from ..agent.turn.loop import AgentLoop
 from ..agent.prompts import resolve_prompt_profile
-from ..agent.prompt_surface_catalog import refresh_prompt_surfaces
+from ..agent.prompt.prompt_surface_catalog import refresh_prompt_surfaces
 from ..agent.rules import RuleLoader
 from ..agent.usage import UsageTracker
-from ..agent.working_context import WorkingContextStore
+from ..agent.context.working_context import WorkingContextStore
 from ..bootstrap.composition.tools import default_tools
 from ..core.events import EventBus
 from ..core.redact import SecretRedactor

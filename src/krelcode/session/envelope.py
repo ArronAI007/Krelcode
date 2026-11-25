@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
-from ..agent.query import QueryEvent
+from ..agent.turn.query import QueryEvent
 from ..core.events import AgentEvent
 from ..core.redact import SecretRedactor
 from ..core.session_events import SessionEvent, SessionEventKind, session_event_kind

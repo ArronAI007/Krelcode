@@ -10,23 +10,23 @@ from pathlib import Path
 from typing import Optional, cast
 
 from ....agent.context import build_workspace_context_bundle
-from ....agent.context_inspection import ContextInspectionService
-from ....agent.cyber_risk import prepend_cyber_risk_prompt
-from ....agent.fragments import (
+from ....agent.context.context_inspection import ContextInspectionService
+from ....agent.prompt.cyber_risk import prepend_cyber_risk_prompt
+from ....agent.prompt.fragments import (
     GROUP_WORKSPACE,
     refresh_registry_snapshot,
     rule_fragment,
     skills_fragment,
     workspace_fragments,
 )
-from ....agent.prompt_authoring import PROMPT_AUTHORING_FRAGMENT_ID
+from ....agent.prompt.prompt_authoring import PROMPT_AUTHORING_FRAGMENT_ID
 from ....agent.prompt.prompt_release_pipeline import (
     PromptReleaseApprovalService,
     PromptReleasePipeline,
     PromptReleaseProposal,
 )
 from ....agent.prompts import build_system_prompt
-from ....agent.tokens import estimate_history_tokens
+from ....core.tokens import estimate_history_tokens
 from ....core.messages import Message
 from ....mcp.security import render_mcp_prompt_evidence
 from ....safety.runtime import parse_permission_mode

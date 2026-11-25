@@ -12,7 +12,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, Optional, Protocol, Sequence
 
-from krelcode.agent.evidence import EvidenceSource, InstructionSource, SourceRole
+from krelcode.core.evidence import EvidenceSource, InstructionSource, SourceRole
 from krelcode.agent.prompt.prompt_surface import (
     PromptSurfaceDescriptor,
     PromptSurfaceKind,
@@ -28,8 +28,8 @@ from krelcode.agent.prompt.prompt_surface_contract import (
     REVIEW_SURFACE_CONTRACT,
     contract_for_hook,
 )
-from krelcode.agent.tokens import estimate_text_tokens
-from krelcode.agent.workflows import DEFAULT_TASK_WORKFLOW_CATALOG, TaskClassification
+from krelcode.core.tokens import estimate_text_tokens
+from krelcode.agent.turn.workflows import DEFAULT_TASK_WORKFLOW_CATALOG, TaskClassification
 
 if TYPE_CHECKING:
     from .fragments import PromptSnapshot
@@ -339,7 +339,7 @@ def output_style_prompt_surfaces(
 def auxiliary_prompt_surfaces(
     extra: Sequence[PromptSurfaceDescriptor] = (),
 ) -> tuple[PromptSurfaceDescriptor, ...]:
-    from krelcode.agent.compression import SUMMARY_SYSTEM_PROMPT
+    from krelcode.agent.context.compression import SUMMARY_SYSTEM_PROMPT
 
     return (
         PromptSurfaceDescriptor(

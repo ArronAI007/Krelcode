@@ -31,7 +31,7 @@ from krelcode.core.messages import (
     TextBlock,
     ToolCall,
 )
-from krelcode.agent.context.tokens import estimate_history_tokens
+from krelcode.core.tokens import estimate_history_tokens
 
 DEFAULT_KEEP_RECENT_TOOLS = 6
 DEFAULT_MIN_COMPACT_CHARS = 200

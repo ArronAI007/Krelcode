@@ -45,6 +45,22 @@ def test_composition_implementations_use_explicit_dependencies():
     assert not violations, violations
 
 
+def test_composition_and_app_facades_have_no_star_imports():
+    src_root = Path(__file__).resolve().parents[1] / "src" / "krelcode"
+    paths = sorted((src_root / "bootstrap" / "composition").glob("*.py"))
+    paths.append(src_root / "app.py")
+    violations: dict[str, int] = {}
+    for path in paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and any(
+                alias.name == "*" for alias in node.names
+            ):
+                violations[path.name] = node.lineno
+    assert not violations, violations
+    assert not (src_root / "bootstrap" / "composition" / "_deps.py").exists()
+
+
 def test_bootstrap_has_explicit_build_phases_and_thin_host():
     from krelcode.bootstrap.application import create_application
     from krelcode.bootstrap.application_builder import (

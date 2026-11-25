@@ -10,12 +10,12 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from ..agent.attachments import ContextAttachmentKind, attachment_id
-from ..agent.tool_pool import TurnToolPool
+from ..agent.context.attachments import ContextAttachmentKind, attachment_id
+from ..agent.turn.tool_pool import TurnToolPool
 from ..contracts.tool import PermissionMode, RuntimeSnapshot, ToolContext
 from ..core.messages import ToolCall
 from ..llm.base import LLMProvider
-from ..session.context_checkpoint import (
+from ..agent.context.context_checkpoint import (
     ContextCheckpointStore,
     WorkspaceFingerprint,
     hash_tracked_files,

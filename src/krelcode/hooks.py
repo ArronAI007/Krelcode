@@ -46,7 +46,7 @@ from .core.process import (
     quote_shell_value,
     stop_process_tree,
 )
-from .agent.prompt_surface_contract import (
+from .agent.prompt.prompt_surface_contract import (
     PromptSurfaceExecutor,
     contract_for_hook,
     observe_surface_result,

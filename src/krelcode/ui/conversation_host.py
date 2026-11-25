@@ -15,7 +15,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Awaitable, Callable, Optional, Protocol, Sequence, cast
 
-from ..agent.runtime import AgentRuntime
+from ..agent.turn.runtime import AgentRuntime
 from ..agent.turn.loop import AgentLoop
 from ..core.events import AgentEvent, ShellJobFinished
 from ..core.redact import SecretRedactor

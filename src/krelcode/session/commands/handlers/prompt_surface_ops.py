@@ -7,15 +7,15 @@ import shlex
 from pathlib import Path
 from typing import cast
 
-from ....agent.prompt_surface import (
+from ....agent.prompt.prompt_surface import (
     CORE_SURFACE_KINDS,
     PromptSurfaceDescriptor,
     PromptSurfaceKind,
     PromptSurfaceObservation,
     PromptSurfaceRegistry,
-    SourceRole,
 )
-from ....agent.prompt_surface_catalog import (
+from ....core.evidence import SourceRole
+from ....agent.prompt.prompt_surface_catalog import (
     PromptSurfaceHostPort,
     refresh_prompt_surfaces,
 )
@@ -119,12 +119,12 @@ def _benchmark_lines(
     *,
     report_path: str = "",
 ) -> list[str]:
-    from ....agent.prompt_benchmark_catalog import PROMPT_BENCHMARK_CASES
-    from ....agent.prompt_benchmark_report import (
+    from ....agent.prompt.prompt_benchmark_catalog import PROMPT_BENCHMARK_CASES
+    from ....agent.prompt.prompt_benchmark_report import (
         DEFAULT_BEHAVIOR_REPORT_PATH,
         load_behavior_report_summary,
     )
-    from ....agent.prompt_parity import PROMPT_PARITY_CONTRACT
+    from ....agent.prompt.prompt_parity import PROMPT_PARITY_CONTRACT
 
     if operation == "list":
         lines = [

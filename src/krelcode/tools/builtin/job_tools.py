@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 from ...contracts.service_ports import ShellJobManagerPort
 from ...contracts.tool import ToolContext
-from ..base import ToolResult, ToolTier
+from krelcode.contracts.tool import ToolResult, ToolTier
 from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
 from ..prompt import ToolPromptExample
 

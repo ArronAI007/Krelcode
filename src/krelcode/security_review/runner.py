@@ -7,9 +7,9 @@ import json
 from pathlib import Path
 from typing import List, Optional
 
-from ..agent.loop import AgentLoop
-from ..agent.prompt_surface_catalog import refresh_prompt_surfaces
-from ..agent.prompt_surface_contract import PromptSurfaceExecutor, observe_surface_result
+from ..agent.turn.loop import AgentLoop
+from ..agent.prompt.prompt_surface_catalog import refresh_prompt_surfaces
+from ..agent.prompt.prompt_surface_contract import PromptSurfaceExecutor, observe_surface_result
 from ..agent.usage import UsageTracker
 from ..core.events import EventBus, PermissionDenied, ToolCallCompleted
 from ..core.redact import SecretRedactor

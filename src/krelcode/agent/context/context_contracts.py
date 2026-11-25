@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping, Optional, Tuple
 
-from krelcode.agent.context.tokens import estimate_text_tokens
+from krelcode.core.tokens import estimate_text_tokens
 
 CATEGORY_SYSTEM = "system"
 CATEGORY_WORKSPACE = "workspace"

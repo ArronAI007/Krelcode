@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from ..agent.prompt_benchmark_report import (
+from ..agent.prompt.prompt_benchmark_report import (
     BEHAVIOR_REPORT_KIND,
     BEHAVIOR_REPORT_STORE_VERSION,
     BehaviorReportSummary,

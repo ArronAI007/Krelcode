@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Protocol, Sequence
 
-from ..agent.query import QueryEvent, QuerySession
+from ..agent.turn.query import QueryEvent, QuerySession
 from ..core.events import AgentEvent, PlanUpdated
 from ..core.redact import SecretRedactor
 from .controller import SessionController

@@ -356,7 +356,7 @@ class FinalAcceptanceRunner:
                 {"gate_present": True, "report_present": False},
             )
 
-        from .parity import (
+        from ..agent.prompt.prompt_parity import (
             FROZEN_PROMPT_PARITY_CONTRACT_HASH,
             FROZEN_PROMPT_PARITY_SUITE_HASH,
             PROMPT_PARITY_CONTRACT,
@@ -533,7 +533,7 @@ class FinalAcceptanceRunner:
             CURRENT_PROMPT_RELEASE,
             FROZEN_PROMPT_RELEASE_HASH,
         )
-        from .parity import (
+        from ..agent.prompt.prompt_parity import (
             FROZEN_PROMPT_PARITY_CONTRACT_HASH,
             FROZEN_PROMPT_PARITY_SUITE_HASH,
         )
@@ -631,7 +631,7 @@ class FinalAcceptanceRunner:
         }
 
     def _probe_tool_pool(self):
-        from ..agent.tool_pool import TurnToolPool
+        from ..agent.turn.tool_pool import TurnToolPool
         from ..contracts.tool import PermissionMode, RuntimeSnapshot
         from ..tools.builtin.read_file import ReadFileTool
         from ..tools.builtin.write_file import WriteFileTool
@@ -681,7 +681,7 @@ class FinalAcceptanceRunner:
         }
 
     def _probe_safety(self):
-        from ..agent.tool_pool import TurnToolPool
+        from ..agent.turn.tool_pool import TurnToolPool
         from ..safety.policy import classify_protected_path
         from ..contracts.tool import PermissionMode, RuntimeSnapshot
         from ..tools.builtin.write_file import WriteFileTool

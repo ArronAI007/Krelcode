@@ -19,7 +19,7 @@ from itertools import count
 from pathlib import Path
 from typing import Any, cast, Callable, Iterator, Optional, TextIO
 
-from ..agent.runtime import AgentRuntime
+from ..agent.turn.runtime import AgentRuntime
 from ..agent.usage import UsageTotals, UsageTracker
 from ..core.events import (
     AgentEvent,
@@ -29,7 +29,7 @@ from ..core.events import (
 )
 from ..core.redact import SecretRedactor
 from ..core.session_events import SessionEventPayload, as_session_event_payload
-from ..agent.query import QueryEvent, QuerySession
+from ..agent.turn.query import QueryEvent, QuerySession
 from .controller import SessionController
 from .input import InputAction, InputEnvelope, InputKind, InputProcessor
 from .runtime_ports import ApprovalBrokerPort, UserInputBrokerPort

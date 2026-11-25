@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from krelcode.core.messages import Message, ToolCall
-from krelcode.agent.context.tokens import estimate_text_tokens
+from krelcode.core.tokens import estimate_text_tokens
 
 WORKING_CONTEXT_KINDS = (
     "goal",

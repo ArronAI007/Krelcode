@@ -10,7 +10,7 @@ import shutil
 from typing import Any, Callable, Optional
 
 from .. import __version__
-from ..agent.loop import AgentLoop
+from ..agent.turn.loop import AgentLoop
 from ..core.events import ShellJobFinished
 from ..safety.runtime import PlanApprovalCoordinator
 from ..session.commands import CommandRegistry, CommandResult, builtin_command_registry

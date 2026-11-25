@@ -14,7 +14,7 @@ from enum import Enum
 from html import escape
 from typing import Optional, Sequence, Tuple
 
-from krelcode.agent.evidence import SourceRole
+from krelcode.core.evidence import SourceRole
 from krelcode.agent.prompt.fragments import (
     GROUP_SYSTEM,
     LAYER_L9_WORKING,

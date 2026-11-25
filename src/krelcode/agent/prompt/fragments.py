@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, 
 
 from krelcode.core.messages import Message
 from krelcode.agent.context import ContextSection, WorkspaceContext
-from krelcode.agent.evidence import SourceRole, instruction_source_for
-from krelcode.agent.prompt.prompts import (
+from krelcode.core.evidence import SourceRole, instruction_source_for
+from krelcode.agent.prompts import (
     BASE_SYSTEM_PROMPT,
     ModelPromptProfile,
     PromptProfileResolution,
@@ -24,7 +24,7 @@ from krelcode.agent.prompt.prompts import (
     resolve_prompt_profile,
 )
 from krelcode.agent.rules import RuleLayer, RuleScope
-from krelcode.agent.tokens import estimate_text_tokens
+from krelcode.core.tokens import estimate_text_tokens
 
 if TYPE_CHECKING: from .prompt_snapshot_ports import PromptSnapshotHostPort, RegistryT
 

@@ -50,7 +50,7 @@ from ..core.events import (
 )
 from ..core.messages import Message
 from ..core.redact import SecretRedactor
-from .codec import history_to_dicts, history_from_dicts
+from ..core.codec import history_to_dicts, history_from_dicts
 
 
 class SessionRecorder:

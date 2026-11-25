@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from ..agent.loop import AgentLoop
+from ..agent.turn.loop import AgentLoop
 from ..agent.prompts import PROMPT_PROFILE_AUTO, build_system_prompt
 from .control import AgentControl
 from .contracts import STATUS_RUNNING

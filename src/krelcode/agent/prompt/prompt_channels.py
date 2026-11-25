@@ -12,7 +12,7 @@ from krelcode.llm.base import (
     SystemPromptBlock,
     SystemPromptBlocks,
 )
-from krelcode.agent.evidence import SourceRole
+from krelcode.core.evidence import SourceRole
 from krelcode.agent.prompt.fragments import (
     GROUP_WORKSPACE,
     LAYER_L7_EVIDENCE,

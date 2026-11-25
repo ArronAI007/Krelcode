@@ -7,11 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, List, Optional, cast
 
-from ..agent.loop import AgentLoop
-from ..agent.runtime import AgentRuntime
+from ..agent.turn.loop import AgentLoop
+from ..agent.turn.runtime import AgentRuntime
 from ..core.messages import Message
 from ..core.redact import SecretRedactor
-from .context_checkpoint import ContextCheckpoint, restore_context_checkpoint
+from ..agent.context.context_checkpoint import ContextCheckpoint, restore_context_checkpoint
 from .memory import MemoryStore, sync_memory_fragment
 from .manager import (
     SessionInfo,

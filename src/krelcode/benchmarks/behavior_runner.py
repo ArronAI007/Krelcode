@@ -32,7 +32,7 @@ from .behavior_models import (
     BehaviorTrialResult,
 )
 from .behavior_session import BehaviorSession
-from .parity import PROMPT_PARITY_CONTRACT
+from ..agent.prompt.prompt_parity import PROMPT_PARITY_CONTRACT
 from .suite import BENCHMARK_SUITES
 
 

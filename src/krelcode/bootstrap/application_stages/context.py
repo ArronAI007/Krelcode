@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, cast
 
-from ...agent.loop import AgentLoop
+from ...agent.turn.loop import AgentLoop
 from ...config import load_config_layers, load_managed_config
 from ...contracts.service_ports import PrincipalPort
 from ...contracts.tool import RunMode

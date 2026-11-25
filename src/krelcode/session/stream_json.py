@@ -49,7 +49,7 @@ from ..core.events import (
     UserSteered,
 )
 from ..core.messages import ImageRef, Message, ToolCall
-from ..agent.query import QueryEvent
+from ..agent.turn.query import QueryEvent
 from .stream_json_schema import (
     STREAM_JSON_PROTOCOL_NAME as PROTOCOL_NAME,
     STREAM_JSON_PROTOCOL_VERSION as PROTOCOL_VERSION,

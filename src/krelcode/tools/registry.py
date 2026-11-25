@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-from .base import Tool, ToolDescriptor
+from krelcode.contracts.tool import Tool, ToolDescriptor
 from .prompt import ToolPromptSpec
 
 

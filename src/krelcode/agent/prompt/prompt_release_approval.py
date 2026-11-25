@@ -24,7 +24,7 @@ from krelcode.agent.prompt.prompt_release_models import (
     _text,
 )
 from krelcode.agent.prompt.prompt_release_store import PromptReleaseProposalStore
-from krelcode.agent.prompt.prompts import CURRENT_PROMPT_RELEASE
+from krelcode.agent.prompts import CURRENT_PROMPT_RELEASE
 
 
 class PromptReleaseApprovalService:

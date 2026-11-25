@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
-from ..agent.prompt_surface_contract import (
+from ..agent.prompt.prompt_surface_contract import (
     PromptSurfaceContract,
     PromptSurfaceSchemaError,
     validate_prompt_surface_schema,

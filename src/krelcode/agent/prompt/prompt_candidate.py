@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Mapping, Tuple, cast
 
-from krelcode.agent.evidence import InstructionSource, instruction_source_for
+from krelcode.core.evidence import InstructionSource, instruction_source_for
 from krelcode.agent.prompt.fragments import (
     LAYER_L6_CATALOG,
     STABILITY_SESSION,

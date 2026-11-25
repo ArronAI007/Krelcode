@@ -9,8 +9,8 @@ from __future__ import annotations
 import argparse
 
 from .. import __version__
-from ..agent.compression import DEFAULT_MAX_TOKENS as DEFAULT_CONTEXT_BUDGET
-from ..agent.loop import DEFAULT_MAX_STEPS
+from ..agent.context.compression import DEFAULT_MAX_TOKENS as DEFAULT_CONTEXT_BUDGET
+from ..agent.turn.loop import DEFAULT_MAX_STEPS
 
 
 def build_parser() -> argparse.ArgumentParser:

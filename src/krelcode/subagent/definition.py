@@ -69,7 +69,7 @@ class AgentDefinitionIssue:
 
 def builtin_agent_definitions() -> Tuple[AgentDefinition, ...]:
     """Return trusted built-ins that user/project files may override."""
-    from ..agent.verification import (
+    from ..agent.turn.verification import (
         VERIFICATION_AGENT_ALLOWED_TOOLS,
         VERIFICATION_AGENT_DESCRIPTION,
         VERIFICATION_AGENT_NAME,

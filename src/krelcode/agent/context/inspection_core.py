@@ -14,7 +14,7 @@ from krelcode.agent.context.inspection_helpers import (
     _short_hash,
 )
 from krelcode.agent.prompt.prompt_plan import PromptPlanSnapshot
-from krelcode.agent.context.tokens import estimate_history_tokens
+from krelcode.core.tokens import estimate_history_tokens
 
 if TYPE_CHECKING:
     from krelcode.agent.turn.runtime_services import AgentServices

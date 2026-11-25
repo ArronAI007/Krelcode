@@ -7,9 +7,9 @@ import time
 from pathlib import Path
 from typing import Callable, Optional, cast
 
-from ..agent.loop import AgentLoop
+from ..agent.turn.loop import AgentLoop
 from ..core.redact import SecretRedactor
-from .context_checkpoint import restore_context_checkpoint
+from ..agent.context.context_checkpoint import restore_context_checkpoint
 from .memory import MemoryStore, sync_memory_fragment
 from .recorder import SessionRecorder, latest_session, new_session_path
 from .restore import restore_session

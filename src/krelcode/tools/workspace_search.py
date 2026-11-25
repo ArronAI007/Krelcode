@@ -26,11 +26,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
 
-from .base import TurnAbortSignal
+from krelcode.contracts.tool import TurnAbortSignal
 from .fsutils import is_hidden_file, is_pruned_dir
 from .paths import safe_file_in_workspace
-from .process import process_isolation_kwargs, stop_process_tree
-from .secret_guard import classify_secret_path
+from ..core.process import process_isolation_kwargs, stop_process_tree
+from ..core.secret_guard import classify_secret_path
 
 MAX_LINE_CHARS = 300
 _RIPGREP_BATCH_FILES = 256

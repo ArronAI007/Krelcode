@@ -13,7 +13,7 @@ import json
 import time
 from typing import Any, Callable, Mapping, Optional
 
-from krelcode.agent.compact_summary import COMPACT_SUMMARY_JSON_SCHEMA
+from krelcode.agent.context.compact_summary import COMPACT_SUMMARY_JSON_SCHEMA
 from krelcode.core.redact import MASK, SecretRedactor, redact_obvious_secrets
 from krelcode.contracts.prompt_surface import (
     LIMIT_STRATEGY_ERROR,

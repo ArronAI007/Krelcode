@@ -12,7 +12,7 @@ from ...agent.turn.runtime_services import (
     SkillServicePort,
 )
 
-from ...agent.prompt_surface_catalog import refresh_prompt_surfaces
+from ...agent.prompt.prompt_surface_catalog import refresh_prompt_surfaces
 from ...extensions import ExtensionRecord, ExtensionRegistry, replace_runtime_extensions
 from ...plugins import PluginManager, PluginRecord
 from ...session.commands import (

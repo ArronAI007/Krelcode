@@ -10,7 +10,7 @@ from typing import Any, Dict
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ...contracts.tool import ToolContext
-from ..base import ToolResult
+from krelcode.contracts.tool import ToolResult
 from ..prompt import ToolPromptExample
 
 

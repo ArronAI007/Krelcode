@@ -14,9 +14,9 @@ from krelcode.llm.base import (
     SystemPromptBlocks,
 )
 from krelcode.tools.prompt import ToolPromptSpec
-from krelcode.agent.attachments import ContextAttachment
-from krelcode.agent.context_contracts import ContextTokenContribution
-from krelcode.agent.context_source import (
+from krelcode.agent.context.attachments import ContextAttachment
+from krelcode.agent.context.context_contracts import ContextTokenContribution
+from krelcode.agent.context.context_source import (
     ContextAssembly,
     ContextRequest,
     ContextSourceIssue,
@@ -24,7 +24,7 @@ from krelcode.agent.context_source import (
 from krelcode.agent.prompt.fragments import PromptCacheBoundary, PromptFragment, PromptSnapshot
 from krelcode.agent.prompt.prompt_conflicts import PromptConflictReport
 from krelcode.agent.prompt.prompt_omission import PromptOmissionSnapshot
-from krelcode.agent.reminders import SelectedReminder
+from krelcode.agent.turn.reminders import SelectedReminder
 
 
 @dataclass(frozen=True)

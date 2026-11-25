@@ -12,8 +12,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast, Optional, Sequence
 
-from ..agent.loop import AgentLoop
-from ..agent.runtime import AgentRuntime
+from ..agent.turn.loop import AgentLoop
+from ..agent.turn.runtime import AgentRuntime
 from ..agent.turn.query import QuerySession
 from ..contracts.runtime import PermissionMode
 from ..safety.runtime import PlanApprovalCoordinator, RuntimePermissionManager

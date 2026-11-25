@@ -21,7 +21,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from ...core.redact import redact_obvious_secrets
 from ...contracts.tool import ToolContext
-from ..base import ToolResult, ToolTier
+from krelcode.contracts.tool import ToolResult, ToolTier
 from ..paths import (
     FileChangedError,
     PathOutsideWorkspaceError,
@@ -32,7 +32,7 @@ from ..paths import (
     safe_file_in_workspace,
 )
 from ..prompt import ToolPromptExample
-from ..secret_guard import classify_secret_path
+from ...core.secret_guard import classify_secret_path
 
 SKIP_DIRS = frozenset({
     ".git", ".hg", ".svn", ".krelcode", "node_modules", "__pycache__",

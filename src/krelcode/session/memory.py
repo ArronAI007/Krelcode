@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Iterable, Optional, Protocol, cast
 
 from ..agent.context import CONTEXT_ENGINE_V3
-from ..agent.fragments import PromptFragment, refresh_registry_snapshot
+from ..agent.prompt.fragments import PromptFragment, refresh_registry_snapshot
 from ..core.redact import MASK, SecretRedactor, redact_obvious_secrets
 from .memory_context import MemoryStoreContextMixin
 from .memory_migration import MemoryStoreMigrationMixin

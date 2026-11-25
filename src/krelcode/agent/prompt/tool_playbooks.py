@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from html import escape
 from typing import Iterable, Optional, Sequence, Tuple
 
-from krelcode.agent.evidence import SourceRole
+from krelcode.core.evidence import SourceRole
 from krelcode.agent.prompt.fragments import (
     GROUP_SYSTEM,
     LAYER_L5_MODE_CONTRACT,

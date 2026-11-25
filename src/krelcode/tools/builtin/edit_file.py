@@ -13,7 +13,7 @@ import difflib
 from typing import Any, Dict, List
 
 from ...contracts.tool import ToolContext
-from ..base import ToolResult
+from krelcode.contracts.tool import ToolResult
 from ..paths import (
     FileChangedError,
     PathOutsideWorkspaceError,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Iterable, Optional
 
-from ..agent.loop import AgentLoop
+from ..agent.turn.loop import AgentLoop
 from ..core.events import (
     AgentEvent,
     EventBus,

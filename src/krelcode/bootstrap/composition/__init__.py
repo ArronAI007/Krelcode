@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from ._deps import *  # noqa: F401,F403
-from ._deps import _restore_session
 from .daemon import build_daemon_agent_runtime, build_parser
 from .graph import CoreRuntime, ExtensionRuntime, RuntimeGraph
 from .extensions import (
@@ -31,11 +29,8 @@ from .security import (
 )
 from .subagents import build_subagent_llm_resolver
 from .tools import default_tools
-
-# Historical facade: the former single module exposed every imported dependency
-# and helper.  Keep that broad surface for embedders; do not add ``__all__`` here.
-restore_session = _restore_session
-
+from krelcode.llm.registry import create_provider, resolve_settings
+from krelcode.session.restore import restore_session
 
 __all__ = [
     "CoreRuntime",
@@ -57,10 +52,12 @@ __all__ = [
     "compose_hook_specs",
     "compose_mcp_config",
     "configured_skill_paths",
+    "create_provider",
     "default_tools",
     "resolve_auto_memory_mode",
     "resolve_auto_memory_thresholds",
     "resolve_permission_mode",
     "resolve_run_mode",
+    "resolve_settings",
     "restore_session",
 ]

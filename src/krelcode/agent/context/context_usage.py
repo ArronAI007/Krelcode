@@ -13,7 +13,7 @@ from krelcode.agent.context.context_source import ContextAssembly
 from krelcode.agent.prompt.fragments import (
     GROUP_RUNTIME, GROUP_WORKSPACE, PromptFragment, PromptSnapshot,
 )
-from krelcode.agent.context.tokens import (
+from krelcode.core.tokens import (
     estimate_history_tokens,
     estimate_text_tokens,
 )

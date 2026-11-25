@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from ...contracts.tool import ToolContext
-from ..base import ToolResult
+from krelcode.contracts.tool import ToolResult
 from ..prompt import ToolPromptExample
 
 ALLOWED_STATUSES = ("pending", "in_progress", "completed")

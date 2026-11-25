@@ -17,7 +17,7 @@ from typing import Dict, Iterable, List, Mapping, Tuple
 
 from .fsutils import is_hidden_file, is_pruned_dir
 from .paths import read_text_file_with_snapshot, safe_file_in_workspace
-from .secret_guard import classify_secret_path
+from ..core.secret_guard import classify_secret_path
 from .symbols import SOURCE_EXTENSIONS, Symbol, parse_symbols
 
 MAX_FILE_BYTES = 1_000_000

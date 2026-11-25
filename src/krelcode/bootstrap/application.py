@@ -6,8 +6,8 @@ import argparse
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from ..agent.loop import AgentLoop
-from ..agent.runtime import AgentRuntime
+from ..agent.turn.loop import AgentLoop
+from ..agent.turn.runtime import AgentRuntime
 from ..agent.usage import UsageTracker
 from ..core.hooks import HookPort
 from ..core.redact import SecretRedactor

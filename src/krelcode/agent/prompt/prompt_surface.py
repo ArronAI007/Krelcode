@@ -23,10 +23,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Mapping, Optional, Sequence, Tuple, cast
 
-from krelcode.agent.evidence import EvidenceSource, InstructionSource, SourceRole
+from krelcode.core.evidence import EvidenceSource, InstructionSource, SourceRole
 from krelcode.agent.prompt.fragments import PROMPT_STABILITY_LEVELS, PROMPT_TRUST_LEVELS
 from krelcode.agent.prompt.prompt_surface_contract import PromptSurfaceContract
-from krelcode.agent.tokens import estimate_text_tokens
+from krelcode.core.tokens import estimate_text_tokens
 
 
 PROMPT_SURFACE_SCHEMA_VERSION = 1

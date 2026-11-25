@@ -6,15 +6,15 @@ import asyncio
 from pathlib import Path
 from typing import Any, Callable, cast
 
-from ..agent.fragments import PromptSnapshot, refresh_registry_snapshot, skills_fragment
+from ..agent.prompt.fragments import PromptSnapshot, refresh_registry_snapshot, skills_fragment
 from ..agent.context.context_checkpoint_ports import (
     CheckpointLoopPort,
 )
 from ..agent.prompt.prompt_snapshot_ports import PromptSnapshotHostPort
 from ..agent.prompts import build_system_prompt
-from ..agent.cyber_risk import prepend_cyber_risk_prompt
+from ..agent.prompt.cyber_risk import prepend_cyber_risk_prompt
 from ..core.messages import Message
-from .context_checkpoint import restore_context_checkpoint
+from ..agent.context.context_checkpoint import restore_context_checkpoint
 from .recorder import (
     load_history,
     load_latest_context_checkpoint_id,

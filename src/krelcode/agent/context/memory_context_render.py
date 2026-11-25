@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from krelcode.agent.evidence import evidence_record_from_memory, render_evidence_set
+from krelcode.core.evidence import evidence_record_from_memory, render_evidence_set
 
 
 def render_memory_context(entries: Sequence[object]) -> str:

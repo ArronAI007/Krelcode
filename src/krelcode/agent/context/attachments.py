@@ -18,7 +18,7 @@ from types import MappingProxyType
 from typing import Dict, Iterable, Mapping, Optional, Protocol, Sequence, Tuple
 
 from krelcode.agent.context.workspace import WorkspaceContext
-from krelcode.agent.evidence import (
+from krelcode.core.evidence import (
     EvidenceRecord,
     EvidenceSource,
     evidence_metadata,
@@ -44,7 +44,7 @@ from krelcode.agent.prompt.fragments import (
     TRUST_UNTRUSTED,
     PromptFragment,
 )
-from krelcode.agent.context.tokens import estimate_text_tokens
+from krelcode.core.tokens import estimate_text_tokens
 from krelcode.safety.contract import ModePermissionContract
 
 

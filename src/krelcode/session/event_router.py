@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from typing import Optional
 
-from ..agent.query import QueryEvent
+from ..agent.turn.query import QueryEvent
 from ..core.redact import SecretRedactor
 from ..core.session_events import SessionEvent
 from .envelope import SessionEnvelope

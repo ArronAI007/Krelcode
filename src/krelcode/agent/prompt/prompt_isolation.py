@@ -20,12 +20,12 @@ from krelcode.safety.contract import (
     build_mode_permission_contract,
 )
 from krelcode.contracts.tool import RuntimeSnapshot
-from krelcode.agent.attachments import (
+from krelcode.agent.context.attachments import (
     ContextAttachment,
     ContextAttachmentKind,
     mode_permission_contract_attachment,
 )
-from krelcode.agent.context_source import ContextRequest
+from krelcode.agent.context.context_source import ContextRequest
 from krelcode.agent.prompt.fragments import (
     GROUP_SYSTEM,
     LAYER_L5_MODE_CONTRACT,

@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple, cast
 
 from krelcode.core.messages import Message, ToolCall
-from krelcode.agent.context.tokens import estimate_text_tokens
+from krelcode.core.tokens import estimate_text_tokens
 from krelcode.agent.value_utils import merge_by_key
 
 COMPACT_SUMMARY_VERSION = 2

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence, cast
 
-from ...agent.runtime import AgentRuntime
+from ...agent.turn.runtime import AgentRuntime
 from ...config import load_config_layers
 from ...core.errors import ConfigError
 from ...core.redact import SecretRedactor
@@ -17,7 +17,7 @@ from ...mcp.supervisor import MCPSupervisor
 from ...agent.turn.runtime_services import MCPServicePort, RuntimeServiceBinderPort
 from ...safety.sandbox import SandboxError
 from ...session.elicitation_bridge import MCPElicitationBridge
-from ...agent.prompt_surface_contract import PromptSurfaceExecutor
+from ...agent.prompt.prompt_surface_contract import PromptSurfaceExecutor
 from ..composition import (
     RuntimeServiceBinder,
     build_loop,
@@ -25,7 +25,7 @@ from ..composition import (
     build_mcp_sampler,
 )
 from ..composition.model_switcher import SubagentManagerPort
-from ...agent.loop import AgentLoop
+from ...agent.turn.loop import AgentLoop
 from .context import (
     ApplicationBuildContext,
     BuildStageError,

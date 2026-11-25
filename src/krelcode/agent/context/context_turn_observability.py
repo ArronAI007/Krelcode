@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from krelcode.agent.context.context_source import ContextAssembly
-from krelcode.agent.runtime_ports import ContextTurnHostPort
+from krelcode.agent.turn.runtime_ports import ContextTurnHostPort
 
 
 def dropped_context_items(host: ContextTurnHostPort) -> tuple[str, ...]:

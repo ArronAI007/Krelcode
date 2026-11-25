@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Mapping, Optional, Sequence, Tuple
 
 from krelcode.agent.prompt.fragments import TRUST_MANAGED, TRUST_PROJECT, TRUST_UNTRUSTED, TRUST_USER
-from krelcode.agent.context.tokens import estimate_text_tokens
+from krelcode.core.tokens import estimate_text_tokens
 
 REMINDER_CATALOG_VERSION = 1
 DEFAULT_REMINDER_BUDGET_TOKENS = 500

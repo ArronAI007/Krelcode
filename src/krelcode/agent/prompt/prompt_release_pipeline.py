@@ -45,7 +45,7 @@ from krelcode.agent.prompt.prompt_release_support import (
     mapping,
     mapping_items,
 )
-from krelcode.agent.prompt.prompts import CURRENT_PROMPT_RELEASE
+from krelcode.agent.prompts import CURRENT_PROMPT_RELEASE
 
 
 def _report_payload(report: object) -> Mapping[str, object]:

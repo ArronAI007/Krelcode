@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Awaitable, cast, Callable, List, Optional, TextIO
 
-from ..agent.runtime import AgentRuntime
+from ..agent.turn.runtime import AgentRuntime
 from ..agent.usage import UsageTracker
 from ..core.events import AgentEvent, PermissionDenied, ToolCallCompleted
 from ..core.redact import SecretRedactor

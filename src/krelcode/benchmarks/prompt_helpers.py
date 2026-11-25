@@ -6,9 +6,9 @@ import hashlib
 import time
 from typing import Mapping
 
-from ..agent.context_cache_ledger import ContextCacheLedger
-from ..agent.fragments import LAYER_L7_EVIDENCE
-from ..agent.prompt_plan import PromptPlanSnapshot
+from ..agent.context.context_cache_ledger import ContextCacheLedger
+from ..agent.prompt.fragments import LAYER_L7_EVIDENCE
+from ..agent.prompt.prompt_plan import PromptPlanSnapshot
 from ..core.messages import Message
 from ..llm.base import PreparedLLMRequest
 from .prompt_models import PromptBenchmarkCheck, PromptBenchmarkMetric

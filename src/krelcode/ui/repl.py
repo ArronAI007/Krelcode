@@ -14,8 +14,8 @@ import sys
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
-from ..agent.runtime import AgentRuntime
-from ..agent.loop import AgentLoop
+from ..agent.turn.runtime import AgentRuntime
+from ..agent.turn.loop import AgentLoop
 from ..core.redact import SecretRedactor
 from ..session.commands.ports import (
     MCPReloadPort,

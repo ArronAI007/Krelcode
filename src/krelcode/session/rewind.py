@@ -17,10 +17,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
-from ..agent.context_plan import ContextPlanSnapshot
+from ..agent.context.context_plan import ContextPlanSnapshot
 from ..agent.context.context_checkpoint import ContextCheckpointStore
-from ..agent.loop import AgentLoop
-from ..agent.runtime import AgentRuntime
+from ..agent.turn.loop import AgentLoop
+from ..agent.turn.runtime import AgentRuntime
 from ..core.events import (
     AgentEvent,
     EventBus,
@@ -43,7 +43,7 @@ from .checkpoint import (
 )
 from .compact_checkpoint import restore_compact_checkpoint
 from .compact_checkpoint import CompactCheckpointStore
-from .context_checkpoint import restore_context_checkpoint
+from ..agent.context.context_checkpoint import restore_context_checkpoint
 from .lifecycle import SessionLifecycle
 from .runtime_ports import CheckpointPort, RestoreTurnsResultPort
 

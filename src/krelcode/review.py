@@ -20,18 +20,18 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .agent.cyber_risk import prepend_cyber_risk_prompt
-from .agent.loop import AgentLoop
-from .agent.prompt_surface import PromptSurfaceDescriptor, PromptSurfaceKind
-from .agent.prompt_surface_catalog import prompt_content_hash, refresh_prompt_surfaces
-from .agent.prompt_surface_contract import (
+from .agent.prompt.cyber_risk import prepend_cyber_risk_prompt
+from .agent.turn.loop import AgentLoop
+from .agent.prompt.prompt_surface import PromptSurfaceDescriptor, PromptSurfaceKind
+from .agent.prompt.prompt_surface_catalog import prompt_content_hash, refresh_prompt_surfaces
+from .agent.prompt.prompt_surface_contract import (
     REVIEW_SURFACE_CONTRACT,
     PromptSurfaceExecutor,
     observe_surface_result,
 )
 from .agent.usage import UsageTracker
-from .agent.evidence import InstructionSource, SourceRole
-from .agent.tokens import estimate_text_tokens
+from .core.evidence import InstructionSource, SourceRole
+from .core.tokens import estimate_text_tokens
 from .core.events import EventBus, PermissionDenied, ToolCallCompleted
 from .core.redact import SecretRedactor
 from .core.textutil import truncate_middle

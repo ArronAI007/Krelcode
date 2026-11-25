@@ -6,14 +6,14 @@ import json
 import os
 import shlex
 
-from ....agent.context_inspection import ContextInspectionService
-from ....agent.fragments import (
+from ....agent.context.context_inspection import ContextInspectionService
+from ....agent.prompt.fragments import (
     refresh_registry_snapshot,
     rule_fragment,
     skills_fragment,
 )
-from ....agent.prompt_authoring import PROMPT_AUTHORING_FRAGMENT_ID
-from ....agent.tokens import estimate_history_tokens
+from ....agent.prompt.prompt_authoring import PROMPT_AUTHORING_FRAGMENT_ID
+from ....core.tokens import estimate_history_tokens
 from ....mcp.security import render_mcp_prompt_evidence
 from ....safety.runtime import parse_permission_mode
 from ....safety.rules import RuleDecision, RuleScope

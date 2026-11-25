@@ -16,8 +16,8 @@ import os
 from typing import Any, Dict
 
 from ...contracts.tool import ToolContext
-from ..base import ToolResult
-from ..process import (
+from krelcode.contracts.tool import ToolResult
+from ...core.process import (
     process_isolation_kwargs,
     shell_argv,
     stop_process_tree,

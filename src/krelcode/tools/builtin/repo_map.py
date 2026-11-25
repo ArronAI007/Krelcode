@@ -16,7 +16,7 @@ from typing import Any, Dict, List
 
 from ...contracts.json import ToolExecutionData
 from ...contracts.tool import ToolContext
-from ..base import ToolResult, ToolTier
+from krelcode.contracts.tool import ToolResult, ToolTier
 from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
 from ..prompt import ToolPromptExample
 from ..repo_index import MAX_FILE_BYTES, RepoMapIndex

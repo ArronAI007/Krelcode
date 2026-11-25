@@ -16,7 +16,7 @@ from enum import Enum
 from typing import Iterable, Sequence, Tuple
 
 from krelcode.contracts.tool import PermissionMode
-from krelcode.agent.evidence import EvidenceSource, InstructionSource, SourceRole
+from krelcode.core.evidence import EvidenceSource, InstructionSource, SourceRole
 from krelcode.agent.prompt.fragments import (
     GROUP_SYSTEM,
     LAYER_L6_CATALOG,

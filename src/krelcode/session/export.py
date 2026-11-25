@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from ..core.redact import SecretRedactor
 from ..core.messages import Message
-from .codec import history_to_dicts
+from ..core.codec import history_to_dicts
 
 TOOL_RESULT_PREVIEW = 2_000
 ARGS_PREVIEW = 300

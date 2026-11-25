@@ -6,13 +6,13 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from ...contracts.tool import ToolContext
-from ..base import ToolResult
+from krelcode.contracts.tool import ToolResult
 from ..fsutils import filter_pruned
 from ..paths import (
     PathOutsideWorkspaceError, resolve_in_workspace, safe_file_in_workspace,
 )
 from ..prompt import ToolPromptExample
-from ..secret_guard import classify_secret_path
+from ...core.secret_guard import classify_secret_path
 
 MAX_RESULTS = 200
 

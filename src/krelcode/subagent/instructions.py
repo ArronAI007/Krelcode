@@ -23,8 +23,8 @@ from ..core.evidence import (
     instruction_source_for,
     render_evidence_set,
 )
-from ..agent.cyber_risk import cyber_risk_fragment
-from ..agent.fragments import (
+from ..agent.prompt.cyber_risk import cyber_risk_fragment
+from ..agent.prompt.fragments import (
     GROUP_RUNTIME,
     GROUP_SYSTEM,
     LAYER_L1_BASE_AGENT,
@@ -38,7 +38,7 @@ from ..agent.fragments import (
     rule_fragment,
 )
 from ..agent.rules import RuleLayer, RuleLoader, RuleScope, extract_rule_targets
-from ..agent.tokens import estimate_text_tokens
+from ..core.tokens import estimate_text_tokens
 from ..core.redact import SecretRedactor
 from .definition import AgentDefinition
 

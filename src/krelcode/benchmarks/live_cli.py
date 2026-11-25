@@ -30,7 +30,7 @@ from .behavior_cases import BEHAVIOR_CASES
 from .behavior_models import BehaviorReport
 from .behavior_runner import BehaviorBenchmarkRunner
 from .acceptance_runner import FinalAcceptanceRunner
-from .parity import (
+from ..agent.prompt.prompt_parity import (
     PROMPT_PARITY_CONTRACT,
     PROMPT_PARITY_MINIMUM_TRIALS,
     PromptParityBaseline,

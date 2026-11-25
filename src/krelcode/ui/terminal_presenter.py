@@ -17,7 +17,7 @@ import time
 from typing import Awaitable, Callable, Optional, cast
 
 from ..agent.turn.loop import AgentLoop
-from ..agent.tokens import estimate_history_tokens
+from ..core.tokens import estimate_history_tokens
 from ..core.events import AgentEvent, MemoryWritten
 from ..core.redact import SecretRedactor
 from ..session.controller import SessionController

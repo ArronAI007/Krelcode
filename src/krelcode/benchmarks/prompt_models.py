@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Mapping
 
-from ..agent.context_cache_ledger import ContextCacheLedger
-from ..agent.prompt_plan import PromptPlanSnapshot
+from ..agent.context.context_cache_ledger import ContextCacheLedger
+from ..agent.prompt.prompt_plan import PromptPlanSnapshot
 
 
 PROMPT_BENCHMARK_SCHEMA_VERSION = 1

@@ -10,8 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional, Protocol, Tuple
 
-from ...agent.loop import AgentLoop
-from ...agent.runtime import AgentRuntime
+from ...agent.turn.loop import AgentLoop
+from ...agent.turn.runtime import AgentRuntime
 from ...agent.usage import UsageTracker
 from ...core.events import EventBus
 from ...core.hooks import HookPort

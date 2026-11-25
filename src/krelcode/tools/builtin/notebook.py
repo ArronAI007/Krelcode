@@ -16,7 +16,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence, cast
 
 from ...core.redact import redact_obvious_secrets
 from ...contracts.tool import ToolContext
-from ..base import ToolResult, ToolTier
+from krelcode.contracts.tool import ToolResult, ToolTier
 from ..paths import (
     FileChangedError,
     FileSnapshot,
@@ -27,7 +27,7 @@ from ..paths import (
     resolve_in_workspace,
 )
 from ..prompt import ToolPromptExample
-from ..secret_guard import classify_secret_path
+from ...core.secret_guard import classify_secret_path
 
 MAX_NOTEBOOK_BYTES = 10_000_000
 MAX_NOTEBOOK_CELLS = 1_000

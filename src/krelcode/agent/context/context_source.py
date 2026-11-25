@@ -10,7 +10,7 @@ from typing import (
 )
 
 from krelcode.core.messages import Message
-from krelcode.agent.evidence import (
+from krelcode.core.evidence import (
     EvidenceRecord,
     EvidenceSource,
     evidence_metadata,
@@ -24,10 +24,10 @@ from krelcode.agent.prompt.fragments import (
     PromptSnapshot,
     rule_fragment,
 )
-from krelcode.agent.intent import TurnIntent
-from krelcode.agent.context.rules import RuleBundle, RuleLayer, RuleLoader, RuleScope, extract_rule_targets
-from krelcode.agent.context.tokens import estimate_text_tokens
-from krelcode.agent.tool_pool import TurnToolPool
+from krelcode.agent.turn.intent import TurnIntent
+from krelcode.agent.rules import RuleBundle, RuleLayer, RuleLoader, RuleScope, extract_rule_targets
+from krelcode.core.tokens import estimate_text_tokens
+from krelcode.agent.turn.tool_pool import TurnToolPool
 from krelcode.agent.context.context_contracts import (
     CATEGORY_MEMORY,
     CATEGORY_ORDER,
@@ -45,7 +45,7 @@ from krelcode.agent.context.context_contracts import (
 from krelcode.agent.context.working_context_source import WorkingContextSource
 
 if TYPE_CHECKING:
-    from krelcode.agent.workflows import TaskWorkflowSelection
+    from krelcode.agent.turn.workflows import TaskWorkflowSelection
     from krelcode.agent.context.working_context import WorkingContextSnapshot
 
 

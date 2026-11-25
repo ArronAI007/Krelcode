@@ -4,7 +4,8 @@ review_cycle = "major"
 reviewed_at = "0.81.0"
 
 # Generated and reviewed compatibility retirement inventory.
-# Keep this list monotonic: remove imports from internal_uses as code migrates.
+# Production code uses canonical modules except the application root and
+# lazy benchmark aggregate imports, which remain explicit boundary cases.
 
 [[facades]]
 path = "src/krelcode/agent/attachments.py"
@@ -14,14 +15,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/agent/prompt/prompt_assembler.py",
-  "src/krelcode/agent/prompt/prompt_isolation.py",
-  "src/krelcode/agent/prompt/prompt_models.py",
-  "src/krelcode/agent/prompt/prompt_rendering.py",
-  "src/krelcode/benchmarks/behavior_advanced_scenarios.py",
-  "src/krelcode/benchmarks/behavior_session.py",
 ]
 
 [[facades]]
@@ -32,10 +27,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/agent/prompt/prompt_surface_contract.py",
-  "src/krelcode/session/compact_checkpoint.py",
 ]
 
 [[facades]]
@@ -46,14 +39,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/agent/prompt/prompt_surface_catalog.py",
-  "src/krelcode/benchmarks/behavior_session.py",
-  "src/krelcode/benchmarks/prompt_fixture.py",
-  "src/krelcode/benchmarks/prompt_scenarios.py",
-  "src/krelcode/bootstrap/parser.py",
-  "src/krelcode/subagent/manager.py",
 ]
 
 [[facades]]
@@ -64,10 +51,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/agent/context/context_source.py",
-  "src/krelcode/agent/context/workspace.py",
 ]
 
 [[facades]]
@@ -78,20 +63,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/agent/context/attachments.py",
-  "src/krelcode/agent/context/compact_summary.py",
-  "src/krelcode/agent/context/compression.py",
-  "src/krelcode/agent/context/context_contracts.py",
-  "src/krelcode/agent/context/context_source.py",
-  "src/krelcode/agent/context/context_usage.py",
-  "src/krelcode/agent/context/inspection_core.py",
-  "src/krelcode/agent/context/tool_microcompact.py",
-  "src/krelcode/agent/context/working_context.py",
-  "src/krelcode/agent/context/workspace.py",
-  "src/krelcode/agent/turn/context_turn.py",
-  "src/krelcode/agent/turn/reminders.py",
 ]
 
 [[facades]]
@@ -102,12 +75,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/agent/prompt/prompt_assembler.py",
-  "src/krelcode/benchmarks/behavior_session.py",
-  "src/krelcode/benchmarks/prompt_fixture.py",
-  "src/krelcode/benchmarks/prompt_scenarios.py",
 ]
 
 [[facades]]
@@ -118,11 +87,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/benchmarks/prompt_helpers.py",
-  "src/krelcode/benchmarks/prompt_models.py",
-  "src/krelcode/benchmarks/prompt_scenarios.py",
 ]
 
 [[facades]]
@@ -133,9 +99,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/subagent/manager.py",
 ]
 
 [[facades]]
@@ -170,10 +135,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/agent/prompt/prompt_models.py",
-  "src/krelcode/agent/prompt/prompt_rendering.py",
 ]
 
 [[facades]]
@@ -184,13 +147,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/session/commands/handlers/command_ops.py",
-  "src/krelcode/session/commands/handlers/configuration_ops.py",
-  "src/krelcode/session/commands/handlers/context_ops.py",
-  "src/krelcode/session/commands/handlers/extension_ops.py",
-  "src/krelcode/session/commands/handlers/prompt_release_ops.py",
 ]
 
 [[facades]]
@@ -201,9 +159,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/session/rewind.py",
 ]
 
 [[facades]]
@@ -214,15 +171,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/agent/prompt/prompt_assembler.py",
-  "src/krelcode/agent/prompt/prompt_isolation.py",
-  "src/krelcode/agent/prompt/prompt_models.py",
-  "src/krelcode/agent/prompt/prompt_rendering.py",
-  "src/krelcode/benchmarks/behavior_session.py",
-  "src/krelcode/benchmarks/prompt_fixture.py",
-  "src/krelcode/benchmarks/prompt_scenarios.py",
 ]
 
 [[facades]]
@@ -269,19 +219,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/benchmarks/behavior_session.py",
-  "src/krelcode/benchmarks/prompt_fixture.py",
-  "src/krelcode/benchmarks/prompt_scenarios.py",
-  "src/krelcode/review.py",
-  "src/krelcode/security_review/prompt.py",
-  "src/krelcode/session/commands/handlers/command_ops.py",
-  "src/krelcode/session/commands/handlers/configuration_ops.py",
-  "src/krelcode/session/commands/handlers/extension_ops.py",
-  "src/krelcode/session/commands/handlers/prompt_release_ops.py",
-  "src/krelcode/session/restore.py",
-  "src/krelcode/subagent/instructions.py",
 ]
 
 [[facades]]
@@ -304,22 +243,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/agent/context/attachments.py",
-  "src/krelcode/agent/context/context_source.py",
-  "src/krelcode/agent/context/memory_context_render.py",
-  "src/krelcode/agent/prompt/fragments.py",
-  "src/krelcode/agent/prompt/prompt_authoring.py",
-  "src/krelcode/agent/prompt/prompt_candidate.py",
-  "src/krelcode/agent/prompt/prompt_channels.py",
-  "src/krelcode/agent/prompt/prompt_rendering.py",
-  "src/krelcode/agent/prompt/prompt_surface.py",
-  "src/krelcode/agent/prompt/prompt_surface_catalog.py",
-  "src/krelcode/agent/prompt/tool_playbooks.py",
-  "src/krelcode/agent/turn/workflows.py",
-  "src/krelcode/review.py",
-  "src/krelcode/security_review/surfaces.py",
 ]
 
 [[facades]]
@@ -330,23 +255,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/benchmarks/behavior_session.py",
-  "src/krelcode/benchmarks/prompt_fixture.py",
-  "src/krelcode/benchmarks/prompt_helpers.py",
-  "src/krelcode/benchmarks/prompt_scenarios.py",
-  "src/krelcode/output_styles.py",
-  "src/krelcode/session/commands/handlers/command_ops.py",
-  "src/krelcode/session/commands/handlers/configuration_ops.py",
-  "src/krelcode/session/commands/handlers/context_ops.py",
-  "src/krelcode/session/commands/handlers/extension_ops.py",
-  "src/krelcode/session/commands/handlers/prompt_release_ops.py",
-  "src/krelcode/session/memory.py",
-  "src/krelcode/session/memory_context.py",
-  "src/krelcode/session/restore.py",
-  "src/krelcode/subagent/instructions.py",
-  "src/krelcode/subagent/manager.py",
 ]
 
 [[facades]]
@@ -405,9 +315,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/agent/context/context_source.py",
 ]
 
 [[facades]]
@@ -418,27 +327,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/benchmarks/behavior_session.py",
-  "src/krelcode/benchmarks/prompt_fixture.py",
-  "src/krelcode/benchmarks/prompt_scenarios.py",
-  "src/krelcode/bootstrap/application.py",
-  "src/krelcode/bootstrap/application_stages/context.py",
-  "src/krelcode/bootstrap/application_stages/core.py",
-  "src/krelcode/bootstrap/composition/graph.py",
-  "src/krelcode/bootstrap/parser.py",
-  "src/krelcode/review.py",
-  "src/krelcode/security_review/runner.py",
-  "src/krelcode/session/bootstrap.py",
-  "src/krelcode/session/controller.py",
-  "src/krelcode/session/lifecycle.py",
-  "src/krelcode/session/memory_candidate_coordinator.py",
-  "src/krelcode/session/rewind.py",
-  "src/krelcode/subagent/manager.py",
-  "src/krelcode/subagent/models.py",
-  "src/krelcode/ui/repl.py",
-  "src/krelcode/ui/repl_surface.py",
 ]
 
 [[facades]]
@@ -485,11 +375,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/agent/prompt/fragments.py",
-  "src/krelcode/agent/prompt/prompt_release_approval.py",
-  "src/krelcode/agent/prompt/prompt_release_pipeline.py",
 ]
 
 [[facades]]
@@ -512,13 +399,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/session/commands/handlers/command_ops.py",
-  "src/krelcode/session/commands/handlers/configuration_ops.py",
-  "src/krelcode/session/commands/handlers/context_ops.py",
-  "src/krelcode/session/commands/handlers/extension_ops.py",
-  "src/krelcode/session/commands/handlers/prompt_release_ops.py",
 ]
 
 [[facades]]
@@ -529,9 +411,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/session/commands/handlers/prompt_surface_ops.py",
 ]
 
 [[facades]]
@@ -542,10 +423,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/benchmarks/report_store.py",
-  "src/krelcode/session/commands/handlers/prompt_surface_ops.py",
 ]
 
 [[facades]]
@@ -652,9 +531,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/session/commands/handlers/prompt_surface_ops.py",
 ]
 
 [[facades]]
@@ -665,11 +543,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/benchmarks/prompt_helpers.py",
-  "src/krelcode/benchmarks/prompt_models.py",
-  "src/krelcode/benchmarks/prompt_scenarios.py",
 ]
 
 [[facades]]
@@ -680,9 +555,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/subagent/manager.py",
 ]
 
 [[facades]]
@@ -741,11 +615,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/review.py",
-  "src/krelcode/security_review/surfaces.py",
-  "src/krelcode/session/commands/handlers/prompt_surface_ops.py",
 ]
 
 [[facades]]
@@ -756,14 +627,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/benchmarks/behavior_session.py",
-  "src/krelcode/bootstrap/application_stages/extensions.py",
-  "src/krelcode/review.py",
-  "src/krelcode/security_review/runner.py",
-  "src/krelcode/security_review/surfaces.py",
-  "src/krelcode/session/commands/handlers/prompt_surface_ops.py",
 ]
 
 [[facades]]
@@ -774,14 +639,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/bootstrap/application_stages/core.py",
-  "src/krelcode/bootstrap/composition/daemon.py",
-  "src/krelcode/hooks.py",
-  "src/krelcode/review.py",
-  "src/krelcode/security_review/report.py",
-  "src/krelcode/security_review/runner.py",
 ]
 
 [[facades]]
@@ -792,14 +651,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/session/envelope.py",
-  "src/krelcode/session/event_router.py",
-  "src/krelcode/session/repl_session.py",
-  "src/krelcode/session/state.py",
-  "src/krelcode/session/stream_json.py",
-  "src/krelcode/session/stream_json_runner.py",
 ]
 
 [[facades]]
@@ -810,11 +663,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/agent/prompt/prompt_assembler.py",
-  "src/krelcode/agent/prompt/prompt_models.py",
-  "src/krelcode/agent/prompt/prompt_rendering.py",
 ]
 
 [[facades]]
@@ -825,19 +675,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/benchmarks/prompt_scenarios.py",
-  "src/krelcode/bootstrap/application.py",
-  "src/krelcode/bootstrap/application_stages/core.py",
-  "src/krelcode/bootstrap/composition/graph.py",
-  "src/krelcode/session/controller.py",
-  "src/krelcode/session/lifecycle.py",
-  "src/krelcode/session/rewind.py",
-  "src/krelcode/session/runner.py",
-  "src/krelcode/session/stream_json_runner.py",
-  "src/krelcode/ui/conversation_host.py",
-  "src/krelcode/ui/repl.py",
 ]
 
 [[facades]]
@@ -848,9 +687,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/agent/context/context_turn_observability.py",
 ]
 
 [[facades]]
@@ -873,25 +711,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/agent/prompt/fragments.py",
-  "src/krelcode/agent/prompt/prompt_assembler.py",
-  "src/krelcode/agent/prompt/prompt_surface.py",
-  "src/krelcode/agent/prompt/prompt_surface_catalog.py",
-  "src/krelcode/benchmarks/prompt_fixture.py",
-  "src/krelcode/benchmarks/prompt_scenarios.py",
-  "src/krelcode/review.py",
-  "src/krelcode/security_review/surfaces.py",
-  "src/krelcode/session/commands/handlers/command_ops.py",
-  "src/krelcode/session/commands/handlers/configuration_ops.py",
-  "src/krelcode/session/commands/handlers/context_ops.py",
-  "src/krelcode/session/commands/handlers/extension_ops.py",
-  "src/krelcode/session/commands/handlers/memory_ops.py",
-  "src/krelcode/session/commands/handlers/prompt_release_ops.py",
-  "src/krelcode/session/memory_context.py",
-  "src/krelcode/subagent/instructions.py",
-  "src/krelcode/ui/terminal_presenter.py",
 ]
 
 [[facades]]
@@ -926,12 +747,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/agent/context/context_source.py",
-  "src/krelcode/benchmarks/acceptance_runner.py",
-  "src/krelcode/benchmarks/behavior_advanced_scenarios.py",
-  "src/krelcode/subagent/manager.py",
 ]
 
 [[facades]]
@@ -954,9 +771,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/subagent/definition.py",
 ]
 
 [[facades]]
@@ -967,11 +783,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/agent/context/context_source.py",
-  "src/krelcode/agent/prompt/prompt_assembler.py",
-  "src/krelcode/agent/prompt/prompt_surface_catalog.py",
 ]
 
 [[facades]]
@@ -982,12 +795,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/benchmarks/behavior_session.py",
-  "src/krelcode/benchmarks/prompt_fixture.py",
-  "src/krelcode/benchmarks/prompt_scenarios.py",
-  "src/krelcode/subagent/manager.py",
 ]
 
 [[facades]]
@@ -1051,9 +860,6 @@ remove_in = "1.0.0"
 internal_use = true
 internal_uses = [
   "src/krelcode/benchmarks/__init__.py",
-  "src/krelcode/benchmarks/acceptance_runner.py",
-  "src/krelcode/benchmarks/behavior_runner.py",
-  "src/krelcode/benchmarks/live_cli.py",
 ]
 
 [[facades]]
@@ -1064,11 +870,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/session/compact_checkpoint.py",
-  "src/krelcode/session/export.py",
-  "src/krelcode/session/recorder.py",
 ]
 
 [[facades]]
@@ -1096,15 +899,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/benchmarks/behavior_advanced_scenarios.py",
-  "src/krelcode/benchmarks/prompt_scenarios.py",
-  "src/krelcode/session/bootstrap.py",
-  "src/krelcode/session/compact_checkpoint.py",
-  "src/krelcode/session/lifecycle.py",
-  "src/krelcode/session/restore.py",
-  "src/krelcode/session/rewind.py",
 ]
 
 [[facades]]
@@ -1116,27 +912,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/tools/builtin/check_syntax.py",
-  "src/krelcode/tools/builtin/database_migration.py",
-  "src/krelcode/tools/builtin/edit_file.py",
-  "src/krelcode/tools/builtin/find_refs.py",
-  "src/krelcode/tools/builtin/glob.py",
-  "src/krelcode/tools/builtin/grep.py",
-  "src/krelcode/tools/builtin/job_tools.py",
-  "src/krelcode/tools/builtin/notebook.py",
-  "src/krelcode/tools/builtin/read_file.py",
-  "src/krelcode/tools/builtin/repo_map.py",
-  "src/krelcode/tools/builtin/run_command.py",
-  "src/krelcode/tools/builtin/time_tool.py",
-  "src/krelcode/tools/builtin/tool_search.py",
-  "src/krelcode/tools/builtin/write_file.py",
-  "src/krelcode/tools/extension/ask_user.py",
-  "src/krelcode/tools/extension/tools.py",
-  "src/krelcode/tools/extension/update_plan.py",
-  "src/krelcode/tools/registry.py",
-  "src/krelcode/tools/workspace_search.py",
 ]
 
 [[facades]]
@@ -1147,10 +924,8 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/tools/builtin/run_command.py",
-  "src/krelcode/tools/workspace_search.py",
 ]
 
 [[facades]]
@@ -1161,14 +936,6 @@ new_imports = [
 ]
 deprecated_in = "0.81.0"
 remove_in = "1.0.0"
-internal_use = true
+internal_use = false
 internal_uses = [
-  "src/krelcode/tools/builtin/check_syntax.py",
-  "src/krelcode/tools/builtin/database_migration.py",
-  "src/krelcode/tools/builtin/find_refs.py",
-  "src/krelcode/tools/builtin/glob.py",
-  "src/krelcode/tools/builtin/notebook.py",
-  "src/krelcode/tools/builtin/read_file.py",
-  "src/krelcode/tools/repo_index.py",
-  "src/krelcode/tools/workspace_search.py",
 ]

@@ -6,14 +6,14 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
-from ..agent.fragments import (
+from ..agent.prompt.fragments import (
     GROUP_RUNTIME,
     LAYER_L7_EVIDENCE,
     STABILITY_TURN,
     PromptFragment,
     TRUST_UNTRUSTED,
 )
-from ..agent.tokens import estimate_text_tokens
+from ..core.tokens import estimate_text_tokens
 from ..core.evidence import (
     EvidenceRecord,
     EvidenceSource,

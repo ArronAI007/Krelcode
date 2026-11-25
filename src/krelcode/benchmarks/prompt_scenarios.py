@@ -15,19 +15,19 @@ from types import SimpleNamespace
 from typing import Mapping, Sequence
 from unittest.mock import patch
 
-from ..agent.compression import ContextManager
+from ..agent.context.compression import ContextManager
 from ..agent.context import ContextOptions, ContextSection, WorkspaceContext
-from ..agent.context_assembler import ContextAssembler
-from ..agent.context_cache_ledger import ContextCacheLedger
-from ..agent.context_source import default_context_sources
-from ..agent.cyber_risk import cyber_risk_fragment
-from ..agent.fragments import LAYER_L7_EVIDENCE, PromptFragmentRegistry, base_fragment, sync_rule_fragments
-from ..agent.loop import AgentLoop
-from ..agent.prompt_plan import PromptPlanSnapshot
+from ..agent.context.context_assembler import ContextAssembler
+from ..agent.context.context_cache_ledger import ContextCacheLedger
+from ..agent.context.context_source import default_context_sources
+from ..agent.prompt.cyber_risk import cyber_risk_fragment
+from ..agent.prompt.fragments import LAYER_L7_EVIDENCE, PromptFragmentRegistry, base_fragment, sync_rule_fragments
+from ..agent.turn.loop import AgentLoop
+from ..agent.prompt.prompt_plan import PromptPlanSnapshot
 from ..agent.rules import RuleLoader
-from ..agent.runtime import AgentRuntime
-from ..agent.tokens import estimate_text_tokens
-from ..agent.working_context import WorkingContextStore
+from ..agent.turn.runtime import AgentRuntime
+from ..core.tokens import estimate_text_tokens
+from ..agent.context.working_context import WorkingContextStore
 from ..core.events import EventBus
 from ..core.messages import Message
 from ..core.redact import SecretRedactor
@@ -35,7 +35,7 @@ from ..llm.base import EvidenceChannel, PreparedLLMRequest, ProviderCapabilities
 from ..safety.policy import AllowAllPolicy
 from ..sdk import KrelcodeClient, KrelcodeOptions
 from ..session.compact_checkpoint import CompactCheckpointStore
-from ..session.context_checkpoint import ContextCheckpointCoordinator, ContextCheckpointStore, WorkspaceFingerprint, hash_tracked_files, restore_context_checkpoint
+from ..agent.context.context_checkpoint import ContextCheckpointCoordinator, ContextCheckpointStore, WorkspaceFingerprint, hash_tracked_files, restore_context_checkpoint
 from ..session.controller import SessionController
 from ..session.lifecycle import SessionLifecycle
 from ..session.memory import MemoryKind, MemoryScope, MemoryStore

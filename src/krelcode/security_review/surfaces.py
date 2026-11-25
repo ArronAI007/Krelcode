@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from ..agent.evidence import EvidenceSource, InstructionSource, SourceRole
-from ..agent.prompt_surface import PromptSurfaceDescriptor, PromptSurfaceKind
-from ..agent.prompt_surface_catalog import prompt_content_hash
-from ..agent.tokens import estimate_text_tokens
+from ..core.evidence import EvidenceSource, InstructionSource, SourceRole
+from ..agent.prompt.prompt_surface import PromptSurfaceDescriptor, PromptSurfaceKind
+from ..agent.prompt.prompt_surface_catalog import prompt_content_hash
+from ..core.tokens import estimate_text_tokens
 from .prompt import SECURITY_REVIEW_SYSTEM_PROMPT
 from .report import SECURITY_REVIEW_SURFACE_CONTRACT
 

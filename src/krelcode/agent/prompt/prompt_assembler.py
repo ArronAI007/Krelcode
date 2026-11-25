@@ -21,9 +21,9 @@ from krelcode.llm.base import (
     EvidenceChannel,
 )
 from krelcode.tools.prompt import ToolPromptSpec
-from krelcode.agent.attachments import ContextAttachment
-from krelcode.agent.context_assembler import ContextAssembler
-from krelcode.agent.context_source import (
+from krelcode.agent.context.attachments import ContextAttachment
+from krelcode.agent.context.context_assembler import ContextAssembler
+from krelcode.agent.context.context_source import (
     ContextAssembly,
     ContextRequest,
     default_context_sources,
@@ -70,13 +70,13 @@ from krelcode.agent.prompt.prompt_rendering import (
     _select_attachment_fragments,
     _token_contributions,
 )
-from krelcode.agent.reminders import SelectedReminder
-from krelcode.agent.tokens import estimate_text_tokens
+from krelcode.agent.turn.reminders import SelectedReminder
+from krelcode.core.tokens import estimate_text_tokens
 from krelcode.agent.prompt.tool_playbooks import (
     DEFAULT_TOOL_PLAYBOOK_CATALOG,
     ToolPlaybookCatalog,
 )
-from krelcode.agent.workflows import DEFAULT_TASK_WORKFLOW_CATALOG, TaskWorkflowCatalog
+from krelcode.agent.turn.workflows import DEFAULT_TASK_WORKFLOW_CATALOG, TaskWorkflowCatalog
 
 
 class PromptAssembler:

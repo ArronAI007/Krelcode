@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping, Optional, Sequence
 
-from .agent.fragments import (
+from .agent.prompt.fragments import (
     GROUP_SYSTEM,
     LAYER_L4_AGENT_STYLE,
     STABILITY_SESSION,

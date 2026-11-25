@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Mapping, Optional
 
-from ..agent.query import QueryEvent
+from ..agent.turn.query import QueryEvent
 from ..core.context_usage import ContextUsageSnapshot
 from ..core.events import (
     ApprovalRequested,

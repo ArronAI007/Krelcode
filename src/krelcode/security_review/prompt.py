@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
 
-from ..agent.cyber_risk import prepend_cyber_risk_prompt
+from ..agent.prompt.cyber_risk import prepend_cyber_risk_prompt
 from ..core.redact import SecretRedactor
 from ..core.textutil import truncate_middle
 from .report import security_report_json_template

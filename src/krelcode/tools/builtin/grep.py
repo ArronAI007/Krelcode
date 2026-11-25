@@ -13,7 +13,7 @@ from typing import Any, Dict
 
 from ...contracts.json import ToolExecutionData
 from ...contracts.tool import ToolContext
-from ..base import ToolResult
+from krelcode.contracts.tool import ToolResult
 from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
 from ..prompt import ToolPromptExample
 from ..workspace_search import WorkspaceSearcher

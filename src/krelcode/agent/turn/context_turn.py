@@ -62,7 +62,7 @@ from krelcode.agent.turn.reminders import (
     ReminderContext,
     ReminderSelection,
 )
-from krelcode.agent.context.tokens import estimate_history_tokens
+from krelcode.core.tokens import estimate_history_tokens
 from krelcode.agent.context.tool_microcompact import MicrocompactReport
 from krelcode.safety.contract import build_mode_permission_contract
 

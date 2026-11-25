@@ -5,7 +5,7 @@ from __future__ import annotations
 import shlex
 from typing import Iterable, Optional, Sequence, cast
 
-from ....agent.tokens import estimate_text_tokens
+from ....core.tokens import estimate_text_tokens
 from ....core.events import AgentEvent, MemoryCandidateObserved, MemoryWritten
 from ....session.memory import MemoryStore, sync_memory_fragment
 from ....session.memory_candidates import (

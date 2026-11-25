@@ -10,16 +10,16 @@ from collections import deque
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from ..agent.compression import ContextManager
+from ..agent.context.compression import ContextManager
 from ..agent.context import ContextOptions, ContextSection, WorkspaceContext
-from ..agent.context_assembler import ContextAssembler
-from ..agent.context_source import default_context_sources
-from ..agent.cyber_risk import cyber_risk_fragment
-from ..agent.fragments import PromptFragmentRegistry, base_fragment, sync_rule_fragments
-from ..agent.loop import AgentLoop
+from ..agent.context.context_assembler import ContextAssembler
+from ..agent.context.context_source import default_context_sources
+from ..agent.prompt.cyber_risk import cyber_risk_fragment
+from ..agent.prompt.fragments import PromptFragmentRegistry, base_fragment, sync_rule_fragments
+from ..agent.turn.loop import AgentLoop
 from ..agent.rules import RuleLoader
-from ..agent.tokens import estimate_text_tokens
-from ..agent.working_context import WorkingContextStore
+from ..core.tokens import estimate_text_tokens
+from ..agent.context.working_context import WorkingContextStore
 from ..core.events import EventBus
 from ..core.messages import Message
 from ..core.redact import SecretRedactor

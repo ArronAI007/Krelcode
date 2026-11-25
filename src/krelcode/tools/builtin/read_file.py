@@ -7,7 +7,7 @@ from typing import Any, Dict
 
 from ...contracts.json import ToolExecutionData
 from ...contracts.tool import ToolContext
-from ..base import ToolResult
+from krelcode.contracts.tool import ToolResult
 from ..paths import (
     FileChangedError,
     PathOutsideWorkspaceError,
@@ -15,7 +15,7 @@ from ..paths import (
     read_text_file,
     resolve_in_workspace,
 )
-from ..secret_guard import classify_secret_path, redact_secret_text
+from ...core.secret_guard import classify_secret_path, redact_secret_text
 from ..prompt import ToolPromptExample
 
 MAX_LINES = 2000          # 单次最多返回行数（可被 limit 覆盖到更小）

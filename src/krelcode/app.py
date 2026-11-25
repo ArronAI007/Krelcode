@@ -1,8 +1,68 @@
-"""Backward-compatible application facade."""
+"""Compatibility facade for the explicit application composition API."""
 
 from __future__ import annotations
 
-from .bootstrap.composition import create_provider, resolve_settings
-from .bootstrap.composition import *  # noqa: F401,F403
+from .bootstrap.composition import (
+    CoreRuntime,
+    ExtensionRuntime,
+    PersistenceServices,
+    RuntimeGraph,
+    RuntimeServiceBinder,
+    RuntimeServices,
+    build_daemon_agent_runtime,
+    build_execution_sandbox,
+    build_llm,
+    build_loop,
+    build_mcp_roots,
+    build_mcp_sampler,
+    build_model_switcher,
+    build_parser,
+    build_policy,
+    build_subagent_llm_resolver,
+    compose_hook_specs,
+    compose_mcp_config,
+    configured_skill_paths,
+    create_provider,
+    default_tools,
+    resolve_auto_memory_mode,
+    resolve_auto_memory_thresholds,
+    resolve_permission_mode,
+    resolve_run_mode,
+    resolve_settings,
+    restore_session,
+)
 from .bootstrap.main import AsyncMain, async_main
 from .entrypoints.main import main
+
+__all__ = [
+    "AsyncMain",
+    "CoreRuntime",
+    "ExtensionRuntime",
+    "PersistenceServices",
+    "RuntimeGraph",
+    "RuntimeServiceBinder",
+    "RuntimeServices",
+    "async_main",
+    "build_daemon_agent_runtime",
+    "build_execution_sandbox",
+    "build_llm",
+    "build_loop",
+    "build_mcp_roots",
+    "build_mcp_sampler",
+    "build_model_switcher",
+    "build_parser",
+    "build_policy",
+    "build_subagent_llm_resolver",
+    "compose_hook_specs",
+    "compose_mcp_config",
+    "configured_skill_paths",
+    "create_provider",
+    "default_tools",
+    "main",
+    "resolve_auto_memory_mode",
+    "resolve_auto_memory_thresholds",
+    "resolve_permission_mode",
+    "resolve_run_mode",
+    "resolve_settings",
+    "restore_session",
+]

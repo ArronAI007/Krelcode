@@ -15,18 +15,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple, cast
 
-from ..agent.compact_summary import CompactSummary, summary_from_history
+from ..agent.context.compact_summary import CompactSummary, summary_from_history
 from ..core.messages import Message
 from ..core.redact import SecretRedactor
 from ..contracts.tool import ToolContext
-from .codec import history_from_dicts, history_to_dicts
+from ..core.codec import history_from_dicts, history_to_dicts
 if TYPE_CHECKING:
     from ..agent.context.context_checkpoint_models import FileIntegrity
     from ..agent.turn.runtime_ports import CompactCheckpointResultPort
     from ..agent.turn.runtime_services import AgentServices
 
 
-from .context_checkpoint import (
+from ..agent.context.context_checkpoint import (
     FileHash,
     FileIntegrity,
     collect_tracked_files,

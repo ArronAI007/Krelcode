@@ -23,18 +23,18 @@ from typing import (
     Tuple,
 )
 
-from ..agent.compression import ContextManager
-from ..agent.fragments import (
+from ..agent.context.compression import ContextManager
+from ..agent.prompt.fragments import (
     PromptFragment,
     PromptFragmentRegistry,
     apply_prompt_snapshot,
 )
-from ..agent.loop import DEFAULT_MAX_STEPS, AgentLoop
+from ..agent.turn.loop import DEFAULT_MAX_STEPS, AgentLoop
 from ..agent.turn.runtime_state import InstructionLayerPort
-from ..agent.tool_pool import normalize_tool_allowlist
-from ..agent.prompt_release import ModelProfileCalibration
+from ..agent.turn.tool_pool import normalize_tool_allowlist
+from ..agent.prompt.prompt_release import ModelProfileCalibration
 from ..agent.prompts import PROMPT_PROFILE_AUTO, resolve_prompt_profile
-from ..agent.working_context import WorkingContextStore
+from ..agent.context.working_context import WorkingContextStore
 from ..core.events import (
     AgentEvent,
     ContextAssembled,
@@ -65,7 +65,7 @@ from ..core.redact import SecretRedactor
 from ..llm.base import LLMProvider
 from ..safety.contract import narrow_permission_mode
 from ..safety.policy import AllowAllPolicy, ApprovalPolicy
-from ..agent.context_checkpoint import (
+from ..agent.context.context_checkpoint import (
     ContextCheckpointCoordinator,
     ContextCheckpointStore,
 )

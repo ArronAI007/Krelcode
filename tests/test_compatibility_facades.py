@@ -43,6 +43,10 @@ def test_compatibility_summary_is_content_light():
         "internal_edges",
         "next_removal",
     }
+    # Canonical modules are used directly except for the application entry
+    # facade and the lazy benchmark aggregate package.
+    assert summary["internal_use"] <= 3
+    assert summary["internal_edges"] <= 3
 
 
 def test_facade_ast_rejects_business_logic(tmp_path: Path):

@@ -9,12 +9,12 @@ from typing import Mapping, Optional, Sequence, Tuple
 from krelcode.core.messages import Message
 from krelcode.llm.base import SYSTEM_BLOCK_CHANNEL_INSTRUCTION
 from krelcode.tools.prompt import ToolPromptSpec
-from krelcode.agent.attachments import (
+from krelcode.agent.context.attachments import (
     ContextAttachment,
     ContextAttachmentKind,
     context_attachment_fragments,
 )
-from krelcode.agent.context_contracts import (
+from krelcode.agent.context.context_contracts import (
     CATEGORY_MEMORY,
     CATEGORY_RUNTIME,
     CATEGORY_SYSTEM,
@@ -23,12 +23,12 @@ from krelcode.agent.context_contracts import (
     ContextLayer,
     ContextTokenContribution,
 )
-from krelcode.agent.context_source import (
+from krelcode.agent.context.context_source import (
     ContextAssembly,
     ContextRequest,
     prompt_fragment_omission_reason,
 )
-from krelcode.agent.evidence import EvidenceSource, SourceRole, instruction_source_for
+from krelcode.core.evidence import EvidenceSource, SourceRole, instruction_source_for
 from krelcode.agent.prompt.fragments import (
     GROUP_WORKSPACE,
     LAYER_L1_BASE_AGENT,
@@ -59,7 +59,7 @@ from krelcode.agent.prompt.fragments import (
 from krelcode.agent.prompt.prompt_channels import _fragment_channel, _render_system_fragments
 from krelcode.agent.prompt.prompt_models import PromptLayerPlan
 from krelcode.agent.prompt.prompt_plan import PromptOmissionSnapshot
-from krelcode.agent.reminders import SelectedReminder
+from krelcode.agent.turn.reminders import SelectedReminder
 
 
 def _empty_dynamic_assembly(engine: str) -> ContextAssembly:
