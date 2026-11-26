@@ -261,6 +261,27 @@ def test_clickable_thinking_summary_registers_anchor():
     assert clicked == [True]
 
 
+def test_repeated_thinking_expand_is_idempotent_and_incremental():
+    buf = Buf()
+    renderer = StreamRenderer(write=buf.write, color=False)
+    renderer(RunStarted("q"))
+    renderer(LLMThinkingDelta("第一段推理"))
+    renderer(LLMStreamDelta("回复"))
+
+    assert renderer.expand_thinking()
+    first = buf.text
+    assert first.count("第一段推理") == 1
+    assert renderer.expand_thinking()
+    assert buf.text == first
+
+    renderer(LLMThinkingDelta("第二段推理"))
+    assert renderer.expand_thinking()
+    assert "第一段推理" in buf.text
+    assert "第二段推理" in buf.text
+    assert buf.text.count("第一段推理") == 1
+    assert "✻ Thinking（继续）" in buf.text
+
+
 def test_assistant_markdown_is_rendered_not_echoed_as_source():
     buf = Buf()
     renderer = StreamRenderer(write=buf.write, color=False)

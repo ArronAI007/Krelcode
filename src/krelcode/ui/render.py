@@ -250,6 +250,7 @@ class StreamRenderer:
         self._markdown = MarkdownStream(enabled=self._color)
         # 仅 UI 层保留最近一轮完整 thinking；绝不写入 AgentLoop.history。
         self.thinking_text = ""
+        self._thinking_expanded_text = ""
         self.tool_outputs: list[ToolOutputRecord] = []
         self._tool_by_call_id: Dict[str, ToolOutputRecord] = {}
         self._live_tool_key: Optional[str] = None
@@ -287,6 +288,7 @@ class StreamRenderer:
             self._end_thinking()
             self._end_stream_only()
             self.thinking_text = ""
+            self._thinking_expanded_text = ""
             self._thinking_summary_shown = False
             self._markdown.reset()
             # 工具调用 ID 只在单轮内保证唯一；新轮次必须重新映射，
@@ -463,16 +465,27 @@ class StreamRenderer:
 
     def expand_thinking(self) -> bool:
         """把最近一轮 thinking 以多行 Markdown 输出；无内容时返回 False。"""
-        if not self.thinking_text.strip():
+        content = self.thinking_text.strip("\n")
+        if not content.strip():
             return False
+        if content == self._thinking_expanded_text:
+            return True
         self.end_stream()
-        header = "✻ Thinking"
+        continued = bool(
+            self._thinking_expanded_text
+            and content.startswith(self._thinking_expanded_text)
+        )
+        if continued:
+            content = content[len(self._thinking_expanded_text):].lstrip("\n")
+            if not content:
+                return True
+        header = "✻ Thinking（继续）" if continued else "✻ Thinking"
         if self._color:
             header = f"{DIM}{header}{RESET}"
         self._write(header + "\n")
-        self._write(render_markdown(
-            self.thinking_text.strip("\n"), self._color))
+        self._write(render_markdown(content, self._color))
         self._ensure_newline()
+        self._thinking_expanded_text = self.thinking_text.strip("\n")
         return True
 
     def _render_tool_result(self, event: ToolCallCompleted) -> None:

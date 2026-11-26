@@ -39,6 +39,9 @@ def test_alt_screen_owns_scroll_copy_click_and_restore(monkeypatch):
         assert surface.handle_mouse(MouseEvent(0, 1, 6, True))
         assert surface.handle_mouse(MouseEvent(0, 1, 6, False))
         assert clicked == [("tool", "10")]
+        assert surface.handle_mouse(MouseEvent(0, 1, 6, True))
+        assert surface.handle_mouse(MouseEvent(0, 1, 6, False))
+        assert clicked == [("tool", "10")]
 
         surface.handle_viewport_key("pageup")
         assert surface.scroll_top < len(surface.transcript) - 6

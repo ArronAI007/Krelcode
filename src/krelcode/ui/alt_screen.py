@@ -384,6 +384,7 @@ class AltScreenSurface:
             self._viewport_height - 1, event.y - 1))
         target = self._clickables.get(row)
         if target and self._on_click is not None:
+            self._clickables.pop(row, None)
             self._on_click(target[0], target[1])
 
     def _copy_selection(self) -> None:
