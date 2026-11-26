@@ -76,6 +76,17 @@ def test_help_and_tools(tmp_path, capsys):
     assert "get_time:" in out
 
 
+def test_version_command_is_local_and_does_not_call_model(tmp_path, capsys):
+    from krelcode import __version__
+
+    loop = make_loop(tmp_path, scripted=["MODEL SHOULD NOT RUN"])
+    drive(loop, ["/version", "/exit"])
+    out = capsys.readouterr().out
+    assert f"krelcode {__version__}" in out
+    assert "MODEL SHOULD NOT RUN" not in out
+    assert loop.llm.calls == []
+
+
 def test_queue_command_shows_empty_queue_when_idle(tmp_path, capsys):
     loop = make_loop(tmp_path)
     drive(loop, ["/queue", "/exit"])

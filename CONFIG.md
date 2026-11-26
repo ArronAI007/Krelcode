@@ -119,6 +119,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | 命令 | 说明 |
 |------|------|
 | `/help` | 帮助 |
+| `/version` | 显示当前 Krelcode 版本；本地执行，不调用模型 |
 | `/history` | 当前对话历史 |
 | `/thinking` | 展开最近一次思考（正文默认折叠） |
 | `/plan` · `/plan <任务>` | 查看最近计划 · 进入只读 Plan 模式并生成待确认计划 |

@@ -14,6 +14,9 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             "help", "显示本帮助",
             help="显示本帮助"),
         CommandSpec(
+            "version", "显示当前 Krelcode 版本", kind=ui,
+            help="显示当前 Krelcode CLI 版本；本地执行，不调用模型"),
+        CommandSpec(
             "history", "查看当前对话历史",
             help="查看当前对话历史"),
         CommandSpec(

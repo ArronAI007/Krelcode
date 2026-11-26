@@ -42,6 +42,7 @@ def test_commands_are_classified_without_attachment_expansion(tmp_path):
     cases = [
         ("/exit", InputKind.CONTROL, "/exit"),
         ("/stop", InputKind.CONTROL, "/stop"),
+        ("/version", InputKind.UI_COMMAND, "/version"),
         ("/thinking", InputKind.UI_COMMAND, "/thinking"),
         ("/tool-output 1", InputKind.UI_COMMAND, "/tool-output"),
         ("/resume 2", InputKind.COMMAND, "/resume"),

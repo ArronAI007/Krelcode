@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
+from .. import __version__
 from ..agent.turn.loop import AgentLoop
 from ..session.commands import CommandRegistry, CommandResult
 from ..session.commands.ports import (
@@ -60,6 +61,10 @@ async def _handle_command(
             await diff_handler(arguments)
         else:
             print("  （当前前台不支持 diff 审阅器）")
+        return False
+
+    if user_input == "/version":
+        print(f"  krelcode {__version__}")
         return False
 
     # 这两类命令操作的是当前终端 renderer 的展示缓存，不属于会话业务状态。

@@ -62,7 +62,7 @@ def test_subcommands_documented():
 
 def test_repl_commands_documented():
     text = (ROOT / "CONFIG.md").read_text(encoding="utf-8")
-    for command in ("/help", "/history", "/tools", "/session", "/sessions",
+    for command in ("/help", "/version", "/history", "/tools", "/session", "/sessions",
                     "/resume", "/mcp", "/agents", "/skills", "/skill",
                     "/undo", "/model", "/allow", "/permissions", "/cost",
                     "/context", "/context plan", "/context why",
