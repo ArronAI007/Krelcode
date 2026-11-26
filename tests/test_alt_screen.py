@@ -7,6 +7,8 @@ import io
 import sys
 
 from krelcode.ui.alt_screen import AltScreenPrompt, AltScreenSurface
+from krelcode.core.events import LLMStreamDelta, RunFinished, RunStarted
+from krelcode.ui.render import StreamRenderer
 from krelcode.ui.tui.mouse import MouseEvent
 
 
@@ -98,3 +100,33 @@ def test_alt_screen_proxies_print_without_recursing(monkeypatch):
     rendered = stream.getvalue()
     assert "\x1b[?1049h" in rendered
     assert "\x1b[?1049l" in rendered
+
+
+def test_alt_screen_keeps_one_bottom_input_and_renders_markdown(monkeypatch):
+    output: list[str] = []
+    monkeypatch.setattr(
+        "shutil.get_terminal_size", lambda _fallback: os.terminal_size((50, 12)))
+    surface = AltScreenSurface(write=output.append, color=False)
+    surface.start()
+    try:
+        prompt = AltScreenPrompt(surface, color=False)
+        prompt.show("❯ 你好")
+        prompt.set_status("permission · default")
+        prompt.submitted(raw=True)
+
+        renderer = StreamRenderer(write=surface.write_transcript, color=False)
+        answer = "当前工作区：\n\n- `quick.py`\n- **README.md**\n"
+        renderer(RunStarted("你好"))
+        renderer(LLMStreamDelta(answer))
+        renderer(RunFinished(answer))
+
+        assert surface.transcript[:2] == ["❯ 你好", "⏺ 当前工作区："]
+        rendered = "\n".join(surface.transcript)
+        assert "• quick.py" in rendered
+        assert "• README.md" in rendered
+        assert "`quick.py`" not in rendered
+        assert "**README.md**" not in rendered
+        assert surface.status == "permission · default"
+        assert surface.input_visible is False
+    finally:
+        surface.stop(print_final=False)

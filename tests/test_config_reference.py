@@ -65,6 +65,7 @@ def test_tui_mouse_defaults_to_native_copy_and_scroll(tmp_path: Path):
     ])
     context = asyncio.run(build_application_context(args))
     assert context.args.tui_mouse is False
+    assert context.args.ui_mode == "fullscreen"
 
     config_path.write_text("[ui]\nmouse = true\n", encoding="utf-8")
     enabled_args = build_parser().parse_args([

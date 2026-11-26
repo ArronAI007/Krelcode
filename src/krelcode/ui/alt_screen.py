@@ -577,6 +577,10 @@ class AltScreenPrompt(PromptWriter):
                 self.show(self._alt_text)
 
     def submitted(self, *, raw: bool = True) -> None:
+        submitted = self._alt_text.rstrip()
+        if raw and submitted:
+            self.surface.write_transcript(submitted + "\n")
+        self._alt_text = ""
         self.hide()
 
     def finish(self) -> None:

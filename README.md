@@ -185,9 +185,9 @@ krelcode
 - 权限模式快速切换、计划确认、Diff 审阅和任务中断。
 - 默认保留终端原生拖拽复制和滚轮滚动。面板、Thinking 行和工具行点击可通过
   `krelcode --tui-mouse` 显式启用；启用后文本选择需按住 `Shift` 拖拽。
-- `krelcode --ui fullscreen` 启用 Alt Screen 后端：应用自己管理 transcript、
+- 交互式终端默认使用 Alt Screen 后端：应用自己管理 transcript、
   滚轮/PageUp/PageDown 视口、拖拽选择、系统剪贴板与 Thinking/工具行点击。
-  退出后恢复终端主屏幕并打印完整会话文档。
+  `--ui native` 可回退到终端原生 scrollback；退出 fullscreen 后恢复主屏幕并打印完整会话文档。
 
 常用命令：
 
