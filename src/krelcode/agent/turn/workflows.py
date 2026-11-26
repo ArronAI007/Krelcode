@@ -23,6 +23,8 @@ from krelcode.agent.prompt.fragments import (
     PromptFragment,
 )
 from krelcode.agent.turn.intent import TurnIntent, instruction_text
+from .workflow_environment import (environment_setup_rules,
+                                   environment_setup_workflow)
 
 TASK_WORKFLOW_VERSION = "1"
 TASK_WORKFLOW_SOURCE_PREFIX = "workflow:"
@@ -34,6 +36,7 @@ CONFIDENCE_LOW = "low"
 
 class TaskType(str, Enum):
     GENERAL = "general"
+    ENVIRONMENT_SETUP = "environment_setup"
     BUG_FIX = "bug_fix"
     FEATURE_IMPLEMENTATION = "feature_implementation"
     REFACTOR = "refactor"
@@ -74,6 +77,7 @@ class _SignalRule:
 
 
 _SIGNAL_RULES: Tuple[_SignalRule, ...] = (
+    *environment_setup_rules(TaskType.ENVIRONMENT_SETUP, _SignalRule),
     _SignalRule(
         TaskType.DATABASE_MIGRATION,
         "database-migration-action",
@@ -268,6 +272,7 @@ _SIGNAL_RULES: Tuple[_SignalRule, ...] = (
 )
 
 _TASK_TIE_ORDER = (
+    TaskType.ENVIRONMENT_SETUP,
     TaskType.DATABASE_MIGRATION,
     TaskType.NOTEBOOK_EDITING,
     TaskType.BROWSER_AUTOMATION,
@@ -503,6 +508,7 @@ TASK_WORKFLOWS: Tuple[TaskWorkflowDefinition, ...] = (
             "Do not present guesses as verified facts.",
         ),
     ),
+    environment_setup_workflow(TaskType.ENVIRONMENT_SETUP, TaskWorkflowDefinition),
     TaskWorkflowDefinition(
         task_type=TaskType.BUG_FIX,
         id="bug-fix",

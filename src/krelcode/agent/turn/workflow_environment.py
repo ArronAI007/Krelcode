@@ -1,0 +1,70 @@
+"""Environment installation workflow definitions."""
+
+from __future__ import annotations
+
+from typing import Callable, TypeVar
+
+_RuleT = TypeVar("_RuleT")
+_DefinitionT = TypeVar("_DefinitionT")
+
+
+def environment_setup_rules(
+    task_type: object,
+    rule_cls: Callable[..., _RuleT],
+) -> tuple[_RuleT, ...]:
+    return (
+        rule_cls(
+            task_type,
+            "environment-setup-action",
+            (
+                "安装", "安装一下", "配置环境", "环境配置", "部署", "初始化环境",
+                "install", "set up", "setup", "configure the environment",
+                "environment setup",
+            ),
+            7,
+        ),
+        rule_cls(
+            task_type,
+            "environment-tooling-topic",
+            (
+                "hermes", "homebrew", "brew install", "pip install",
+                "npm install", "uv tool", "package manager", "依赖安装",
+                "全局命令", "installer", "toolchain", "runtime setup",
+            ),
+            2,
+        ),
+    )
+
+
+def environment_setup_workflow(
+    task_type: object,
+    definition_cls: Callable[..., _DefinitionT],
+) -> _DefinitionT:
+    return definition_cls(
+        task_type=task_type,
+        id="environment-setup",
+        title="Verified environment installation workflow",
+        objective=(
+            "Install or configure a tool at the user's requested scope with "
+            "minimal commands and verified launchability."
+        ),
+        priority=15,
+        steps=(
+            "Establish the requested install scope, target command name, OS/architecture, and whether global or project-local installation is required.",
+            "Fetch the authoritative install documentation once and select one supported installation path; avoid probing the same repository or system repeatedly.",
+            "State the required network, filesystem, package-manager, and privilege boundaries before executing.",
+            "Use the smallest supported installer or isolated environment. Batch related setup operations and verify the resulting command path and version once.",
+            "If network, Sandbox, HOME redirection, or managed policy blocks the requested install scope, stop and report the exact blocker instead of silently creating a workspace-only workaround and calling the task complete.",
+            "If the requested outcome cannot be achieved without a manual credential or user-only action, explain that limitation explicitly and identify the last verified completed step.",
+        ),
+        completion=(
+            "The requested command is installed at the requested scope and resolves from the intended environment.",
+            "Version and one meaningful smoke invocation are verified with tool evidence.",
+            "Any manual follow-up or environment limitation is explicit and is not presented as a completed installation.",
+        ),
+        avoid=(
+            "Do not repeatedly inspect, reinstall, or run doctor loops after one clear failure.",
+            "Do not claim a global install when only a workspace-local launcher exists.",
+            "Do not ask for API keys or fabricate a successful model/runtime smoke test when the user has not supplied credentials.",
+        ),
+    )

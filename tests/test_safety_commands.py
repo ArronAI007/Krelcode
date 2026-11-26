@@ -25,6 +25,17 @@ from krelcode.safety.commands import RISK_ALLOW, RISK_ASK, RISK_DENY, classify_c
     "git remote -v",
     "git remote get-url origin",
     "/usr/bin/cat /etc/hosts",                  # 绝对路径程序名取 basename
+    "pytest tests/ -q",
+    "python3 -m pytest -q",
+    "ruff check .",
+    "mypy src",
+    "npm test",
+    "npm run build",
+    "pnpm run typecheck",
+    "cargo test --locked",
+    "go test ./...",
+    "dotnet test",
+    "make test",
 ])
 def test_allow_readonly(cmd):
     risk, _ = classify_command(cmd)
@@ -53,10 +64,14 @@ def test_deny_dangerous(cmd):
 
 
 @pytest.mark.parametrize("cmd,why", [
-    ("pytest tests/", "执行代码"),
     ("python3 script.py", "执行代码"),
     ("npm install", "修改环境"),
     ("pip3 install requests", "修改环境"),
+    ("npm run deploy", "任意项目脚本"),
+    ("cargo run", "运行应用"),
+    ("go run main.go", "直接运行代码"),
+    ("make install", "安装目标"),
+    ("uv tool install hermes", "安装全局工具"),
     ("rm notes.txt", "删除文件"),
     ("rm -rf build/", "递归删除"),
     ("git commit -m x", "git 写操作"),
@@ -92,7 +107,9 @@ def test_worst_case_wins_across_segments():
     risk, _ = classify_command("ls -la && pytest && rm -rf /")
     assert risk == RISK_DENY
     risk2, _ = classify_command("ls && pytest")
-    assert risk2 == RISK_ASK
+    assert risk2 == RISK_ALLOW
+    risk3, _ = classify_command("pytest && npm install")
+    assert risk3 == RISK_ASK
 
 
 def test_unparsable_command_is_ask():

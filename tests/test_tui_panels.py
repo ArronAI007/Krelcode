@@ -152,6 +152,10 @@ def test_panel_view_builder_surfaces_plan_activity_context_and_memory():
     assert by_id["tasks"].items[1].status == "▶"
     activity = " ".join(item.label for item in by_id["activity"].items)
     assert "step · 2" in activity and "shell ·" in activity
+    activity_detail = " ".join(
+        item.detail for item in by_id["activity"].items)
+    assert "2 已完成" in activity_detail and "1 执行中" in activity_detail
+    assert "2/3" not in activity_detail
     context = " ".join(item.label for item in by_id["context"].items)
     assert "1234/8000" in context and "fragments · 4" in context
     memory_item = by_id["memory"].items[0]

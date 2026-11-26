@@ -43,6 +43,8 @@ from krelcode.tools.registry import ToolRegistry
         ("修复登录时报错", TaskType.BUG_FIX),
         ("fix the broken parser", TaskType.BUG_FIX),
         ("实现一个新的 status command", TaskType.FEATURE_IMPLEMENTATION),
+        ("安装一下 hermes，并参考 GitHub 上的官方步骤", TaskType.ENVIRONMENT_SETUP),
+        ("install the CLI globally with Homebrew", TaskType.ENVIRONMENT_SETUP),
         ("重构配置加载模块，不改变行为", TaskType.REFACTOR),
         ("请评审这段 diff 的安全风险", TaskType.SECURITY_REVIEW),
         ("perform a security review of the auth change", TaskType.SECURITY_REVIEW),
@@ -113,6 +115,11 @@ def test_attachment_and_code_fence_content_cannot_change_workflow():
             "创建数据库迁移并提供回滚",
             "database-migration",
             "down/rollback",
+        ),
+        (
+            "安装 hermes 到全局命令",
+            "environment-setup",
+            "requested install scope",
         ),
     ],
 )

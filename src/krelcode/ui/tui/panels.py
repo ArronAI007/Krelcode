@@ -100,13 +100,14 @@ def build_panels(
         activity.append(PanelItem(
             "activity-tool",
             f"tool · {state.active_tool_name}",
-            f"{tool_done}/{tool_total} 完成",
+            f"{tool_done} 已完成 · "
+            f"{max(0, tool_total - tool_done)} 执行中",
             "▶",
         ))
     elif tool_total:
         activity.append(PanelItem(
             "activity-tools",
-            f"tools · {tool_done}/{tool_total}",
+            f"tools · {tool_done} 已完成",
             f"输出 {state.tool_output_chars} 字符",
             "✓" if tool_done >= tool_total else "○",
         ))

@@ -1197,7 +1197,8 @@ subject/issuer/授权方式。`KRELCODE_SSO_ACCESS_TOKEN` 仅用于无法交互�
 | write_file/edit_file（普通路径） | REPL 默认 ASK 并显示 unified diff；显式 allow、headless、`--auto-approve` 或 `[ui].diff_review=false` 时按策略放行（受保护路径仍 ASK） |
 | write/edit 受保护路径：`.git/`、`.krelcode/`、`krelcode.toml`、`.env*`、`*.pem/*.key/*.p12/*.pfx`、`id_rsa*`、`secrets.*`、`credentials*`、`.npmrc/.netrc/.pgpass/.htpasswd` | ASK（非交互拒绝） |
 | run_command 只读命令（ls/cat/grep/git status·log·diff…） | 放行 |
-| run_command 执行代码/装依赖/删文件/git 写操作/网络/未知命令/重定向 | ASK |
+| run_command 常规测试/格式化/类型检查/常见项目构建（pytest、ruff、mypy、npm test、cargo test、go test、make test…） | 放行 |
+| run_command 直接执行任意脚本/装依赖/删文件/git 写操作/网络/未知命令/重定向 | ASK |
 | run_skill_script（Skill 内 bundled 脚本） | ASK；参数数组不经过 shell，子进程走运行时 Sandbox |
 | run_command：sudo/su、dd/mkfs/diskutil、shutdown/reboot、rm 灾难目标、curl\|sh、fork 炸弹 | **DENY（不可越过，--auto-approve 也拒）** |
 | Windows 命令风险 | `del/erase/rmdir/rd` 至少 ASK；根盘及 `Windows/Program Files/Users/ProgramData` 等高风险目标 DENY；`diskpart/format/bcdedit` DENY；`cmd/powershell/pwsh` 执行代码为 ASK |

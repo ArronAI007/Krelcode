@@ -141,7 +141,8 @@ class ApprovalPolicy(Protocol):
 #     子代理独立历史同样经 redactor（SubagentManager spawn 注入，Step 50）
 #     - 按控制符切段(punctuation_chars)逐段分级，整条取最严格；重定向升级为 ASK
 #     - 无条件 DENY：sudo/dd/mkfs/shutdown、rm 灾难目标、curl|sh、fork 炸弹
-#     - ASK：执行代码/装依赖/git 写操作/删文件/网络/未知命令
+#     - ALLOW：pytest/ruff/mypy、npm test、cargo test、go test、make test 等常规开发验证
+#     - ASK：直接执行任意脚本/装依赖/git 写操作/删文件/网络/未知命令
 #   · 统一规则：allow/ask/deny × session/workspace × command/command_program/path/tool
 #     优先级 deny > ask > allow；显式 ask 与受限模式不能被 auto-approve 越过
 #   · ASK 处理链：统一规则/旧版 allow 规则 → auto-approve → 交互 approver(y/n/a)

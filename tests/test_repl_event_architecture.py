@@ -84,6 +84,8 @@ def test_status_text_contains_phase_step_tool_count_and_elapsed():
     state.started_at = 100.0
     state.query_phase = "tool"
     state.current_step = 3
+    state.plan_items = ("读取", "修改", "测试")
+    state.plan_statuses = ("completed", "completed", "in_progress")
     state.active_tool_name = "run_command"
     state.tool_calls_started = 2
     state.tool_calls_completed = 1
@@ -94,7 +96,10 @@ def test_status_text_contains_phase_step_tool_count_and_elapsed():
 
     assert "run_command · 命令运行中" in status
     assert "Step 3" in status
-    assert "工具 1/2" in status
+    assert "计划 2/3" in status
+    assert "工具 1 已完成" in status
+    assert "1 执行中" in status
+    assert "1/2" not in status
     assert "输出 8 字符" in status
     assert status.endswith("1.2s")
 

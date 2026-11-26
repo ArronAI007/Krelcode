@@ -82,6 +82,28 @@ CODE_RUNNERS = {
     "go", "java", "mvn", "gradle", "docker", "kubectl",
 }
 
+ROUTINE_DEV_PROGRAMS = {
+    "pytest", "ruff", "mypy", "pyright", "basedpyright",
+    "eslint", "biome", "tsc", "jest", "vitest", "mocha",
+    "phpunit", "rspec", "tox", "nox",
+}
+
+ROUTINE_JS_SCRIPTS = {
+    "test", "tests", "lint", "typecheck", "check", "build", "verify",
+}
+
+ROUTINE_CARGO_COMMANDS = {"test", "check", "build", "clippy", "fmt"}
+ROUTINE_GO_COMMANDS = {"test", "build", "vet"}
+ROUTINE_DOTNET_COMMANDS = {"test", "build", "format"}
+ROUTINE_JVM_TASKS = {
+    "test", "check", "build", "verify", "compile", "compilejava",
+    "compiletestjava", "assemble", "lint",
+}
+ROUTINE_MAKE_TARGETS = {
+    "test", "tests", "check", "lint", "typecheck", "verify", "build",
+}
+ROUTINE_PYTHON_MODULES = {"pytest", "unittest", "compileall", "mypy", "ruff"}
+
 SHELL_INTERPRETERS = {
     "sh", "bash", "zsh", "cmd", "powershell", "pwsh", "python", "python3",
     "node", "ruby", "perl", "eval",
@@ -290,6 +312,27 @@ def _classify_segment(seg: Sequence[str]) -> Tuple[str, str]:
         return RISK_ALLOW, ""
     if prog == "git":
         return _classify_git(args)
+    if prog in ROUTINE_DEV_PROGRAMS:
+        return RISK_ALLOW, ""
+    if prog in {"python", "python3"}:
+        return _classify_python(args)
+    if prog in {"npm", "pnpm", "yarn"}:
+        return _classify_js_runner(prog, args)
+    if prog == "uv":
+        return _classify_uv(args)
+    if prog == "cargo":
+        return _classify_subcommand_runner(
+            prog, args, ROUTINE_CARGO_COMMANDS)
+    if prog == "go":
+        return _classify_subcommand_runner(
+            prog, args, ROUTINE_GO_COMMANDS)
+    if prog == "dotnet":
+        return _classify_subcommand_runner(
+            prog, args, ROUTINE_DOTNET_COMMANDS)
+    if prog in {"mvn", "gradle", "gradlew"}:
+        return _classify_jvm_runner(prog, args)
+    if prog == "make":
+        return _classify_make(args)
     if prog in DOWNLOADERS:
         return RISK_ASK, f"{prog} 访问网络"
     if prog in SAFE_PROGRAMS:
@@ -297,6 +340,71 @@ def _classify_segment(seg: Sequence[str]) -> Tuple[str, str]:
     if prog in CODE_RUNNERS:
         return RISK_ASK, f"{prog} 会执行代码/修改环境"
     return RISK_ASK, f"未知命令 {prog}"
+
+
+def _first_non_option(args: Sequence[str]) -> str:
+    return next((arg for arg in args if not arg.startswith("-")), "")
+
+
+def _classify_python(args: Sequence[str]) -> Tuple[str, str]:
+    try:
+        module_index = args.index("-m")
+    except ValueError:
+        return RISK_ASK, "python 直接执行脚本，需人工确认"
+    module = args[module_index + 1] if module_index + 1 < len(args) else ""
+    if module in ROUTINE_PYTHON_MODULES:
+        return RISK_ALLOW, ""
+    return RISK_ASK, f"python -m {module or '?'} 会执行代码/修改环境"
+
+
+def _classify_js_runner(prog: str, args: Sequence[str]) -> Tuple[str, str]:
+    command = _first_non_option(args)
+    if command in {"test", "t"}:
+        return RISK_ALLOW, ""
+    if command == "run":
+        scripts = [arg for arg in args[args.index(command) + 1:]
+                   if not arg.startswith("-")]
+        if scripts and scripts[0] in ROUTINE_JS_SCRIPTS:
+            return RISK_ALLOW, ""
+    return RISK_ASK, f"{prog} {command or '?'} 会修改环境或执行任意脚本"
+
+
+def _classify_uv(args: Sequence[str]) -> Tuple[str, str]:
+    if args[:2] == ["run", "pytest"]:
+        return RISK_ALLOW, ""
+    return RISK_ASK, "uv 会安装依赖或执行任意项目代码"
+
+
+def _classify_subcommand_runner(
+    prog: str,
+    args: Sequence[str],
+    allowed: set[str],
+) -> Tuple[str, str]:
+    command = _first_non_option(args)
+    if command in allowed:
+        return RISK_ALLOW, ""
+    return RISK_ASK, f"{prog} {command or '?'} 会执行代码/修改环境"
+
+
+def _classify_jvm_runner(prog: str, args: Sequence[str]) -> Tuple[str, str]:
+    tasks = {
+        arg.split(":", 1)[-1].lower()
+        for arg in args
+        if not arg.startswith("-") and not arg.startswith("=")
+    }
+    if tasks and tasks <= ROUTINE_JVM_TASKS:
+        return RISK_ALLOW, ""
+    return RISK_ASK, f"{prog} 任务可能执行任意构建逻辑"
+
+
+def _classify_make(args: Sequence[str]) -> Tuple[str, str]:
+    targets = {
+        arg for arg in args
+        if not arg.startswith("-") and "=" not in arg
+    }
+    if targets and targets <= ROUTINE_MAKE_TARGETS:
+        return RISK_ALLOW, ""
+    return RISK_ASK, "make 目标可能执行任意命令"
 
 
 def _classify_rm(args: Sequence[str]) -> Tuple[str, str]:

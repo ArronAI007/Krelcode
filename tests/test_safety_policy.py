@@ -102,16 +102,32 @@ def test_dangerous_command_denied_without_approver(ctx):
 def test_ask_yes_no_flow(ctx):
     approver = ScriptedApprover("yes", "no")
     policy = SandboxPolicy(approver=approver)
-    assert run(policy.check(tc(command="pytest -q", call_id="a"), ctx)).allowed
-    d = run(policy.check(tc(command="pytest -q", call_id="b"), ctx))
+    assert run(policy.check(tc(command="npm install", call_id="a"), ctx)).allowed
+    d = run(policy.check(tc(command="npm install", call_id="b"), ctx))
     assert not d.allowed and "用户拒绝" in d.reason
     assert len(approver.calls) == 2
 
 
 def test_ask_non_interactive_fail_closed(ctx):
     policy = SandboxPolicy(approver=None)
-    d = run(policy.check(tc(command="pytest -q"), ctx))
+    d = run(policy.check(tc(command="npm install"), ctx))
     assert not d.allowed and "非交互" in d.reason
+
+
+def test_routine_development_commands_do_not_require_approval(ctx):
+    approver = ScriptedApprover()
+    policy = SandboxPolicy(approver=approver)
+    for command in (
+        "pytest -q",
+        "python3 -m pytest tests/",
+        "npm test",
+        "npm run build",
+        "cargo test",
+        "go test ./...",
+        "make test",
+    ):
+        assert run(policy.check(tc(command=command), ctx)).allowed
+    assert approver.calls == []
 
 
 def test_auto_approve_bypasses_ask_but_not_deny(ctx):
@@ -130,18 +146,18 @@ def test_always_persists_rule_and_reloads(ctx, tmp_path):
     approver = ScriptedApprover("always")
     policy = SandboxPolicy(approver=approver, rules_path=rules_path)
 
-    d = run(policy.check(tc(command="pytest tests/"), ctx))
+    d = run(policy.check(tc(command="npm install"), ctx))
     assert d.allowed and "always" in d.reason
     assert json.loads(rules_path.read_text()) == {
         "allow_programs": [],
-        "allow_commands": ["pytest tests/"],
+        "allow_commands": ["npm install"],
     }
 
     # 新会话只自动放行完全相同的规范化命令；不同参数仍需审批。
     policy2 = SandboxPolicy(approver=None, rules_path=rules_path)
-    d2 = run(policy2.check(tc(command="pytest   tests/"), ctx))
+    d2 = run(policy2.check(tc(command="npm   install"), ctx))
     assert d2.allowed and "allow 规则" in d2.reason
-    d3 = run(policy2.check(tc(command="pytest -x other/"), ctx))
+    d3 = run(policy2.check(tc(command="npm install express"), ctx))
     assert not d3.allowed and "非交互" in d3.reason
 
 
@@ -192,7 +208,7 @@ def test_approval_requested_event_emitted(ctx):
     events = []
     bus.subscribe(events.append)
     policy = SandboxPolicy(approver=ScriptedApprover("yes"), bus=bus)
-    run(policy.check(tc(command="pytest"), ctx))
+    run(policy.check(tc(command="npm install"), ctx))
     requested = [e for e in events if isinstance(e, ApprovalRequested)]
     assert len(requested) == 1 and requested[0].tool_call.name == "run_command"
 

@@ -193,9 +193,15 @@ class SessionViewState:
         parts = [text]
         if self.current_step > 0:
             parts.append(f"Step {self.current_step}")
+        if self.plan_items:
+            completed_plan = sum(
+                status == "completed" for status in self.plan_statuses)
+            parts.append(f"计划 {completed_plan}/{len(self.plan_items)}")
         if self.tool_calls_started:
-            parts.append(
-                f"工具 {self.tool_calls_completed}/{self.tool_calls_started}")
+            parts.append(f"工具 {self.tool_calls_completed} 已完成")
+            running = self.tool_calls_started - self.tool_calls_completed
+            if running > 0:
+                parts.append(f"{running} 执行中")
         if self.active_tool_name and self.tool_output_chars:
             parts.append(f"输出 {self.tool_output_chars} 字符")
         if self.started_at is not None:
