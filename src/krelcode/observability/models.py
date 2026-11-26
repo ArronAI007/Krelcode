@@ -9,8 +9,12 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Mapping
 
+from krelcode.contracts.runtime import (
+    RUNTIME_RELEASE_SCHEMA_VERSION,
+    RuntimeReleaseManifest,
+)
+
 SCHEMA_VERSION = 1
-RUNTIME_RELEASE_SCHEMA_VERSION = 1
 
 
 def utc_timestamp() -> float:
@@ -23,116 +27,6 @@ def stable_hash(value: object) -> str:
         default=str,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
-
-
-_RELEASE_COMPONENTS = (
-    "agent_definition",
-    "prompt_release",
-    "model_profile",
-    "tool_catalog",
-    "mcp_servers",
-    "plugins",
-    "skills",
-    "policy_version",
-    "memory_schema",
-    "context_engine",
-    "code_version",
-)
-
-
-@dataclass(frozen=True)
-class RuntimeReleaseManifest:
-    """Complete, content-light identity of one runtime composition."""
-
-    agent_definition: Mapping[str, object] = field(default_factory=dict)
-    prompt_release: Mapping[str, object] = field(default_factory=dict)
-    model_profile: Mapping[str, object] = field(default_factory=dict)
-    tool_catalog: Mapping[str, object] = field(default_factory=dict)
-    mcp_servers: Mapping[str, object] = field(default_factory=dict)
-    plugins: Mapping[str, object] = field(default_factory=dict)
-    skills: Mapping[str, object] = field(default_factory=dict)
-    policy_version: Mapping[str, object] = field(default_factory=dict)
-    memory_schema: Mapping[str, object] = field(default_factory=dict)
-    context_engine: Mapping[str, object] = field(default_factory=dict)
-    code_version: Mapping[str, object] = field(default_factory=dict)
-    schema_version: int = RUNTIME_RELEASE_SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        for name in _RELEASE_COMPONENTS:
-            value = getattr(self, name)
-            object.__setattr__(
-                self,
-                name,
-                MappingProxyType(dict(value) if isinstance(value, Mapping) else {}),
-            )
-
-    @property
-    def release_hash(self) -> str:
-        return stable_hash(self.to_dict(include_hashes=False))
-
-    @property
-    def release_id(self) -> str:
-        return f"runtime-{self.release_hash[:16]}"
-
-    def component_hashes(self) -> dict[str, str]:
-        return {
-            name: stable_hash(dict(getattr(self, name)))
-            for name in _RELEASE_COMPONENTS
-        }
-
-    def to_dict(self, *, include_hashes: bool = True) -> dict[str, object]:
-        record: dict[str, object] = {
-            "schema_version": self.schema_version,
-            **{
-                name: dict(getattr(self, name))
-                for name in _RELEASE_COMPONENTS
-            },
-        }
-        if include_hashes:
-            record["release_id"] = self.release_id
-            record["release_hash"] = self.release_hash
-            record["component_hashes"] = self.component_hashes()
-        return record
-
-    @classmethod
-    def from_dict(cls, raw: Mapping[str, object]) -> "RuntimeReleaseManifest":
-        return cls(
-            **{
-                name: (
-                    dict(value)
-                    if isinstance((value := raw.get(name)), Mapping) else {}
-                )
-                for name in _RELEASE_COMPONENTS
-            },
-            schema_version=int(
-                str(raw.get("schema_version")
-                    or RUNTIME_RELEASE_SCHEMA_VERSION)),
-        )
-
-    def diff(self, other: "RuntimeReleaseManifest") -> dict[str, object]:
-        """Return deterministic component-level release differences."""
-        left_hashes = self.component_hashes()
-        right_hashes = other.component_hashes()
-        changed: dict[str, object] = {}
-        unchanged: list[str] = []
-        for name in _RELEASE_COMPONENTS:
-            if left_hashes[name] == right_hashes[name]:
-                unchanged.append(name)
-                continue
-            changed[name] = {
-                "left_hash": left_hashes[name],
-                "right_hash": right_hashes[name],
-                "left": dict(getattr(self, name)),
-                "right": dict(getattr(other, name)),
-            }
-        return {
-            "left_release_id": self.release_id,
-            "right_release_id": other.release_id,
-            "left_release_hash": self.release_hash,
-            "right_release_hash": other.release_hash,
-            "changed_components": changed,
-            "unchanged_components": unchanged,
-        }
 
 
 @dataclass(frozen=True)

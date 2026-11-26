@@ -10,10 +10,10 @@ from krelcode.contracts.application import (
     ApplicationRequest,
     ApplicationRequestFactory,
 )
+from krelcode.contracts.runtime import RuntimeReleaseManifest
 from krelcode.observability.models import (
     EventEnvelope,
     RunManifest,
-    RuntimeReleaseManifest,
 )
 
 _SAFE_ID_CHARS = frozenset(

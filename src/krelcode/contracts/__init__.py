@@ -31,7 +31,6 @@ from .evaluation import (
     VersionManifestPort,
 )
 from .governance import (
-    ArtifactIdentity,
     AuditCorrelation,
     ControlPlanePort,
     GovernanceDecision,
@@ -43,7 +42,15 @@ from .governance import (
     SecurityDecision,
     SecurityDecisionValue,
 )
-from .runtime import PermissionMode, RunMode, RuntimeSnapshot
+from .lifecycle import RuntimeLifecycleEnvelope
+from .runtime import (
+    ArtifactIdentity,
+    PermissionMode,
+    RUNTIME_RELEASE_SCHEMA_VERSION,
+    RunMode,
+    RuntimeReleaseManifest,
+    RuntimeSnapshot,
+)
 from .safety import SandboxPort
 from .service_ports import (
     EnterprisePolicyPort,
@@ -117,6 +124,9 @@ __all__ = [
     "PolicyVersion",
     "RunMode",
     "RuntimeSnapshot",
+    "RuntimeReleaseManifest",
+    "RuntimeLifecycleEnvelope",
+    "RUNTIME_RELEASE_SCHEMA_VERSION",
     "RiskLevel",
     "RiskProfile",
     "RollbackManifest",

@@ -452,12 +452,14 @@ def test_runtime_state_has_no_reflective_fallback_api():
 PACKAGE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "core": frozenset(),
     "bootstrap": frozenset({
-        "agent", "browser", "config", "contracts", "core", "daemon",
+        "agent", "application", "browser", "config", "contracts", "core",
+        "daemon",
         "enterprise", "extensions", "hooks", "jobs", "llm", "lsp", "mcp",
-        "observability", "output_styles", "plugins", "review", "safety",
-        "security_review", "session", "skills", "subagent", "telemetry",
-        "tools", "ui", "web", "webui",
+        "governance", "observability", "output_styles", "plugins", "review",
+        "runtime", "safety", "security_review", "session", "skills",
+        "subagent", "telemetry", "tools", "ui", "web", "webui",
     }),
+    "application": frozenset({"contracts"}),
     "contracts": frozenset({"core"}),
     "llm": frozenset({"core"}),
     "safety": frozenset({"core", "contracts"}),
@@ -471,6 +473,15 @@ PACKAGE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "plugins": frozenset({"contracts", "skills"}),
     "enterprise": frozenset({"contracts", "core"}),
     "agent": frozenset({"contracts", "core", "llm", "safety", "tools"}),
+    "runtime": frozenset({
+        "agent", "contracts", "core", "daemon", "jobs", "mcp", "safety",
+        "session", "tools",
+    }),
+    "governance": frozenset({"contracts", "core", "enterprise", "safety"}),
+    "tuning": frozenset({
+        "benchmarks", "contracts", "core", "governance", "observability",
+        "security_review",
+    }),
     "security_review": frozenset(
         {"agent", "config", "contracts", "core", "llm", "safety", "tools"}),
     "subagent": frozenset(
@@ -484,7 +495,7 @@ PACKAGE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
         "app", "config", "contracts", "core", "jobs", "safety", "subagent",
     }),
     "telemetry": frozenset({"core"}),
-    "observability": frozenset({"core"}),
+    "observability": frozenset({"contracts", "core"}),
     "webui": frozenset({"contracts", "observability"}),
     "benchmarks": frozenset({
         "agent", "app", "bootstrap", "config", "contracts", "core",
@@ -522,7 +533,7 @@ COMPONENT_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     **ROOT_MODULE_ALLOWED_DEPENDENCIES,
 }
 
-BENCHMARK_IMPORT_BOUNDARY = frozenset({"benchmarks", "entrypoints"})
+BENCHMARK_IMPORT_BOUNDARY = frozenset({"benchmarks", "entrypoints", "tuning"})
 
 
 @lru_cache(maxsize=1)
@@ -873,6 +884,19 @@ def test_benchmark_port_boundary_has_no_agent_internals():
     assert "EvaluationHarnessPort" in source
     assert "TraceReplayPort" in source
     assert "VersionManifestPort" in source
+
+
+def test_agent_package_does_not_import_production_runtime_package():
+    violations: dict[str, list[str]] = {}
+    for path in modules_under("agent"):
+        dependencies = {
+            module for module in imported_modules(path)
+            if module == "krelcode.runtime"
+            or module.startswith("krelcode.runtime.")
+        }
+        if dependencies:
+            violations[str(path.relative_to(ROOT))] = sorted(dependencies)
+    assert not violations, violations
 
 
 def test_agent_loop_is_a_thin_turn_orchestration_facade():

@@ -6,12 +6,14 @@ from dataclasses import asdict
 from typing import Iterable, Mapping
 
 from ...agent.turn.loop import AgentLoop
+from ...contracts.runtime import (
+    RUNTIME_RELEASE_SCHEMA_VERSION,
+    RuntimeReleaseManifest,
+)
 from ...enterprise.policy import EnterprisePolicy
 from ...mcp.supervisor import MCPSupervisor
 from ...observability.models import (
     SCHEMA_VERSION,
-    RUNTIME_RELEASE_SCHEMA_VERSION,
-    RuntimeReleaseManifest,
     stable_hash,
 )
 from ...plugins.manager import PluginManager

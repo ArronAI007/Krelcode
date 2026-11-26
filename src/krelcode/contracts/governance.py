@@ -17,7 +17,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping, Optional, Protocol, Tuple
 
-from .runtime import PermissionMode, RuntimeSnapshot
+from .runtime import ArtifactIdentity, PermissionMode, RuntimeSnapshot
 from .service_ports import EnterprisePolicyPort, PrincipalPort
 
 
@@ -37,35 +37,6 @@ class PolicyVersion:
     @property
     def policy_version(self) -> str:
         return self.version
-
-
-@dataclass(frozen=True)
-class ArtifactIdentity:
-    """Content-addressed artifact/version identity."""
-
-    kind: str
-    id: str
-    version: str = ""
-    digest: str = ""
-    required: bool = True
-    expected_digest: str = ""
-    metadata: Mapping[str, object] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "kind", str(self.kind or "").strip())
-        object.__setattr__(
-            self, "id", str(self.id or "").strip())
-        object.__setattr__(self, "version", str(self.version or "").strip())
-        object.__setattr__(self, "digest", str(self.digest or "").strip())
-        object.__setattr__(
-            self, "expected_digest",
-            str(self.expected_digest or "").strip())
-        object.__setattr__(self, "metadata", MappingProxyType(
-            dict(self.metadata)))
-
-    @property
-    def artifact_id(self) -> str:
-        return self.id
 
 
 @dataclass(frozen=True)
