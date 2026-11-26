@@ -228,6 +228,50 @@ def test_install_network_is_enabled_only_for_install_commands(tmp_path):
     assert no_install_network.audit_command("pip install requests", workspace)
 
 
+def test_installer_url_and_script_infer_application_home(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    sandbox = ExecutionSandbox(
+        workspace,
+        backend="static",
+        user_home=home,
+        network=False,
+        install_network=True,
+    )
+    download = (
+        "curl -fsSL https://raw.githubusercontent.com/"
+        "NousResearch/hermes-agent/main/install.sh "
+        "-o .hermes-install.sh"
+    )
+    assert sandbox.resolve_permission_profile(download).value == "user-install"
+    assert sandbox.audit_command(download, workspace) is None
+    assert (home / ".hermes").resolve() in sandbox._install_roots_for_command(
+        download)
+
+    installer = workspace / "hermes-install.sh"
+    installer.write_text(
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "mkdir -p \"$HOME/.hermes\" \"$HOME/.local/bin\"\n"
+        "printf '0.19.0\\n' > \"$HOME/.hermes/version\"\n"
+        "ln -sf /bin/true \"$HOME/.local/bin/hermes\"\n",
+        encoding="utf-8",
+    )
+    result = run(RunCommandTool().execute(
+        {
+            "command": "sh hermes-install.sh",
+            "sandbox_permission": "user-install",
+        },
+        ToolContext(workspace_root=workspace, sandbox=sandbox),
+    ))
+    assert not result.is_error
+    assert (home / ".hermes" / "version").read_text(
+        encoding="utf-8").strip() == "0.19.0"
+    assert (home / ".local" / "bin" / "hermes").is_symlink()
+
+
 def test_user_install_can_be_disabled_by_policy(tmp_path):
     sandbox = ExecutionSandbox(
         tmp_path,

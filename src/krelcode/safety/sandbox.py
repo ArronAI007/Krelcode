@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, cast
 
 from .environment import scrub_environment
+from .sandbox_install import inferred_user_install_roots
 from .sandbox_audit import (
     SYSTEM_READ_ROOTS,
     _inside,
@@ -176,7 +177,7 @@ class ExecutionSandbox:
         except SandboxError as exc:
             return str(exc)
         extra_roots = (
-            self.user_install_roots
+            self._install_roots_for_command(command)
             if profile is SandboxPermissionProfile.USER_INSTALL
             else ()
         )
@@ -224,11 +225,17 @@ class ExecutionSandbox:
         permission_profile: SandboxPermissionProfile | str | None = None,
     ) -> SandboxedCommand:
         profile = self.resolve_permission_profile(command, permission_profile)
+        install_roots = (
+            self._install_roots_for_command(command)
+            if profile is SandboxPermissionProfile.USER_INSTALL
+            else ()
+        )
         return self._prepare(
             self.process_platform.shell_argv(command),
             Path(cwd),
             extra_read_roots=(),
             permission_profile=profile,
+            install_roots=install_roots,
             network_allowed=self._network_allowed(
                 command,
                 profile,
@@ -249,6 +256,7 @@ class ExecutionSandbox:
             extra_read_roots=[
                 Path(path).resolve() for path in extra_read_roots],
             permission_profile=SandboxPermissionProfile.WORKSPACE,
+            install_roots=(),
             network_allowed=self.network,
         )
 
@@ -259,24 +267,21 @@ class ExecutionSandbox:
         *,
         extra_read_roots: Sequence[Path],
         permission_profile: SandboxPermissionProfile,
+        install_roots: Sequence[Path],
         network_allowed: bool,
     ) -> SandboxedCommand:
         cwd = cwd.resolve()
         allowed_roots = [self.workspace_root, *extra_read_roots]
         if not any(_inside(cwd, root) for root in allowed_roots):
             raise SandboxError(f"cwd 越出 Sandbox 允许范围: {cwd}")
-        install_roots = (
-            self.user_install_roots
-            if permission_profile is SandboxPermissionProfile.USER_INSTALL
-            else ()
-        )
         if install_roots:
             self._ensure_user_install_roots(install_roots)
-        env = self._sandbox_env(cwd, permission_profile)
+        env = self._sandbox_env(cwd, permission_profile, install_roots)
         if self.backend == "seatbelt":
             profile = self._seatbelt_profile(
                 extra_read_roots,
                 permission_profile=permission_profile,
+                install_roots=install_roots,
                 network_allowed=network_allowed,
             )
             wrapped = [
@@ -299,6 +304,7 @@ class ExecutionSandbox:
                 cwd,
                 extra_read_roots,
                 permission_profile=permission_profile,
+                install_roots=install_roots,
                 network_allowed=network_allowed,
             )
             return SandboxedCommand(
@@ -339,6 +345,15 @@ class ExecutionSandbox:
             )
         )
 
+    def _install_roots_for_command(self, command: str) -> tuple[Path, ...]:
+        inferred = inferred_user_install_roots(
+            command,
+            self.user_home,
+            self.user_install_roots,
+            shell_dialect=self.process_platform.shell_dialect,
+        )
+        return tuple(dict.fromkeys((*self.user_install_roots, *inferred)))
+
     def _ensure_user_install_roots(self, roots: Sequence[Path]) -> None:
         try:
             for root in roots:
@@ -352,6 +367,7 @@ class ExecutionSandbox:
         cwd: Path,
         permission_profile: SandboxPermissionProfile = (
             SandboxPermissionProfile.WORKSPACE),
+        install_roots: Sequence[Path] = (),
     ) -> dict[str, str]:
         base = scrub_environment(os.environ)
         runtime = self.workspace_root / ".krelcode" / "sandbox"
@@ -369,7 +385,7 @@ class ExecutionSandbox:
             for path in (fake_home, install_home, tmp, cache):
                 path.mkdir(parents=True, exist_ok=True)
             if user_install:
-                self._link_user_install_roots(install_home)
+                self._link_user_install_roots(install_home, install_roots)
             if home == fake_home or self.process_platform.windows:
                 for path in (local_appdata, roaming_appdata):
                     path.mkdir(parents=True, exist_ok=True)
@@ -418,9 +434,13 @@ class ExecutionSandbox:
         env.update(updates)
         return env
 
-    def _link_user_install_roots(self, install_home: Path) -> None:
+    def _link_user_install_roots(
+        self,
+        install_home: Path,
+        install_roots: Sequence[Path],
+    ) -> None:
         """Expose only allowlisted user-install roots through a synthetic HOME."""
-        for root in self.user_install_roots:
+        for root in install_roots:
             try:
                 relative = root.relative_to(self.user_home)
             except ValueError:
@@ -447,14 +467,16 @@ class ExecutionSandbox:
         *,
         permission_profile: SandboxPermissionProfile = (
             SandboxPermissionProfile.WORKSPACE),
+        install_roots: Optional[Sequence[Path]] = None,
         network_allowed: Optional[bool] = None,
     ) -> str:
         runtime = self.workspace_root / ".krelcode" / "sandbox"
-        install_roots = (
-            self.user_install_roots
-            if permission_profile is SandboxPermissionProfile.USER_INSTALL
-            else ()
-        )
+        if install_roots is None:
+            install_roots = (
+                self.user_install_roots
+                if permission_profile is SandboxPermissionProfile.USER_INSTALL
+                else ()
+            )
         read_roots = list(dict.fromkeys([
             *[root for root in SYSTEM_READ_ROOTS if Path(root).exists()],
             str(Path(sys.executable).resolve().parent),
@@ -498,6 +520,7 @@ class ExecutionSandbox:
         *,
         permission_profile: SandboxPermissionProfile = (
             SandboxPermissionProfile.WORKSPACE),
+        install_roots: Optional[Sequence[Path]] = None,
         network_allowed: Optional[bool] = None,
     ) -> List[str]:
         bwrap = shutil.which("bwrap") or "bwrap"
@@ -529,8 +552,14 @@ class ExecutionSandbox:
             out += ["--ro-bind", str(prefix), str(prefix)]
         out += [
             "--bind", str(self.workspace_root), str(self.workspace_root)]
-        if permission_profile is SandboxPermissionProfile.USER_INSTALL:
-            for root in self.user_install_roots:
+        if install_roots is None:
+            install_roots = (
+                self.user_install_roots
+                if permission_profile is SandboxPermissionProfile.USER_INSTALL
+                else ()
+            )
+        if install_roots:
+            for root in install_roots:
                 out += ["--bind", str(root), str(root)]
         for root in extra_read_roots:
             if _inside(root, self.workspace_root) or any(

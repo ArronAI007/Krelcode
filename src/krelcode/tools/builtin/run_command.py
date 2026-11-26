@@ -77,6 +77,10 @@ Sandbox and safety:
 - User-level installation is supported without disabling the Sandbox. Set
   sandbox_permission="user-install" only for commands that install or link a
   command into user-owned locations such as ~/.local/bin or ~/.local/share.
+  Installer filenames and URLs containing names such as hermes-install.sh also
+  expose the corresponding ~/.hermes-style application home automatically.
+  Download the installer first instead of piping it to a shell, preserve the
+  app name in the local filename, review it, then run it with the same scope.
   Never use sudo, write to /usr/local, /etc, /System, or other system-wide
   locations, and do not redirect HOME to evade the policy.
 - Do not print credentials or include secrets in commands. Treat command output
@@ -161,9 +165,23 @@ Sandbox and safety:
                 )
             )
             if violation:
+                if (
+                    permission_profile_arg is None
+                    and "网络已禁用" in violation
+                    and any(marker in command.lower() for marker in (
+                        "install", "setup", "bootstrap", "update", "upgrade",
+                    ))
+                ):
+                    violation += (
+                        "；如果这是用户级安装，请重试并设置 "
+                        "sandbox_permission=\"user-install\""
+                    )
                 return ToolResult(
                     content=f"Sandbox 拒绝命令: {violation}", is_error=True,
-                    data={"sandbox_denied": True},
+                    data={
+                        "sandbox_denied": True,
+                        "suggested_sandbox_permission": "user-install",
+                    } if "user-install" in violation else {"sandbox_denied": True},
                 )
             try:
                 prepared = (
