@@ -171,9 +171,9 @@ async def build_application_context(
     if getattr(args, "tui_mouse", None) is None:
         ui_config = config.get("ui")
         args.tui_mouse = (
-            bool(ui_config.get("mouse", False))
+            bool(ui_config.get("mouse", True))
             if isinstance(ui_config, dict)
-            else False
+            else True
         )
 
     return ApplicationBuildContext(

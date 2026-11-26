@@ -144,6 +144,12 @@ def test_multiline_tool_arguments_stay_on_one_execution_line():
     r(ToolCallStarted(tc))
     assert buf.text == "  ⏺ run_command · set -e echo ready pytest -q"
     assert "\n" not in buf.text
+    assert r.expand_tool_output("1")
+    assert "│ Arguments" in buf.text
+    assert "│ command:" in buf.text
+    assert "│   set -e" in buf.text
+    assert "│   echo ready" in buf.text
+    assert "│   pytest -q" in buf.text
 
 
 # -- diff 上色 ---------------------------------------------------------------------------
@@ -243,6 +249,35 @@ def test_transcript_click_expands_the_matching_tool_line():
     assert presenter.renderer.expanded == ["1"]
     assert not presenter.handle_transcript_mouse(
         MouseEvent(button=0, x=4, y=5, pressed=True))
+
+
+def test_transcript_click_expands_thinking_summary():
+    class Renderer:
+        def __init__(self):
+            self.expanded = 0
+
+        def expand_thinking(self):
+            self.expanded += 1
+            return True
+
+    presenter = object.__new__(TerminalPresenter)
+    presenter.panel_controller = PanelController()
+    presenter.panel_controller.set_cursor_origin(
+        cursor_row=10, relative_cursor_row=1)
+    presenter._output_row_sequence = 5
+    presenter._tool_click_anchors = {}
+    presenter._thinking_click_anchor = 4
+    presenter.renderer = Renderer()
+    presenter.prompt = type("Prompt", (), {
+        "resume_or_show": lambda self, _fallback: None,
+    })()
+    presenter.state = SimpleNamespace(is_running=False)
+    presenter.use_color = False
+
+    assert presenter.handle_transcript_mouse(
+        MouseEvent(button=0, x=4, y=7, pressed=True))
+    assert presenter.renderer.expanded == 1
+    assert presenter._thinking_click_anchor is None
 
 
 def test_tool_output_panel_has_gray_background():

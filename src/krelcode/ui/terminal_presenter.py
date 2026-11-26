@@ -18,7 +18,12 @@ from typing import Awaitable, Callable, Optional, cast
 
 from ..agent.turn.loop import AgentLoop
 from ..core.tokens import estimate_history_tokens
-from ..core.events import AgentEvent, MemoryCandidateObserved, MemoryWritten
+from ..core.events import (
+    AgentEvent,
+    MemoryCandidateObserved,
+    MemoryWritten,
+    RunStarted,
+)
 from ..core.redact import SecretRedactor
 from ..session.controller import SessionController
 from ..session.input import InputAction, InputProcessor
@@ -76,10 +81,12 @@ class TerminalPresenter:
         self.prompt = PromptWriter(color=self.use_color)
         self._output_row_sequence = 0
         self._tool_click_anchors: dict[int, int] = {}
+        self._thinking_click_anchor: Optional[int] = None
         self.renderer = StreamRenderer(
             write=self._prompt_write,
             redactor=redactor,
             on_tool_line=self._register_tool_click_anchor,
+            on_thinking_line=self._register_thinking_click_anchor,
             tool_lines_clickable=self.tui_mouse,
         )
         self.input_ready = threading.Event()
@@ -166,6 +173,9 @@ class TerminalPresenter:
     def _register_tool_click_anchor(self, index: int) -> None:
         self._tool_click_anchors[index] = self._output_row_sequence
 
+    def _register_thinking_click_anchor(self) -> None:
+        self._thinking_click_anchor = self._output_row_sequence
+
     def handle_transcript_mouse(self, event: MouseEvent) -> bool:
         if not event.is_left_click:
             return False
@@ -176,6 +186,15 @@ class TerminalPresenter:
         if clicked_row >= origin:
             return False
         distance = origin - clicked_row
+        thinking_anchor = getattr(self, "_thinking_click_anchor", None)
+        if thinking_anchor is not None:
+            expected = self._output_row_sequence - thinking_anchor + 1
+            if distance == expected:
+                self._thinking_click_anchor = None
+                handled = self.renderer.expand_thinking()
+                if handled:
+                    self.prompt.resume_or_show(self.prompt_text)
+                return handled
         for index, anchor in reversed(tuple(self._tool_click_anchors.items())):
             expected = self._output_row_sequence - anchor + 1
             if distance == expected:
@@ -365,6 +384,8 @@ class TerminalPresenter:
 
     def on_session_event(self, event: AgentEvent) -> None:
         self.renderer(event)
+        if isinstance(event, RunStarted):
+            self._thinking_click_anchor = None
         if isinstance(event, (MemoryCandidateObserved, MemoryWritten)):
             self.refresh_memory_cache()
             refresh = getattr(self, "refresh_status", None)

@@ -414,8 +414,9 @@ def test_thinking_can_expand_while_run_in_progress(tmp_path, capsys):
     rc = asyncio.run(run_repl(loop, input_fn=inp))
     out = capsys.readouterr().out
     assert rc == 0
-    assert "✻ Thinking（Markdown）" in out
-    assert "# 分析\n\n- 先检查缓存" in out
+    assert "✻ Thinking" in out
+    assert "▌ 分析" in out
+    assert "• 先检查缓存" in out
     assert "任务运行中" not in out
 
 

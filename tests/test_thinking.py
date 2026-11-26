@@ -22,7 +22,12 @@ from krelcode.llm.providers.openai import OpenAIProvider
 from krelcode.safety.policy import AllowAllPolicy
 from krelcode.tools.base import ToolContext
 from krelcode.tools.registry import ToolRegistry
-from krelcode.ui.render import THINKING_COLLAPSED, THINKING_LIVE, StreamRenderer
+from krelcode.ui.render import (
+    THINKING_COLLAPSED,
+    THINKING_COLLAPSED_CLICKABLE,
+    THINKING_LIVE,
+    StreamRenderer,
+)
 
 
 # -- OpenAI 兼容：reasoning_content / reasoning -------------------------------------------------
@@ -159,7 +164,7 @@ def test_renderer_thinking_is_collapsed_to_one_line():
     assert THINKING_COLLAPSED in buf.text
     assert buf.text.endswith("\n⏺ 回复")
     assert "想一下" not in buf.text and "再想" not in buf.text
-    assert "正文已折叠" in THINKING_COLLAPSED
+    assert "正文已折叠" not in THINKING_COLLAPSED
 
 
 def test_expand_thinking_preserves_markdown_structure():
@@ -181,10 +186,15 @@ def test_expand_thinking_preserves_markdown_structure():
     assert "# 分析" not in buf.text                    # 默认折叠
     assert renderer.expand_thinking() is True
     expanded = buf.text
-    assert "✻ Thinking（Markdown）" in expanded
-    assert thinking in expanded
-    assert "\n\n- 检查" in expanded
-    assert "```python\nprint('ok')\n```" in expanded
+    assert "✻ Thinking" in expanded
+    assert "▌ 分析" in expanded
+    assert "• 检查 config.toml" in expanded
+    assert "  • 保留缩进" in expanded
+    assert "• 结论" in expanded
+    assert "  ┌─ python" in expanded
+    assert "  │ print('ok')" in expanded
+    assert "# 分析" not in expanded
+    assert "**结论**" not in expanded
 
 
 def test_thinking_aggregates_segments_without_extra_summary():
@@ -229,4 +239,39 @@ def test_thinking_slash_command_expands_cached_markdown(tmp_path):
         model_switch=None,
     ))
     assert handled is False
-    assert "# 步骤\n\n- 读取文件" in buf.text
+    assert "✻ Thinking" in buf.text
+    assert "▌ 步骤" in buf.text
+    assert "• 读取文件" in buf.text
+
+
+def test_clickable_thinking_summary_registers_anchor():
+    buf = Buf()
+    clicked = []
+    renderer = StreamRenderer(
+        write=buf.write,
+        color=False,
+        on_thinking_line=lambda: clicked.append(True),
+        tool_lines_clickable=True,
+    )
+    renderer(RunStarted("q"))
+    renderer(LLMThinkingDelta("需要检查文件"))
+    renderer(LLMStreamDelta("完成"))
+
+    assert THINKING_COLLAPSED_CLICKABLE in buf.text
+    assert clicked == [True]
+
+
+def test_assistant_markdown_is_rendered_not_echoed_as_source():
+    buf = Buf()
+    renderer = StreamRenderer(write=buf.write, color=False)
+    renderer(RunStarted("q"))
+    renderer(LLMStreamDelta("# 结果\n\n- **测试**通过\n- 使用 `pytest`\n"))
+    renderer(RunFinished("# 结果\n\n- **测试**通过\n- 使用 `pytest`\n"))
+
+    text = buf.text
+    assert "⏺ ▌ 结果" in text
+    assert "• 测试通过" in text
+    assert "• 使用 pytest" in text
+    assert "# 结果" not in text
+    assert "**测试**" not in text
+    assert "`pytest`" not in text

@@ -183,8 +183,8 @@ krelcode
 - 流式回答；模型思考和执行过程各占一行，工具状态原地刷新，完整输出按需展开。
 - Tasks、Activity、Context、Review、Memory 多面板状态。
 - 权限模式快速切换、计划确认、Diff 审阅和任务中断。
-- 默认保留终端普通拖拽选择与复制。`krelcode --tui-mouse` 可启用面板/工具行点击；
-  开启后普通拖拽会被应用接管，文本选择需按住 `Shift` 拖拽。
+- 默认启用面板、Thinking 行和工具行点击。普通拖拽会被应用接管，文本选择请按住
+  `Shift` 拖拽；也可用 `krelcode --no-tui-mouse` 恢复终端原生选择与复制。
 
 常用命令：
 

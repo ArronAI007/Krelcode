@@ -18,6 +18,7 @@ from typing import Callable, Dict, Mapping, Optional
 
 from ..core.redact import SecretRedactor
 from ..core.messages import ToolCall
+from .terminal_markdown import MarkdownStream, render_markdown
 from ..core.events import (
     AgentEvent,
     ContextAssembled,
@@ -64,9 +65,8 @@ ASSISTANT_MARK = "⏺ "
 RESULT_MARK = "⎿ "
 THINKING_MARK = "✻ "
 THINKING_LIVE = f"{THINKING_MARK}模型思考中…"
-THINKING_COLLAPSED = (
-    f"{THINKING_MARK}模型思考完成（正文已折叠，/thinking 展开）"
-)
+THINKING_COLLAPSED = f"{THINKING_MARK}模型思考完成 · /thinking 展开"
+THINKING_COLLAPSED_CLICKABLE = f"{THINKING_MARK}模型思考完成 · 点击展开"
 
 TOOL_ARGUMENT_INLINE_LIMIT = 100
 TOOL_ARGUMENT_PREVIEW_LINES = 8
@@ -118,44 +118,9 @@ def colorize_diff(text: str, enabled: bool = True) -> str:
     return "\n".join(out)
 
 
-_INLINE_CODE_RE = re.compile(r"(`[^`\n]+`)")
-_BOLD_RE = re.compile(r"(\*\*[^*\n]+\*\*)")
-
-
 def colorize_markdown(text: str, enabled: bool = True) -> str:
-    """轻量终端 Markdown 上色，保留标题、列表、空行和 fenced code 结构。"""
-    if not enabled or not text:
-        return text
-    out = []
-    in_fence = False
-    for line in text.split("\n"):
-        stripped = line.lstrip()
-        if stripped.startswith(("```", "~~~")):
-            out.append(DIM + line + RESET)
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            out.append(line)
-            continue
-        if re.match(r"^\s{0,3}#{1,6}\s+", line):
-            out.append(BOLD + CYAN + line + RESET)
-            continue
-        list_match = re.match(r"^(\s*)([-*+]|\d+\.)(\s+.*)$", line)
-        if list_match:
-            prefix, marker, rest = list_match.groups()
-            out.append(prefix + CYAN + marker + RESET + rest)
-            continue
-        quote_match = re.match(r"^(\s*>+)(.*)$", line)
-        if quote_match:
-            marker, rest = quote_match.groups()
-            out.append(CYAN + marker + RESET + rest)
-            continue
-        line = _INLINE_CODE_RE.sub(
-            lambda m: CYAN + m.group(1) + RESET, line)
-        line = _BOLD_RE.sub(
-            lambda m: BOLD + m.group(1) + RESET, line)
-        out.append(line)
-    return "\n".join(out)
+    """Compatibility wrapper around the terminal Markdown renderer."""
+    return render_markdown(text, enabled)
 
 
 def _default_write(s: str) -> None:
@@ -268,6 +233,7 @@ class StreamRenderer:
         color: Optional[bool] = None,
         redactor: Optional[SecretRedactor] = None,
         on_tool_line: Optional[Callable[[int], None]] = None,
+        on_thinking_line: Optional[Callable[[], None]] = None,
         tool_lines_clickable: bool = False,
     ) -> None:
         self._raw_write = write or _default_write
@@ -279,7 +245,9 @@ class StreamRenderer:
         self._thinking_line_live = False
         self._at_line_start = True
         self._on_tool_line = on_tool_line
+        self._on_thinking_line = on_thinking_line
         self._tool_lines_clickable = tool_lines_clickable
+        self._markdown = MarkdownStream(enabled=self._color)
         # 仅 UI 层保留最近一轮完整 thinking；绝不写入 AgentLoop.history。
         self.thinking_text = ""
         self.tool_outputs: list[ToolOutputRecord] = []
@@ -320,6 +288,7 @@ class StreamRenderer:
             self._end_stream_only()
             self.thinking_text = ""
             self._thinking_summary_shown = False
+            self._markdown.reset()
             # 工具调用 ID 只在单轮内保证唯一；新轮次必须重新映射，
             # 否则常见的 "c1" 会错误复用上一轮输出。
             self._tool_by_call_id.clear()
@@ -346,7 +315,9 @@ class StreamRenderer:
             if not self._streaming:
                 self._write(self._mark(ASSISTANT_MARK))
                 self._streaming = True
-            self._write(event.text)
+            rendered = self._markdown.feed(event.text)
+            if rendered:
+                self._write(rendered)
         elif isinstance(event, ToolCallStarted):
             self.end_stream()
             record = self._register_tool_call(event.tool_call)
@@ -444,11 +415,11 @@ class StreamRenderer:
         elif isinstance(event, RunFinished):
             self._finish_live_tool_line()
             if self._streaming:
-                self._ensure_newline()
-                self._streaming = False
+                self._end_stream_only()
             else:
                 # 未经流式的最终文本（如 max_steps/卡死中止的系统消息）
-                self._write(f"{self._mark(ASSISTANT_MARK)}{event.final_text}")
+                rendered = render_markdown(event.final_text, self._color)
+                self._write(f"{self._mark(ASSISTANT_MARK)}{rendered}")
                 self._ensure_newline()
 
     def end_stream(self) -> None:
@@ -458,7 +429,11 @@ class StreamRenderer:
 
     def _end_stream_only(self) -> None:
         if self._streaming:
+            tail = self._markdown.finish()
+            if tail:
+                self._write(tail)
             self._ensure_newline()
+            self._markdown.reset()
             self._streaming = False
 
     def _end_thinking(self) -> None:
@@ -468,7 +443,14 @@ class StreamRenderer:
         live = self._thinking_line_live
         self._thinking_line_live = False
         if not self._thinking_summary_shown and self.thinking_text.strip():
-            summary = THINKING_COLLAPSED
+            clickable = (
+                self._tool_lines_clickable
+                and self._on_thinking_line is not None
+            )
+            summary = (
+                THINKING_COLLAPSED_CLICKABLE
+                if clickable else THINKING_COLLAPSED
+            )
             if self._color:
                 summary = f"{DIM}{summary}{RESET}"
             if live:
@@ -476,17 +458,20 @@ class StreamRenderer:
             else:
                 self._write(summary + "\n")
             self._thinking_summary_shown = True
+            if clickable and self._on_thinking_line is not None:
+                self._on_thinking_line()
 
     def expand_thinking(self) -> bool:
         """把最近一轮 thinking 以多行 Markdown 输出；无内容时返回 False。"""
         if not self.thinking_text.strip():
             return False
         self.end_stream()
-        header = "✻ Thinking（Markdown）"
+        header = "✻ Thinking"
         if self._color:
             header = f"{DIM}{header}{RESET}"
         self._write(header + "\n")
-        self._write(colorize_markdown(self.thinking_text.strip("\n"), self._color))
+        self._write(render_markdown(
+            self.thinking_text.strip("\n"), self._color))
         self._ensure_newline()
         return True
 
@@ -603,6 +588,17 @@ class StreamRenderer:
         header_prefix = f"  ┌─ Tool output #{record.index} · {record.tool_call.name} "
         header = header_prefix + "─" * max(3, TOOL_PANEL_WIDTH - len(header_prefix))
         self._panel_line(header)
+        if record.tool_call.arguments:
+            self._panel_line("  │ Arguments")
+            arguments = _clip_preview(
+                _format_tool_arguments(record.tool_call.arguments),
+                TOOL_ARGUMENT_PREVIEW_LINES,
+                TOOL_ARGUMENT_PREVIEW_CHARS,
+                "参数",
+            )
+            for line in _wrap_tool_content(arguments):
+                self._panel_line(f"  │ {line}")
+            self._panel_line("  ├" + "─" * (TOOL_PANEL_WIDTH - 3))
         if not record.content.strip():
             content = "（无输出）"
         else:
