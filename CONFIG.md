@@ -353,7 +353,7 @@ haiku = "anthropic/claude-haiku-4-5"
 
 [ui]
 diff_review = true                  # REPL 的 write_file/edit_file 写前显示 unified diff
-mouse = true                        # TUI 面板/工具行点击；文本选择请按住 Shift 拖拽
+mouse = false                       # 默认保留原生复制和滚轮；true 启用点击交互
 
 [sandbox]
 backend = "auto"                     # macOS seatbelt / Linux bubblewrap / 其他平台 static
@@ -426,8 +426,8 @@ krelcode --no-observability                 # 显式关闭本轮事件记录
 krelcode --experiment-profile ./profile.json # 启动时校验并冻结实验 profile
 krelcode --webui                           # 强制随当前 CLI 启动 Web UI
 krelcode --no-webui                        # 关闭随 CLI 自动启动的 Web UI
-krelcode --tui-mouse                       # 启用面板/工具行点击（默认）
-krelcode --no-tui-mouse                    # 关闭鼠标上报，恢复普通拖拽选择/复制
+krelcode --tui-mouse                       # 启用面板/工具行点击（接管拖拽和滚轮）
+krelcode --no-tui-mouse                    # 恢复原生拖拽复制和滚轮（默认）
 ```
 
 [observability]                     # 独立 Web UI 的共享事件底座

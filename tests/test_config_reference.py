@@ -28,7 +28,7 @@ def test_tui_mouse_flags_are_explicit_and_default_to_config_resolution():
     assert parser.parse_args(["--no-tui-mouse"]).tui_mouse is False
 
 
-def test_tui_mouse_defaults_to_clickable_and_config_can_disable(tmp_path: Path):
+def test_tui_mouse_defaults_to_native_copy_and_scroll(tmp_path: Path):
     from krelcode.app import build_parser
     from krelcode.bootstrap.application_stages.context import (
         build_application_context,
@@ -43,17 +43,17 @@ def test_tui_mouse_defaults_to_clickable_and_config_can_disable(tmp_path: Path):
         "--no-session",
     ])
     context = asyncio.run(build_application_context(args))
-    assert context.args.tui_mouse is True
+    assert context.args.tui_mouse is False
 
-    config_path.write_text("[ui]\nmouse = false\n", encoding="utf-8")
-    disabled_args = build_parser().parse_args([
+    config_path.write_text("[ui]\nmouse = true\n", encoding="utf-8")
+    enabled_args = build_parser().parse_args([
         "--mock",
         "--workspace", str(tmp_path),
         "--config", str(config_path),
         "--no-session",
     ])
-    disabled = asyncio.run(build_application_context(disabled_args))
-    assert disabled.args.tui_mouse is False
+    enabled = asyncio.run(build_application_context(enabled_args))
+    assert enabled.args.tui_mouse is True
 
 
 def test_default_max_steps_matches_agent_default():
