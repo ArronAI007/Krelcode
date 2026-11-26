@@ -16,6 +16,7 @@ from krelcode.core.events import (
     ErrorOccurred,
     PermissionDenied,
     PlanUpdated,
+    SecurityDecisionRecorded,
     ToolCallCompleted,
     ToolCallStarted,
     ToolOutputDelta,
@@ -36,10 +37,13 @@ from krelcode.core.messages import (
 from krelcode.core.textutil import truncate_middle
 from krelcode.contracts.governance import (
     AuditCorrelation,
+    GovernanceDecision,
     GovernanceRequest,
     PluginTrustContext,
     PromptReleaseIdentity,
     SandboxProfile,
+    SecurityDecision,
+    SecurityDecisionValue,
 )
 from krelcode.contracts.tool import (
     ToolContext,
@@ -401,13 +405,12 @@ class ToolBatchExecutor:
             ),
             governance_decision=governance_decision,
         )
-        intent = ToolIntent(
-            call=tool_call,
-            descriptor=descriptor,
-            parameters=prompt_spec.parameters,
-            context=execution_ctx,
-        )
         if not governance_decision.allowed:
+            await _emit_security_decision(
+                host,
+                tool_call,
+                governance_decision.security_decision,
+            )
             return ToolExecutionResult(
                 content=f"治理控制面拒绝工具执行: {governance_decision.reason}",
                 is_error=True,
@@ -417,10 +420,20 @@ class ToolBatchExecutor:
                     "runtime": runtime.value,
                     "error_kind": "governance_denied",
                     "governance_decision": governance_decision.decision_hash,
+                    "security_decision": (
+                        governance_decision.security_decision.decision_hash),
                 },
             )
         pre_hook = await host._before_tool_hook(tool_call)
         if pre_hook.blocked:
+            security_decision = _security_decision(
+                governance_decision,
+                tool_call,
+                decision=SecurityDecisionValue.DENY,
+                policy_id="pre-tool-hook",
+                reason=pre_hook.reason,
+            )
+            await _emit_security_decision(host, tool_call, security_decision)
             return ToolExecutionResult(
                 content=f"PreToolUse Hook 阻止执行: {pre_hook.reason}",
                 is_error=True,
@@ -430,9 +443,13 @@ class ToolBatchExecutor:
                     "source": descriptor.source.value,
                     "runtime": runtime.value,
                     "error_kind": "hook_blocked",
+                    "security_decision": security_decision.decision_hash,
                 },
             )
 
+        policy_id = "governance"
+        approval_id = ""
+        policy_reason = ""
         if deps.policy is not None:
             await execution_ctx.emit_progress("安全策略检查中")
             try:
@@ -441,6 +458,15 @@ class ToolBatchExecutor:
             except Exception as e:
                 await host._emit(ErrorOccurred(str(e), "policy.check"))
                 await host._emit(PermissionDenied(tool_call, str(e)))
+                security_decision = _security_decision(
+                    governance_decision,
+                    tool_call,
+                    decision=SecurityDecisionValue.DENY,
+                    policy_id="policy.check",
+                    reason=str(e),
+                )
+                await _emit_security_decision(
+                    host, tool_call, security_decision)
                 return ToolExecutionResult(
                     content=f"审批检查失败，已拒绝执行: {e}",
                     is_error=True,
@@ -449,11 +475,25 @@ class ToolBatchExecutor:
                         "source": descriptor.source.value,
                         "runtime": runtime.value,
                         "error_kind": "policy_exception",
+                        "security_decision": security_decision.decision_hash,
                     },
                 )
+            policy_id = policy_decision.policy_id
+            approval_id = policy_decision.approval_id
+            policy_reason = policy_decision.reason
             if not policy_decision.allowed:
                 await host._emit(PermissionDenied(
                     tool_call, policy_decision.reason))
+                security_decision = _security_decision(
+                    governance_decision,
+                    tool_call,
+                    decision=SecurityDecisionValue.DENY,
+                    policy_id=policy_id,
+                    approval_id=approval_id,
+                    reason=policy_reason,
+                )
+                await _emit_security_decision(
+                    host, tool_call, security_decision)
                 return ToolExecutionResult(
                     content=f"操作被安全策略拒绝: {policy_decision.reason}",
                     is_error=True,
@@ -462,11 +502,42 @@ class ToolBatchExecutor:
                         "source": descriptor.source.value,
                         "runtime": runtime.value,
                         "error_kind": "permission_denied",
+                        "security_decision": security_decision.decision_hash,
                     },
                 )
 
+        security_decision = _security_decision(
+            governance_decision,
+            tool_call,
+            decision=SecurityDecisionValue.ALLOW,
+            policy_id=policy_id,
+            approval_id=approval_id,
+            reason=policy_reason or governance_decision.reason,
+        )
+        governance_decision = replace(
+            governance_decision,
+            security_decision=security_decision,
+        )
+        execution_ctx = replace(
+            execution_ctx,
+            governance_decision=governance_decision,
+        )
+        intent = ToolIntent(
+            call=tool_call,
+            descriptor=descriptor,
+            parameters=prompt_spec.parameters,
+            context=execution_ctx,
+        )
+        await _emit_security_decision(host, tool_call, security_decision)
         await execution_ctx.emit_progress("开始执行")
         result = await deps.execution_runtime.execute(intent)
+        result = replace(
+            result,
+            diagnostics={
+                **dict(result.diagnostics),
+                "security_decision": security_decision.decision_hash,
+            },
+        )
         if result.diagnostics.get("error_kind") == "runtime_exception":
             await host._emit(ErrorOccurred(
                 result.content.removeprefix("工具执行出错: "),
@@ -484,6 +555,47 @@ class ToolBatchExecutor:
                 content=(result.content + "\n\n" + blocks).strip(),
             )
         return result
+
+
+def _security_decision(
+    governance: GovernanceDecision,
+    tool_call: ToolCall,
+    *,
+    decision: SecurityDecisionValue,
+    policy_id: str,
+    approval_id: str = "",
+    reason: str = "",
+) -> SecurityDecision:
+    return SecurityDecision(
+        policy_id=policy_id,
+        policy_version=governance.policy_version.version,
+        resource=f"tool:{tool_call.name}",
+        action="tool.execute",
+        decision=decision,
+        reason=reason,
+        approval_id=approval_id,
+        sandbox_profile=governance.sandbox_profile,
+        trace_id=(
+            governance.audit.trace_id
+            or governance.audit.correlation_id
+        ),
+        evidence={
+            "governance_decision_hash": governance.decision_hash,
+            "policy_organization": governance.policy_version.organization,
+            "policy_digest": governance.policy_version.digest,
+        },
+    )
+
+
+async def _emit_security_decision(
+    host: ToolTurnHostPort,
+    tool_call: ToolCall,
+    decision: SecurityDecision,
+) -> None:
+    await host._emit(SecurityDecisionRecorded(
+        tool_call_id=tool_call.id,
+        security=decision.to_dict(),
+    ))
 
 
 def _governance_request(

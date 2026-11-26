@@ -128,6 +128,14 @@ class PermissionDenied(AgentEvent):
 
 
 @dataclass(frozen=True)
+class SecurityDecisionRecorded(AgentEvent):
+    """Content-free unified security evidence for audit and trace joins."""
+
+    tool_call_id: str
+    security: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ContextMicrocompacted(AgentEvent):
     """Old tool results were deterministically summarized/referenced.
 

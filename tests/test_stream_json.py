@@ -30,6 +30,7 @@ from krelcode.core.events import (
     RunCancelled,
     RunFinished,
     RunStarted,
+    SecurityDecisionRecorded,
     StepStarted,
     SubagentFinished,
     SubagentSpawned,
@@ -238,6 +239,29 @@ def test_terminal_fields_cannot_be_overwritten_by_extensions():
     assert manual["turn_id"] == "turn-9"
     assert manual["session_id"] == "session-1"
     assert manual["sequence"] == 10
+
+
+def test_encoder_emits_unified_security_decision():
+    encoder = StreamJsonEncoder(metadata())
+    payload = encoder.encode(envelope(SecurityDecisionRecorded(
+        "call-1",
+        {
+            "policy_id": "managed",
+            "policy_version": "1",
+            "resource": "tool:read_file",
+            "action": "tool.execute",
+            "decision": "allow",
+            "reason": "",
+            "approval_id": "",
+            "sandbox_profile": {"enabled": True},
+            "trace_id": "trace-1",
+        },
+    )))
+
+    assert payload["type"] == "permission"
+    assert payload["subtype"] == "security_decision"
+    assert payload["tool_call_id"] == "call-1"
+    assert payload["security"]["trace_id"] == "trace-1"
 
 
 def test_parse_string_and_anthropic_style_content_blocks():

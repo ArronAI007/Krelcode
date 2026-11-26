@@ -32,6 +32,7 @@ from ..core.events import (
     RunCancelled,
     RunFinished,
     RunStarted,
+    SecurityDecisionRecorded,
     ShellJobFinished,
     ShellJobOutput,
     ShellJobStarted,
@@ -224,6 +225,13 @@ class StreamJsonEncoder:
                 "subtype": "denied",
                 "tool_call": _tool_call_payload(event.tool_call),
                 "reason": event.reason,
+            }
+        elif isinstance(event, SecurityDecisionRecorded):
+            payload = {
+                "type": "permission",
+                "subtype": "security_decision",
+                "tool_call_id": event.tool_call_id,
+                "security": dict(event.security),
             }
         elif isinstance(event, ContextAssembled):
             payload = {

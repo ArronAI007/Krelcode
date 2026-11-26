@@ -32,13 +32,20 @@ from .rules import AllowRules, RuleDecision, RuleMatch
 class Decision:
     allowed: bool
     reason: str = ""
+    policy_id: str = "runtime-approval"
+    approval_id: str = ""
 
 
 ALLOW = Decision(True)
 
 
-def deny(reason: str) -> Decision:
-    return Decision(False, reason)
+def deny(
+    reason: str,
+    *,
+    policy_id: str = "runtime-approval",
+    approval_id: str = "",
+) -> Decision:
+    return Decision(False, reason, policy_id, approval_id)
 
 
 class ApprovalPolicy(Protocol):
@@ -240,7 +247,8 @@ class SandboxPolicy:
     ) -> Decision:
         # 1) 旧版持久化规则仅在没有显式 ask/更高优先级规则时生效。
         if not ignore_rules and command is not None and self.rules.matches(command):
-            return Decision(True, f"命中已存 allow 规则: {reason}")
+            return Decision(
+                True, f"命中已存 allow 规则: {reason}", "stored-allow-rule")
         # 2) 全自动批准模式
         runtime_auto = bool(
             ctx is not None
@@ -253,22 +261,37 @@ class SandboxPolicy:
         if not force_approval and not auto_disabled and (
                 self.auto_approve or runtime_auto):
             source = "运行时权限模式" if runtime_auto else "--auto-approve"
-            return Decision(True, f"{source}自动批准: {reason}")
+            return Decision(
+                True, f"{source}自动批准: {reason}", "auto-approval")
         # 3) 交互审批
+        approval_id = str(tool_call.id or "").strip()
         if self.bus is not None:
-            await self.bus.emit(ApprovalRequested(tool_call, reason))
+            await self.bus.emit(ApprovalRequested(
+                tool_call, reason, request_id=approval_id))
         if self.approver is None:
-            return deny(f"非交互模式且无审批器，已拒绝（{reason}）")
+            return deny(
+                f"非交互模式且无审批器，已拒绝（{reason}）",
+                policy_id="interactive-approval",
+                approval_id=approval_id,
+            )
         answer = self.approver(tool_call, reason)
         if inspect.isawaitable(answer):
             answer = await answer
         if answer == "always":
             if command is not None:
                 self.rules.add(command)
-            return Decision(True, f"用户批准（always）: {reason}")
+            return Decision(
+                True, f"用户批准（always）: {reason}",
+                "interactive-approval", approval_id)
         if answer == "yes":
-            return Decision(True, f"用户批准: {reason}")
-        return deny(f"用户拒绝（{reason}）")
+            return Decision(
+                True, f"用户批准: {reason}",
+                "interactive-approval", approval_id)
+        return deny(
+            f"用户拒绝（{reason}）",
+            policy_id="interactive-approval",
+            approval_id=approval_id,
+        )
 
 
 class EnterpriseGuardPolicy:

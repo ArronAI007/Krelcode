@@ -36,6 +36,7 @@ from .events import (
     RunCancelled,
     RunFinished,
     RunStarted,
+    SecurityDecisionRecorded,
     ShellJobFinished,
     ShellJobOutput,
     ShellJobStarted,
@@ -90,6 +91,7 @@ SessionEventPayload: TypeAlias = (
     | HookTriggered
     | ApprovalRequested
     | PermissionDenied
+    | SecurityDecisionRecorded
     | ContextMicrocompacted
     | ContextCompressed
     | ContextCheckpointCreated
@@ -130,6 +132,7 @@ SESSION_EVENT_TYPE_TO_KIND: Mapping[type[AgentEvent], SessionEventKind] = {
     HookTriggered: SessionEventKind.HOOK,
     ApprovalRequested: SessionEventKind.PERMISSION,
     PermissionDenied: SessionEventKind.PERMISSION,
+    SecurityDecisionRecorded: SessionEventKind.PERMISSION,
     ContextMicrocompacted: SessionEventKind.CONTEXT,
     ContextCompressed: SessionEventKind.CONTEXT,
     ContextCheckpointCreated: SessionEventKind.CONTEXT,

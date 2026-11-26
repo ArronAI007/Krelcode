@@ -116,9 +116,10 @@ def test_full_tool_call_cycle():
     # 第一轮 assistant 只有 tool_calls（无文本 delta），第二轮有文本 delta
     assert rec.types() == [
         "RunStarted", "QueryPhaseChanged", "StepStarted",
-        "QueryPhaseChanged", "ContextAssembled", "LLMResponseReceived",
-        "ToolCallStarted", "ToolProgress", "ToolProgress",
-        "ToolCallCompleted", "StepStarted", "QueryPhaseChanged",
+            "QueryPhaseChanged", "ContextAssembled", "LLMResponseReceived",
+            "ToolCallStarted", "ToolProgress", "SecurityDecisionRecorded",
+            "ToolProgress",
+            "ToolCallCompleted", "StepStarted", "QueryPhaseChanged",
         "ContextAssembled", "LLMStreamDelta", "LLMResponseReceived",
         "RunFinished",
     ]

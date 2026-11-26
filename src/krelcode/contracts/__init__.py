@@ -40,6 +40,8 @@ from .governance import (
     PolicyVersion,
     PromptReleaseIdentity,
     SandboxProfile,
+    SecurityDecision,
+    SecurityDecisionValue,
 )
 from .runtime import PermissionMode, RunMode, RuntimeSnapshot
 from .safety import SandboxPort
@@ -120,6 +122,8 @@ __all__ = [
     "RollbackManifest",
     "SandboxPort",
     "SandboxProfile",
+    "SecurityDecision",
+    "SecurityDecisionValue",
     "ShellJobManagerPort",
     "ShellJobPagePort",
     "ShellJobPort",

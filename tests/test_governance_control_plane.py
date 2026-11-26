@@ -19,14 +19,17 @@ from krelcode.contracts.governance import (
     PolicyVersion,
     PromptReleaseIdentity,
     SandboxProfile,
+    SecurityDecisionValue,
 )
 from krelcode.contracts.runtime import PermissionMode, RuntimeSnapshot
 from krelcode.core.errors import ConfigError
 from krelcode.core.messages import Message, ToolCall
+from krelcode.core.events import SecurityDecisionRecorded
 from krelcode.llm.providers.mock import MockProvider
 from krelcode.plugins import PluginManager, PluginSignatureError
 from krelcode.safety.control_plane import DefaultControlPlane
 from krelcode.safety.policy import AllowAllPolicy
+from krelcode.safety.policy import SandboxPolicy
 from krelcode.tools.base import ToolContext, ToolResult
 from krelcode.tools.registry import ToolRegistry
 
@@ -180,6 +183,10 @@ def test_control_plane_allows_and_normalizes_all_inputs() -> None:
     assert decision.policy_version.organization == "acme"
     assert decision.policy_version.version == "2026.11"
     assert decision.audit.correlation_id == "session-1:turn-1:request-1"
+    assert decision.security_decision.decision is SecurityDecisionValue.ALLOW
+    assert decision.security_decision.policy_id == "acme@2026.11"
+    assert decision.security_decision.trace_id == (
+        "session-1:turn-1:request-1")
     assert decision.decision_hash
 
 
@@ -237,10 +244,29 @@ def test_control_plane_combines_all_governance_failures() -> None:
 def test_agent_tool_consumes_control_plane_decision(tmp_path: Path) -> None:
     tool = CaptureGovernanceTool()
     loop = make_loop(tmp_path, tool)
+    events = []
+    loop.bus.subscribe(events.append)
 
     assert asyncio.run(loop.run("capture")) == "done"
     assert tool.decision is not None
     assert tool.decision.allowed
+    security = next(
+        event for event in events
+        if isinstance(event, SecurityDecisionRecorded))
+    assert security.tool_call_id == "call-1"
+    for key in (
+        "policy_id",
+        "policy_version",
+        "resource",
+        "action",
+        "decision",
+        "reason",
+        "approval_id",
+        "sandbox_profile",
+        "trace_id",
+    ):
+        assert key in security.security
+    assert security.security["decision"] == "allow"
     assert loop.history[3].content == "captured"
 
 
@@ -310,3 +336,22 @@ def test_plugin_install_execution_point_consumes_decision(tmp_path: Path) -> Non
     with pytest.raises(PluginSignatureError, match="治理控制面"):
         asyncio.run(manager.install(
             plugin, governance_decision=denied))
+
+
+def test_approval_policy_returns_correlated_approval_id() -> None:
+    async def approve(tool_call, reason):
+        del tool_call, reason
+        return "yes"
+
+    call = ToolCall("approval-1", "unknown_tool", {})
+    decision = asyncio.run(SandboxPolicy(
+        approver=approve,
+        workspace_root=Path("."),
+    ).check(
+        call,
+        ToolContext(workspace_root=Path("."), sandbox_enabled=False),
+    ))
+
+    assert decision.allowed
+    assert decision.policy_id == "interactive-approval"
+    assert decision.approval_id == "approval-1"

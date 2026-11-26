@@ -22,6 +22,8 @@ from ..contracts.governance import (
     GovernanceDecision,
     GovernanceRequest,
     PolicyVersion,
+    SecurityDecision,
+    SecurityDecisionValue,
 )
 from ..contracts.runtime import PermissionMode
 
@@ -136,6 +138,23 @@ class DefaultControlPlane:
         audit = _normalized_audit(request.audit)
         policy_version = _policy_version(policy, request.policy_version)
         denied_reason = "; ".join(dict.fromkeys(denials))
+        security_decision = SecurityDecision(
+            policy_id=policy_version.label,
+            policy_version=policy_version.version,
+            resource=request.resource or request.tool_name,
+            action=request.action,
+            decision=(
+                SecurityDecisionValue.DENY
+                if denials else SecurityDecisionValue.ALLOW
+            ),
+            reason=denied_reason,
+            sandbox_profile=sandbox,
+            trace_id=audit.trace_id or audit.correlation_id,
+            evidence={
+                "checked": tuple(checked),
+                "policy_digest": policy_version.digest,
+            },
+        )
         return GovernanceDecision(
             allowed=not denials,
             reason=denied_reason,
@@ -156,6 +175,7 @@ class DefaultControlPlane:
                 "resource": request.resource,
                 "action": request.action,
             },
+            security_decision=security_decision,
         )
 
 

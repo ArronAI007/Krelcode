@@ -12,6 +12,7 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping, Optional, Protocol, Tuple
@@ -171,6 +172,65 @@ class PromptReleaseIdentity:
         object.__setattr__(self, "required", bool(self.required))
 
 
+class SecurityDecisionValue(str, Enum):
+    ALLOW = "allow"
+    DENY = "deny"
+    REQUIRE_APPROVAL = "require_approval"
+
+
+@dataclass(frozen=True)
+class SecurityDecision:
+    """One auditable security decision shared across enforcement points."""
+
+    policy_id: str = "local"
+    policy_version: str = "0"
+    resource: str = ""
+    action: str = ""
+    decision: SecurityDecisionValue | str = SecurityDecisionValue.ALLOW
+    reason: str = ""
+    approval_id: str = ""
+    sandbox_profile: SandboxProfile = field(default_factory=SandboxProfile)
+    trace_id: str = ""
+    evidence: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for name in (
+            "policy_id", "policy_version", "resource", "action", "reason",
+            "approval_id", "trace_id",
+        ):
+            object.__setattr__(
+                self, name, str(getattr(self, name) or "").strip())
+        object.__setattr__(
+            self, "decision", SecurityDecisionValue(self.decision))
+        object.__setattr__(
+            self, "evidence", MappingProxyType(dict(self.evidence)))
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "policy_id": self.policy_id,
+            "policy_version": self.policy_version,
+            "resource": self.resource,
+            "action": self.action,
+            "decision": SecurityDecisionValue(self.decision).value,
+            "reason": self.reason,
+            "approval_id": self.approval_id,
+            "sandbox_profile": {
+                "name": self.sandbox_profile.name,
+                "backend": self.sandbox_profile.backend,
+                "enabled": self.sandbox_profile.enabled,
+                "network": self.sandbox_profile.network,
+                "permission_profile": self.sandbox_profile.permission_profile,
+                "write_scope": self.sandbox_profile.write_scope,
+            },
+            "trace_id": self.trace_id,
+            "evidence": dict(self.evidence),
+        }
+
+    @property
+    def decision_hash(self) -> str:
+        return _stable_hash(self.to_dict())
+
+
 @dataclass(frozen=True)
 class GovernanceRequest:
     """All inputs required for one deterministic governance evaluation."""
@@ -235,6 +295,8 @@ class GovernanceDecision:
     audit: AuditCorrelation = field(default_factory=AuditCorrelation)
     constraints: Tuple[str, ...] = ()
     evidence: Mapping[str, object] = field(default_factory=dict)
+    security_decision: SecurityDecision = field(
+        default_factory=SecurityDecision)
     decided_at: float = field(default_factory=time.time)
 
     def __post_init__(self) -> None:
@@ -259,6 +321,24 @@ class GovernanceDecision:
         )
         object.__setattr__(
             self, "evidence", MappingProxyType(dict(self.evidence)))
+        if not isinstance(self.security_decision, SecurityDecision) or (
+            self.security_decision == SecurityDecision()
+        ):
+            object.__setattr__(
+                self,
+                "security_decision",
+                SecurityDecision(
+                    policy_id=self.policy_version.label,
+                    policy_version=self.policy_version.version,
+                    reason=self.reason,
+                    decision=(
+                        SecurityDecisionValue.ALLOW
+                        if self.allowed else SecurityDecisionValue.DENY
+                    ),
+                    sandbox_profile=self.sandbox_profile,
+                    trace_id=self.audit.trace_id or self.audit.correlation_id,
+                ),
+            )
 
     @property
     def decision_hash(self) -> str:
@@ -316,11 +396,9 @@ class GovernanceDecision:
             ],
             "audit": self.audit.as_dict(),
             "constraints": list(self.constraints),
+            "security_decision_hash": self.security_decision.decision_hash,
         }
-        encoded = json.dumps(
-            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
-        ).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()
+        return _stable_hash(payload)
 
     def artifact(self, artifact_id: str) -> Optional[ArtifactIdentity]:
         normalized = str(artifact_id or "").strip()
@@ -345,6 +423,14 @@ class ControlPlanePort(Protocol):
     async def evaluate(self, request: GovernanceRequest) -> GovernanceDecision: ...
 
 
+def _stable_hash(value: object) -> str:
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 __all__ = [
     "ArtifactIdentity",
     "AuditCorrelation",
@@ -355,4 +441,6 @@ __all__ = [
     "PolicyVersion",
     "PromptReleaseIdentity",
     "SandboxProfile",
+    "SecurityDecision",
+    "SecurityDecisionValue",
 ]

@@ -30,6 +30,7 @@ from krelcode.core.events import (
     RunCancelled,
     RunFinished,
     RunStarted,
+    SecurityDecisionRecorded,
     ShellJobFinished,
     ShellJobOutput,
     ShellJobStarted,
@@ -101,6 +102,20 @@ def all_encoder_events() -> list[object]:
         ToolCallCompleted(call, "content", False, {"lines": 1}),
         ApprovalRequested(call, "need approval", "approval-1"),
         PermissionDenied(call, "denied"),
+        SecurityDecisionRecorded(
+            "call-1",
+            {
+                "policy_id": "local",
+                "policy_version": "1",
+                "resource": "tool:read_file",
+                "action": "tool.execute",
+                "decision": "allow",
+                "reason": "",
+                "approval_id": "",
+                "sandbox_profile": {},
+                "trace_id": "trace-1",
+            },
+        ),
         ContextAssembled(ContextUsageSnapshot(
             turn_id="turn-1", step=1, estimated_input_tokens=80)),
         ContextDropped(("workspace:big",), "budget"),
