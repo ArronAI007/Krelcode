@@ -89,6 +89,7 @@ async def run_repl(
     history_path: Optional[Path] = None,
     persist_history: Optional[bool] = None,
     tui_mouse: bool = False,
+    ui_mode: str = "native",
 ) -> int:
     """Compatibility entrypoint for the extracted conversation host."""
     from .conversation_host import ConversationHost
@@ -117,6 +118,7 @@ async def run_repl(
         history_path=history_path,
         persist_history=persist_history,
         tui_mouse=tui_mouse,
+        ui_mode=ui_mode,
     )
     return await host.run()
 

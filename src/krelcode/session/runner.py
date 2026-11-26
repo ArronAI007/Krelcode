@@ -233,6 +233,7 @@ async def run_session(
             approval_broker=approval_broker,
             input_broker=user_input_broker,
             tui_mouse=bool(getattr(args, "tui_mouse", False)),
+            ui_mode=str(getattr(args, "ui_mode", "native") or "native"),
         )
 
     try:

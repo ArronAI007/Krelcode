@@ -71,6 +71,7 @@ krelcode [子命令] [选项]
 | `--sandbox-backend auto\|static\|seatbelt\|bubblewrap` | auto | 运行时隔离后端；显式后端不可用则启动失败 |
 | `--sandbox-network` | — | 允许 Sandbox 子进程访问网络（默认关闭） |
 | `--no-sandbox` | — | 同时关闭审批策略与运行时 Sandbox（AllowAll，自担风险） |
+| `--ui native\|fullscreen` | native | 终端 UI 后端；fullscreen 使用 Alt Screen 和应用内滚动/选择/复制 |
 | `--daemon` | — | 启用持久化 daemon；后台 Job/子代理在 REPL 退出后继续运行 |
 | `--no-daemon` | — | 禁用 daemon，使用兼容的进程内 Job/SubagentManager |
 | `--daemon-idle-timeout <秒>` | 配置/`1800` | daemon 无活动任务时的退出秒数；`0` 表示常驻 |
@@ -354,6 +355,7 @@ haiku = "anthropic/claude-haiku-4-5"
 [ui]
 diff_review = true                  # REPL 的 write_file/edit_file 写前显示 unified diff
 mouse = false                       # 默认保留原生复制和滚轮；true 启用点击交互
+mode = "native"                      # native / fullscreen（应用管理视口与剪贴板）
 
 [sandbox]
 backend = "auto"                     # macOS seatbelt / Linux bubblewrap / 其他平台 static

@@ -109,7 +109,8 @@ class TerminalLineEditor:
                  panels: Optional[PanelController] = None,
                  on_diff_pager_change: Optional[Callable[[], None]] = None,
                  mouse_reporting: bool = False,
-                 on_mouse_click: Optional[Callable[[MouseEvent], bool]] = None) -> None:
+                 on_mouse_click: Optional[Callable[[MouseEvent], bool]] = None,
+                 on_viewport_key: Optional[Callable[[str], bool]] = None) -> None:
         self._prompt = prompt
         self._suggest = suggest
         self._color = color
@@ -117,6 +118,7 @@ class TerminalLineEditor:
         self._panels = panels
         self._mouse_reporting = mouse_reporting
         self._on_mouse_click = on_mouse_click
+        self._on_viewport_key = on_viewport_key
         self._diff_pager: Optional[DiffPager] = None
         self._on_diff_pager_change = on_diff_pager_change
         self._pending_input = bytearray()
@@ -245,6 +247,21 @@ class TerminalLineEditor:
                             )
                             if not handled:
                                 self._panels.handle_mouse(sequence)
+                            self._refresh(prompt_text(), buffer, search=search)
+                            continue
+                        viewport_key = {
+                            b"[5~": "pageup",
+                            b"[6~": "pagedown",
+                            b"[H": "home",
+                            b"OH": "home",
+                            b"[F": "end",
+                            b"OF": "end",
+                        }.get(sequence)
+                        if (
+                            viewport_key is not None
+                            and self._on_viewport_key is not None
+                            and self._on_viewport_key(viewport_key)
+                        ):
                             self._refresh(prompt_text(), buffer, search=search)
                             continue
                         panel_key = self._panels.key_from_escape(sequence)

@@ -175,6 +175,16 @@ async def build_application_context(
             if isinstance(ui_config, dict)
             else False
         )
+    if getattr(args, "ui_mode", None) is None:
+        ui_config = config.get("ui")
+        args.ui_mode = (
+            str(ui_config.get("mode", "native"))
+            if isinstance(ui_config, dict)
+            else "native"
+        )
+    if args.ui_mode not in {"native", "fullscreen"}:
+        raise BuildStageError(
+            f"未知 [ui].mode: {args.ui_mode!r}；可用: native, fullscreen")
 
     return ApplicationBuildContext(
         args=args,

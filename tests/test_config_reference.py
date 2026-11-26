@@ -28,6 +28,27 @@ def test_tui_mouse_flags_are_explicit_and_default_to_config_resolution():
     assert parser.parse_args(["--no-tui-mouse"]).tui_mouse is False
 
 
+def test_ui_mode_cli_and_config_resolution(tmp_path: Path):
+    from krelcode.app import build_parser
+    from krelcode.bootstrap.application_stages.context import (
+        build_application_context,
+    )
+
+    parser = build_parser()
+    assert parser.parse_args([]).ui_mode is None
+    assert parser.parse_args(["--ui", "fullscreen"]).ui_mode == "fullscreen"
+    config_path = tmp_path / "fullscreen.toml"
+    config_path.write_text("[ui]\nmode = \"fullscreen\"\n", encoding="utf-8")
+    args = parser.parse_args([
+        "--mock",
+        "--workspace", str(tmp_path),
+        "--config", str(config_path),
+        "--no-session",
+    ])
+    context = asyncio.run(build_application_context(args))
+    assert context.args.ui_mode == "fullscreen"
+
+
 def test_tui_mouse_defaults_to_native_copy_and_scroll(tmp_path: Path):
     from krelcode.app import build_parser
     from krelcode.bootstrap.application_stages.context import (

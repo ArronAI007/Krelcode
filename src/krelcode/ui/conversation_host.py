@@ -101,6 +101,7 @@ class ConversationHost:
         history_path: Optional[Path] = None,
         persist_history: Optional[bool] = None,
         tui_mouse: bool = False,
+        ui_mode: str = "native",
     ) -> None:
         if (input_broker is not None
                 and loop.services.core.user_input_port is None):
@@ -168,6 +169,7 @@ class ConversationHost:
             history_path=history_path,
             persist_history=persist_history,
             tui_mouse=tui_mouse,
+            ui_mode=ui_mode,
         )
         self.runner = ReplSessionRunner(
             self.controller,
@@ -219,6 +221,7 @@ class ConversationHost:
         skills_reload = self.skills_reload
         approval_broker = self.approval_broker
         input_broker = self.input_broker
+        presenter.start_alt_screen()
         presenter.show_banner()
         raw_inbox: asyncio.Queue[RawInput] = asyncio.Queue()
         action_queue: asyncio.Queue[QueuedAction] = asyncio.Queue()
@@ -745,6 +748,7 @@ class ConversationHost:
                 input_broker.cancel_all()
             state.finish_turn()
             prompt.finish()
+            presenter.stop_alt_screen()
 
 
 __all__ = ["ConversationHost"]

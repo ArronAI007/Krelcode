@@ -165,6 +165,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-tui-mouse", dest="tui_mouse", action="store_false",
         help="关闭 TUI 鼠标上报，恢复原生拖拽复制和滚轮（默认）")
     p.add_argument(
+        "--ui", dest="ui_mode", choices=("native", "fullscreen"), default=None,
+        help="终端 UI 后端：native（原生 scrollback）或 fullscreen（应用管理视口）")
+    p.add_argument(
         "--experiment-profile", default=None,
         help="本轮消融实验 profile JSON；在启动时校验并冻结，不支持 turn 中热改")
     p.add_argument("--memory-mode", choices=("off", "suggest", "auto"), default=None,

@@ -12,6 +12,7 @@ import os
 import pathlib
 import shlex
 import shutil
+import sys
 import threading
 import time
 from typing import Awaitable, Callable, Optional, cast
@@ -33,6 +34,7 @@ from ..session.memory_models import MemoryStoreSnapshot
 from ..session.repl_session import ReplSessionRunner
 from ..session.state import SessionViewState
 from .approval import ApprovalRequest
+from .alt_screen import AltScreenPrompt, AltScreenSurface
 from .diff_review import (
     DiffPager,
     DiffReview,
@@ -69,6 +71,7 @@ class TerminalPresenter:
         history_path: Optional[pathlib.Path] = None,
         persist_history: Optional[bool] = None,
         tui_mouse: bool = False,
+        ui_mode: str = "native",
     ) -> None:
         self.loop = loop
         self.tool_names = tool_names
@@ -78,16 +81,42 @@ class TerminalPresenter:
         self.tui_mouse = tui_mouse
         self.workspace_root = loop.tool_context.workspace_root
         self.use_color = auto_color()
-        self.prompt = PromptWriter(color=self.use_color)
+        self.ui_mode = str(ui_mode or "native").lower()
+        if self.ui_mode not in {"native", "fullscreen"}:
+            raise ValueError(f"未知 UI 模式: {ui_mode}")
+        if self.ui_mode == "fullscreen" and not sys.stdout.isatty():
+            self.ui_mode = "native"
+        self.alt_screen: Optional[AltScreenSurface] = (
+            AltScreenSurface(color=self.use_color)
+            if self.ui_mode == "fullscreen" else None
+        )
+        self.prompt: PromptWriter = (
+            AltScreenPrompt(self.alt_screen, color=self.use_color)
+            if self.alt_screen is not None
+            else PromptWriter(color=self.use_color)
+        )
         self._output_row_sequence = 0
         self._tool_click_anchors: dict[int, int] = {}
         self._thinking_click_anchor: Optional[int] = None
         self.renderer = StreamRenderer(
-            write=self._prompt_write,
+            write=(
+                self.alt_screen.write_transcript
+                if self.alt_screen is not None
+                else self._prompt_write
+            ),
             redactor=redactor,
-            on_tool_line=self._register_tool_click_anchor,
-            on_thinking_line=self._register_thinking_click_anchor,
-            tool_lines_clickable=self.tui_mouse,
+            on_tool_line=(
+                self.alt_screen.mark_tool
+                if self.alt_screen is not None
+                else self._register_tool_click_anchor
+            ),
+            on_thinking_line=(
+                self.alt_screen.mark_thinking
+                if self.alt_screen is not None
+                else self._register_thinking_click_anchor
+            ),
+            tool_lines_clickable=(
+                self.alt_screen is not None or self.tui_mouse),
         )
         self.input_ready = threading.Event()
 
@@ -166,8 +195,13 @@ class TerminalPresenter:
             panels=self.panel_controller,
             on_diff_pager_change=lambda: self.refresh_panels(
                 queue_size=len(runner.queue)),
-            mouse_reporting=self.tui_mouse,
+            mouse_reporting=(
+                self.alt_screen is not None or self.tui_mouse),
             on_mouse_click=self.handle_transcript_mouse,
+            on_viewport_key=(
+                self.alt_screen.handle_viewport_key
+                if self.alt_screen is not None else None
+            ),
         )
 
     def _register_tool_click_anchor(self, index: int) -> None:
@@ -177,6 +211,12 @@ class TerminalPresenter:
         self._thinking_click_anchor = self._output_row_sequence
 
     def handle_transcript_mouse(self, event: MouseEvent) -> bool:
+        alt_screen = cast(
+            Optional[AltScreenSurface],
+            getattr(self, "alt_screen", None),
+        )
+        if alt_screen is not None:
+            return alt_screen.handle_mouse(event)
         if not event.is_left_click:
             return False
         origin = self.panel_controller.cursor_origin_row
@@ -203,6 +243,23 @@ class TerminalPresenter:
                 if handled:
                     self.prompt.resume_or_show(self.prompt_text)
                 return handled
+        return False
+
+    def start_alt_screen(self) -> None:
+        if self.alt_screen is None:
+            return
+        self.alt_screen.set_click_handler(self._handle_alt_click)
+        self.alt_screen.start()
+
+    def stop_alt_screen(self) -> None:
+        if self.alt_screen is not None:
+            self.alt_screen.stop()
+
+    def _handle_alt_click(self, kind: str, value: str) -> bool:
+        if kind == "thinking":
+            return self.renderer.expand_thinking()
+        if kind == "tool":
+            return self.renderer.expand_tool_output(value)
         return False
 
     def show_banner(self) -> None:
