@@ -24,6 +24,17 @@ from krelcode.agent.prompts import (
 )
 from krelcode.agent.turn.loop import AgentLoop
 from krelcode.agent.usage import UsageTracker
+from krelcode.contracts.application import RiskLevel
+from krelcode.contracts.change_admission import (
+    AdmissionGatePort,
+    ChangeApproval,
+    ChangeCandidate,
+    ChangeEvidence,
+    ChangeType,
+    EvaluationCheck,
+    EvaluationReport,
+    RollbackManifest,
+)
 from krelcode.contracts.tool import Tool
 from krelcode.core.errors import ConfigError
 from krelcode.core.messages import Message
@@ -32,6 +43,7 @@ from krelcode.enterprise.policy import EnterprisePolicy
 from krelcode.llm.base import LLMProvider
 from krelcode.llm.registry import create_provider, resolve_settings
 from krelcode.llm.retry import RetryingProvider, RetryPolicy
+from krelcode.safety.admission import DefaultAdmissionGate
 
 from ...agent.prompt.prompt_release import ModelProfileCalibration
 from ...core.hooks import HookPort
@@ -62,6 +74,7 @@ def build_model_switcher(
     subagents: Optional[SubagentManagerPort] = None,
     redactor: Optional[SecretRedactor] = None,
     enterprise_policy: Optional[EnterprisePolicy] = None,
+    admission_gate: Optional[AdmissionGatePort] = None,
 ) -> Callable[[Optional[str]], str]:
     """/model 热切换：返回 callable(new_spec|None) -> 结果描述文本。"""
 
@@ -122,6 +135,96 @@ def build_model_switcher(
             )
         except ConfigError as exc:
             return f"切换失败: {exc}"
+        before = {
+            "provider": current_base(),
+            "model": str(getattr(loop.llm, "model", "") or ""),
+            "prompt_profile": loop.prompt_profile_name,
+            "prompt_release_id": getattr(
+                loop.prompt_profile_resolution, "release_id", ""),
+        }
+        after = {
+            "provider": str(provider.name or ""),
+            "model": str(getattr(inner, "model", "") or ""),
+            "prompt_profile": profile_resolution.name,
+            "prompt_release_id": profile_resolution.release_id,
+        }
+        risk = (
+            RiskLevel.MEDIUM
+            if profile_resolution.calibrated else RiskLevel.HIGH
+        )
+        candidate = ChangeCandidate(
+            change_type=ChangeType.MODEL_PROFILE,
+            target=f"{after['provider']}/{after['model']}",
+            before=before,
+            after=after,
+            risk=risk,
+            affected_artifacts=(
+                {"kind": "model_profile", "role": "provider"},
+                {"kind": "prompt_release", "id": profile_resolution.release_id},
+            ),
+            evidence=(
+                ChangeEvidence(
+                    kind="benchmark_calibration",
+                    source="prompt-release-registry",
+                    digest=profile_resolution.calibration_hash,
+                    summary=profile_resolution.calibration_reason,
+                    passed=True,
+                    metadata={"status": profile_resolution.calibration_status},
+                ),
+            ),
+            metadata={"entrypoint": "/model", "explicit_user_switch": True},
+        )
+        evaluation = EvaluationReport.from_checks(
+            candidate.candidate_id,
+            [
+                EvaluationCheck(
+                    name="provider_policy",
+                    passed=True,
+                    reason="enterprise provider policy accepted",
+                    score=1.0,
+                ),
+                EvaluationCheck(
+                    name="prompt_profile_resolution",
+                    passed=True,
+                    reason=profile_resolution.matched_by,
+                    score=1.0,
+                ),
+                EvaluationCheck(
+                    name="behavior_calibration",
+                    passed=profile_resolution.calibrated,
+                    reason=profile_resolution.calibration_reason,
+                    required=False,
+                    score=1.0 if profile_resolution.calibrated else 0.0,
+                ),
+            ],
+        )
+        admission = (admission_gate or DefaultAdmissionGate()).admit(
+            candidate,
+            evaluation=evaluation,
+            approval=ChangeApproval(
+                approved=True,
+                actor="session-user",
+                reason="用户显式执行 /model 热切换",
+                scope="model-profile",
+                metadata={"target": candidate.target},
+            ),
+            rollback=RollbackManifest(
+                candidate_id=candidate.candidate_id,
+                snapshot=before,
+                instructions="通过 /model 恢复到 before 中的 provider/model",
+            ),
+            policy_version=str(getattr(
+                enterprise_policy, "policy_version", "") or "local"),
+            audit={
+                "session_id": loop.tool_context.runtime.session_id or "",
+                "entrypoint": "/model",
+            },
+        )
+        if not admission.admitted:
+            return (
+                "切换失败: 模型变更未通过运行时准入"
+                f"（{admission.status.value}: {admission.reason}）"
+            )
         loop.set_llm(provider)
         if subagents is not None:
             subagents.llm = provider
@@ -163,7 +266,7 @@ def build_model_switcher(
             redactor.add(getattr(inner, "api_key", None))
         return (
             f"已切换: {provider.name} / {getattr(inner, 'model', '?')}"
-            f"{budget_note}{prompt_note}"
+            f"{budget_note}{prompt_note} · admission {admission.release_id}"
         )
 
     return switch

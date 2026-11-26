@@ -864,6 +864,17 @@ def test_tool_batch_executor_delegates_to_execution_runtime():
     assert "deps.execution_runtime.execute(intent)" in source
 
 
+def test_benchmark_port_boundary_has_no_agent_internals():
+    path = ROOT / "benchmarks" / "ports.py"
+    source = path.read_text(encoding="utf-8")
+
+    assert "krelcode.agent" not in source
+    assert "from ..agent" not in source
+    assert "EvaluationHarnessPort" in source
+    assert "TraceReplayPort" in source
+    assert "VersionManifestPort" in source
+
+
 def test_agent_loop_is_a_thin_turn_orchestration_facade():
     path = ROOT / "agent" / "turn" / "loop.py"
     source = path.read_text(encoding="utf-8")

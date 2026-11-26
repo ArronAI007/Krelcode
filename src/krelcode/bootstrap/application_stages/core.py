@@ -13,6 +13,15 @@ from ... import __version__
 from ...agent.turn.runtime import AgentRuntime
 from ...config import load_config_layers
 from ...contracts.runtime import RunMode
+from ...contracts.application import RiskLevel
+from ...contracts.change_admission import (
+    ChangeApproval,
+    ChangeCandidate,
+    ChangeType,
+    EvaluationCheck,
+    EvaluationReport,
+    RollbackManifest,
+)
 from ...core.errors import ConfigError
 from ...core.redact import SecretRedactor
 from ...enterprise.audit import AuditError, ComplianceAuditor
@@ -27,6 +36,7 @@ from ...session.memory import MemoryStore
 from ...skills import SkillManager
 from ...agent.turn.runtime_services import MCPServicePort, RuntimeServiceBinderPort
 from ...safety.sandbox import SandboxError
+from ...safety.admission import DefaultAdmissionGate
 from ...webui.service import WebUIOptions, WebUIService
 from ...session.elicitation_bridge import MCPElicitationBridge
 from ...agent.prompt.prompt_surface_contract import PromptSurfaceExecutor
@@ -142,6 +152,44 @@ async def build_core_services(
 
     async def reload_mcp() -> Sequence[str]:
         """Reload layered MCP config, synchronize servers, then refresh prompts."""
+        before = {"servers": supervisor.status()}
+        candidate = ChangeCandidate(
+            change_type=ChangeType.MCP_SERVER,
+            target="mcp:reload",
+            before=before,
+            after={"action": "reload_layered_config"},
+            risk=RiskLevel.HIGH,
+            affected_artifacts=(
+                {"kind": "mcp_catalog"},
+                {"kind": "tool_catalog"},
+            ),
+        )
+        admission = DefaultAdmissionGate().admit(
+            candidate,
+            evaluation=EvaluationReport.from_checks(
+                candidate.candidate_id,
+                [EvaluationCheck(
+                    name="mcp_reload_requested",
+                    passed=True,
+                    reason="explicit /mcp reload",
+                    score=1.0,
+                )],
+            ),
+            approval=ChangeApproval(
+                approved=True,
+                actor="session-user",
+                reason="用户显式执行 /mcp reload",
+                scope="mcp-catalog",
+            ),
+            rollback=RollbackManifest(
+                candidate_id=candidate.candidate_id,
+                snapshot=before,
+                instructions="恢复 before 中的 MCP 配置并重启服务器",
+            ),
+        )
+        if not admission.admitted:
+            context.note(f"[mcp] 热更新未准入: {admission.reason}")
+            return ()
         new_bundle = load_config_layers(
             workspace=Path(context.args.workspace),
             explicit_path=context.config_path,

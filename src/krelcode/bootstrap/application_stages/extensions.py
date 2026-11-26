@@ -13,6 +13,15 @@ from ...agent.turn.runtime_services import (
 )
 
 from ...agent.prompt.prompt_surface_catalog import refresh_prompt_surfaces
+from ...contracts.application import RiskLevel
+from ...contracts.change_admission import (
+    ChangeApproval,
+    ChangeCandidate,
+    ChangeType,
+    EvaluationCheck,
+    EvaluationReport,
+    RollbackManifest,
+)
 from ...extensions import ExtensionRecord, ExtensionRegistry, replace_runtime_extensions
 from ...plugins import PluginManager, PluginRecord
 from ...session.commands import (
@@ -24,8 +33,9 @@ from ...session.commands import (
 from ...session.commands.custom import CustomCommandManager
 from ...session.commands.ports import SkillReloadPort
 from ...session.restore import refresh_skill_system_prompt
-from ...skills import SkillManager, SkillReloadReport
+from ...skills import SkillIssue, SkillManager, SkillReloadReport
 from ...subagent.definition import AgentDefinitionManager
+from ...safety.admission import DefaultAdmissionGate
 from .context import ApplicationBuildContext
 from .context_services import ContextServices
 from .core import CoreServices
@@ -67,6 +77,7 @@ def build_extension_services(
     skill_manager = cast(SkillManager, loop.skill_manager)
     agent_definitions = cast(AgentDefinitionManager, loop.agent_definitions)
     extension_registry = cast(ExtensionRegistry, loop.extension_registry)
+    admission_gate = DefaultAdmissionGate()
 
     def refresh_extensions() -> Tuple[ExtensionRecord, ...]:
         result = replace_runtime_extensions(
@@ -97,6 +108,49 @@ def build_extension_services(
     refresh_extensions()
 
     def reload_skills() -> SkillReloadReport:
+        before = {
+            "skills": tuple(sorted(
+                (item.name, item.version, item.source)
+                for item in skill_manager.list())),
+        }
+        candidate = ChangeCandidate(
+            change_type=ChangeType.SKILL,
+            target="skills:reload",
+            before=before,
+            after={"action": "rescan", "enabled": skill_manager.enabled},
+            risk=RiskLevel.MEDIUM,
+            affected_artifacts=({"kind": "skill_catalog"},),
+        )
+        decision = admission_gate.admit(
+            candidate,
+            evaluation=EvaluationReport.from_checks(
+                candidate.candidate_id,
+                [EvaluationCheck(
+                    name="reload_requested",
+                    passed=True,
+                    reason="explicit /skills reload",
+                    score=1.0,
+                )],
+            ),
+            approval=ChangeApproval(
+                approved=True,
+                actor="session-user",
+                reason="用户显式执行 /skills reload",
+                scope="skill-catalog",
+            ),
+            rollback=RollbackManifest(
+                candidate_id=candidate.candidate_id,
+                snapshot=before,
+                instructions="重新加载 before 中的 Skill 来源",
+            ),
+        )
+        if not decision.admitted:
+            return SkillReloadReport(
+                tuple(skill_manager.list()),
+                (SkillIssue(
+                    skill_manager.workspace_root,
+                    f"Skill 热更新未准入: {decision.reason}"),),
+            )
         report = skill_manager.reload()
         refresh_skill_system_prompt(loop)
         sync_skill_commands(registry, loop.skill_manager)
@@ -117,6 +171,54 @@ def build_extension_services(
     )
 
     async def reload_plugins() -> Tuple[PluginRecord, ...]:
+        before_records = tuple(plugin_manager.records())
+        before = {
+            "plugins": tuple(sorted(
+                (item.name, item.version, item.status, item.trust_status)
+                for item in before_records)),
+        }
+        candidate = ChangeCandidate(
+            change_type=ChangeType.PLUGIN,
+            target="plugins:reload",
+            before=before,
+            after={"action": "rescan", "enabled": plugin_manager.enabled},
+            risk=(
+                RiskLevel.HIGH
+                if plugin_manager.trust_policy.mode in {"signed", "strict"}
+                else RiskLevel.MEDIUM
+            ),
+            affected_artifacts=(
+                {"kind": "plugin_catalog"},
+                {"kind": "tool_catalog"},
+            ),
+        )
+        decision = admission_gate.admit(
+            candidate,
+            evaluation=EvaluationReport.from_checks(
+                candidate.candidate_id,
+                [EvaluationCheck(
+                    name="plugin_reload_requested",
+                    passed=True,
+                    reason="explicit /plugins reload",
+                    score=1.0,
+                )],
+            ),
+            approval=ChangeApproval(
+                approved=True,
+                actor="session-user",
+                reason="用户显式执行 /plugins reload",
+                scope="plugin-catalog",
+            ),
+            rollback=RollbackManifest(
+                candidate_id=candidate.candidate_id,
+                snapshot=before,
+                instructions="恢复 before 中的 Plugin 状态并重新加载",
+            ),
+        )
+        if not decision.admitted:
+            context.note(
+                f"[plugins] 热更新未准入: {decision.reason}")
+            return before_records
         records = await base_plugin_reload()
         context_services.refresh_hooks()
         if not context.args.no_mcp:

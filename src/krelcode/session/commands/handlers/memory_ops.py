@@ -5,6 +5,16 @@ from __future__ import annotations
 import shlex
 from typing import Iterable, Optional, Sequence, cast
 
+from ....contracts.application import RiskLevel
+from ....contracts.change_admission import (
+    AdmissionDecision,
+    ChangeApproval,
+    ChangeCandidate,
+    ChangeType,
+    EvaluationCheck,
+    EvaluationReport,
+    RollbackManifest,
+)
 from ....core.tokens import estimate_text_tokens
 from ....core.events import AgentEvent, MemoryCandidateObserved, MemoryWritten
 from ....session.memory import MemoryStore, sync_memory_fragment
@@ -29,6 +39,7 @@ from ....session.memory_models import (
     coerce_memory_scope,
     coerce_memory_type,
 )
+from ....safety.admission import DefaultAdmissionGate
 from ..context import CommandContext
 from ..types import CommandResult
 
@@ -84,6 +95,48 @@ def _candidate_lines(candidates: Sequence[MemoryCandidate]) -> list[str]:
         lines.append(
             "  /memory review accept <id> 接受；/memory review reject <id> 拒绝")
     return lines
+
+
+def _admit_memory_change(
+    *,
+    change_type: ChangeType,
+    target: str,
+    before: dict[str, object],
+    after: dict[str, object],
+    risk: RiskLevel,
+) -> AdmissionDecision:
+    candidate = ChangeCandidate(
+        change_type=change_type,
+        target=target,
+        before=before,
+        after=after,
+        risk=risk,
+        affected_artifacts=({"kind": "memory_store"},),
+    )
+    return DefaultAdmissionGate().admit(
+        candidate,
+        evaluation=EvaluationReport.from_checks(
+            candidate.candidate_id,
+            [EvaluationCheck(
+                name="memory_change_requested",
+                passed=True,
+                reason="explicit user memory command",
+                score=1.0,
+            )],
+        ),
+        approval=ChangeApproval(
+            approved=True,
+            actor="session-user",
+            reason="用户显式执行 Memory 变更命令",
+            scope="memory",
+        ),
+        rollback=RollbackManifest(
+            candidate_id=candidate.candidate_id,
+            snapshot=before,
+            instructions="从迁移备份或 AutoDream 前记忆快照恢复",
+        ),
+        audit={"entrypoint": "/memory"},
+    )
 
 
 def _entry_lines(entries: Iterable[MemoryEntry]) -> list[str]:
@@ -471,6 +524,17 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
                 migrate_scope = coerce_memory_scope(tokens[0])
             except ValueError as exc:
                 return _ok(f"  [memory] {exc}")
+        admission = _admit_memory_change(
+            change_type=ChangeType.MEMORY_MIGRATION,
+            target=f"memory:{migrate_scope}",
+            before={"scope": str(migrate_scope), "schema": "legacy"},
+            after={"scope": str(migrate_scope), "schema": "memory-v2"},
+            risk=RiskLevel.MEDIUM,
+        )
+        if not admission.admitted:
+            return _ok(
+                f"  [memory] 迁移未准入: {admission.status.value}"
+                f" · {admission.reason}")
         try:
             report = store.migrate(migrate_scope)
         except OSError as exc:
@@ -522,6 +586,18 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
         token = dream_rest.strip().split(maxsplit=1)[0] if dream_rest.strip() else ""
         if not token:
             return _ok(f"  用法: /memory dream {suboperation} <id>")
+        if suboperation == "accept":
+            admission = _admit_memory_change(
+                change_type=ChangeType.AUTO_DREAM,
+                target=f"dream:{token}",
+                before={"proposal": token, "status": "pending"},
+                after={"proposal": token, "status": "accepted"},
+                risk=RiskLevel.MEDIUM,
+            )
+            if not admission.admitted:
+                return _ok(
+                    f"  [dream] 合并未准入: {admission.status.value}"
+                    f" · {admission.reason}")
         result = (
             dream.accept(token)
             if suboperation == "accept" else dream.reject(token)

@@ -42,6 +42,14 @@ __all__ = [
     "BehaviorReport",
     "BehaviorReportSummary",
     "BehaviorTrialResult",
+    "BehaviorFixture",
+    "BehaviorFixturePort",
+    "BenchmarkPorts",
+    "EvaluationHarnessPort",
+    "TraceReplayPort",
+    "VersionManifestPort",
+    "evaluate_and_admit",
+    "evaluate_candidate",
     "DEFAULT_BEHAVIOR_REPORT_PATH",
     "aggregate_behavior_report_files",
     "aggregate_behavior_reports",
@@ -97,6 +105,14 @@ def __getattr__(name: str) -> Any:
         from . import acceptance
 
         return getattr(acceptance, name)
+    if name in {
+        "BehaviorFixture", "BehaviorFixturePort", "BenchmarkPorts",
+        "EvaluationHarnessPort", "TraceReplayPort", "VersionManifestPort",
+        "evaluate_and_admit", "evaluate_candidate",
+    }:
+        from . import ports
+
+        return getattr(ports, name)
     if name in {
         "BehaviorReportSummary", "DEFAULT_BEHAVIOR_REPORT_PATH",
         "aggregate_behavior_report_files", "load_behavior_report",
