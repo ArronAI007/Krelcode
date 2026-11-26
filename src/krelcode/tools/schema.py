@@ -25,13 +25,14 @@ class SchemaValidationError:
 
 def validate_tool_arguments(schema: Any, arguments: Any) -> list[SchemaValidationError]:
     """校验工具参数；返回空列表表示通过。"""
-    if not isinstance(schema, (dict, bool)):
+    if not isinstance(schema, (Mapping, bool)):
         return [SchemaValidationError(
             "$", "工具 JSON Schema 本身必须是 object 或 boolean")]
-    root = schema if isinstance(schema, dict) else {}
+    normalized_schema = dict(schema) if isinstance(schema, Mapping) else schema
+    root = normalized_schema if isinstance(normalized_schema, dict) else {}
     if not isinstance(arguments, dict):
         return [SchemaValidationError("$", "工具参数必须是 JSON object")]
-    return _validate(arguments, schema, root, "$", depth=0)
+    return _validate(arguments, normalized_schema, root, "$", depth=0)
 
 
 def _validate(

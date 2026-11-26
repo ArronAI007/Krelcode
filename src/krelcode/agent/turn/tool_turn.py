@@ -34,7 +34,11 @@ from krelcode.core.messages import (
     ToolResultBlock,
 )
 from krelcode.core.textutil import truncate_middle
-from krelcode.contracts.tool import ToolResult
+from krelcode.contracts.tool import ToolExecutionRuntime, ToolResult
+from krelcode.contracts.tool_execution import (
+    ToolExecutionResult,
+    ToolIntent,
+)
 from krelcode.tools.schema import validate_tool_arguments
 from krelcode.agent.turn.dependencies import AgentDependencies
 from krelcode.agent.turn.runtime_ports import ToolTurnHostPort
@@ -60,12 +64,13 @@ class ToolBatchExecutor:
     async def apply_results(
         self,
         tool_calls: List[ToolCall],
-        results: List[ToolResult],
+        results: List[ToolExecutionResult],
     ) -> Optional[str]:
         """Append results in model order and return a loop-guard reason."""
         host = self.host
         redactor = self.dependencies.redactor
-        for tool_call, result in zip(tool_calls, results):
+        for tool_call, execution_result in zip(tool_calls, results):
+            result = execution_result.to_tool_result()
             metadata = compact_tool_metadata(
                 tool_call.name,
                 result.data,
@@ -108,34 +113,39 @@ class ToolBatchExecutor:
                 host._failure_counts.pop(signature, None)
         return None
 
-    async def run_stream_tool(self, tool_call: ToolCall) -> ToolResult:
+    async def run_stream_tool(self, tool_call: ToolCall) -> ToolExecutionResult:
         """Execute one streamed call and publish completion immediately."""
         await self.host._emit(ToolCallStarted(tool_call))
         result = await self.execute_one(tool_call)
-        await self.publish_tool_result(tool_call, result)
-        return result
+        return await self.publish_tool_result(tool_call, result)
 
     async def publish_tool_result(
-        self, tool_call: ToolCall, result: ToolResult,
-    ) -> None:
+        self, tool_call: ToolCall, result: ToolExecutionResult,
+    ) -> ToolExecutionResult:
         """Redact, persist and publish a tool result as soon as it completes."""
         redactor = self.dependencies.redactor
-        content = redactor.redact(result.content) if redactor else result.content
+        legacy = result.to_tool_result()
+        content = redactor.redact(legacy.content) if redactor else legacy.content
         inline_content = self.persist_large_output(tool_call, content)
-        result.content = inline_content
+        legacy.content = inline_content
         if redactor is not None:
-            result.blocks = tuple(
-                self._redact_tool_block(block) for block in result.blocks)
-            result.data = cast(
-                Dict[str, Any], _redact_json(result.data, redactor.redact))
+            legacy.blocks = tuple(
+                self._redact_tool_block(block) for block in legacy.blocks)
+            legacy.data = cast(
+                Dict[str, Any], _redact_json(legacy.data, redactor.redact))
         await self.host._emit(
             ToolCallCompleted(
                 tool_call,
                 inline_content,
-                result.is_error,
-                result.blocks,
-                dict(result.data),
+                legacy.is_error,
+                legacy.blocks,
+                dict(legacy.data),
             )
+        )
+        return ToolExecutionResult.from_tool_result(
+            legacy,
+            runtime=result.runtime,
+            diagnostics=result.diagnostics,
         )
 
     def _redact_tool_block(self, block: ToolResultBlock) -> ToolResultBlock:
@@ -184,28 +194,58 @@ class ToolBatchExecutor:
             + f"\n[输出过长（{len(content)} 字符），全文已存盘: {path}]"
         )
 
-    async def execute_one(self, tool_call: ToolCall) -> ToolResult:
+    async def execute_one(self, tool_call: ToolCall) -> ToolExecutionResult:
         host = self.host
         deps = self.dependencies
         pool = host._current_tool_pool()
-        tool = pool.get(tool_call.name)
-        if tool is None or not pool.is_executable(tool_call.name):
-            reason = pool.unavailable_reason(tool_call.name)
-            if reason is not None:
-                return ToolResult(
-                    content=(
-                        f"工具在本轮不可用: {tool_call.name}（{reason}；"
-                        "当前已暴露工具: "
-                        f"{', '.join(pool.advertised_names()) or '无'}）"
-                    ),
-                    is_error=True,
-                )
-            return ToolResult(
+        descriptor = pool.descriptor(tool_call.name)
+        prompt_spec = pool.prompt_spec(tool_call.name)
+        unavailable_reason = pool.unavailable_reason(tool_call.name)
+        if unavailable_reason is not None:
+            runtime = (
+                descriptor.resolved_execution_runtime
+                if descriptor is not None else ToolExecutionRuntime.LOCAL
+            )
+            return ToolExecutionResult(
+                content=(
+                    f"工具在本轮不可用: {tool_call.name}"
+                    f"（{unavailable_reason}；当前已暴露工具: "
+                    f"{', '.join(pool.advertised_names()) or '无'}）"
+                ),
+                is_error=True,
+                runtime=runtime,
+                diagnostics={
+                    "source": (
+                        descriptor.source.value
+                        if descriptor is not None else "unknown"),
+                    "runtime": runtime.value,
+                    "error_kind": "tool_unavailable",
+                },
+            )
+        if descriptor is None or prompt_spec is None:
+            return ToolExecutionResult(
                 content=(
                     f"未知工具: {tool_call.name}（本轮可用工具: "
                     f"{', '.join(pool.advertised_names()) or '无'}）"
                 ),
                 is_error=True,
+                runtime=ToolExecutionRuntime.LOCAL,
+                diagnostics={"error_kind": "unknown_tool"},
+            )
+        runtime = descriptor.resolved_execution_runtime
+        if not pool.is_executable(tool_call.name):
+            return ToolExecutionResult(
+                content=(
+                    f"工具不可执行: {tool_call.name}（本轮可用工具: "
+                    f"{', '.join(pool.advertised_names()) or '无'}）"
+                ),
+                is_error=True,
+                runtime=runtime,
+                diagnostics={
+                    "source": descriptor.source.value,
+                    "runtime": runtime.value,
+                    "error_kind": "tool_not_executable",
+                },
             )
 
         async def emit_progress(
@@ -291,42 +331,65 @@ class ToolBatchExecutor:
 
         execution_ctx = replace(
             host._turn_tool_context,
-            tool_descriptor=pool.descriptor(tool_call.name),
+            tool_descriptor=descriptor,
             tool_catalog=pool,
             progress_emitter=emit_progress,
             output_emitter=emit_output,
             input_requester=request_user_input,
             plan_emitter=emit_plan,
         )
+        intent = ToolIntent(
+            call=tool_call,
+            descriptor=descriptor,
+            parameters=prompt_spec.parameters,
+            context=execution_ctx,
+        )
 
         if tool_call.has_invalid_arguments:
-            return ToolResult(
+            return ToolExecutionResult(
                 content=(
                     "工具参数不是合法 JSON: "
                     f"{tool_call.arguments[INVALID_ARGUMENTS_KEY]!r}"
                 ),
                 is_error=True,
+                runtime=runtime,
+                diagnostics={
+                    "source": descriptor.source.value,
+                    "runtime": runtime.value,
+                    "error_kind": "invalid_arguments_json",
+                },
             )
         validation_errors = validate_tool_arguments(
-            tool.parameters, tool_call.arguments)
+            intent.parameters, tool_call.arguments)
         if validation_errors:
             rendered = [error.render() for error in validation_errors[:20]]
             if len(validation_errors) > 20:
                 rendered.append(f"…另有 {len(validation_errors) - 20} 个错误")
-            return ToolResult(
+            return ToolExecutionResult(
                 content=(
                     f"工具参数校验失败: {tool_call.name}\n- "
                     + "\n- ".join(rendered)
                 ),
                 is_error=True,
+                runtime=runtime,
+                diagnostics={
+                    "source": descriptor.source.value,
+                    "runtime": runtime.value,
+                    "error_kind": "schema_validation",
+                },
             )
-        args = dict(tool_call.arguments)
         pre_hook = await host._before_tool_hook(tool_call)
         if pre_hook.blocked:
-            return ToolResult(
+            return ToolExecutionResult(
                 content=f"PreToolUse Hook 阻止执行: {pre_hook.reason}",
                 is_error=True,
                 data={"hook_blocked": True, "hook_trigger": "pre_tool_use"},
+                runtime=runtime,
+                diagnostics={
+                    "source": descriptor.source.value,
+                    "runtime": runtime.value,
+                    "error_kind": "hook_blocked",
+                },
             )
 
         if deps.policy is not None:
@@ -336,32 +399,47 @@ class ToolBatchExecutor:
             except Exception as e:
                 await host._emit(ErrorOccurred(str(e), "policy.check"))
                 await host._emit(PermissionDenied(tool_call, str(e)))
-                return ToolResult(
-                    content=f"审批检查失败，已拒绝执行: {e}", is_error=True)
+                return ToolExecutionResult(
+                    content=f"审批检查失败，已拒绝执行: {e}",
+                    is_error=True,
+                    runtime=runtime,
+                    diagnostics={
+                        "source": descriptor.source.value,
+                        "runtime": runtime.value,
+                        "error_kind": "policy_exception",
+                    },
+                )
             if not decision.allowed:
                 await host._emit(PermissionDenied(tool_call, decision.reason))
-                return ToolResult(
+                return ToolExecutionResult(
                     content=f"操作被安全策略拒绝: {decision.reason}",
                     is_error=True,
+                    runtime=runtime,
+                    diagnostics={
+                        "source": descriptor.source.value,
+                        "runtime": runtime.value,
+                        "error_kind": "permission_denied",
+                    },
                 )
 
         await execution_ctx.emit_progress("开始执行")
-        try:
-            result = await tool.execute(args, execution_ctx)
-        except Exception as e:
+        result = await deps.execution_runtime.execute(intent)
+        if result.diagnostics.get("error_kind") == "runtime_exception":
             await host._emit(ErrorOccurred(
-                f"{type(e).__name__}: {e}", tool_call.name))
-            result = ToolResult(
-                content=f"工具执行出错: {type(e).__name__}: {e}",
-                is_error=True,
-            )
+                result.content.removeprefix("工具执行出错: "),
+                tool_call.name,
+            ))
 
-        post_hook = await host._after_tool_hook(tool_call, result)
+        post_hook = await host._after_tool_hook(
+            tool_call, result.to_tool_result())
         contexts = (*pre_hook.context, *post_hook.context)
         if contexts:
             blocks = "\n\n".join(
                 f"<hook_context>\n{item}\n</hook_context>" for item in contexts)
-            result.content = (result.content + "\n\n" + blocks).strip()
+            result = replace(
+                result,
+                content=(result.content + "\n\n" + blocks).strip(),
+            )
         return result
 
 

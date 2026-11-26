@@ -129,8 +129,13 @@ class RuntimeServiceView:
 
     @registry.setter
     def registry(self, value: ToolRegistry) -> None:
+        from krelcode.tools.runtime.execution import resolver_from_registry
+        from krelcode.tools.runtime.router import ExecutionRuntimeRouter
+
         self.services.core.registry = value
-        self.dependencies.registry = value
+        runtime = ExecutionRuntimeRouter(resolver_from_registry(value))
+        self.services.core.execution_runtime = runtime
+        self.dependencies.execution_runtime = runtime
 
     @property
     def tool_context(self) -> ToolContext:

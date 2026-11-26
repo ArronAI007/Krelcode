@@ -15,7 +15,7 @@ import codecs
 import os
 from typing import Any, Dict
 
-from ...contracts.tool import ToolContext
+from ...contracts.tool import ToolContext, ToolExecutionRuntime
 from krelcode.contracts.tool import ToolResult
 from ...core.process import (
     process_isolation_kwargs,
@@ -37,6 +37,7 @@ MAX_TIMEOUT = 600.0
 
 class RunCommandTool:
     name = "run_command"
+    execution_runtime = ToolExecutionRuntime.SANDBOX
     description = (
         "在工作区内执行 shell 命令并返回合并的 stdout+stderr 与 exit code。"
         "默认超时 60 秒（可用 timeout 参数调整，上限 600 秒），超时会终止整个进程组。"

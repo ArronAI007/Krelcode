@@ -855,6 +855,15 @@ def test_agent_turn_runtime_has_explicit_executor_boundaries():
         _class_node(path, class_name)
 
 
+def test_tool_batch_executor_delegates_to_execution_runtime():
+    path = ROOT / "agent" / "turn" / "tool_turn.py"
+    source = path.read_text(encoding="utf-8")
+
+    assert "ToolRegistry" not in source
+    assert "tool.execute(" not in source
+    assert "deps.execution_runtime.execute(intent)" in source
+
+
 def test_agent_loop_is_a_thin_turn_orchestration_facade():
     path = ROOT / "agent" / "turn" / "loop.py"
     source = path.read_text(encoding="utf-8")

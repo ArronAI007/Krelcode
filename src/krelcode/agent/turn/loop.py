@@ -81,6 +81,7 @@ from krelcode.agent.context.working_context_source import WorkingContextSource
 from krelcode.agent.turn.workflows import TaskWorkflowSelection, select_task_workflow
 from krelcode.safety.policy import ApprovalPolicy
 from krelcode.contracts.tool import RuntimeSnapshot, ToolContext, ToolResult, TurnAbortSignal
+from krelcode.contracts.tool_execution import ExecutionRuntimePort, ToolExecutionResult
 from krelcode.tools.registry import ToolRegistry
 
 DEFAULT_MAX_STEPS = 64
@@ -111,7 +112,7 @@ class AgentLoop(RuntimeStateHost):
     """
 
     _DEPENDENCY_ATTRS = frozenset({
-        "llm", "registry", "tool_context", "policy", "bus", "max_steps",
+        "llm", "execution_runtime", "tool_context", "policy", "bus", "max_steps",
         "repeat_failure_limit", "context_manager", "tool_output_inline_limit",
         "token_budget", "redactor", "working_context_store",
         "tool_microcompactor", "context_assembler", "prompt_assembler",
@@ -147,6 +148,7 @@ class AgentLoop(RuntimeStateHost):
         compact_checkpoint_store: Optional[CompactCheckpointStorePort] = None,
         today_provider: Optional[Callable[[], str]] = None,
         reminder_catalog: Optional[ReminderCatalog] = None,
+        execution_runtime: Optional[ExecutionRuntimePort] = None,
     ) -> None:
         self._runtime_state = AgentRuntimeState()
         self.services = build_agent_services(
@@ -167,6 +169,7 @@ class AgentLoop(RuntimeStateHost):
             compact_checkpoint_store=compact_checkpoint_store,
             reminder_catalog=reminder_catalog,
             registry_provider=lambda: self.services.prompt.registry,
+            execution_runtime=execution_runtime,
         )
 
         # Non-service executor dependencies remain explicit attributes.
@@ -191,7 +194,7 @@ class AgentLoop(RuntimeStateHost):
 
         self.dependencies = AgentDependencies(
             llm=self.services.core.llm,
-            registry=self.services.core.registry,
+            execution_runtime=self.services.core.execution_runtime,
             tool_context=self.services.core.tool_context,
             bus=self.services.core.bus,
             context_manager=cast(
@@ -371,7 +374,7 @@ class AgentLoop(RuntimeStateHost):
         )
         self._active_tool_pool.authorize_direct(name)
         try:
-            return await self._run_stream_tool(call)
+            return (await self._run_stream_tool(call)).to_tool_result()
         except asyncio.CancelledError:
             self._turn_abort_signal.cancel("直接工具被用户中止")
             raise
@@ -712,17 +715,19 @@ class AgentLoop(RuntimeStateHost):
     async def _apply_tool_results(
         self,
         tool_calls: List[ToolCall],
-        results: List[ToolResult],
+        results: List[ToolExecutionResult],
     ) -> Optional[str]:
         return await self.tool_executor.apply_results(tool_calls, results)
 
-    async def _run_stream_tool(self, tool_call: ToolCall) -> ToolResult:
+    async def _run_stream_tool(
+        self, tool_call: ToolCall,
+    ) -> ToolExecutionResult:
         return await self.tool_executor.run_stream_tool(tool_call)
 
     async def _publish_tool_result(
-        self, tool_call: ToolCall, result: ToolResult,
-    ) -> None:
-        await self.tool_executor.publish_tool_result(tool_call, result)
+        self, tool_call: ToolCall, result: ToolExecutionResult,
+    ) -> ToolExecutionResult:
+        return await self.tool_executor.publish_tool_result(tool_call, result)
 
     def _redact_tool_block(self, block: ToolResultBlock) -> ToolResultBlock:
         return self.tool_executor._redact_tool_block(block)
@@ -730,7 +735,9 @@ class AgentLoop(RuntimeStateHost):
     def _persist_large_output(self, tool_call: ToolCall, content: str) -> str:
         return self.tool_executor.persist_large_output(tool_call, content)
 
-    async def _execute_one(self, tool_call: ToolCall) -> ToolResult:
+    async def _execute_one(
+        self, tool_call: ToolCall,
+    ) -> ToolExecutionResult:
         return await self.tool_executor.execute_one(tool_call)
 
     async def run_lifecycle_hook(

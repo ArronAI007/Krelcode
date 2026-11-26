@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from krelcode.core.interactions import UserInputPort
     from krelcode.core.redact import SecretRedactor
     from krelcode.contracts.tool import ToolContext
+    from krelcode.contracts.tool_execution import ExecutionRuntimePort
     from krelcode.llm.base import LLMProvider
     from krelcode.safety.policy import ApprovalPolicy
     from krelcode.tools.registry import ToolRegistry
@@ -57,6 +58,7 @@ def build_agent_services(
     compact_checkpoint_store: Optional[CompactCheckpointStorePort],
     reminder_catalog: Optional["ReminderCatalog"],
     registry_provider: Callable[[], Optional["PromptFragmentRegistry"]],
+    execution_runtime: Optional["ExecutionRuntimePort"] = None,
 ) -> AgentServices:
     """Build the stable service graph shared by all turn executors."""
     # Import concrete agent-layer implementations lazily to keep this helper out
@@ -76,6 +78,8 @@ def build_agent_services(
     )
     from krelcode.agent.turn.reminders import default_reminder_catalog
     from krelcode.core.events import EventBus
+    from krelcode.tools.runtime.execution import resolver_from_registry
+    from krelcode.tools.runtime.router import ExecutionRuntimeRouter
 
     working_context = working_context_store or WorkingContextStore(
         tool_context.workspace_root,
@@ -116,10 +120,15 @@ def build_agent_services(
     surface_registry: PromptSurfaceRegistry = PromptSurfaceRegistry({
         "main": (main_prompt_surface(system_prompt),),
     })
+    resolved_execution_runtime = (
+        execution_runtime
+        or ExecutionRuntimeRouter(resolver_from_registry(registry))
+    )
     return AgentServices(
         core=CoreRuntimeServices(
             llm=llm,
             registry=registry,
+            execution_runtime=resolved_execution_runtime,
             tool_context=tool_context,
             bus=bus or EventBus(),
             policy=policy,

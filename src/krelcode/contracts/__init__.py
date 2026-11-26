@@ -33,11 +33,18 @@ from .tool import (
     ToolCatalogMatch,
     ToolContext,
     ToolDescriptor,
+    ToolExecutionRuntime,
     ToolResult,
     ToolServices,
     ToolSource,
     ToolTier,
     TurnAbortSignal,
+)
+from .tool_execution import (
+    ExecutionRuntimePort,
+    ToolExecutionResult,
+    ToolIntent,
+    ToolResolverPort,
 )
 
 __all__ = [
@@ -46,6 +53,7 @@ __all__ = [
     "ApplicationRequestFactory",
     "CommandDescriptor",
     "EnterprisePolicyPort",
+    "ExecutionRuntimePort",
     "PermissionMode",
     "PrincipalPort",
     "PromptBenchmarkServicesPort",
@@ -68,7 +76,11 @@ __all__ = [
     "ToolCatalogMatch",
     "ToolContext",
     "ToolDescriptor",
+    "ToolExecutionRuntime",
+    "ToolExecutionResult",
+    "ToolIntent",
     "ToolResult",
+    "ToolResolverPort",
     "ToolServices",
     "ToolSource",
     "ToolTier",

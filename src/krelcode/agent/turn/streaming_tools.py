@@ -18,10 +18,10 @@ import asyncio
 from typing import Awaitable, Callable, Dict, List, Optional
 
 from krelcode.core.messages import ToolCall
-from krelcode.contracts.tool import ToolResult
+from krelcode.contracts.tool_execution import ToolExecutionResult
 from krelcode.agent.turn.tool_pool import TurnToolPool
 
-ToolRunner = Callable[[ToolCall], Awaitable[ToolResult]]
+ToolRunner = Callable[[ToolCall], Awaitable[ToolExecutionResult]]
 
 
 class StreamingToolExecutor:
@@ -29,10 +29,11 @@ class StreamingToolExecutor:
         self._pool = pool
         self._runner = runner
         self._ready: Dict[int, ToolCall] = {}
-        self._tasks: Dict[int, asyncio.Task[ToolResult]] = {}
+        self._tasks: Dict[int, asyncio.Task[ToolExecutionResult]] = {}
         self._next_index = 0
-        self._reader_tasks: List[asyncio.Task[ToolResult]] = []
-        self._barrier_task: Optional[asyncio.Task[ToolResult]] = None
+        self._reader_tasks: List[asyncio.Task[ToolExecutionResult]] = []
+        self._barrier_task: Optional[
+            asyncio.Task[ToolExecutionResult]] = None
         self._closed = False
 
     @property
@@ -76,7 +77,7 @@ class StreamingToolExecutor:
             descriptor = self._pool.descriptor(tool_call.name)
             read_only = descriptor is not None and descriptor.read_only
 
-            waits: List[asyncio.Task[ToolResult]] = []
+            waits: List[asyncio.Task[ToolExecutionResult]] = []
             if read_only:
                 if self._barrier_task is not None:
                     waits.append(self._barrier_task)
@@ -102,17 +103,17 @@ class StreamingToolExecutor:
 
     async def _run_after(
         self,
-        waits: tuple[asyncio.Task[ToolResult], ...],
+        waits: tuple[asyncio.Task[ToolExecutionResult], ...],
         index: int,
         tool_call: ToolCall,
-    ) -> ToolResult:
+    ) -> ToolExecutionResult:
         if waits:
             await asyncio.gather(*waits)
         if self._closed:
             raise asyncio.CancelledError
         return await self._runner(tool_call)
 
-    async def wait_results(self, count: int) -> List[ToolResult]:
+    async def wait_results(self, count: int) -> List[ToolExecutionResult]:
         """等待所有已调度工具，按 0..count-1 返回结果。"""
         if len(self._tasks) != count:
             raise RuntimeError(

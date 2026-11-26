@@ -17,9 +17,9 @@ from krelcode.core.hooks import HookPort
 from krelcode.core.interactions import UserInputPort
 from krelcode.core.redact import SecretRedactor
 from krelcode.contracts.tool import RuntimeSnapshot, ToolContext
+from krelcode.contracts.tool_execution import ExecutionRuntimePort
 from krelcode.llm.base import LLMProvider
 from krelcode.safety.policy import ApprovalPolicy
-from krelcode.tools.registry import ToolRegistry
 from krelcode.agent.turn.runtime_ports import (
     CompactCheckpointStorePort,
     ContextAssemblerPort,
@@ -36,7 +36,7 @@ class AgentDependencies:
     """Resources shared by the model, context and tool turn executors."""
 
     llm: LLMProvider
-    registry: ToolRegistry
+    execution_runtime: ExecutionRuntimePort
     tool_context: ToolContext
     bus: EventBus
     context_assembler: ContextAssemblerPort

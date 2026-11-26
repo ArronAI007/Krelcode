@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from ...contracts.service_ports import ShellJobManagerPort
-from ...contracts.tool import ToolContext
+from ...contracts.tool import ToolContext, ToolExecutionRuntime
 from krelcode.contracts.tool import ToolResult, ToolTier
 from ..paths import PathOutsideWorkspaceError, resolve_in_workspace
 from ..prompt import ToolPromptExample
@@ -24,6 +24,7 @@ def _manager_error() -> ToolResult:
 
 class JobStartTool:
     name = "job_start"
+    execution_runtime = ToolExecutionRuntime.SANDBOX
     tool_tier = ToolTier.DISCOVERABLE
     description = (
         "启动一个独立的后台 Shell 任务并立即返回 job_id。任务不会随当前 turn "

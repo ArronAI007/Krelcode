@@ -16,7 +16,7 @@ from krelcode.core.events import (
     LLMThinkingDelta,
 )
 from krelcode.core.messages import Message
-from krelcode.contracts.tool import ToolResult
+from krelcode.contracts.tool_execution import ToolExecutionResult
 from krelcode.llm.base import (
     FINISH_LENGTH,
     FINISH_TOOLS,
@@ -38,7 +38,7 @@ class LLMTurnResult:
     """One model response plus completed tool results, not yet in history."""
 
     message: Message
-    tool_results: List[ToolResult]
+    tool_results: List[ToolExecutionResult]
     finish_reason: Optional[str] = None
 
 

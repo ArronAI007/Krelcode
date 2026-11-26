@@ -261,6 +261,15 @@ class ToolSource(str, Enum):
     PLUGIN = "plugin"
 
 
+class ToolExecutionRuntime(str, Enum):
+    """Concrete execution tier selected before a tool is invoked."""
+
+    LOCAL = "local"
+    MCP = "mcp"
+    SANDBOX = "sandbox"
+    REMOTE = "remote"
+
+
 @dataclass(frozen=True)
 class ToolDescriptor:
     source: ToolSource = ToolSource.BUILTIN
@@ -271,6 +280,7 @@ class ToolDescriptor:
     plugin_name: Optional[str] = None
     tier: Optional[ToolTier] = None
     search_terms: Tuple[str, ...] = ()
+    execution_runtime: Optional[ToolExecutionRuntime] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "source", ToolSource(self.source))
@@ -300,6 +310,22 @@ class ToolDescriptor:
                 if str(term).strip()
             )),
         )
+        if self.execution_runtime is not None:
+            object.__setattr__(
+                self,
+                "execution_runtime",
+                ToolExecutionRuntime(self.execution_runtime),
+            )
+
+    @property
+    def resolved_execution_runtime(self) -> ToolExecutionRuntime:
+        if self.execution_runtime is not None:
+            return self.execution_runtime
+        if self.source is ToolSource.MCP:
+            return ToolExecutionRuntime.MCP
+        if self.source is ToolSource.SUBAGENT:
+            return ToolExecutionRuntime.REMOTE
+        return ToolExecutionRuntime.LOCAL
 
     @classmethod
     def from_tool(
@@ -319,6 +345,7 @@ class ToolDescriptor:
             plugin_name=getattr(tool, "plugin_name", None),
             tier=getattr(tool, "tool_tier", None),
             search_terms=getattr(tool, "search_terms", ()),
+            execution_runtime=getattr(tool, "execution_runtime", None),
         )
 
 
@@ -336,6 +363,7 @@ __all__ = [
     "ToolCatalogMatch",
     "ToolContext",
     "ToolDescriptor",
+    "ToolExecutionRuntime",
     "ToolResult",
     "ToolServices",
     "ToolSource",
