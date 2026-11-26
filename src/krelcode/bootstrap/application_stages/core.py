@@ -22,6 +22,9 @@ from ...observability import ObservabilitySink, RunManifest
 from ...observability.models import stable_hash
 from ...observability.settings import ObservabilityOptions
 from ...mcp.supervisor import MCPSupervisor
+from ...plugins import PluginManager
+from ...session.memory import MemoryStore
+from ...skills import SkillManager
 from ...agent.turn.runtime_services import MCPServicePort, RuntimeServiceBinderPort
 from ...safety.sandbox import SandboxError
 from ...webui.service import WebUIOptions, WebUIService
@@ -32,6 +35,7 @@ from ..composition import (
     build_loop,
     build_mcp_roots,
     build_mcp_sampler,
+    build_runtime_release_manifest,
 )
 from ..composition.model_switcher import SubagentManagerPort
 from ...agent.turn.loop import AgentLoop
@@ -170,6 +174,17 @@ async def build_core_services(
         run_id = (
             f"{int(time.time())}-{uuid.uuid4().hex[:12]}"
         )
+        runtime_release = build_runtime_release_manifest(
+            code_version=__version__,
+            run_mode=context.run_mode.value,
+            loop=loop,
+            supervisor=supervisor,
+            plugin_manager=cast(PluginManager, loop.plugin_manager),
+            skill_manager=cast(SkillManager, loop.skill_manager),
+            memory_store=cast(MemoryStore, loop.memory_store),
+            enterprise_policy=context.enterprise_policy,
+            tool_names=tool_names,
+        )
         manifest = RunManifest(
             run_id=run_id,
             started_at=time.time(),
@@ -189,6 +204,7 @@ async def build_core_services(
             experiment_knobs=(
                 dict(experiment.profile.knobs)
                 if experiment is not None else {}),
+            runtime_release=runtime_release,
             metadata={
                 "experiment_warnings": list(experiment.warnings)
                 if experiment is not None else [],

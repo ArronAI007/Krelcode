@@ -15,6 +15,7 @@ from .mcp import build_mcp_roots, build_mcp_sampler, compose_mcp_config
 from .memory import resolve_auto_memory_mode, resolve_auto_memory_thresholds
 from .model_switcher import build_model_switcher
 from .providers import build_llm
+from .release_manifest import build_runtime_release_manifest
 from .runtime import build_loop
 from .services import (
     PersistenceServices,
@@ -48,6 +49,7 @@ __all__ = [
     "build_model_switcher",
     "build_parser",
     "build_policy",
+    "build_runtime_release_manifest",
     "build_subagent_llm_resolver",
     "compose_hook_specs",
     "compose_mcp_config",

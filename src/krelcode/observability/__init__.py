@@ -5,6 +5,11 @@ it, and failures in its journal/gateway cannot propagate into an Agent turn.
 """
 
 from .journal import ObservabilitySink
-from .models import EventEnvelope, RunManifest
+from .models import EventEnvelope, RunManifest, RuntimeReleaseManifest
 
-__all__ = ["EventEnvelope", "ObservabilitySink", "RunManifest"]
+__all__ = [
+    "EventEnvelope",
+    "ObservabilitySink",
+    "RunManifest",
+    "RuntimeReleaseManifest",
+]

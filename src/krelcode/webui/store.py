@@ -10,7 +10,11 @@ from krelcode.contracts.application import (
     ApplicationRequest,
     ApplicationRequestFactory,
 )
-from krelcode.observability.models import EventEnvelope, RunManifest
+from krelcode.observability.models import (
+    EventEnvelope,
+    RunManifest,
+    RuntimeReleaseManifest,
+)
 
 _SAFE_ID_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
@@ -89,6 +93,20 @@ class DashboardStore:
             goal="[run has no application event]",
             metadata={"run_id": run_id, "legacy": True},
         )
+
+    def runtime_release(self, run_id: str) -> RuntimeReleaseManifest:
+        release = self._manifest(safe_run_id(run_id)).runtime_release
+        if not isinstance(release, RuntimeReleaseManifest):
+            raise ValueError(f"run 未记录 RuntimeReleaseManifest: {run_id}")
+        return release
+
+    def diff_runtime_releases(
+        self,
+        left_run_id: str,
+        right_run_id: str,
+    ) -> dict[str, object]:
+        return self.runtime_release(left_run_id).diff(
+            self.runtime_release(right_run_id))
 
     def read_events(
         self,

@@ -126,8 +126,41 @@ class PluginServicePort(Protocol):
     def reload(self) -> object | Awaitable[object]: ...
 
 
+class AgentDefinitionViewPort(Protocol):
+    """Read-only identity exposed by one subagent definition."""
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def description(self) -> str: ...
+
+    @property
+    def system_prompt(self) -> str: ...
+
+    @property
+    def allowed_tools(self) -> Sequence[str]: ...
+
+    @property
+    def source(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
+
+    @property
+    def permission_mode(self) -> str: ...
+
+    @property
+    def mcp_servers(self) -> Optional[Sequence[str]]: ...
+
+    @property
+    def inherit_project_rules(self) -> bool: ...
+
+
 class AgentDefinitionServicePort(Protocol):
-    """Marker protocol for the subagent definition registry."""
+    """Read-only subagent definition registry."""
+
+    def list(self) -> Sequence[AgentDefinitionViewPort]: ...
 
 
 class MCPServicePort(Protocol):
@@ -355,6 +388,7 @@ class AgentServices:
 
 __all__ = [
     "AgentDefinitionServicePort",
+    "AgentDefinitionViewPort",
     "AgentServices",
     "BrowserOptionsServicePort",
     "BrowserRuntimeServicePort",

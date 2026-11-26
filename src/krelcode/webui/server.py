@@ -123,6 +123,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({
                     "runs": self.dashboard.store.list_runs(limit=limit)})
                 return
+            if path == "/api/v1/releases/diff":
+                left = _query_string(query, "left")
+                right = _query_string(query, "right")
+                if not left or not right:
+                    raise ValueError(
+                        "releases/diff 需要 left 和 right run id")
+                self._send_json(
+                    self.dashboard.store.diff_runtime_releases(left, right))
+                return
             parts = [part for part in path.split("/") if part]
             if len(parts) == 4 and parts[:3] == ["api", "v1", "runs"]:
                 self._send_json(self.dashboard.store.get_run(parts[3]))
@@ -145,6 +154,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             ):
                 self._send_json(
                     self.dashboard.store.application(parts[3]).to_dict())
+                return
+            if (
+                len(parts) == 5
+                and parts[:3] == ["api", "v1", "runs"]
+                and parts[4] == "release"
+            ):
+                self._send_json(
+                    self.dashboard.store.runtime_release(parts[3]).to_dict())
                 return
             if (
                 len(parts) == 5
@@ -371,6 +388,14 @@ def _query_int(
     except (TypeError, ValueError):
         parsed = default
     return max(minimum, min(parsed, maximum))
+
+
+def _query_string(
+    query: Mapping[str, Sequence[str]],
+    key: str,
+) -> str:
+    values = query.get(key) or ()
+    return str(values[0]).strip() if values else ""
 
 
 __all__ = ["DashboardHTTPServer"]

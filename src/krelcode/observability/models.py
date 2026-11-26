@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 SCHEMA_VERSION = 1
+RUNTIME_RELEASE_SCHEMA_VERSION = 1
 
 
 def utc_timestamp() -> float:
@@ -22,6 +23,116 @@ def stable_hash(value: object) -> str:
         default=str,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+_RELEASE_COMPONENTS = (
+    "agent_definition",
+    "prompt_release",
+    "model_profile",
+    "tool_catalog",
+    "mcp_servers",
+    "plugins",
+    "skills",
+    "policy_version",
+    "memory_schema",
+    "context_engine",
+    "code_version",
+)
+
+
+@dataclass(frozen=True)
+class RuntimeReleaseManifest:
+    """Complete, content-light identity of one runtime composition."""
+
+    agent_definition: Mapping[str, object] = field(default_factory=dict)
+    prompt_release: Mapping[str, object] = field(default_factory=dict)
+    model_profile: Mapping[str, object] = field(default_factory=dict)
+    tool_catalog: Mapping[str, object] = field(default_factory=dict)
+    mcp_servers: Mapping[str, object] = field(default_factory=dict)
+    plugins: Mapping[str, object] = field(default_factory=dict)
+    skills: Mapping[str, object] = field(default_factory=dict)
+    policy_version: Mapping[str, object] = field(default_factory=dict)
+    memory_schema: Mapping[str, object] = field(default_factory=dict)
+    context_engine: Mapping[str, object] = field(default_factory=dict)
+    code_version: Mapping[str, object] = field(default_factory=dict)
+    schema_version: int = RUNTIME_RELEASE_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        for name in _RELEASE_COMPONENTS:
+            value = getattr(self, name)
+            object.__setattr__(
+                self,
+                name,
+                MappingProxyType(dict(value) if isinstance(value, Mapping) else {}),
+            )
+
+    @property
+    def release_hash(self) -> str:
+        return stable_hash(self.to_dict(include_hashes=False))
+
+    @property
+    def release_id(self) -> str:
+        return f"runtime-{self.release_hash[:16]}"
+
+    def component_hashes(self) -> dict[str, str]:
+        return {
+            name: stable_hash(dict(getattr(self, name)))
+            for name in _RELEASE_COMPONENTS
+        }
+
+    def to_dict(self, *, include_hashes: bool = True) -> dict[str, object]:
+        record: dict[str, object] = {
+            "schema_version": self.schema_version,
+            **{
+                name: dict(getattr(self, name))
+                for name in _RELEASE_COMPONENTS
+            },
+        }
+        if include_hashes:
+            record["release_id"] = self.release_id
+            record["release_hash"] = self.release_hash
+            record["component_hashes"] = self.component_hashes()
+        return record
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, object]) -> "RuntimeReleaseManifest":
+        return cls(
+            **{
+                name: (
+                    dict(value)
+                    if isinstance((value := raw.get(name)), Mapping) else {}
+                )
+                for name in _RELEASE_COMPONENTS
+            },
+            schema_version=int(
+                str(raw.get("schema_version")
+                    or RUNTIME_RELEASE_SCHEMA_VERSION)),
+        )
+
+    def diff(self, other: "RuntimeReleaseManifest") -> dict[str, object]:
+        """Return deterministic component-level release differences."""
+        left_hashes = self.component_hashes()
+        right_hashes = other.component_hashes()
+        changed: dict[str, object] = {}
+        unchanged: list[str] = []
+        for name in _RELEASE_COMPONENTS:
+            if left_hashes[name] == right_hashes[name]:
+                unchanged.append(name)
+                continue
+            changed[name] = {
+                "left_hash": left_hashes[name],
+                "right_hash": right_hashes[name],
+                "left": dict(getattr(self, name)),
+                "right": dict(getattr(other, name)),
+            }
+        return {
+            "left_release_id": self.release_id,
+            "right_release_id": other.release_id,
+            "left_release_hash": self.release_hash,
+            "right_release_hash": other.release_hash,
+            "changed_components": changed,
+            "unchanged_components": unchanged,
+        }
 
 
 @dataclass(frozen=True)
@@ -108,6 +219,7 @@ class RunManifest:
     experiment_name: str = ""
     experiment_hash: str = ""
     experiment_knobs: Mapping[str, object] = field(default_factory=dict)
+    runtime_release: Mapping[str, object] | RuntimeReleaseManifest | None = None
     metadata: Mapping[str, object] = field(default_factory=dict)
     schema_version: int = SCHEMA_VERSION
 
@@ -116,6 +228,10 @@ class RunManifest:
         object.__setattr__(
             self, "experiment_knobs",
             MappingProxyType(dict(self.experiment_knobs)))
+        release = self.runtime_release
+        if isinstance(release, Mapping):
+            release = RuntimeReleaseManifest.from_dict(release)
+        object.__setattr__(self, "runtime_release", release)
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
     @property
@@ -141,6 +257,21 @@ class RunManifest:
             "experiment_name": self.experiment_name,
             "experiment_hash": self.experiment_hash,
             "experiment_knobs": dict(self.experiment_knobs),
+            "runtime_release": (
+                self.runtime_release.to_dict()
+                if isinstance(self.runtime_release, RuntimeReleaseManifest)
+                else None
+            ),
+            "runtime_release_id": (
+                self.runtime_release.release_id
+                if isinstance(self.runtime_release, RuntimeReleaseManifest)
+                else ""
+            ),
+            "runtime_release_hash": (
+                self.runtime_release.release_hash
+                if isinstance(self.runtime_release, RuntimeReleaseManifest)
+                else ""
+            ),
             "metadata": dict(self.metadata),
         }
         if include_hash:
@@ -152,6 +283,7 @@ class RunManifest:
         names = raw.get("tool_names") or ()
         knobs = raw.get("experiment_knobs") or {}
         metadata = raw.get("metadata") or {}
+        release = raw.get("runtime_release")
         return cls(
             run_id=str(raw.get("run_id") or ""),
             started_at=float(raw.get("started_at") or 0.0),
@@ -170,6 +302,10 @@ class RunManifest:
             experiment_name=str(raw.get("experiment_name") or ""),
             experiment_hash=str(raw.get("experiment_hash") or ""),
             experiment_knobs=dict(knobs) if isinstance(knobs, Mapping) else {},
+            runtime_release=(
+                RuntimeReleaseManifest.from_dict(release)
+                if isinstance(release, Mapping) else None
+            ),
             metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
             schema_version=int(raw.get("schema_version") or SCHEMA_VERSION),
         )
@@ -178,7 +314,9 @@ class RunManifest:
 __all__ = [
     "EventEnvelope",
     "RunManifest",
+    "RuntimeReleaseManifest",
     "SCHEMA_VERSION",
+    "RUNTIME_RELEASE_SCHEMA_VERSION",
     "stable_hash",
     "utc_timestamp",
 ]
