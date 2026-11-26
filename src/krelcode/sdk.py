@@ -25,6 +25,11 @@ from types import TracebackType
 from typing import Any, AsyncIterator, Mapping, Optional, Sequence
 
 from .core.process import process_isolation_kwargs, stop_process_tree
+from .contracts.application import (
+    ApplicationRequest,
+    ApplicationRequestFactory,
+    TaskBudget,
+)
 
 PROTOCOL_NAME = "krelcode.stream-json"
 PROTOCOL_VERSION = "1"
@@ -386,6 +391,7 @@ class KrelcodeClient:
         *,
         request_id: Optional[str] = None,
         images: Sequence[ImageInput] = (),
+        application: Optional[ApplicationRequest] = None,
     ) -> AsyncIterator[KrelcodeMessage]:
         """发送一条 user 消息并流式产出该请求的事件，直到终态 ``result``。"""
         await self.start()
@@ -399,6 +405,20 @@ class KrelcodeClient:
             raise ValueError("request_id 不能为空")
         if rid in self._request_queues:
             raise ValueError(f"request_id 正在使用: {rid}")
+        application_request = application or (
+            ApplicationRequestFactory.from_input_source(
+                "sdk",
+                goal=prompt or "[image attachment]",
+                budget=TaskBudget(
+                    max_steps=self.options.max_steps,
+                    max_tokens=self.options.token_budget,
+                ),
+                metadata={
+                    "request_id": rid,
+                    "workspace": str(self.options.workspace),
+                },
+            )
+        )
 
         content: str | list[dict[str, Any]]
         if images:
@@ -417,6 +437,7 @@ class KrelcodeClient:
                 "type": "user",
                 "content": content,
                 "request_id": rid,
+                "application": application_request.to_dict(),
             })
             while True:
                 item = await self._next_message(queue)

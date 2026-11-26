@@ -158,6 +158,9 @@ def test_sdk_e2e_streams_query_and_reuses_session(tmp_path):
             assert messages[0].type == "system"
             assert messages[0].subtype == "turn_started"
             assert messages[0].request_id == "test-request"
+            assert messages[0].get("application")["trigger"] == "sdk"
+            assert messages[0].get("application")["metadata"]["request_id"] == (
+                "test-request")
             assert any(
                 message.type == "assistant"
                 and message.subtype == "text_delta"

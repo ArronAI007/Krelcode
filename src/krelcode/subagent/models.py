@@ -10,6 +10,7 @@ from typing import List, Optional, Tuple
 
 from ..agent.turn.loop import AgentLoop
 from ..agent.prompts import PROMPT_PROFILE_AUTO, build_system_prompt
+from ..contracts.application import ApplicationRequest
 from .control import AgentControl
 from .contracts import STATUS_RUNNING
 from .feed import AgentFeed
@@ -55,6 +56,8 @@ class AgentHandle:
     error: Optional[str] = None
     turns: int = 0
     queue: List[str] = field(default_factory=list)
+    queued_application_requests: List[Optional[ApplicationRequest]] = field(
+        default_factory=list, repr=False)
     task_obj: Optional[asyncio.Task[None]] = field(default=None, repr=False)
     worktree: Optional[Path] = None
     branch: Optional[str] = None
@@ -74,6 +77,7 @@ class AgentHandle:
     mcp_servers: Tuple[str, ...] = field(default_factory=tuple)
     kill_requested: bool = field(default=False, repr=False)
     cache_ledger_hash: str = ""
+    application_request: Optional[ApplicationRequest] = None
 
     def preview(self) -> str:
         text = self.result or self.error or ""

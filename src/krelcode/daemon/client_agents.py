@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
 
 from ..core.redact import SecretRedactor
+from ..contracts.application import ApplicationRequest
 from ..subagent.feed import AgentFeedEntry, AgentFeedPage
 from ..subagent.sidechain import SidechainStore, read_sidechain
 from .client_transport import DaemonClient, DaemonUnavailable
@@ -32,6 +33,7 @@ class RemoteAgentHandle:
     permission_mode: str = ""
     mcp_servers: Tuple[str, ...] = field(default_factory=tuple)
     latest_sequence: int = 0
+    application_request: Optional[ApplicationRequest] = None
 
     def preview(self) -> str:
         text = self.result or self.error or ""
@@ -110,24 +112,38 @@ class DaemonSubagentManager:
         fork_context: Optional[bool] = None,
         *,
         definition: Optional[str] = None,
+        application_request: Optional[ApplicationRequest] = None,
     ) -> RemoteAgentHandle:
         data = await self._request("spawn", {
             "task": task,
             "isolated": isolated,
             "fork_context": fork_context,
             "definition": definition,
+            "application": (
+                application_request.to_dict()
+                if application_request is not None else None
+            ),
         }, timeout=60.0)
         handle = _remote_handle(data)
         self._cache[handle.id] = handle
         return handle
 
     async def send_input(
-        self, agent_id: str, message: str, interrupt: bool = False,
+        self,
+        agent_id: str,
+        message: str,
+        interrupt: bool = False,
+        *,
+        application_request: Optional[ApplicationRequest] = None,
     ) -> Tuple[RemoteAgentHandle, str]:
         data = await self._request("send_input", {
             "agent_id": agent_id,
             "message": message,
             "interrupt": bool(interrupt),
+            "application": (
+                application_request.to_dict()
+                if application_request is not None else None
+            ),
         })
         handle = _remote_handle(data.get("agent") or {})
         self._cache[handle.id] = handle
@@ -263,6 +279,7 @@ def _remote_handle(raw: Dict[str, Any]) -> RemoteAgentHandle:
     agent_id = str(raw.get("agent_id") or raw.get("id") or "").strip()
     if not agent_id:
         raise ValueError("daemon 返回了无效 agent 信息")
+    application = raw.get("application")
     return RemoteAgentHandle(
         id=agent_id,
         task=str(raw.get("task") or ""),
@@ -282,6 +299,10 @@ def _remote_handle(raw: Dict[str, Any]) -> RemoteAgentHandle:
         permission_mode=str(raw.get("permission_mode") or ""),
         mcp_servers=tuple(str(item) for item in raw.get("mcp_servers") or ()),
         latest_sequence=int(raw.get("latest_sequence") or 0),
+        application_request=(
+            ApplicationRequest.from_mapping(application)
+            if isinstance(application, dict) else None
+        ),
     )
 
 

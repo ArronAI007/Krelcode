@@ -98,6 +98,7 @@ if TYPE_CHECKING:
         EnterprisePolicyPort,
         PrincipalPort,
     )
+    from krelcode.contracts.application import ApplicationRequest
     from krelcode.contracts.tool import RuntimeSnapshot, ToolContext, TurnAbortSignal
     from krelcode.llm.base import LLMProvider
     from krelcode.safety.contract import ModePermissionContract
@@ -160,6 +161,7 @@ class TurnRuntimeState:
     turn_reminder_selection: Optional["ReminderSelection"] = None
     turn_requested_reminder_ids: tuple[str, ...] = ()
     last_reminder_selection: Optional["ReminderSelection"] = None
+    application_request: Optional["ApplicationRequest"] = None
     steering_queue: asyncio.Queue[SteeringInput | str] = field(
         default_factory=lambda: asyncio.Queue()
     )
@@ -249,5 +251,4 @@ __all__ = [
     "SessionRuntimeState",
     "TurnRuntimeState",
 ]
-
 

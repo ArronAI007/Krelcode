@@ -70,6 +70,11 @@ from ..agent.context.context_checkpoint import (
     ContextCheckpointStore,
 )
 from ..contracts.tool import PermissionMode, RunMode, Tool, ToolContext, TurnAbortSignal
+from ..contracts.application import (
+    ApplicationRequest,
+    ApplicationRequestFactory,
+    TaskShape,
+)
 from ..contracts.service_ports import PromptFragmentRegistryPort
 from ..tools.registry import ToolRegistry
 from .builtin_agents import DEFAULT_BUILTIN_SUBAGENT_NAME
@@ -176,6 +181,7 @@ class SubagentManager(SubagentReadMixin):
         fork_context: Optional[bool] = None,
         *,
         definition: Optional[str] = None,
+        application_request: Optional[ApplicationRequest] = None,
     ) -> AgentHandle:
         """创建并启动后台子代理。
 
@@ -186,6 +192,13 @@ class SubagentManager(SubagentReadMixin):
         """
         if self._closed:
             raise RuntimeError("SubagentManager 已关闭")
+        application_request = application_request or (
+            ApplicationRequestFactory.from_input_source(
+                "subagent",
+                goal=task or "[subagent task]",
+                task_shape=TaskShape.MULTI_AGENT,
+            )
+        )
         if self.sidechains.redactor is None and self.redactor is not None:
             self.sidechains.redactor = self.redactor
         await self.worktrees.ensure_workspace_ready()
@@ -476,6 +489,10 @@ class SubagentManager(SubagentReadMixin):
             "inherited_memory_ids": list(memory_ids),
             "instruction_layers": instruction_bundle.metadata(),
             "parent_policy_instruction_hash": parent_policy_hash,
+            "application": (
+                application_request.to_dict()
+                if application_request is not None else {}
+            ),
         })
         handle = AgentHandle(
             id=agent_id,
@@ -498,6 +515,7 @@ class SubagentManager(SubagentReadMixin):
             prompt_profile=prompt_resolution.name,
             permission_mode=permission_mode.value,
             mcp_servers=mcp_servers,
+            application_request=application_request,
         )
         self._handles[agent_id] = handle
         child_bus.subscribe(partial(self._on_child_event, handle))
@@ -588,7 +606,10 @@ class SubagentManager(SubagentReadMixin):
             handle.error = None
             await self._set_state(handle, STATUS_RUNNING, "执行任务")
             try:
-                result = await handle.loop.run(message)
+                result = await handle.loop.run(
+                    message,
+                    application_request=handle.application_request,
+                )
                 handle.result = result
                 handle.turns += 1
                 await self._set_state(handle, STATUS_COMPLETED, "本轮完成")
@@ -615,6 +636,10 @@ class SubagentManager(SubagentReadMixin):
 
             if handle.queue:
                 message = handle.queue.pop(0)
+                handle.application_request = (
+                    handle.queued_application_requests.pop(0)
+                    if handle.queued_application_requests else None
+                )
                 if handle.sidechain is not None:
                     handle.sidechain.append_message(
                         "user", message, source="queue")
@@ -632,7 +657,12 @@ class SubagentManager(SubagentReadMixin):
     # -- 交互：send / pause / resume / kill --------------------------------------
 
     async def send_input(
-        self, agent_id: str, message: str, interrupt: bool = False
+        self,
+        agent_id: str,
+        message: str,
+        interrupt: bool = False,
+        *,
+        application_request: Optional[ApplicationRequest] = None,
     ) -> Tuple[AgentHandle, str]:
         handle = self._require_handle(agent_id)
         if handle.status == STATUS_KILLED:
@@ -641,6 +671,7 @@ class SubagentManager(SubagentReadMixin):
         if not self.is_running(handle):
             handle.kill_requested = False
             handle.task = message
+            handle.application_request = application_request
             if handle.sidechain is not None:
                 handle.sidechain.append_message("user", message, source="input")
             handle.task_obj = asyncio.create_task(self._run(handle, message))
@@ -648,6 +679,7 @@ class SubagentManager(SubagentReadMixin):
 
         if not interrupt:
             handle.queue.append(message)
+            handle.queued_application_requests.append(application_request)
             if handle.sidechain is not None:
                 handle.sidechain.append_message("user", message, source="queued")
             return handle, "queued"
@@ -668,6 +700,7 @@ class SubagentManager(SubagentReadMixin):
             first = message
         handle.kill_requested = False
         handle.task = message
+        handle.application_request = application_request
         if handle.sidechain is not None:
             handle.sidechain.append_message("user", message, source="interrupt")
         handle.task_obj = asyncio.create_task(self._run(handle, first))

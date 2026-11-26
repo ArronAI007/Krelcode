@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
 
 from ..core.events import (
@@ -50,6 +50,10 @@ from ..core.events import (
 )
 from ..core.messages import ImageRef, Message, ToolCall
 from ..agent.turn.query import QueryEvent
+from ..contracts.application import (
+    ApplicationRequest,
+    ApplicationRequestFactory,
+)
 from .stream_json_schema import (
     STREAM_JSON_PROTOCOL_NAME as PROTOCOL_NAME,
     STREAM_JSON_PROTOCOL_VERSION as PROTOCOL_VERSION,
@@ -68,6 +72,8 @@ class StreamUserMessage:
     content: str
     request_id: str = ""
     images: tuple[ImageRef, ...] = ()
+    application: Optional[ApplicationRequest] = field(
+        default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -141,6 +147,7 @@ class StreamJsonEncoder:
                 "type": "system",
                 "subtype": "turn_started",
                 "content": event.user_input,
+                "application": dict(event.application),
             }
         elif isinstance(event, StepStarted):
             payload = {"type": "step", "subtype": "started", "step": event.step}
@@ -585,18 +592,27 @@ def parse_input_line(line: str) -> StreamUserMessage | StreamControlMessage:
         raw_content = envelope.get("content")
         request_id = str(
             value.get("request_id", envelope.get("request_id", ""))).strip()
+        raw_application = value.get(
+            "application", envelope.get("application"))
     else:
         raw_content = value.get("content")
         request_id = str(value.get("request_id", "")).strip()
+        raw_application = value.get("application")
 
     content, images = _parse_content(raw_content)
     if not content.strip() and not images:
         raise StreamJsonProtocolError("user.content 不能为空")
+    application = _parse_application(
+        raw_application,
+        content=content,
+        request_id=request_id,
+    )
     _validate_input_envelope(value)
     return StreamUserMessage(
         content=content,
         request_id=request_id,
         images=tuple(images),
+        application=application,
     )
 
 
@@ -657,6 +673,27 @@ def _parse_content(raw_content: Any) -> tuple[str, list[ImageRef]]:
             continue
         raise StreamJsonProtocolError(f"不支持的 content block: {block_type!r}")
     return "\n".join(text_parts), images
+
+
+def _parse_application(
+    raw: object,
+    *,
+    content: str,
+    request_id: str,
+) -> Optional[ApplicationRequest]:
+    if raw is not None:
+        if not isinstance(raw, Mapping):
+            raise StreamJsonProtocolError("application 必须是对象")
+        try:
+            return ApplicationRequest.from_mapping(raw)
+        except (TypeError, ValueError) as exc:
+            raise StreamJsonProtocolError(
+                f"application 无效: {exc}") from exc
+    return ApplicationRequestFactory.from_input_source(
+        "stream-json",
+        goal=content or "[image attachment]",
+        metadata={"request_id": request_id} if request_id else None,
+    )
 
 
 def _tool_call_payload(tool_call: ToolCall) -> Dict[str, Any]:

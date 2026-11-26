@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -15,6 +16,12 @@ from ..core.events import (
     SubagentStateChanged,
 )
 from ..core.redact import SecretRedactor
+from ..contracts.application import (
+    ApplicationRequest,
+    ApplicationRequestFactory,
+    TaskShape,
+    TriggerType,
+)
 from ..jobs import ShellJobManager
 from .protocol import RPCError
 from .server_runtime import DaemonAgentRuntimeFactory, DaemonAgentRuntimeRequest
@@ -177,11 +184,16 @@ class DaemonAgentService:
             return {"path": str(path), "records": list(records)}
         if operation == "spawn":
             _, manager = await self._ensure_runtime()
+            task = _required(params, "task")
             handle = await manager.spawn(
-                _required(params, "task"),
+                task,
                 isolated=_optional_bool(params.get("isolated")),
                 fork_context=_optional_bool(params.get("fork_context")),
                 definition=(str(params.get("definition") or "").strip() or None),
+                application_request=_daemon_application_request(
+                    params,
+                    goal=task,
+                ),
             )
             await asyncio.to_thread(
                 self.agent_store.upsert,
@@ -239,10 +251,15 @@ class DaemonAgentService:
                     ],
                 }
             if operation == "send_input":
+                message = _required(params, "message")
                 handle, action = await manager.send_input(
                     agent_id,
-                    _required(params, "message"),
+                    message,
                     interrupt=bool(params.get("interrupt")),
+                    application_request=_daemon_application_request(
+                        params,
+                        goal=message,
+                    ),
                 )
             elif operation == "pause":
                 handle = await manager.pause(agent_id)
@@ -342,6 +359,10 @@ def _agent_record(handle: Any, instance_id: str) -> Dict[str, Any]:
         "latest_sequence": handle.feed.latest_sequence if handle.feed else 0,
         "queue": list(handle.queue),
         "started_at": getattr(handle, "started_at", None) or time.time(),
+        "application": (
+            handle.application_request.to_dict()
+            if getattr(handle, "application_request", None) is not None else {}
+        ),
     }
 
 
@@ -365,7 +386,34 @@ def _handle_dict(handle: Any) -> Dict[str, Any]:
         "mcp_servers": list(handle.mcp_servers),
         "queue": list(handle.queue),
         "latest_sequence": handle.feed.latest_sequence if handle.feed else 0,
+        "application": (
+            handle.application_request.to_dict()
+            if getattr(handle, "application_request", None) is not None else {}
+        ),
     }
+
+
+def _daemon_application_request(
+    params: Dict[str, Any],
+    *,
+    goal: str,
+) -> ApplicationRequest:
+    raw = params.get("application")
+    request = (
+        ApplicationRequest.from_mapping(raw)
+        if isinstance(raw, dict)
+        else ApplicationRequestFactory.from_input_source(
+            "daemon",
+            goal=goal,
+            task_shape=TaskShape.MULTI_AGENT,
+            metadata={"rpc": "agent"},
+        )
+    )
+    return replace(
+        request,
+        trigger=TriggerType.DAEMON,
+        goal=goal,
+    )
 
 
 __all__ = ["DaemonAgentService"]

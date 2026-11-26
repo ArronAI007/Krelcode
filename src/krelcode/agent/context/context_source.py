@@ -27,6 +27,7 @@ from krelcode.agent.prompt.fragments import (
 from krelcode.agent.turn.intent import TurnIntent
 from krelcode.agent.rules import RuleBundle, RuleLayer, RuleLoader, RuleScope, extract_rule_targets
 from krelcode.core.tokens import estimate_text_tokens
+from krelcode.contracts.application import ApplicationRequest
 from krelcode.agent.turn.tool_pool import TurnToolPool
 from krelcode.agent.context.context_contracts import (
     CATEGORY_MEMORY,
@@ -97,6 +98,7 @@ class ContextRequest:
     runtime_context: Tuple[str, ...] = ()
     working_context: Optional["WorkingContextSnapshot"] = None
     relevant_memory: Tuple[str, ...] = ()
+    application_request: Optional[ApplicationRequest] = None
 
 
 @dataclass(frozen=True)

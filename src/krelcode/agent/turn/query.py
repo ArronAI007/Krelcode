@@ -15,6 +15,7 @@ from typing import AsyncIterator, Callable, Optional
 from krelcode.core.events import AgentEvent
 from krelcode.core.messages import ImageRef
 from krelcode.core.session_events import SessionEvent, as_session_event_payload
+from krelcode.contracts.application import ApplicationRequest
 from krelcode.agent.turn.loop import AgentLoop
 
 
@@ -71,6 +72,7 @@ class QueryEngine:
         images: Optional[list[ImageRef]] = None,
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[list[str]] = None,
+        application_request: Optional[ApplicationRequest] = None,
     ) -> QuerySession:
         turn_id = f"turn-{next(self._counter)}"
         queue: asyncio.Queue[QueryEvent | _QueryEnd] = asyncio.Queue(
@@ -96,6 +98,7 @@ class QueryEngine:
                 turn_id=turn_id,
                 tool_allowlist=tool_allowlist,
                 reminder_ids=reminder_ids,
+                application_request=application_request,
             ))
 
         def on_done(finished: asyncio.Task[str]) -> None:

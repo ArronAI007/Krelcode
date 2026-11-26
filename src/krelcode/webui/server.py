@@ -141,6 +141,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if (
                 len(parts) == 5
                 and parts[:3] == ["api", "v1", "runs"]
+                and parts[4] == "application"
+            ):
+                self._send_json(
+                    self.dashboard.store.application(parts[3]).to_dict())
+                return
+            if (
+                len(parts) == 5
+                and parts[:3] == ["api", "v1", "runs"]
                 and parts[4] == "stream"
             ):
                 after = _query_int(query, "after", 0, 0, 2_000_000_000)

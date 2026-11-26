@@ -14,6 +14,10 @@ from typing import Awaitable, Callable, Mapping, Optional, Protocol, Sequence
 
 from krelcode.core.events import EventBus
 from krelcode.core.messages import ImageRef, SteeringInput
+from krelcode.contracts.application import (
+    ApplicationRequest,
+    ApplicationRequestFactory,
+)
 from krelcode.contracts.tool import RuntimeSnapshot
 from krelcode.agent.turn.loop import AgentLoop
 from krelcode.agent.turn.query import QueryEngine, QuerySession
@@ -100,6 +104,7 @@ class AgentRuntime:
         images: Optional[list[ImageRef]] = None,
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[list[str]] = None,
+        application_request: Optional[ApplicationRequest] = None,
     ) -> str:
         """执行一次完整 turn；供 headless/API 复用。"""
         query = self.start_query(
@@ -107,6 +112,7 @@ class AgentRuntime:
             images=images,
             tool_allowlist=tool_allowlist,
             reminder_ids=reminder_ids,
+            application_request=application_request,
         )
         async for _ in query.events:
             pass
@@ -124,6 +130,7 @@ class AgentRuntime:
         images: Optional[list[ImageRef]] = None,
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[list[str]] = None,
+        application_request: Optional[ApplicationRequest] = None,
     ) -> QuerySession:
         """启动一条可消费 QueryEvent 流；同一 Runtime 不允许并发两轮。"""
         if self.is_running:
@@ -133,6 +140,12 @@ class AgentRuntime:
             images=images,
             tool_allowlist=tool_allowlist,
             reminder_ids=reminder_ids,
+            application_request=application_request or (
+                ApplicationRequestFactory.from_input_source(
+                    "headless",
+                    goal=message or "[image attachment]",
+                )
+            ),
         )
         self._task = self._query.task
         return self._query
@@ -142,9 +155,14 @@ class AgentRuntime:
         message: str,
         *,
         images: Optional[list[ImageRef]] = None,
+        application_request: Optional[ApplicationRequest] = None,
     ) -> asyncio.Task[str]:
         """兼容入口：启动后台 turn 并返回底层 task。"""
-        return self.start_query(message, images=images).task
+        return self.start_query(
+            message,
+            images=images,
+            application_request=application_request,
+        ).task
 
     def steer(
         self,

@@ -6,6 +6,10 @@ import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
+from krelcode.contracts.application import (
+    ApplicationRequest,
+    ApplicationRequestFactory,
+)
 from krelcode.observability.models import EventEnvelope, RunManifest
 
 _SAFE_ID_CHARS = frozenset(
@@ -53,7 +57,38 @@ class DashboardStore:
         return {
             "manifest": manifest.to_dict(),
             "metrics": metrics,
+            "application": self.application(run_id).to_dict(),
         }
+
+    def application(self, run_id: str) -> ApplicationRequest:
+        """Read a run's application contract or build a legacy WebUI view."""
+        run_id = safe_run_id(run_id)
+        manifest = self._manifest(run_id)
+        events = self.events_after(run_id, 0, limit=1_000)
+        for event in events:
+            if event.name != "run_started":
+                continue
+            raw = event.payload.get("application")
+            if isinstance(raw, Mapping) and raw:
+                try:
+                    return ApplicationRequest.from_mapping(raw)
+                except (TypeError, ValueError):
+                    break
+            input_text = str(event.payload.get("input") or "")
+            return ApplicationRequestFactory.from_input_source(
+                "webui",
+                goal=input_text or "[legacy run without recorded goal]",
+                metadata={
+                    "run_id": run_id,
+                    "legacy": True,
+                    "run_mode": manifest.run_mode,
+                },
+            )
+        return ApplicationRequestFactory.from_input_source(
+            "webui",
+            goal="[run has no application event]",
+            metadata={"run_id": run_id, "legacy": True},
+        )
 
     def read_events(
         self,

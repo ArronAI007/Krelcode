@@ -479,11 +479,13 @@ PACKAGE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
         "agent", "contracts", "core", "mcp", "safety", "security_review",
         "skills", "tools",
     }),
-    "ui": frozenset({"agent", "core", "safety", "session"}),
-    "daemon": frozenset({"app", "config", "core", "jobs", "safety", "subagent"}),
+    "ui": frozenset({"agent", "contracts", "core", "safety", "session"}),
+    "daemon": frozenset({
+        "app", "config", "contracts", "core", "jobs", "safety", "subagent",
+    }),
     "telemetry": frozenset({"core"}),
     "observability": frozenset({"core"}),
-    "webui": frozenset({"observability"}),
+    "webui": frozenset({"contracts", "observability"}),
     "benchmarks": frozenset({
         "agent", "app", "bootstrap", "config", "contracts", "core",
         "extensions", "llm", "safety", "sdk", "session", "subagent", "tools",
@@ -512,7 +514,7 @@ ROOT_MODULE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
         "agent", "config", "contracts", "core", "llm", "safety", "tools",
     }),
     "scaffold": frozenset(),
-    "sdk": frozenset({"core"}),
+    "sdk": frozenset({"contracts", "core"}),
 }
 
 COMPONENT_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {

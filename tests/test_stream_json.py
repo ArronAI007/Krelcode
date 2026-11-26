@@ -334,6 +334,9 @@ def test_parse_editor_interaction_responses():
     ('{"type":"user","content":" "}', "不能为空"),
     ('{"type":"user","content":[{"type":"audio"}]}', "不支持"),
     ('{"type":"user","content":{"text":"x"}}', "必须是字符串或"),
+    ('{"type":"user","content":"x","application":[]}', "application 必须是对象"),
+    ('{"type":"user","content":"x","application":{"goal":""}}',
+     "application 无效"),
     ('{"type":"user","message":{"role":"assistant","content":"x"}}',
      "role 必须"),
     ('{"type":"user","content":[{"type":"image","source":{}}]}',
@@ -416,6 +419,12 @@ def test_runner_single_prompt_emits_one_terminal_result(tmp_path):
     assert rc == 0
     assert rows[0]["type"] == "system" and rows[0]["subtype"] == "init"
     assert rows[0]["protocol"] == PROTOCOL_NAME
+    turn_started = next(
+        item for item in rows
+        if item["type"] == "system" and item["subtype"] == "turn_started"
+    )
+    assert turn_started["application"]["trigger"] == "stream-json"
+    assert turn_started["application"]["goal"] == "hello"
     assembled = [
         item for item in rows
         if item["type"] == "context" and item["subtype"] == "assembled"

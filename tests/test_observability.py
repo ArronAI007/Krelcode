@@ -185,6 +185,10 @@ def test_store_aggregates_events_and_rejects_path_traversal(tmp_path: Path) -> N
     assert metrics["status"] == "completed"
     assert metrics["event_count"] == 2
     assert len(store.read_events("run-store", after=1)) == 1
+    application = store.application("run-store")
+    assert application.trigger.value == "webui"
+    assert application.metadata["run_id"] == "run-store"
+    assert store.get_run("run-store")["application"] == application.to_dict()
     with pytest.raises(ValueError):
         safe_run_id("../escape")
 

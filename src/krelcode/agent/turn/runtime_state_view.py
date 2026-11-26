@@ -98,6 +98,7 @@ if TYPE_CHECKING:
         EnterprisePolicyPort,
         PrincipalPort,
     )
+    from krelcode.contracts.application import ApplicationRequest
     from krelcode.contracts.tool import RuntimeSnapshot, ToolContext, TurnAbortSignal
     from krelcode.llm.base import LLMProvider
     from krelcode.safety.contract import ModePermissionContract
@@ -251,6 +252,17 @@ class RuntimeStateView:
     @last_reminder_selection.setter
     def last_reminder_selection(self, value: Optional[ReminderSelection]) -> None:
         self.runtime_state.turn.last_reminder_selection = value
+
+    @property
+    def application_request(self) -> Optional[ApplicationRequest]:
+        return self.runtime_state.turn.application_request
+
+    @application_request.setter
+    def application_request(
+        self,
+        value: Optional[ApplicationRequest],
+    ) -> None:
+        self.runtime_state.turn.application_request = value
 
     @property
     def steering_queue(self) -> asyncio.Queue[SteeringInput | str]:

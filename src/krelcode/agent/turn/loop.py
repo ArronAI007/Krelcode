@@ -35,6 +35,10 @@ from krelcode.core.events import (
 )
 from krelcode.core.messages import ImageRef, Message, SteeringInput, ToolCall, ToolResultBlock
 from krelcode.llm.base import LLMProvider, PreparedLLMRequest, ToolSpec
+from krelcode.contracts.application import (
+    ApplicationRequest,
+    ApplicationRequestFactory,
+)
 from krelcode.agent.context.attachments import ContextAttachment, ContextAttachmentDiff, ContextAttachmentKind
 from krelcode.agent.context.compression import ContextManager
 from krelcode.agent.context.context_assembler import ContextAssembler
@@ -308,12 +312,19 @@ class AgentLoop(RuntimeStateHost):
         turn_id: Optional[str] = None,
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[Iterable[str]] = None,
+        application_request: Optional[ApplicationRequest] = None,
     ) -> str:
         """QueryEngine 的窄入口；允许 runner 替换 ``run`` 时仍传入 turn id。"""
         self._begin_turn(
             turn_id,
             tool_allowlist=tool_allowlist,
             reminder_ids=reminder_ids,
+            application_request=application_request or (
+                ApplicationRequestFactory.from_input_source(
+                    "headless",
+                    goal=user_input or "[image attachment]",
+                )
+            ),
         )
         self._turn_prepared = True
         try:
@@ -343,6 +354,7 @@ class AgentLoop(RuntimeStateHost):
         saved_pool = self._active_tool_pool
         saved_abort = self._turn_abort_signal
         saved_turn_id = self._current_turn_id
+        saved_application_request = self.application_request
         direct_turn = turn_id or f"direct-{next(self._direct_counter)}"
         call = ToolCall(
             id=f"{direct_turn}-call",
@@ -370,6 +382,7 @@ class AgentLoop(RuntimeStateHost):
             self._active_tool_pool = saved_pool
             self._turn_abort_signal = saved_abort
             self._current_turn_id = saved_turn_id
+            self.application_request = saved_application_request
 
     async def run(
         self,
@@ -379,6 +392,7 @@ class AgentLoop(RuntimeStateHost):
         turn_id: Optional[str] = None,
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[Iterable[str]] = None,
+        application_request: Optional[ApplicationRequest] = None,
     ) -> str:
         """处理一轮用户输入：内部可能经历多次 LLM 调用与工具执行。
 
@@ -392,6 +406,12 @@ class AgentLoop(RuntimeStateHost):
                 turn_id,
                 tool_allowlist=tool_allowlist,
                 reminder_ids=reminder_ids,
+                application_request=application_request or (
+                    ApplicationRequestFactory.from_input_source(
+                        "headless",
+                        goal=user_input or "[image attachment]",
+                    )
+                ),
             )
         if self.pending_context_refresh:
             await self.refresh_workspace_context()
@@ -419,6 +439,10 @@ class AgentLoop(RuntimeStateHost):
             user_input,
             turn_id=self._current_turn_id,
             session_id=self._turn_tool_context.runtime.session_id or "",
+            application=(
+                self.application_request.to_dict()
+                if self.application_request is not None else {}
+            ),
         ))
         await self._emit(QueryPhaseChanged(
             "awaiting_model", "等待模型响应"))
@@ -492,6 +516,7 @@ class AgentLoop(RuntimeStateHost):
         *,
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[Iterable[str]] = None,
+        application_request: Optional[ApplicationRequest] = None,
     ) -> None:
         resolved_turn_id = turn_id or f"turn-{next(self._turn_counter)}"
         self._current_turn_id = resolved_turn_id
@@ -502,6 +527,7 @@ class AgentLoop(RuntimeStateHost):
             for item in (reminder_ids or ())
             if str(item).strip()
         ))
+        self.application_request = application_request
         self._turn_abort_signal = TurnAbortSignal()
         snapshot = self.services.core.tool_context.runtime
         if self.runtime_snapshot_provider is not None:

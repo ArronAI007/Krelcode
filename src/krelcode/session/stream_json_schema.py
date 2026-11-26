@@ -145,6 +145,7 @@ STREAM_JSON_FIELD_TYPES: Mapping[str, Mapping[str, object]] = {
     "explanation": {"type": "string"},
     "command": {"type": "string"},
     "job_id": {"type": "string"},
+    "application": _FIELD_OBJECT,
 }
 
 _ENVELOPE = ("turn_id", "sequence", "session_id")

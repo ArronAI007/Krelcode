@@ -20,6 +20,10 @@ from typing import Any, Callable, Optional, Protocol, Sequence
 from ..agent.turn.query import QueryEvent, QuerySession
 from ..core.events import AgentEvent, PlanUpdated
 from ..core.redact import SecretRedactor
+from ..contracts.application import (
+    ApplicationRequest,
+    ApplicationRequestFactory,
+)
 from .controller import SessionController
 from .envelope import SessionEnvelope
 from .event_router import EnvelopeSink, SessionEventRouter
@@ -56,6 +60,7 @@ class SessionPrompt:
     tool_allowlist: Optional[tuple[str, ...]] = None
     reminder_ids: tuple[str, ...] = ()
     label: str = ""
+    application_request: Optional[ApplicationRequest] = None
 
     @classmethod
     def create(
@@ -66,7 +71,16 @@ class SessionPrompt:
         tool_allowlist: Optional[Sequence[str]] = None,
         reminder_ids: Sequence[str] = (),
         label: str = "",
+        source: str = "repl",
+        application_request: Optional[ApplicationRequest] = None,
     ) -> "SessionPrompt":
+        request = application_request or (
+            ApplicationRequestFactory.from_input_source(
+                source,
+                goal=text or "[image attachment]",
+                metadata={"session_label": label or " ".join(text.split())},
+            )
+        )
         return cls(
             text=text,
             images=tuple(images),
@@ -74,6 +88,7 @@ class SessionPrompt:
                 tuple(tool_allowlist) if tool_allowlist is not None else None),
             reminder_ids=tuple(reminder_ids),
             label=label or " ".join(text.split()),
+            application_request=request,
         )
 
 
@@ -261,6 +276,7 @@ class ReplSessionRunner:
                 if prompt.tool_allowlist is not None else None),
             reminder_ids=(
                 list(prompt.reminder_ids) if prompt.reminder_ids else None),
+            application_request=prompt.application_request,
         )
         self.state.begin_turn(turn_id=query.turn_id)
         self.active_query = query

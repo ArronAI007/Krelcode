@@ -16,6 +16,11 @@ from ..agent.turn.runtime import AgentRuntime
 from ..agent.usage import UsageTracker
 from ..core.events import AgentEvent, PermissionDenied, ToolCallCompleted
 from ..core.redact import SecretRedactor
+from ..contracts.application import (
+    ApplicationRequest,
+    ApplicationRequestFactory,
+    TaskBudget,
+)
 from .bootstrap import setup_session
 from .commands.ports import (
     ModelSwitchPort,
@@ -149,6 +154,13 @@ async def run_session(
                     if result.run_prompt is None:
                         return 0
                     message = result.run_prompt
+            application_request = _headless_application_request(
+                args,
+                str(args.message),
+                command=(
+                    str(args.message).partition(" ")[0]
+                    if command_result is not None else ""),
+            )
             if args.output_format == "json":
                 summary = _RunSummary()
                 loop.bus.subscribe(summary.on_event)
@@ -165,6 +177,7 @@ async def run_session(
                             list(command_result.reminder_ids)
                             if command_result is not None
                             and command_result.reminder_ids else None),
+                        application_request=application_request,
                     ))
                     payload = {
                         "ok": True,
@@ -199,6 +212,7 @@ async def run_session(
                         list(command_result.reminder_ids)
                         if command_result is not None
                         and command_result.reminder_ids else None),
+                    application_request=application_request,
                 )))
             except Exception as exc:
                 print(f"错误：{type(exc).__name__}: {exc}")
@@ -244,3 +258,35 @@ async def run_session(
                 "session": str(session_path) if session_path else "",
                 "workspace": str(runtime.workspace_root),
             })
+
+
+def _headless_application_request(
+    args: argparse.Namespace,
+    goal: str,
+    *,
+    command: str = "",
+) -> ApplicationRequest:
+    metadata: dict[str, object] = {
+        "interactive": False,
+        "output_format": str(getattr(args, "output_format", "text") or "text"),
+    }
+    if command:
+        metadata["command"] = command
+    return ApplicationRequestFactory.from_input_source(
+        "headless",
+        goal=goal or "[image attachment]",
+        budget=TaskBudget(
+            max_steps=_optional_int(getattr(args, "max_steps", None)),
+            max_tokens=_optional_int(getattr(args, "token_budget", None)),
+        ),
+        metadata=metadata,
+    )
+
+
+def _optional_int(value: object) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None

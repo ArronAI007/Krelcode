@@ -1,5 +1,15 @@
 """Shared, dependency-light contracts between runtime layers."""
 
+from .application import (
+    AcceptanceContract,
+    ApplicationRequest,
+    ApplicationRequestFactory,
+    RiskLevel,
+    RiskProfile,
+    TaskBudget,
+    TaskShape,
+    TriggerType,
+)
 from .runtime import PermissionMode, RunMode, RuntimeSnapshot
 from .safety import SandboxPort
 from .service_ports import (
@@ -31,6 +41,9 @@ from .tool import (
 )
 
 __all__ = [
+    "AcceptanceContract",
+    "ApplicationRequest",
+    "ApplicationRequestFactory",
     "CommandDescriptor",
     "EnterprisePolicyPort",
     "PermissionMode",
@@ -43,6 +56,8 @@ __all__ = [
     "PromptReleaseStorePort",
     "RunMode",
     "RuntimeSnapshot",
+    "RiskLevel",
+    "RiskProfile",
     "SandboxPort",
     "ShellJobManagerPort",
     "ShellJobPagePort",
@@ -58,4 +73,7 @@ __all__ = [
     "ToolSource",
     "ToolTier",
     "TurnAbortSignal",
+    "TaskBudget",
+    "TaskShape",
+    "TriggerType",
 ]

@@ -19,6 +19,7 @@ from ..agent.turn.runtime import AgentRuntime
 from ..agent.turn.loop import AgentLoop
 from ..core.events import AgentEvent, ShellJobFinished
 from ..core.redact import SecretRedactor
+from ..contracts.application import ApplicationRequestFactory
 from ..session.commands import CommandResult
 from ..session.commands.ports import (
     MCPReloadPort,
@@ -313,12 +314,22 @@ class ConversationHost:
             tool_allowlist: Optional[Sequence[str]] = None,
             reminder_ids: Optional[Sequence[str]] = None,
         ) -> SessionPrompt:
+            application_request = ApplicationRequestFactory.from_input_source(
+                action.source,
+                goal=action.text or "[image attachment]",
+                metadata={
+                    "delivery": action.delivery.value,
+                    "input_kind": action.kind.value,
+                },
+            )
             return SessionPrompt.create(
                 action.text,
                 images=action.images,
                 tool_allowlist=tool_allowlist,
                 reminder_ids=reminder_ids or (),
                 label=_queue_label(action),
+                source=action.source,
+                application_request=application_request,
             )
 
         async def cancel_quick_task(
@@ -713,11 +724,23 @@ class ConversationHost:
                 handled_command = await handle_command(action)
                 if (isinstance(handled_command, CommandResult)
                         and handled_command.run_prompt is not None):
+                    application_request = (
+                        ApplicationRequestFactory.from_input_source(
+                            action.source,
+                            goal=action.text,
+                            metadata={
+                                "input_kind": action.kind.value,
+                                "command": action.command,
+                            },
+                        )
+                    )
                     skill_prompt = SessionPrompt.create(
                         handled_command.run_prompt,
                         tool_allowlist=handled_command.tool_allowlist,
                         reminder_ids=handled_command.reminder_ids,
                         label=_queue_label(action),
+                        source=action.source,
+                        application_request=application_request,
                     )
                     runner.start(skill_prompt)
                 restore_prompt()

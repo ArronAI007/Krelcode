@@ -12,6 +12,8 @@ from krelcode.agent.loop import AgentLoop
 from krelcode.agent.runtime import AgentRuntime
 from krelcode.agent.usage import UsageTracker
 from krelcode.core.redact import SecretRedactor
+from krelcode.core.events import RunStarted
+from krelcode.contracts.application import TriggerType
 from krelcode.hooks import HookRunner, HookSpec
 from krelcode.llm.providers.mock import MockProvider
 from krelcode.safety.policy import AllowAllPolicy
@@ -61,6 +63,8 @@ def base_args(**overrides):
 def test_headless_mode_runs_through_runtime(tmp_path, capsys):
     runtime = make_runtime(tmp_path)
     usage = UsageTracker()
+    events = []
+    runtime.loop.bus.subscribe(events.append)
     rc = asyncio.run(run_session(
         base_args(message="hello"),
         runtime,
@@ -73,6 +77,9 @@ def test_headless_mode_runs_through_runtime(tmp_path, capsys):
     assert rc == 0
     assert "headless reply" in capsys.readouterr().out
     assert runtime.loop.history[1].content == "hello"
+    started = next(event for event in events if isinstance(event, RunStarted))
+    assert started.application["trigger"] == TriggerType.HEADLESS.value
+    assert started.application["goal"] == "hello"
 
 
 def test_headless_input_processor_applies_user_input_hook(tmp_path, capsys):

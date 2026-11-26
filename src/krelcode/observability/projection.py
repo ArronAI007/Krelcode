@@ -192,6 +192,7 @@ class EventProjector:
             return {
                 "input": self._text(event.user_input),
                 "input_chars": len(event.user_input),
+                "application": self._value(event.application),
             }
         if isinstance(event, (LLMStreamDelta, LLMThinkingDelta)):
             return {"text": self._text(event.text), "text_chars": len(event.text)}

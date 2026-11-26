@@ -15,6 +15,7 @@ from typing import Any, cast, Optional, Sequence
 from ..agent.turn.loop import AgentLoop
 from ..agent.turn.runtime import AgentRuntime
 from ..agent.turn.query import QuerySession
+from ..contracts.application import ApplicationRequest
 from ..contracts.runtime import PermissionMode
 from ..safety.runtime import PlanApprovalCoordinator, RuntimePermissionManager
 from ..contracts.tool import CommandDescriptor, ToolResult, ToolServices
@@ -171,6 +172,7 @@ class SessionController:
         images: Optional[list[ImageRef]] = None,
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[list[str]] = None,
+        application_request: Optional[ApplicationRequest] = None,
     ) -> QuerySession:
         """启动一轮查询并返回可消费事件的 QuerySession。"""
         if self.permission_manager.mode.value == "plan":
@@ -180,6 +182,7 @@ class SessionController:
             images=images,
             tool_allowlist=tool_allowlist,
             reminder_ids=reminder_ids,
+            application_request=application_request,
         )
 
     def start_run(

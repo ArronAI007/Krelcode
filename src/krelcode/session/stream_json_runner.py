@@ -29,6 +29,7 @@ from ..core.events import (
 )
 from ..core.redact import SecretRedactor
 from ..core.session_events import SessionEventPayload, as_session_event_payload
+from ..contracts.application import ApplicationRequestFactory
 from ..agent.turn.query import QueryEvent, QuerySession
 from .controller import SessionController
 from .input import InputAction, InputEnvelope, InputKind, InputProcessor
@@ -127,7 +128,14 @@ async def run_stream_json_session(
     unsubscribe_jobs = loop.bus.subscribe(on_job_event)
     input_queue: asyncio.Queue[Any] = asyncio.Queue()
     if initial_prompt is not None:
-        input_queue.put_nowait(StreamUserMessage(initial_prompt))
+        input_queue.put_nowait(StreamUserMessage(
+            initial_prompt,
+            application=ApplicationRequestFactory.from_input_source(
+                "stream-json",
+                goal=initial_prompt,
+                metadata={"initial_prompt": True},
+            ),
+        ))
         input_queue.put_nowait(_INPUT_DONE)
     reader_task = asyncio.create_task(_read_inputs(input_stream, input_queue))
 
@@ -244,6 +252,16 @@ async def _run_turn(
                 if result.tool_allowlist is not None else None)
             reminder_ids = (
                 list(result.reminder_ids) if result.reminder_ids else None)
+            application_request = message.application or (
+                ApplicationRequestFactory.from_input_source(
+                    "stream-json",
+                    goal=message.content,
+                    metadata={
+                        "request_id": message.request_id,
+                        "command": True,
+                    },
+                )
+            )
         else:
             prepared = (
                 action if action is not None
@@ -253,11 +271,19 @@ async def _run_turn(
             prompt = prepared.text if prepared is not None else message.content
             tool_allowlist = None
             reminder_ids = None
+            application_request = message.application or (
+                ApplicationRequestFactory.from_input_source(
+                    "stream-json",
+                    goal=prompt or "[image attachment]",
+                    metadata={"request_id": message.request_id},
+                )
+            )
         query = runtime.start_query(
             prompt,
             images=images or None,
             tool_allowlist=tool_allowlist,
             reminder_ids=reminder_ids,
+            application_request=application_request,
         )
     except Exception as exc:
         writer.emit(encoder.result_message(
