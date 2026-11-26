@@ -42,6 +42,7 @@ if TYPE_CHECKING:
         ContextSource,
     )
     from krelcode.agent.prompt.fragments import PromptFragmentRegistry
+    from krelcode.agent.prompts import PromptProfileResolution
     from krelcode.agent.turn.intent import TurnIntent
     from krelcode.agent.prompt.prompt_models import PromptPlan, ProviderMessages as PromptProviderMessages
     from krelcode.agent.prompt.prompt_assembler import PromptAssemblyRequest
@@ -367,6 +368,7 @@ class ToolTurnHostPort(_EventHostPort, _ToolPoolHostPort, Protocol):
     _failure_counts: dict[str, int]
     _input_counter: Iterator[int]
     _turn_tool_context: "ToolContext"
+    prompt_profile_resolution: Optional["PromptProfileResolution"]
 
     async def _before_tool_hook(
         self, tool_call: "ToolCall") -> "HookResult": ...

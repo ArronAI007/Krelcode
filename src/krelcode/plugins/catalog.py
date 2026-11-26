@@ -11,6 +11,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
+from ..contracts.governance import GovernanceDecision
 from .components import (
     PluginCommand,
     PluginComponentError,
@@ -556,6 +557,7 @@ class PluginCatalogMixin:
         scope: str = "user",
         replace: bool = False,
         require_signature: Optional[bool] = None,
+        governance_decision: Optional[GovernanceDecision] = None,
     ) -> PluginLifecycleResult:
         result = await asyncio.to_thread(
             self._install_sync,
@@ -564,6 +566,7 @@ class PluginCatalogMixin:
             replace,
             require_signature,
             None,
+            governance_decision,
         )
         return result
 
@@ -574,6 +577,7 @@ class PluginCatalogMixin:
         replace: bool,
         require_signature: Optional[bool] = None,
         registry_metadata: Optional[Mapping[str, Any]] = None,
+        governance_decision: Optional[GovernanceDecision] = None,
     ) -> PluginLifecycleResult:
         source = source.expanduser().resolve()
         manifest_path = source / "plugin.toml"
@@ -582,6 +586,16 @@ class PluginCatalogMixin:
         manifest = parse_manifest(manifest_path)
         self._validate_source_tree(source)
         verification = self._verify_manifest(manifest)
+        if governance_decision is not None:
+            trust = governance_decision.plugin_trust
+            if not governance_decision.allowed:
+                raise PluginSignatureError(
+                    f"治理控制面拒绝插件安装: {governance_decision.reason}")
+            if trust.name and trust.name != manifest.name:
+                raise PluginSignatureError(
+                    "治理决策属于其他插件，不能用于当前安装")
+            if trust.required and not trust.allowed:
+                raise PluginSignatureError("治理控制面拒绝插件信任状态")
         allowed, reason = self.trust_policy.allows(verification)
         signature_required = (
             self.trust_policy.require_signature_for_install

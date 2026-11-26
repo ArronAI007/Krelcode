@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Optional
 
+from ..contracts.governance import GovernanceDecision
 from .dependencies import DependencyNode, resolve_dependencies
 from .manifest import PluginManifest, PluginManifestError, parse_manifest
 from .models import PluginLifecycleResult, PluginRecord
@@ -51,6 +52,7 @@ class PluginRegistryMixin:
             replace: bool,
             require_signature: Optional[bool] = None,
             registry_metadata: Optional[Mapping[str, Any]] = None,
+            governance_decision: GovernanceDecision | None = None,
         ) -> PluginLifecycleResult: ...
 
         def _load_state(self) -> dict[str, bool]: ...

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import codecs
 import os
+from dataclasses import replace
 from typing import Any, Dict
 
 from ...contracts.tool import ToolContext, ToolExecutionRuntime
@@ -149,6 +150,14 @@ Sandbox and safety:
         timeout = _clamp_timeout(args.get("timeout"))
         permission_profile = str(
             args.get("sandbox_permission") or "auto").strip().lower()
+        decision = ctx.governance_decision
+        governance_profile = (
+            decision.sandbox_profile if decision is not None else None)
+        if governance_profile is not None:
+            if governance_profile.permission_profile:
+                permission_profile = governance_profile.permission_profile
+            if not governance_profile.enabled:
+                ctx = replace(ctx, sandbox=None, sandbox_enabled=False)
         if permission_profile == "auto":
             permission_profile_arg = None
         else:

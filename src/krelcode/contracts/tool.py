@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import (
-    Awaitable, Callable, Dict, FrozenSet, Optional, Protocol, Sequence,
-    Tuple, Union,
+    Awaitable, Callable, Dict, FrozenSet, Optional, Protocol, Sequence, Tuple,
+    Union,
 )
 
 from ..core.messages import (
@@ -20,6 +20,7 @@ from ..core.messages import (
     ToolResultBlock,
 )
 from .runtime import PermissionMode, RunMode, RuntimeSnapshot
+from .governance import GovernanceDecision
 from .json import (
     JsonObject,
     ToolExecutionData,
@@ -34,7 +35,6 @@ from .service_ports import (
     PromptReleasePipelinePort,
     ShellJobManagerPort,
 )
-
 
 @dataclass
 class ToolResult:
@@ -195,6 +195,8 @@ class ToolContext:
     enterprise_policy: Optional[EnterprisePolicyPort] = field(
         default=None, repr=False)
     principal: Optional[PrincipalPort] = field(default=None, repr=False)
+    governance_decision: Optional[GovernanceDecision] = field(
+        default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not self.sandbox_enabled:

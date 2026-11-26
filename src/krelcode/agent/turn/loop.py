@@ -114,8 +114,7 @@ class AgentLoop(RuntimeStateHost):
     _DEPENDENCY_ATTRS = frozenset({
         "llm", "execution_runtime", "tool_context", "policy", "bus", "max_steps",
         "repeat_failure_limit", "context_manager", "tool_output_inline_limit",
-        "token_budget", "redactor", "working_context_store",
-        "tool_microcompactor", "context_assembler", "prompt_assembler",
+        "token_budget", "redactor", "working_context_store", "tool_microcompactor", "context_assembler", "prompt_assembler",
         "reminder_catalog", "compact_checkpoint_store",
         "runtime_snapshot_provider", "hook_port", "user_input_port",
         "step_gate",
@@ -194,6 +193,7 @@ class AgentLoop(RuntimeStateHost):
 
         self.dependencies = AgentDependencies(
             llm=self.services.core.llm,
+            control_plane=self.services.core.control_plane,
             execution_runtime=self.services.core.execution_runtime,
             tool_context=self.services.core.tool_context,
             bus=self.services.core.bus,

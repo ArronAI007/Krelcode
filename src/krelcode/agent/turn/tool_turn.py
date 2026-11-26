@@ -34,7 +34,20 @@ from krelcode.core.messages import (
     ToolResultBlock,
 )
 from krelcode.core.textutil import truncate_middle
-from krelcode.contracts.tool import ToolExecutionRuntime, ToolResult
+from krelcode.contracts.governance import (
+    AuditCorrelation,
+    GovernanceRequest,
+    PluginTrustContext,
+    PromptReleaseIdentity,
+    SandboxProfile,
+)
+from krelcode.contracts.tool import (
+    ToolContext,
+    ToolDescriptor,
+    ToolExecutionRuntime,
+    ToolResult,
+    ToolSource,
+)
 from krelcode.contracts.tool_execution import (
     ToolExecutionResult,
     ToolIntent,
@@ -378,6 +391,34 @@ class ToolBatchExecutor:
                     "error_kind": "schema_validation",
                 },
             )
+        governance_decision = await deps.control_plane.evaluate(
+            _governance_request(host, execution_ctx, descriptor, tool_call))
+        execution_ctx = replace(
+            execution_ctx,
+            runtime=replace(
+                execution_ctx.runtime,
+                permission_mode=governance_decision.permission_mode,
+            ),
+            governance_decision=governance_decision,
+        )
+        intent = ToolIntent(
+            call=tool_call,
+            descriptor=descriptor,
+            parameters=prompt_spec.parameters,
+            context=execution_ctx,
+        )
+        if not governance_decision.allowed:
+            return ToolExecutionResult(
+                content=f"治理控制面拒绝工具执行: {governance_decision.reason}",
+                is_error=True,
+                runtime=runtime,
+                diagnostics={
+                    "source": descriptor.source.value,
+                    "runtime": runtime.value,
+                    "error_kind": "governance_denied",
+                    "governance_decision": governance_decision.decision_hash,
+                },
+            )
         pre_hook = await host._before_tool_hook(tool_call)
         if pre_hook.blocked:
             return ToolExecutionResult(
@@ -395,7 +436,8 @@ class ToolBatchExecutor:
         if deps.policy is not None:
             await execution_ctx.emit_progress("安全策略检查中")
             try:
-                decision = await deps.policy.check(tool_call, execution_ctx)
+                policy_decision = await deps.policy.check(
+                    tool_call, execution_ctx)
             except Exception as e:
                 await host._emit(ErrorOccurred(str(e), "policy.check"))
                 await host._emit(PermissionDenied(tool_call, str(e)))
@@ -409,10 +451,11 @@ class ToolBatchExecutor:
                         "error_kind": "policy_exception",
                     },
                 )
-            if not decision.allowed:
-                await host._emit(PermissionDenied(tool_call, decision.reason))
+            if not policy_decision.allowed:
+                await host._emit(PermissionDenied(
+                    tool_call, policy_decision.reason))
                 return ToolExecutionResult(
-                    content=f"操作被安全策略拒绝: {decision.reason}",
+                    content=f"操作被安全策略拒绝: {policy_decision.reason}",
                     is_error=True,
                     runtime=runtime,
                     diagnostics={
@@ -441,6 +484,57 @@ class ToolBatchExecutor:
                 content=(result.content + "\n\n" + blocks).strip(),
             )
         return result
+
+
+def _governance_request(
+    host: ToolTurnHostPort,
+    context: ToolContext,
+    descriptor: ToolDescriptor,
+    tool_call: ToolCall,
+) -> GovernanceRequest:
+    runtime = context.runtime
+    sandbox = context.sandbox
+    plugin_name = descriptor.plugin_name or ""
+    plugin_required = descriptor.source is ToolSource.PLUGIN
+    resolution = host.prompt_profile_resolution
+    release_id = str(getattr(resolution, "release_id", "") or "")
+    release_hash = str(getattr(resolution, "release_hash", "") or "")
+    permission_profile = str(
+        tool_call.arguments.get("sandbox_permission") or "workspace")
+    return GovernanceRequest(
+        identity=context.principal,
+        enterprise_policy=context.enterprise_policy,
+        runtime=runtime,
+        action="tool.execute",
+        resource="tool",
+        tool_name=tool_call.name,
+        tool_arguments=tool_call.arguments,
+        workspace_root=context.workspace_root,
+        sandbox_profile=SandboxProfile(
+            name=f"runtime:{runtime.permission_mode.value}",
+            backend=str(getattr(sandbox, "backend", "none")),
+            enabled=context.sandbox_enabled,
+            network=bool(getattr(sandbox, "network", False)),
+            permission_profile=permission_profile,
+        ),
+        plugin_trust=PluginTrustContext(
+            name=plugin_name,
+            required=plugin_required,
+            allowed=True,
+            trust_status="loaded" if plugin_required else "",
+        ),
+        prompt_release=PromptReleaseIdentity(
+            release_id=release_id,
+            release_hash=release_hash,
+            required=bool(release_id and release_hash),
+        ),
+        audit=AuditCorrelation(
+            correlation_id=f"{host._current_turn_id}:{tool_call.id}",
+            session_id=runtime.session_id or "",
+            turn_id=host._current_turn_id,
+            request_id=tool_call.id,
+        ),
+    )
 
 
 def _call_signature(tool_call: ToolCall) -> str:

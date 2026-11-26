@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Dict, Optional
 
 from ...contracts.service_ports import ShellJobManagerPort
@@ -94,6 +95,14 @@ cannot be bypassed.
             return ToolResult(content=str(exc), is_error=True)
         permission_profile = str(
             args.get("sandbox_permission") or "auto").strip().lower()
+        decision = ctx.governance_decision
+        governance_profile = (
+            decision.sandbox_profile if decision is not None else None)
+        if governance_profile is not None:
+            if governance_profile.permission_profile:
+                permission_profile = governance_profile.permission_profile
+            if not governance_profile.enabled:
+                ctx = replace(ctx, sandbox=None, sandbox_enabled=False)
         try:
             job = await manager.start(
                 command,

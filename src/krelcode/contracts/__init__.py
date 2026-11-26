@@ -10,6 +10,17 @@ from .application import (
     TaskShape,
     TriggerType,
 )
+from .governance import (
+    ArtifactIdentity,
+    AuditCorrelation,
+    ControlPlanePort,
+    GovernanceDecision,
+    GovernanceRequest,
+    PluginTrustContext,
+    PolicyVersion,
+    PromptReleaseIdentity,
+    SandboxProfile,
+)
 from .runtime import PermissionMode, RunMode, RuntimeSnapshot
 from .safety import SandboxPort
 from .service_ports import (
@@ -51,9 +62,14 @@ __all__ = [
     "AcceptanceContract",
     "ApplicationRequest",
     "ApplicationRequestFactory",
+    "ArtifactIdentity",
+    "AuditCorrelation",
     "CommandDescriptor",
+    "ControlPlanePort",
     "EnterprisePolicyPort",
     "ExecutionRuntimePort",
+    "GovernanceDecision",
+    "GovernanceRequest",
     "PermissionMode",
     "PrincipalPort",
     "PromptBenchmarkServicesPort",
@@ -62,11 +78,14 @@ __all__ = [
     "PromptReleasePipelinePort",
     "PromptReleaseProposalPort",
     "PromptReleaseStorePort",
+    "PluginTrustContext",
+    "PolicyVersion",
     "RunMode",
     "RuntimeSnapshot",
     "RiskLevel",
     "RiskProfile",
     "SandboxPort",
+    "SandboxProfile",
     "ShellJobManagerPort",
     "ShellJobPagePort",
     "ShellJobPort",
@@ -88,4 +107,5 @@ __all__ = [
     "TaskBudget",
     "TaskShape",
     "TriggerType",
+    "PromptReleaseIdentity",
 ]

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional, Protocol, Sequence, Tuple, runtime_checkable
 
 from .safety import SandboxPort
+from .runtime import PermissionMode
 
 
 @runtime_checkable
@@ -148,9 +149,55 @@ class PromptBenchmarkServicesPort(Protocol):
 
 @runtime_checkable
 class EnterprisePolicyPort(Protocol):
+    @property
+    def enabled(self) -> bool: ...
+
+    @property
+    def organization(self) -> str: ...
+
+    @property
+    def policy_version(self) -> str: ...
+
+    @property
+    def source(self) -> str: ...
+
+    @property
+    def require_sso(self) -> bool: ...
+
+    @property
+    def max_permission_mode(self) -> PermissionMode: ...
+
+    @property
+    def allow_auto_approve(self) -> bool: ...
+
+    @property
+    def allow_no_sandbox(self) -> bool: ...
+
+    @property
+    def disable_plugins(self) -> bool: ...
+
+    @property
+    def allowed_tools(self) -> Sequence[str]: ...
+
+    @property
+    def disabled_tools(self) -> Sequence[str]: ...
+
     def validate_provider(self, provider: str) -> None: ...
 
     def validate_cli(self, args: object) -> None: ...
+
+    def clamp_permission_mode(
+        self,
+        mode: PermissionMode | str,
+    ) -> PermissionMode: ...
+
+    def deny_tool_reason(
+        self,
+        tool_call: object,
+        workspace_root: Path,
+    ) -> Optional[str]: ...
+
+    def audit_metadata(self) -> dict[str, object]: ...
 
 
 @runtime_checkable

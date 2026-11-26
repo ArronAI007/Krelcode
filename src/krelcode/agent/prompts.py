@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence, Tuple, Union
 
 from krelcode.core.errors import ConfigError
+from krelcode.contracts.governance import GovernanceDecision
 from krelcode.agent.prompt.prompt_release import (
     ModelProfileCalibration,
     ProfileCalibrationResolution,
@@ -431,6 +432,7 @@ def resolve_prompt_profile(
     configured: str = PROMPT_PROFILE_AUTO,
     release_id: str = "",
     calibrations: Sequence[ModelProfileCalibration] = (),
+    governance_decision: Optional[GovernanceDecision] = None,
 ) -> PromptProfileResolution:
     """Resolve profile and attach release/calibration evidence identity."""
 
@@ -448,6 +450,22 @@ def resolve_prompt_profile(
         profile = configured_profile
         matched_by = "configured"
     release = select_prompt_release(release_id)
+    if governance_decision is not None:
+        governed = governance_decision.prompt_release
+        if not governance_decision.allowed:
+            raise ConfigError(
+                f"治理控制面拒绝 Prompt release: {governance_decision.reason}")
+        if governed.required:
+            if not governed.approved:
+                raise ConfigError("治理控制面未批准当前 Prompt release")
+            if governed.expected_release_id and (
+                release.release_id != governed.expected_release_id
+            ):
+                raise ConfigError("Prompt release id 与治理决策不一致")
+            if governed.expected_release_hash and (
+                release.release_hash != governed.expected_release_hash
+            ):
+                raise ConfigError("Prompt release hash 与治理决策不一致")
     try:
         profile_identity_value = release.profile(profile.name)
     except ValueError:

@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from krelcode.core.interactions import UserInputPort
     from krelcode.core.redact import SecretRedactor
     from krelcode.contracts.tool import ToolContext
+    from krelcode.contracts.governance import ControlPlanePort
     from krelcode.contracts.tool_execution import ExecutionRuntimePort
     from krelcode.llm.base import LLMProvider
     from krelcode.safety.policy import ApprovalPolicy
@@ -59,6 +60,7 @@ def build_agent_services(
     reminder_catalog: Optional["ReminderCatalog"],
     registry_provider: Callable[[], Optional["PromptFragmentRegistry"]],
     execution_runtime: Optional["ExecutionRuntimePort"] = None,
+    control_plane: Optional["ControlPlanePort"] = None,
 ) -> AgentServices:
     """Build the stable service graph shared by all turn executors."""
     # Import concrete agent-layer implementations lazily to keep this helper out
@@ -80,6 +82,7 @@ def build_agent_services(
     from krelcode.core.events import EventBus
     from krelcode.tools.runtime.execution import resolver_from_registry
     from krelcode.tools.runtime.router import ExecutionRuntimeRouter
+    from krelcode.safety.control_plane import DefaultControlPlane
 
     working_context = working_context_store or WorkingContextStore(
         tool_context.workspace_root,
@@ -128,6 +131,7 @@ def build_agent_services(
         core=CoreRuntimeServices(
             llm=llm,
             registry=registry,
+            control_plane=control_plane or DefaultControlPlane(),
             execution_runtime=resolved_execution_runtime,
             tool_context=tool_context,
             bus=bus or EventBus(),
