@@ -63,9 +63,9 @@ TOOL_PANEL_FG = "\x1b[38;5;252m"
 ASSISTANT_MARK = "⏺ "
 RESULT_MARK = "⎿ "
 THINKING_MARK = "✻ "
-THINKING_LIVE = f"{THINKING_MARK}意图识别中…"
+THINKING_LIVE = f"{THINKING_MARK}模型思考中…"
 THINKING_COLLAPSED = (
-    f"{THINKING_MARK}意图识别完成（正文已折叠，/thinking 展开）"
+    f"{THINKING_MARK}模型思考完成（正文已折叠，/thinking 展开）"
 )
 
 TOOL_ARGUMENT_INLINE_LIMIT = 100

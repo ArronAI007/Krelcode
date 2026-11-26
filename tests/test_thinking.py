@@ -154,7 +154,7 @@ def test_renderer_thinking_is_collapsed_to_one_line():
     renderer(RunStarted("q"))
     renderer(LLMThinkingDelta("想一下"))
     renderer(LLMThinkingDelta("再想"))
-    assert buf.text == THINKING_LIVE                   # 只显示一行实时意图状态
+    assert buf.text == THINKING_LIVE                   # 只显示一行实时思考状态
     renderer(LLMStreamDelta("回复"))
     assert THINKING_COLLAPSED in buf.text
     assert buf.text.endswith("\n⏺ 回复")

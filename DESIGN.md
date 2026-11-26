@@ -430,7 +430,7 @@ version、commands、errors、handoff notes 或其他扩展字段。缺少字段
 ## 交互与会话（Step 8）
 
 - **StreamRenderer**（ui/render.py）：EventBus 订阅者，LLMStreamDelta 逐字流式打印
-  （助手文本用 `⏺`，工具结果用 `⎿`）；意图识别和每个工具执行各占一行，执行中的
+  （助手文本用 `⏺`，工具结果用 `⎿`）；模型思考和每个工具执行各占一行，执行中的
   工具行原地刷新命令、进度和最新输出，完成后替换为结果摘要；工具活动/审批/压缩事件打断流式行后续接；
   RunFinished 兜底打印未经流式的系统消息（max_steps/卡死中止），并避免模型自带
   尾部换行时产生空行。write/color 可注入，测试无需终端
