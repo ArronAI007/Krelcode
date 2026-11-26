@@ -18,7 +18,10 @@ from typing import Any, Mapping, Optional
 
 from ..core.process import process_isolation_kwargs
 
-DEFAULT_TEMPLATE = "{status} · {permission} · Shift-Tab 切换 · Ctrl-O 面板"
+DEFAULT_TEMPLATE = (
+    "{status} · {context} · {permission} · "
+    "Shift-Tab 切换 · Ctrl-O 详情"
+)
 ALLOWED_FIELDS = frozenset({
     "provider", "model", "permission", "session", "cwd",
     "status", "tokens", "context", "branch",

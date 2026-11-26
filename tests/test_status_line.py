@@ -18,8 +18,12 @@ def test_default_status_line_cleans_empty_status_separator():
     line = renderer.render(
         permission="权限 default",
         status="",
+        context="ctx 12k/750k · mem 3",
     )
-    assert line == "权限 default · Shift-Tab 切换 · Ctrl-O 面板"
+    assert line == (
+        "ctx 12k/750k · mem 3 · 权限 default · "
+        "Shift-Tab 切换 · Ctrl-O 详情"
+    )
 
 
 def test_custom_template_supports_runtime_values_and_truncation():

@@ -181,13 +181,14 @@ krelcode
 - 多行输入、历史记录、反向搜索和文件引用。
 - Slash 命令补全与实时命令菜单。
 - 流式回答；模型思考和执行过程各占一行，工具状态原地刷新，完整输出按需展开。
-- Tasks、Activity、Context、Review、Memory 多面板状态。
+- Tasks、Activity、Context、Memory 摘要默认压缩进底部状态栏；`Ctrl-O` 查看详细面板。
 - 权限模式快速切换、计划确认、Diff 审阅和任务中断。
 - 默认保留终端原生拖拽复制和滚轮滚动。面板、Thinking 行和工具行点击可通过
   `krelcode --tui-mouse` 显式启用；启用后文本选择需按住 `Shift` 拖拽。
 - 交互式终端默认使用 Alt Screen 后端：应用自己管理 transcript、
   滚轮/PageUp/PageDown 视口、拖拽选择、系统剪贴板与 Thinking/工具行点击。
   `--ui native` 可回退到终端原生 scrollback；退出 fullscreen 后恢复主屏幕并打印完整会话文档。
+- Review 面板只在存在待审批 diff 或 `/diff` 审阅时自动出现，不再占用常态界面。
 
 常用命令：
 

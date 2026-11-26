@@ -57,6 +57,20 @@ from .tui.mouse import MouseEvent
 from .tui.panels import build_panels
 
 
+def _compact_token_count(value: object) -> str:
+    if not isinstance(value, (int, float, str)):
+        return "?"
+    try:
+        number = max(0, int(value))
+    except (TypeError, ValueError):
+        return "?"
+    if number >= 1_000_000:
+        return f"{number / 1_000_000:.1f}m".rstrip("0").rstrip(".")
+    if number >= 1_000:
+        return f"{number / 1_000:.1f}k".rstrip("0").rstrip(".")
+    return str(number)
+
+
 class TerminalPresenter:
     """Render one interactive conversation into a terminal."""
 
@@ -339,12 +353,8 @@ class TerminalPresenter:
         self.panel_controller.set_panels(panels)
         layout = self.panel_controller.render(columns)
         dock_visible = (
-            self.state.is_running
-            or bool(self.state.plan_items)
-            or self.panel_controller.focused
-            or bool(self.quick_status)
-            or (self.approval_review is not None)
-            or (self.git_review is not None)
+            self.panel_controller.focused
+            or (self.review_pager is not None and self.review_pager.active)
         )
         self.panel_controller.set_dock_visible(dock_visible)
         self.prompt.set_panels(layout.lines if dock_visible else ())
@@ -354,6 +364,8 @@ class TerminalPresenter:
         if self.controller is None:
             return ""
         progress = view.status_text()
+        if self.quick_status and not progress:
+            progress = self.quick_status
         if self.tui_mouse:
             progress = (
                 f"{progress} · Shift+拖拽复制"
@@ -369,7 +381,21 @@ class TerminalPresenter:
         tokens = estimate_history_tokens(self.loop.history)
         manager = self.loop.services.context.manager
         budget = getattr(manager, "max_tokens", None)
-        context = f"ctx {tokens}/{budget}" if budget else f"ctx {tokens}"
+        token_text = _compact_token_count(tokens)
+        context = (
+            f"ctx {token_text}/{_compact_token_count(budget)}"
+            if budget else f"ctx {token_text}"
+        )
+        memory_cache = self.memory_cache
+        memory_total = memory_cache.total_entries if memory_cache else 0
+        context += f" · mem {memory_total}"
+        if self.memory_pending_candidates:
+            context += f"+{self.memory_pending_candidates}"
+        if self.runner is not None and self.runner.queue:
+            progress = (
+                f"{progress} · 队列 {len(self.runner.queue)}"
+                if progress else f"队列 {len(self.runner.queue)}"
+            )
         provider = str(getattr(self.loop.services.core.llm, "name", "") or "")
         model = str(getattr(self.loop.services.core.llm, "model", "") or "")
         session = (
