@@ -234,6 +234,7 @@ class StreamRenderer:
         redactor: Optional[SecretRedactor] = None,
         on_tool_line: Optional[Callable[[int], None]] = None,
         on_thinking_line: Optional[Callable[[], None]] = None,
+        on_thinking_delta: Optional[Callable[[str], None]] = None,
         tool_lines_clickable: bool = False,
     ) -> None:
         self._raw_write = write or _default_write
@@ -246,6 +247,8 @@ class StreamRenderer:
         self._at_line_start = True
         self._on_tool_line = on_tool_line
         self._on_thinking_line = on_thinking_line
+        self._on_thinking_delta = on_thinking_delta
+        self._thinking_expander: Optional[Callable[[], bool]] = None
         self._tool_lines_clickable = tool_lines_clickable
         self._markdown = MarkdownStream(enabled=self._color)
         # 仅 UI 层保留最近一轮完整 thinking；绝不写入 AgentLoop.history。
@@ -309,6 +312,8 @@ class StreamRenderer:
                     self._write(line)
             # 默认不输出 reasoning 正文；只缓存原始 Markdown，等待 /thinking。
             self.thinking_text += event.text
+            if self._on_thinking_delta is not None:
+                self._on_thinking_delta(event.text)
             return
         # 任何非思考事件：先把本轮折叠状态收束为一行。
         self._end_thinking()
@@ -465,6 +470,8 @@ class StreamRenderer:
 
     def expand_thinking(self) -> bool:
         """把最近一轮 thinking 以多行 Markdown 输出；无内容时返回 False。"""
+        if self._thinking_expander is not None:
+            return self._thinking_expander()
         content = self.thinking_text.strip("\n")
         if not content.strip():
             return False
@@ -487,6 +494,12 @@ class StreamRenderer:
         self._ensure_newline()
         self._thinking_expanded_text = self.thinking_text.strip("\n")
         return True
+
+    def set_thinking_expander(
+        self,
+        callback: Optional[Callable[[], bool]],
+    ) -> None:
+        self._thinking_expander = callback
 
     def _render_tool_result(self, event: ToolCallCompleted) -> None:
         record = self._tool_by_call_id.get(self._tool_key(event.tool_call))

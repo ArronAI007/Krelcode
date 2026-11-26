@@ -20,6 +20,7 @@ from typing import Callable, Optional, TextIO
 
 from .prompt_writer import PromptWriter, _display_width
 from .render import DIM, RESET, auto_color
+from .terminal_markdown import render_markdown
 from .tui.mouse import MouseEvent
 
 ENTER_ALT_SCREEN = "\x1b[?1049h"
@@ -93,6 +94,13 @@ class SelectionPoint:
     column: int
 
 
+@dataclass
+class ThinkingBlock:
+    row: int
+    content: str
+    expanded: bool = False
+
+
 class _TranscriptWriter(io.TextIOBase):
     def __init__(self, surface: "AltScreenSurface") -> None:
         self.surface = surface
@@ -135,6 +143,11 @@ class AltScreenSurface:
         self._viewport_height = 1
         self._viewport_width = 1
         self._clickables: dict[int, tuple[str, str]] = {}
+        self._thinking_blocks: dict[int, ThinkingBlock] = {}
+        self._thinking_turn_text = ""
+        self._latest_thinking_row: Optional[int] = None
+        self._thinking_segment_active = False
+        self._visible_clickables: dict[int, tuple[str, str]] = {}
         self._on_click: Optional[Callable[[str, str], bool]] = None
         self._selection_anchor: Optional[SelectionPoint] = None
         self._selection_focus: Optional[SelectionPoint] = None
@@ -218,15 +231,104 @@ class AltScreenSurface:
         self._on_click = callback
 
     def _content_lines(self) -> list[str]:
-        if self._pending:
-            return [*self.transcript, self._pending]
-        return self.transcript
+        lines, _clicks = self._render_content()
+        return lines
+
+    def _render_content(
+        self,
+    ) -> tuple[list[str], dict[int, tuple[str, str]]]:
+        source = (
+            [*self.transcript, self._pending]
+            if self._pending else list(self.transcript)
+        )
+        lines: list[str] = []
+        clicks: dict[int, tuple[str, str]] = {}
+        for row, line in enumerate(source):
+            block = self._thinking_blocks.get(row)
+            if block is not None:
+                marker = "▼" if block.expanded else "▶"
+                action = "点击折叠" if block.expanded else "点击展开"
+                label = f"{marker} ✻ Thinking · {action}"
+                if self._color:
+                    label = f"{DIM}{label}{RESET}"
+                lines.append(label)
+                clicks[len(lines) - 1] = ("thinking", str(row))
+                if block.expanded:
+                    rendered = render_markdown(block.content, self._color)
+                    lines.extend(f"  {item}" for item in rendered.splitlines())
+                continue
+            lines.append(line)
+            target = self._clickables.get(row)
+            if target is not None:
+                clicks[len(lines) - 1] = target
+        return lines, clicks
 
     def mark_tool(self, index: int) -> None:
         self._mark_current("tool", str(index))
 
     def mark_thinking(self) -> None:
-        self._mark_current("thinking", "")
+        if self._pending:
+            self._flush_pending()
+        row = len(self.transcript) - 1
+        if row < 0:
+            return
+        self._thinking_blocks[row] = ThinkingBlock(
+            row=row,
+            content=self._thinking_turn_text.strip("\n"),
+        )
+        self._latest_thinking_row = row
+        self._thinking_segment_active = False
+        self._clickables[row] = ("thinking", str(row))
+        self.render()
+
+    def begin_thinking_turn(self) -> None:
+        self._thinking_turn_text = ""
+        self._latest_thinking_row = None
+        self._thinking_segment_active = False
+
+    def append_thinking_delta(self, text: str) -> None:
+        if not text:
+            return
+        if self._latest_thinking_row is not None:
+            if not self._thinking_segment_active:
+                self._thinking_turn_text = (
+                    self._thinking_turn_text.rstrip("\n") + "\n\n" + text
+                )
+                self._thinking_segment_active = True
+            else:
+                self._thinking_turn_text += text
+            block = self._thinking_blocks.get(self._latest_thinking_row)
+            if block is not None:
+                block.content = self._thinking_turn_text.strip("\n")
+                if block.expanded:
+                    self.render()
+        else:
+            self._thinking_turn_text += text
+
+    def toggle_thinking(self, row: int) -> bool:
+        block = self._thinking_blocks.get(row)
+        if block is None or not block.content.strip():
+            return False
+        block.expanded = not block.expanded
+        if block.expanded:
+            self.follow_end = False
+            self.scroll_top = self._virtual_row_for_block(row)
+        self.render()
+        return True
+
+    def toggle_latest_thinking(self) -> bool:
+        if self._latest_thinking_row is None:
+            return False
+        return self.toggle_thinking(self._latest_thinking_row)
+
+    def _virtual_row_for_block(self, row: int) -> int:
+        offset = 0
+        for earlier_row, block in self._thinking_blocks.items():
+            if earlier_row >= row or not block.expanded:
+                continue
+            rendered = render_markdown(block.content, self._color)
+            offset += len(rendered.splitlines())
+        return max(0, row + offset)
 
     def _mark_current(self, kind: str, value: str) -> None:
         if self._pending:
@@ -234,6 +336,7 @@ class AltScreenSurface:
         row = len(self.transcript) - 1
         if row >= 0:
             self._clickables[row] = (kind, value)
+            self.render()
 
     def write_transcript(self, text: str) -> None:
         if not text:
@@ -380,12 +483,15 @@ class AltScreenSurface:
         )
 
     def _activate_click(self, event: MouseEvent) -> None:
-        row = self.scroll_top + max(0, min(
+        screen_row = max(0, min(
             self._viewport_height - 1, event.y - 1))
-        target = self._clickables.get(row)
+        target = self._visible_clickables.get(screen_row)
         if target and self._on_click is not None:
-            self._clickables.pop(row, None)
             self._on_click(target[0], target[1])
+            if target[0] == "tool":
+                for row, value in tuple(self._clickables.items()):
+                    if value == target:
+                        self._clickables.pop(row, None)
 
     def _copy_selection(self) -> None:
         if (
@@ -422,7 +528,7 @@ class AltScreenSurface:
         self._viewport_width = max(1, columns)
         bottom = self._bottom_lines(columns)
         self._viewport_height = max(1, rows - len(bottom))
-        content = self._content_lines()
+        content, clickables = self._render_content()
         max_top = max(0, len(content) - self._viewport_height)
         if self.follow_end:
             self.scroll_top = max_top
@@ -430,6 +536,11 @@ class AltScreenSurface:
             self.scroll_top = max(0, min(self.scroll_top, max_top))
         viewport = content[
             self.scroll_top:self.scroll_top + self._viewport_height]
+        self._visible_clickables = {
+            row - self.scroll_top: target
+            for row, target in clickables.items()
+            if self.scroll_top <= row < self.scroll_top + self._viewport_height
+        }
         while len(viewport) < self._viewport_height:
             viewport.append("")
         screen = [

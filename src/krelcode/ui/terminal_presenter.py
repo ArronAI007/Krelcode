@@ -115,9 +115,16 @@ class TerminalPresenter:
                 if self.alt_screen is not None
                 else self._register_thinking_click_anchor
             ),
+            on_thinking_delta=(
+                self.alt_screen.append_thinking_delta
+                if self.alt_screen is not None else None
+            ),
             tool_lines_clickable=(
                 self.alt_screen is not None or self.tui_mouse),
         )
+        if self.alt_screen is not None:
+            self.renderer.set_thinking_expander(
+                self.alt_screen.toggle_latest_thinking)
         self.input_ready = threading.Event()
 
         explicit_history_path = history_path is not None
@@ -257,7 +264,11 @@ class TerminalPresenter:
 
     def _handle_alt_click(self, kind: str, value: str) -> bool:
         if kind == "thinking":
-            return self.renderer.expand_thinking()
+            try:
+                row = int(value)
+            except ValueError:
+                return False
+            return self.alt_screen.toggle_thinking(row) if self.alt_screen else False
         if kind == "tool":
             return self.renderer.expand_tool_output(value)
         return False
@@ -443,6 +454,8 @@ class TerminalPresenter:
         self.renderer(event)
         if isinstance(event, RunStarted):
             self._thinking_click_anchor = None
+            if self.alt_screen is not None:
+                self.alt_screen.begin_thinking_turn()
         if isinstance(event, (MemoryCandidateObserved, MemoryWritten)):
             self.refresh_memory_cache()
             refresh = getattr(self, "refresh_status", None)

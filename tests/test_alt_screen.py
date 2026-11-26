@@ -7,7 +7,12 @@ import io
 import sys
 
 from krelcode.ui.alt_screen import AltScreenPrompt, AltScreenSurface
-from krelcode.core.events import LLMStreamDelta, RunFinished, RunStarted
+from krelcode.core.events import (
+    LLMStreamDelta,
+    LLMThinkingDelta,
+    RunFinished,
+    RunStarted,
+)
 from krelcode.ui.render import StreamRenderer
 from krelcode.ui.tui.mouse import MouseEvent
 
@@ -131,5 +136,76 @@ def test_alt_screen_keeps_one_bottom_input_and_renders_markdown(monkeypatch):
         assert "**README.md**" not in rendered
         assert surface.status == "permission · default"
         assert surface.input_visible is False
+    finally:
+        surface.stop(print_final=False)
+
+
+def test_thinking_block_expands_and_collapses_in_place(monkeypatch):
+    output: list[str] = []
+    monkeypatch.setattr(
+        "shutil.get_terminal_size", lambda _fallback: os.terminal_size((60, 14)))
+    surface = AltScreenSurface(write=output.append, color=False)
+    surface.start()
+    surface.set_click_handler(
+        lambda kind, value: (
+            surface.toggle_thinking(int(value))
+            if kind == "thinking" else False
+        ))
+    try:
+        surface.begin_thinking_turn()
+        surface.append_thinking_delta("# 分析\n\n- **检查文件**")
+        surface.write_transcript("✻ 模型思考完成 · 点击展开\n")
+        surface.mark_thinking()
+
+        collapsed = "\n".join(surface._content_lines())
+        assert "▶ ✻ Thinking · 点击展开" in collapsed
+        assert "检查文件" not in collapsed
+
+        surface.handle_mouse(MouseEvent(0, 1, 1, True))
+        surface.handle_mouse(MouseEvent(0, 1, 1, False))
+        expanded = "\n".join(surface._content_lines())
+        assert expanded.count("Thinking") == 1
+        assert "▼ ✻ Thinking · 点击折叠" in expanded
+        assert "  ▌ 分析" in expanded
+        assert "  • 检查文件" in expanded
+
+        surface.handle_mouse(MouseEvent(0, 1, 1, True))
+        surface.handle_mouse(MouseEvent(0, 1, 1, False))
+        collapsed_again = "\n".join(surface._content_lines())
+        assert "▶ ✻ Thinking · 点击展开" in collapsed_again
+        assert "检查文件" not in collapsed_again
+    finally:
+        surface.stop(print_final=False)
+
+
+def test_renderer_slash_thinking_toggles_alt_screen_block(monkeypatch):
+    output: list[str] = []
+    monkeypatch.setattr(
+        "shutil.get_terminal_size", lambda _fallback: os.terminal_size((60, 14)))
+    surface = AltScreenSurface(write=output.append, color=False)
+    surface.start()
+    try:
+        surface.begin_thinking_turn()
+        renderer = StreamRenderer(
+            write=surface.write_transcript,
+            color=False,
+            on_thinking_line=surface.mark_thinking,
+            on_thinking_delta=surface.append_thinking_delta,
+            tool_lines_clickable=True,
+        )
+        renderer.set_thinking_expander(surface.toggle_latest_thinking)
+        renderer(RunStarted("q"))
+        renderer(LLMThinkingDelta("需要先分析文件"))
+        renderer(LLMStreamDelta("回答"))
+
+        assert renderer.expand_thinking()
+        expanded = "\n".join(surface._content_lines())
+        assert "▼ ✻ Thinking · 点击折叠" in expanded
+        assert "需要先分析文件" in expanded
+
+        assert renderer.expand_thinking()
+        collapsed = "\n".join(surface._content_lines())
+        assert "▶ ✻ Thinking · 点击展开" in collapsed
+        assert "需要先分析文件" not in collapsed
     finally:
         surface.stop(print_final=False)
