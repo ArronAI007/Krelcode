@@ -72,6 +72,7 @@ def build_panels(
     memory_mode: str = "",
     quick_status: str = "",
     diff_review: Optional[DiffReview] = None,
+    show_empty_review: bool = False,
 ) -> tuple[Panel, ...]:
     """Create the fixed panel snapshots shown above the input editor."""
     memories = tuple(memory_entries)
@@ -301,10 +302,16 @@ def build_panels(
             "review-empty", "暂无待审阅差异",
             "文件写入审批或 /diff 时显示", "○"))
 
-    return (
+    panels = [
         Panel("tasks", "Tasks", _task_items(state)),
         Panel("activity", "Activity", tuple(activity)),
         Panel("context", "Context", context_items),
         Panel("review", "Review", tuple(review_items)),
         Panel("memory", "Memory", tuple(memory_items)),
-    )
+    ]
+    if (
+        diff_review is None
+        or (not diff_review.files and not diff_review.notice)
+    ) and not show_empty_review:
+        panels = [panel for panel in panels if panel.id != "review"]
+    return tuple(panels)

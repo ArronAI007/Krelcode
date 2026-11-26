@@ -179,6 +179,22 @@ def test_memory_panel_surfaces_pending_auto_memory_candidates():
     assert "mode suggest" in memory.items[0].detail
 
 
+def test_empty_review_tab_is_hidden_until_review_exists():
+    panels = build_panels(
+        SessionViewState(),
+        permission_mode="default",
+    )
+    assert "review" not in {panel.id for panel in panels}
+
+    opted_in = build_panels(
+        SessionViewState(),
+        permission_mode="default",
+        show_empty_review=True,
+    )
+    review = next(panel for panel in opted_in if panel.id == "review")
+    assert review.items[0].id == "review-empty"
+
+
 def test_prompt_writer_renders_panel_dock_above_input():
     from krelcode.ui.repl import IDLE_PROMPT, PromptWriter
 
