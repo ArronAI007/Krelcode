@@ -94,6 +94,10 @@ INTERRUPTED_NOTE = "[已被用户中止]"
 STEERING_PREFIX = "[用户插话] "
 
 
+class _AsyncClosePort(Protocol):
+    async def close(self) -> None: ...
+
+
 class AgentLoop(RuntimeStateHost):
     """Turn orchestration facade.
 
@@ -168,6 +172,9 @@ class AgentLoop(RuntimeStateHost):
         self.token_budget = token_budget
         self.services.core.runtime_snapshot_provider = runtime_snapshot_provider
         self.step_gate = step_gate
+        self.compact_scheduler: Optional[_AsyncClosePort] = None
+        self.memory_dream_scheduler: Optional[_AsyncClosePort] = None
+        self.memory_dream: Optional[object] = None
 
         # Mutable state is initialized by AgentRuntimeState.  Only constructor
         # inputs override the typed defaults here.

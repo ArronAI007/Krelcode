@@ -199,6 +199,10 @@ class AgentRuntime:
             return
         self._closed = True
         await self.stop()
+        if self.loop.compact_scheduler is not None:
+            await self.loop.compact_scheduler.close()
+        if self.loop.memory_dream_scheduler is not None:
+            await self.loop.memory_dream_scheduler.close()
         if self.shell_jobs is not None:
             await self.shell_jobs.shutdown()
         if self.subagents is not None:

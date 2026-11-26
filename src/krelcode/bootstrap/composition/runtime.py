@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
 from krelcode.agent.context import CONTEXT_ENGINE_V3
 from krelcode.agent.context.context_assembler import ContextAssembler
+from krelcode.agent.context.compact_scheduler import BackgroundCompactScheduler
 from krelcode.agent.context.context_checkpoint import (
     ContextCheckpointCoordinator,
     ContextCheckpointStore,
@@ -51,6 +52,11 @@ from krelcode.safety.policy import Approver
 from krelcode.session.compact_checkpoint import CompactCheckpointStore
 from krelcode.session.memory import sync_memory_fragment
 from krelcode.session.memory_candidates import AutoMemoryCoordinator
+from krelcode.session.memory_dream import (
+    MemoryDreamCoordinator,
+    MemoryDreamScheduler,
+    MemoryDreamStore,
+)
 from krelcode.session.restore import refresh_skill_system_prompt
 from krelcode.subagent.definition import AgentDefinitionManager
 from krelcode.subagent.manager import SubagentManager
@@ -410,6 +416,27 @@ async def build_loop(
             log=log,
         )
         context_coordinator.attach(bus)
+    context_config = config.get("context") or {}
+    if not isinstance(context_config, dict):
+        context_config = {}
+    if (
+        context_manager is not None
+        and bool(context_config.get("background_compact", True))
+    ):
+        try:
+            background_compact_ratio = float(
+                context_config.get("background_compact_ratio", 0.72))
+        except (TypeError, ValueError):
+            background_compact_ratio = 0.72
+        compact_scheduler = BackgroundCompactScheduler(
+            loop.history,
+            context_manager,
+            history_provider=lambda: loop.history,
+            bus=bus,
+            trigger_ratio=background_compact_ratio,
+        )
+        compact_scheduler.attach(bus)
+        loop.compact_scheduler = compact_scheduler
     apply_prompt_snapshot(loop, prompt_snapshot)
     from ...review import review_prompt_surface
     from ...security_review.surfaces import security_review_prompt_surface
@@ -429,6 +456,29 @@ async def build_loop(
     )
     auto_memory.attach(bus)
     loop.auto_memory = auto_memory
+    memory_config = config.get("memory") or {}
+    if not isinstance(memory_config, dict):
+        memory_config = {}
+    dream_mode = str(memory_config.get("dream_mode", "suggest")).lower()
+    dream_coordinator = MemoryDreamCoordinator(
+        memory_store,
+        MemoryDreamStore(workspace_root),
+    )
+    loop.memory_dream = dream_coordinator
+    if dream_mode not in {"off", "suggest"}:
+        dream_mode = "suggest"
+    if dream_mode == "suggest" and resolve_auto_memory_mode(args, config).value != "off":
+        try:
+            dream_idle_seconds = float(
+                memory_config.get("dream_idle_seconds", 30.0))
+        except (TypeError, ValueError):
+            dream_idle_seconds = 30.0
+        dream_scheduler = MemoryDreamScheduler(
+            dream_coordinator,
+            bus=bus,
+            idle_seconds=dream_idle_seconds,
+        )
+        loop.memory_dream_scheduler = dream_scheduler
 
     extension_registry = ExtensionRegistry()
     loop.extension_registry = extension_registry

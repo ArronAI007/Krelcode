@@ -80,6 +80,8 @@ api_key_env = "GEMINI_API_KEY"
 # mode = "suggest"        # off / suggest / auto；默认只生成候选供审核
 # suggest_threshold = 0.55
 # auto_threshold = 0.80
+# dream_mode = "suggest"  # off / suggest；空闲时生成记忆治理提案
+# dream_idle_seconds = 30
 
 # ---- Agent Skills（SKILL.md 指令包）----
 # [skills]
@@ -107,6 +109,10 @@ api_key_env = "GEMINI_API_KEY"
 # [context]
 # engine = "v3"                    # v3（默认，安全边界+来源归因）| legacy
 # max_tokens = 6000                # 规则 + git + 目录树总预算
+# background_compact = true       # 空闲 turn 边界后台预压缩
+# background_compact_ratio = 0.72 # 达到 high watermark 比例后调度
+# recent_window_messages = 10     # compact 始终保护的最近消息数
+# recent_window_tokens = 4000     # compact 始终保护的最近 token 预算
 # include_rules = true
 # include_git = true
 # include_tree = true

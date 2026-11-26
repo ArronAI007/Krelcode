@@ -105,6 +105,7 @@ class CommandLoopPort(Protocol):
     prompt_registry: Optional["PromptFragmentRegistry"]
     prompt_snapshot: Optional["PromptSnapshot"]
     skill_base_prompt: str
+    memory_dream: object
 
     @property
     def services(self) -> "AgentServices": ...

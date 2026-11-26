@@ -46,6 +46,7 @@ from .memory_models import (
     MemoryIndexSnapshot,
     MemoryKind,
     MemoryMigrationReport,
+    MemoryRevisionConflict,
     MemoryScope,
     MemoryStoreSnapshot,
     MemoryTopic,
@@ -140,3 +141,11 @@ def memory_lines(entries: Iterable[MemoryEntry]) -> list[str]:
             f"  #{index} [{scope.value}/{entry.kind_value}]"
             f" type={entry.memory_type_value} {entry.text}")
     return lines
+
+
+__all__ = [
+    "MemoryRevisionConflict",
+    "MemoryStore",
+    "memory_lines",
+    "sync_memory_fragment",
+]

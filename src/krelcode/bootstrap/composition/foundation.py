@@ -175,8 +175,25 @@ async def build_runtime_foundation(
             or default_budget_for(getattr(llm, "model", None))
             or DEFAULT_CONTEXT_BUDGET
         )
+        context_section = config.get("context") or {}
+        if not isinstance(context_section, dict):
+            context_section = {}
+        try:
+            recent_window_messages = int(
+                context_section.get("recent_window_messages", 10))
+        except (TypeError, ValueError):
+            recent_window_messages = 10
+        try:
+            recent_window_tokens = int(
+                context_section.get("recent_window_tokens", 4_000))
+        except (TypeError, ValueError):
+            recent_window_tokens = 4_000
         context_manager = ContextManager(
-            llm, max_tokens=context_budget, redactor=redactor
+            llm,
+            max_tokens=context_budget,
+            keep_recent=recent_window_messages,
+            keep_recent_tokens=recent_window_tokens,
+            redactor=redactor,
         )
     sandbox = build_execution_sandbox(args, config, workspace_root)
     tool_context = ToolContext(

@@ -79,6 +79,7 @@ required; use empty arrays when unknown. Do not add version or any other field.
 SUMMARY_PREFIX = "[上下文摘要] "
 DEFAULT_MAX_TOKENS = 100_000
 DEFAULT_KEEP_RECENT = 10
+DEFAULT_KEEP_RECENT_TOKENS = 0
 DEFAULT_LOW_WATERMARK_RATIO = 0.60
 
 MIN_MESSAGES_TO_COMPRESS = 6  # 太短的历史压缩无意义（防抖动/死循环）
@@ -198,6 +199,7 @@ class ContextManager:
         llm: LLMProvider,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         keep_recent: int = DEFAULT_KEEP_RECENT,
+        keep_recent_tokens: int = DEFAULT_KEEP_RECENT_TOKENS,
         keep_recent_tools: int = DEFAULT_KEEP_RECENT_TOOLS,
         microcompactor: Optional[ToolMicrocompactor] = None,
         *,
@@ -210,6 +212,7 @@ class ContextManager:
         self.llm = llm
         self.max_tokens = max_tokens
         self.keep_recent = max(2, keep_recent)
+        self.keep_recent_tokens = max(0, int(keep_recent_tokens))
         self.keep_recent_tools = max(1, keep_recent_tools)
         self.low_watermark_ratio = min(
             0.95, max(0.1, float(low_watermark_ratio)))
@@ -370,6 +373,7 @@ class ContextManager:
             low_watermark_tokens=low_target,
             current_turn_id=current_turn_id,
             require_new_content=not force,
+            keep_recent_tokens=self.keep_recent_tokens,
         )
         middle = work[head_count:cut] if cut is not None else []
         has_new_content = any(
@@ -717,6 +721,7 @@ def _choose_compact_cut(
     low_watermark_tokens: int = 0,
     current_turn_id: str = "",
     require_new_content: bool = False,
+    keep_recent_tokens: int = 0,
 ) -> Tuple[Optional[int], bool, str]:
     """Choose a safe completed-turn boundary, targeting the low watermark.
 
@@ -727,11 +732,21 @@ def _choose_compact_cut(
     if len(history) <= head_count:
         return None, False, "没有可压缩消息"
     requested = max(head_count, len(history) - max(2, keep_recent))
+    if keep_recent_tokens > 0:
+        tail_start = len(history)
+        while (
+            tail_start > head_count
+            and estimate_history_tokens(history[tail_start - 1:])
+            <= keep_recent_tokens
+        ):
+            tail_start -= 1
+        requested = min(requested, max(head_count, tail_start))
     active_start = _active_turn_start(history, current_turn_id, head_count)
     boundaries = [
         index for index in range(head_count + 1, active_start + 1)
         if history[index].role == "user"
         and not is_compact_summary_message(history[index].content)
+        and (keep_recent_tokens <= 0 or index <= requested)
     ]
     if require_new_content:
         boundaries = [

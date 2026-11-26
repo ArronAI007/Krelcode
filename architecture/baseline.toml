@@ -19,7 +19,7 @@ max_unlisted_lines = 800
 
 [file_size.limits]
 "agent/context/compact_summary.py" = 859
-"agent/context/compression.py" = 871
+"agent/context/compression.py" = 886
 "agent/prompt/fragments.py" = 880
 "agent/prompt/prompt_authoring.py" = 890
 "agent/prompt/prompt_plan.py" = 852

@@ -308,6 +308,21 @@ origin、pinned 状态保留为机器可读元数据。模型生成内容仍是 
 位于工作区，user 作用域的视图只写入 `~/.krelcode/memory/`，不会把跨工作区私密正文复制到
 项目目录。
 
+### 并发与 revision
+
+每个磁盘作用域都有独立 revision sidecar（`*.revision`）。写入时先取得跨进程
+`*.lock`，比较 `expected_revision`，再追加或原子替换 JSONL，最后推进 revision。
+旧 revision 的写者会收到 `MemoryRevisionConflict`，不会静默覆盖其他 CLI、daemon、
+子代理或 Web UI 的更新。单条记录同时保存自己的 `revision` 和 `writer_id`，便于审计。
+候选队列使用同一套 revision 语义，但使用独立的冲突错误。
+
+### 后台 compact
+
+交互运行在 `RunFinished` 后检查历史 token 水位。达到
+`background_compact_ratio × high_watermark` 时，后台对深拷贝的历史快照执行 Structured
+Compact。提交前会比较 history digest；如果用户已经开启下一轮或历史发生变化，结果直接
+丢弃。只有空闲且 snapshot 未被修改时才原地提交，避免后台摘要覆盖新消息。
+
 ### Auto Memory 候选
 
 候选保存在 `<workspace>/.krelcode/memory/candidates.jsonl`，不跨项目共享。候选触发来源
@@ -324,6 +339,21 @@ origin、pinned 状态保留为机器可读元数据。模型生成内容仍是 
 `user:` / `reference:` 前缀则保留对应类型。`feedback/project` 候选缺少结构时保持 pending，
 不能进入 `auto` 写入或人工 accept。`/memory review accept <id>` 按候选类型写入；`reject`
 标记拒绝且不会自动写入。`off` 不生成新候选，但已有候选仍可审核。
+
+### AutoDream 离线治理
+
+`[memory].dream_mode="suggest"` 时，完成 turn 后会等待
+`dream_idle_seconds`；若期间没有新 turn，AutoDream 对 **project scope** 生成以下治理提案：
+
+- 规范化文本完全重复的 Memory 合并；
+- 潜在冲突事实；
+- 同一 Topic 下碎片过多，建议整理；
+- 文本中记录的项目绝对路径已不存在，建议重新验证。
+
+提案保存在 `.krelcode/memory/dream.jsonl`，不会直接改写长期记忆。使用
+`/memory dream run|review|accept <id>|reject <id>` 审核。当前只有重复 Memory 合并可以在
+接受后自动执行；冲突、Topic 整理和路径重新验证只标记审核结果，后续修改仍需显式操作。
+AutoDream 不扫描 `user` scope，避免一个项目治理跨项目私有记忆。
 
 专用 L5 `memory:lifecycle-contract` Prompt 明确区分四种状态：Task 保存当前步骤与阻塞，
 Plan 保存实施方案与审批状态，Memory 只保存未来仍有用且无法从工作区推导的长期事实，

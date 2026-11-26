@@ -22,6 +22,8 @@ class MemoryStoreMigrationMixin(MemoryStoreBase):
     def migrate(
         self,
         scope: MemoryScope | str = MemoryScope.PROJECT,
+        *,
+        expected_revision: Optional[int] = None,
     ) -> MemoryMigrationReport:
         """Normalize one memory file in place with an idempotent backup.
 
@@ -35,7 +37,9 @@ class MemoryStoreMigrationMixin(MemoryStoreBase):
         if path is None:
             return MemoryMigrationReport(
                 scope=normalized_scope.value, path="in-memory")
-        with self._lock:
+        with self._lock, self._scope_lock(normalized_scope):
+            current_revision = self._assert_revision(
+                normalized_scope, expected_revision)
             if not self._safe_scope_path(normalized_scope, path):
                 raise OSError("记忆文件路径不安全或为符号链接")
             if not path.is_file():
@@ -118,6 +122,8 @@ class MemoryStoreMigrationMixin(MemoryStoreBase):
                 try:
                     shutil.copy2(path, backup_path)
                     self._write_scope(path, ordered)
+                    self._set_revision(
+                        normalized_scope, current_revision + 1)
                     if normalized_scope is MemoryScope.PROJECT:
                         self.refresh_markdown_views()
                 except OSError as exc:
@@ -141,6 +147,7 @@ class MemoryStoreMigrationMixin(MemoryStoreBase):
             entries = self.list(limit=0, scopes=(scope,))
             summary[scope.value] = {
                 "entries": len(entries),
+                "revision": self.revision(scope),
                 "path": (
                     str(self.scope_path(scope))
                     if self.scope_path(scope) is not None else "in-memory"

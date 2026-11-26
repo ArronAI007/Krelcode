@@ -17,6 +17,11 @@ from ....session.memory_candidates import (
     MemoryCandidateStatus,
     MemoryCandidateTrigger,
 )
+from ....session.memory_dream import (
+    DreamKind,
+    DreamStatus,
+    MemoryDreamCoordinator,
+)
 from ....session.memory_models import (
     SCOPE_LABELS,
     MemoryEntry,
@@ -230,7 +235,8 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
             item = summary[scope_name]
             lines.append(
                 f"  {SCOPE_LABELS[coerce_memory_scope(scope_name)]} ({scope_name})"
-                f" · {item['entries']} 条 · {item['path']}")
+                f" · {item['entries']} 条 · rev {item.get('revision', 0)}"
+                f" · {item['path']}")
         if auto_memory is not None:
             lines.append(
                 f"  Auto Memory · mode={auto_memory.mode.value}"
@@ -484,7 +490,49 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
             lines.append(f"  backup: {report.backup_path}")
         return _ok(*lines)
 
+    if operation == "dream":
+        dream = cast(
+            Optional[MemoryDreamCoordinator],
+            ctx.loop.memory_dream,
+        )
+        if dream is None:
+            return _ok("  （AutoDream 未启用）")
+        suboperation, _, dream_rest = rest.partition(" ")
+        suboperation = suboperation.lower() or "review"
+        if suboperation == "run":
+            created = dream.run()
+            return _ok(
+                f"  [dream] 本次生成 {len(created)} 个新治理提案",
+                f"  pending: {len(dream.dream_store.list(status=DreamStatus.PENDING, limit=0))}",
+                "  使用 /memory dream review 查看，accept/reject 审核")
+        if suboperation == "review":
+            proposals = dream.dream_store.list(
+                status=DreamStatus.PENDING, limit=50)
+            lines = [f"  [dream review] {len(proposals)} 个待审核提案"]
+            for proposal in proposals:
+                lines.append(
+                    f"  {proposal.id} · {DreamKind(proposal.kind).value}"
+                    f" · confidence {proposal.confidence:.2f}"
+                    f" · memories {len(proposal.memory_ids)}"
+                    f" · {proposal.title}")
+            return _ok(*lines)
+        if suboperation not in {"accept", "reject"}:
+            return _ok(
+                "  用法: /memory dream [run|review|accept <id>|reject <id>]")
+        token = dream_rest.strip().split(maxsplit=1)[0] if dream_rest.strip() else ""
+        if not token:
+            return _ok(f"  用法: /memory dream {suboperation} <id>")
+        result = (
+            dream.accept(token)
+            if suboperation == "accept" else dream.reject(token)
+        )
+        if result is None:
+            return _ok(f"  [dream] 未找到提案: {token}")
+        return _ok(
+            f"  [dream] {result.id} → {DreamStatus(result.status).value}",
+            f"  {result.title}")
+
     return _ok(
         "  用法: /memory [list [scope]|scopes|show|add|remove|forget|"
-        "pin|unpin|search|mode|review|migrate]",
+        "pin|unpin|search|mode|review|migrate|dream]",
         "  add 支持 --type user|feedback|project|reference、--why、--how、--topic")

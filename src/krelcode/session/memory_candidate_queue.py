@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Iterable, List, Mapping, Optional, Sequence
 
 from ..core.redact import SecretRedactor
+from ..core.file_lock import InterProcessFileLock
 from .memory_candidate_models import (
     MAX_CANDIDATES,
     MAX_CANDIDATE_CHARS,
@@ -32,6 +33,10 @@ from .memory_utils import (
 )
 
 
+class MemoryCandidateRevisionConflict(RuntimeError):
+    """Raised when a stale candidate queue revision is used for a write."""
+
+
 class MemoryCandidateQueue:
     """Crash-safe, bounded project-local candidate queue."""
 
@@ -47,7 +52,42 @@ class MemoryCandidateQueue:
             self.workspace_root / ".krelcode" / "memory" / "candidates.jsonl")
         self.project_id = _project_id(self.workspace_root)
         self.redactor = redactor
+        self.writer_id = f"candidate-{uuid.uuid4().hex[:12]}"
         self._lock = threading.RLock()
+
+    @property
+    def revision_path(self) -> Path:
+        return self.path.with_suffix(self.path.suffix + ".revision")
+
+    def revision(self) -> int:
+        try:
+            return max(0, int(self.revision_path.read_text(
+                encoding="utf-8").strip()))
+        except (OSError, ValueError):
+            return 0
+
+    def _assert_revision(self, expected: Optional[int]) -> int:
+        current = self.revision()
+        if expected is not None and int(expected) != current:
+            raise MemoryCandidateRevisionConflict(
+                f"candidate revision conflict: expected {expected}, actual {current}")
+        return current
+
+    def _set_revision(self, revision: int) -> None:
+        self.revision_path.parent.mkdir(parents=True, exist_ok=True)
+        temp = self.revision_path.with_name(
+            f".{self.revision_path.name}.tmp-{uuid.uuid4().hex[:8]}")
+        try:
+            temp.write_text(f"{max(0, int(revision))}\n", encoding="utf-8")
+            temp.replace(self.revision_path)
+        finally:
+            try:
+                temp.unlink()
+            except OSError:
+                pass
+
+    def _file_lock(self) -> InterProcessFileLock:
+        return InterProcessFileLock(self.path.with_name(self.path.name + ".lock"))
 
     def _sanitize_text(self, value: str, limit: int) -> str:
         raw = " ".join(str(value).split())
@@ -177,7 +217,12 @@ class MemoryCandidateQueue:
     def pending_count(self) -> int:
         return len(self.list(status=MemoryCandidateStatus.PENDING, limit=0))
 
-    def merge(self, draft: MemoryCandidateDraft) -> tuple[Optional[MemoryCandidate], bool]:
+    def merge(
+        self,
+        draft: MemoryCandidateDraft,
+        *,
+        expected_revision: Optional[int] = None,
+    ) -> tuple[Optional[MemoryCandidate], bool]:
         text = self._sanitize_text(draft.text, MAX_CANDIDATE_CHARS)
         if not text or not _meaningful_candidate_text(text):
             return None, False
@@ -191,7 +236,8 @@ class MemoryCandidateQueue:
         evidence = tuple(evidence_items)
         digest = memory_digest(text)
         now = _now()
-        with self._lock:
+        with self._lock, self._file_lock():
+            current_revision = self._assert_revision(expected_revision)
             records = self._load()
             existing = next(
                 (item for item in reversed(records) if item.digest == digest),
@@ -217,6 +263,7 @@ class MemoryCandidateQueue:
                 records = self._reconcile_conflicts(records)
                 candidate = next(item for item in records if item.id == candidate.id)
                 self._write(records)
+                self._set_revision(current_revision + 1)
                 return candidate, True
 
             identities = {item.identity for item in existing.evidence}
@@ -249,6 +296,7 @@ class MemoryCandidateQueue:
             records = self._reconcile_conflicts(records)
             updated = next(item for item in records if item.id == existing.id)
             self._write(records)
+            self._set_revision(current_revision + 1)
             return updated, False
 
     def _reconcile_conflicts(
@@ -301,12 +349,15 @@ class MemoryCandidateQueue:
         self,
         candidate_id: str,
         conflict_ids: Iterable[str],
+        *,
+        expected_revision: Optional[int] = None,
     ) -> Optional[MemoryCandidate]:
         """Replace conflicts with permanent memory while retaining candidate ids."""
         target = str(candidate_id).strip()
         if not target:
             return None
-        with self._lock:
+        with self._lock, self._file_lock():
+            current_revision = self._assert_revision(expected_revision)
             records = self._load()
             candidate = next((item for item in records if item.id == target), None)
             if candidate is None:
@@ -323,6 +374,7 @@ class MemoryCandidateQueue:
                 candidate, conflict_ids=merged, updated_at=_now())
             self._write([
                 updated if item.id == target else item for item in records])
+            self._set_revision(current_revision + 1)
             return updated
 
     def set_status(
@@ -331,10 +383,12 @@ class MemoryCandidateQueue:
         status: MemoryCandidateStatus | str,
         *,
         existing_memory_id: str = "",
+        expected_revision: Optional[int] = None,
     ) -> Optional[MemoryCandidate]:
         target = str(candidate_id).strip()
         normalized = MemoryCandidateStatus(status)
-        with self._lock:
+        with self._lock, self._file_lock():
+            current_revision = self._assert_revision(expected_revision)
             records = self._load()
             candidate = next((item for item in records if item.id == target), None)
             if candidate is None:
@@ -348,7 +402,11 @@ class MemoryCandidateQueue:
             records = [updated if item.id == target else item for item in records]
             records = self._reconcile_conflicts(records)
             self._write(records)
+            self._set_revision(current_revision + 1)
             return next((item for item in records if item.id == target), None)
 
 
-__all__ = ["MemoryCandidateQueue"]
+__all__ = [
+    "MemoryCandidateQueue",
+    "MemoryCandidateRevisionConflict",
+]

@@ -175,6 +175,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/memory review [pending\|accepted\|rejected\|superseded\|all]` | 按状态查看候选、触发来源、置信度、证据数与冲突 |
 | `/memory review accept\|reject <id>` | 按候选语义类型接受；feedback/project 结构不完整时 fail-closed，或拒绝且永不自动写入 |
 | `/memory migrate [user\|project\|session]` | 幂等迁移旧 JSONL：补全 schema、脱敏、去重、保留 pinned；仅在变更时备份 |
+| `/memory dream [run\|review\|accept\|reject]` | 运行或审核 AutoDream 的去重、冲突、主题聚合与失效路径治理提案 |
 | `/compact` | 立即执行工具微压缩+Structured Compact v2（不等预算），完成后显示 generation、来源节省量、checkpoint 与实际边界 |
 | `/compact preview [--auto]` | 预览工具微压缩与 compact 的 head/compact/keep 边界、高低水位、来源节省量、条数、预计 tokens 与待摘要消息；不改 history。`--auto` 仅在超预算时预览 |
 | `/compact <focus>` | 强制 compact，并把自然语言重点写入交接摘要，例如保留 API 设计、失败测试和下一步 |
@@ -419,6 +420,8 @@ scopes = ["openid", "profile", "email"]
 mode = "suggest"                     # off / suggest / auto；默认只入队，不自动写
 suggest_threshold = 0.55             # 候选入队阈值
 auto_threshold = 0.80                # auto 模式晋级阈值；冲突候选永不自动晋级
+dream_mode = "suggest"               # off / suggest；空闲后生成治理提案
+dream_idle_seconds = 30              # turn 完成后等待多久运行 AutoDream
 
 ### Observability / 消融实验 CLI
 
@@ -475,6 +478,10 @@ paths = ["./team-commands", "/opt/shared-commands"]
 [context]                            # Context v3（legacy 仅保留一个版本用于回退）
 engine = "v3"                        # v3（默认）| legacy（兼容 v2）
 max_tokens = 6000                    # rules + git + tree 的统一 token 预算
+background_compact = true            # 空闲 turn 边界后台预压缩
+background_compact_ratio = 0.72      # 达到 high watermark 的 72% 后调度
+recent_window_messages = 10          # compact 始终保护的最近消息数
+recent_window_tokens = 4000          # compact 始终保护的最近 token 预算
 include_rules = true                 # ~/.krelcode/AGENTS.md + 项目根规则
 include_git = true                   # 分支与 porcelain 状态
 include_tree = true                  # 剪枝后的目录树

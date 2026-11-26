@@ -10,7 +10,7 @@ Krelcode 强调可操作、可观测和可控：所有重要行为都能检查�
 
 - **Web UI 与 CLI 同步运行**：交互式执行 `krelcode` 会自动启动本地 Web 控制台，不需要单独命令，CLI 退出时同步关闭。
 - **Agent 可观测性**：提供实时事件流、工具轨迹、Context/Cache 检查、运行记录和消融实验开关。
-- **上下文与长期记忆**：支持工作区规则、动态上下文、Structured Compact、Auto Memory、恢复与检查点。
+- **上下文与长期记忆**：支持工作区规则、动态上下文、Structured Compact、后台预压缩、Auto Memory、AutoDream、恢复与检查点。
 - **完整权限与安全边界**：支持权限模式、路径规则、写前 Diff 审阅、命令审批、敏感信息保护和运行时 Sandbox。
 - **可扩展 Agent 生态**：支持 Plugins、Skills、Agent Definitions、Commands、Hooks 和 MCP。
 - **持久化后台任务**：后台 Shell Job 和子代理可在 REPL 退出后继续运行，并支持重新连接、暂停、恢复和终止。

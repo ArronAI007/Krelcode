@@ -67,6 +67,20 @@ class MemoryType(str, Enum):
     REFERENCE = "reference"
 
 
+class MemoryRevisionConflict(RuntimeError):
+    """Raised when an optimistic memory write used a stale revision."""
+
+    def __init__(self, scope: MemoryScope | str, expected: int, actual: int) -> None:
+        normalized = coerce_memory_scope(scope)
+        self.scope = normalized.value
+        self.expected = int(expected)
+        self.actual = int(actual)
+        super().__init__(
+            f"memory revision conflict ({self.scope}): "
+            f"expected {self.expected}, actual {self.actual}"
+        )
+
+
 MEMORY_SCOPE_ORDER = (
     MemoryScope.USER,
     MemoryScope.PROJECT,
@@ -196,6 +210,8 @@ class MemoryEntry:
     topic: str = ""
     why: str = ""
     how_to_apply: str = ""
+    revision: int = 1
+    writer_id: str = ""
 
     def __post_init__(self) -> None:
         if not str(self.id).strip():
@@ -235,6 +251,8 @@ class MemoryEntry:
             self, "topic", " ".join(str(self.topic or "").split())[:MAX_TOPIC_CHARS])
         object.__setattr__(self, "why", why)
         object.__setattr__(self, "how_to_apply", how_to_apply)
+        object.__setattr__(self, "revision", max(1, int(self.revision)))
+        object.__setattr__(self, "writer_id", str(self.writer_id or ""))
 
     @property
     def scope_value(self) -> str:
@@ -273,6 +291,8 @@ class MemoryEntry:
             "topic": self.topic,
             "why": self.why,
             "how_to_apply": self.how_to_apply,
+            "revision": self.revision,
+            "writer_id": self.writer_id,
         }
 
 
@@ -330,4 +350,3 @@ class MemoryMigrationReport:
     skipped: int = 0
     changed: bool = False
     backup_path: str = ""
-

@@ -12,7 +12,7 @@ from krelcode.agent.compact_summary import (
     CompactSummaryError,
     merge_summaries,
 )
-from krelcode.agent.compression import ContextManager
+from krelcode.agent.compression import ContextManager, _choose_compact_cut
 from krelcode.agent.loop import AgentLoop
 from krelcode.agent.query import QueryEvent
 from krelcode.agent.runtime import AgentRuntime
@@ -26,6 +26,7 @@ from krelcode.core.events import (
 )
 from krelcode.core.messages import Message, ToolCall
 from krelcode.core.redact import SecretRedactor
+from krelcode.core.tokens import estimate_history_tokens
 from krelcode.llm.providers.mock import MockProvider
 from krelcode.safety.policy import AllowAllPolicy
 from krelcode.session.compact_checkpoint import CompactCheckpointStore
@@ -378,6 +379,28 @@ def test_preview_reports_source_savings_without_mutating_history():
     assert savings["conversation"] > 0
     assert savings["total"] > 0
     assert "source savings:" in preview.render(include_messages=False)
+
+
+def test_recent_window_protects_message_and_token_budget():
+    history = [Message.system("SYS")]
+    for index in range(20):
+        history.append(Message.user(f"question-{index} " + "x" * 80))
+        history.append(Message.assistant("answer-" + "y" * 80))
+    history.append(Message.user("current question"))
+
+    cut, aligned, reason = _choose_compact_cut(
+        history,
+        1,
+        4,
+        force=False,
+        current_turn_id="",
+        keep_recent_tokens=80,
+    )
+
+    assert cut is not None
+    assert aligned and not reason
+    assert len(history) - cut >= 4
+    assert estimate_history_tokens(history[cut:]) <= 80 + 40
 
 
 def test_compact_checkpoint_round_trip_is_redacted_and_matchable(tmp_path):

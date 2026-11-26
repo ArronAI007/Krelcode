@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Iterable, Mapping, Optional
+from typing import ContextManager, Iterable, Mapping, Optional
 
 from ..core.redact import SecretRedactor
 from .memory_models import (
@@ -52,6 +52,22 @@ class MemoryStoreBase:
         raise NotImplementedError
 
     def scope_path(self, scope: MemoryScope | str) -> Optional[Path]:
+        raise NotImplementedError
+
+    def revision(self, scope: MemoryScope | str = MemoryScope.PROJECT) -> int:
+        raise NotImplementedError
+
+    def _scope_lock(self, scope: MemoryScope) -> ContextManager[object]:
+        raise NotImplementedError
+
+    def _assert_revision(
+        self,
+        scope: MemoryScope,
+        expected: Optional[int],
+    ) -> int:
+        raise NotImplementedError
+
+    def _set_revision(self, scope: MemoryScope, revision: int) -> None:
         raise NotImplementedError
 
     def _safe_scope_path(
