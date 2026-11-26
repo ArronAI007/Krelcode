@@ -52,9 +52,10 @@ def environment_setup_workflow(
         steps=(
             "Establish the requested install scope, target command name, OS/architecture, and whether global or project-local installation is required.",
             "Fetch the authoritative install documentation once and select one supported installation path; avoid probing the same repository or system repeatedly.",
+            "For a global command that is owned by the current user, use the Sandbox user-install scope and target ~/.local/bin or ~/.local/share. Never use sudo or system-wide locations such as /usr/local, /etc, /System, or /Library.",
             "State the required network, filesystem, package-manager, and privilege boundaries before executing.",
             "Use the smallest supported installer or isolated environment. Batch related setup operations and verify the resulting command path and version once.",
-            "If network, Sandbox, HOME redirection, or managed policy blocks the requested install scope, stop and report the exact blocker instead of silently creating a workspace-only workaround and calling the task complete.",
+            "If network, Sandbox, user-install scope, HOME redirection, or managed policy blocks the requested install scope, stop and report the exact blocker instead of silently creating a workspace-only workaround and calling the task complete.",
             "If the requested outcome cannot be achieved without a manual credential or user-only action, explain that limitation explicitly and identify the last verified completed step.",
         ),
         completion=(
@@ -65,6 +66,7 @@ def environment_setup_workflow(
         avoid=(
             "Do not repeatedly inspect, reinstall, or run doctor loops after one clear failure.",
             "Do not claim a global install when only a workspace-local launcher exists.",
+            "Do not replace a permitted user-level install with --no-sandbox or a system-wide privileged install.",
             "Do not ask for API keys or fabricate a successful model/runtime smoke test when the user has not supplied credentials.",
         ),
     )

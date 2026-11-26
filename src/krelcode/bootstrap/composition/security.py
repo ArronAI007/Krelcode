@@ -147,4 +147,18 @@ def build_execution_sandbox(
         if network_arg is None
         else bool(network_arg)
     )
-    return ExecutionSandbox(workspace_root, backend=str(backend), network=network)
+    raw_install_paths = (
+        section.get("user_install_paths")
+        or section.get("install_paths")
+        or ()
+    )
+    if isinstance(raw_install_paths, str):
+        raw_install_paths = [raw_install_paths]
+    return ExecutionSandbox(
+        workspace_root,
+        backend=str(backend),
+        network=network,
+        allow_user_install=bool(section.get("user_install", True)),
+        install_network=bool(section.get("install_network", True)),
+        user_install_roots=tuple(Path(path).expanduser() for path in raw_install_paths),
+    )

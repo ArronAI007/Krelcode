@@ -81,6 +81,7 @@ class DaemonJobManager:
         *,
         cwd: Path,
         sandbox: Any = None,
+        permission_profile: str | None = None,
     ) -> ShellJobInfo:
         await self.client.ensure_started(idle_timeout=self.idle_timeout)
         params: Dict[str, Any] = {
@@ -90,6 +91,8 @@ class DaemonJobManager:
         if sandbox is not None:
             params["sandbox_backend"] = getattr(sandbox, "backend", "")
             params["sandbox_network"] = bool(getattr(sandbox, "network", False))
+        if permission_profile is not None:
+            params["sandbox_permission"] = permission_profile
         data = await self.client.request("job.start", params, timeout=30.0)
         job = _job_from_dict(data)
         self._cache[job.job_id] = job

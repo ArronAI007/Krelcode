@@ -72,6 +72,7 @@ class ShellJobManagerPort(Protocol):
         *,
         cwd: Path,
         sandbox: Optional[SandboxPort] = None,
+        permission_profile: str | None = None,
     ) -> ShellJobPort: ...
 
     async def output(

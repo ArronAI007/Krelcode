@@ -396,13 +396,26 @@ def check_sandbox(config: Optional[Dict[str, Any]] = None) -> CheckResult:
         return CheckResult("运行时 Sandbox", STATUS_FAIL, "[sandbox] 必须是 TOML table")
     backend = str(section.get("backend", "auto"))
     network = bool(section.get("network", False))
+    install_paths = section.get("user_install_paths") or section.get("install_paths") or ()
+    if isinstance(install_paths, str):
+        install_paths = [install_paths]
     try:
         sandbox = ExecutionSandbox(
-            Path.cwd(), backend=backend, network=network)
+            Path.cwd(),
+            backend=backend,
+            network=network,
+            allow_user_install=bool(section.get("user_install", True)),
+            install_network=bool(section.get("install_network", True)),
+            user_install_roots=tuple(Path(path) for path in install_paths),
+        )
     except SandboxError as e:
         return CheckResult("运行时 Sandbox", STATUS_FAIL, str(e))
     capabilities = sandbox.capabilities
-    state = "network=on" if sandbox.network else "network=off"
+    state = (
+        f"network={'on' if sandbox.network else 'off'} "
+        f"user-install={'on' if sandbox.allow_user_install else 'off'} "
+        f"install-network={'on' if sandbox.install_network else 'off'}"
+    )
     platform = (
         f"platform={capabilities.platform} "
         f"shell={capabilities.shell_dialect} backend={sandbox.backend} {state}"

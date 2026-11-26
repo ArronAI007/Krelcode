@@ -64,6 +64,9 @@ api_key_env = "GEMINI_API_KEY"
 # [sandbox]
 # backend = "auto"        # auto / static / seatbelt(macOS) / bubblewrap(Linux)
 # network = false         # 默认断网；需要依赖下载时临时启用 --sandbox-network
+# user_install = true     # 允许安装/链接到 ~/.local/bin 等用户目录（禁止 sudo/系统目录）
+# install_network = true  # 仅对 pip/uv/npm install、git clone 等安装命令放行网络
+# user_install_paths = [".hermes"]  # 额外的用户级安装目录；必须位于真实 HOME 下
 
 # ---- 持久化 daemon（后台 Job / 子代理）----
 # [daemon]

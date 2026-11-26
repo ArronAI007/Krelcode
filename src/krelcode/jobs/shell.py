@@ -173,6 +173,7 @@ class ShellJobManager:
         *,
         cwd: Path,
         sandbox: Optional[ExecutionSandbox] = None,
+        permission_profile: str | None = None,
     ) -> ShellJobInfo:
         if self._closed:
             raise ShellJobError("Shell job manager 已关闭")
@@ -181,11 +182,27 @@ class ShellJobManager:
             raise ShellJobError("command 不能为空")
         resolved_cwd = self._validate_cwd(Path(cwd))
         if sandbox is not None:
-            violation = sandbox.audit_command(text, resolved_cwd)
+            violation = (
+                sandbox.audit_command(text, resolved_cwd)
+                if permission_profile is None
+                else sandbox.audit_command(
+                    text,
+                    resolved_cwd,
+                    permission_profile=permission_profile,
+                )
+            )
             if violation:
                 raise ShellJobError(f"Sandbox 拒绝命令: {violation}")
             try:
-                prepared = sandbox.prepare_shell(text, resolved_cwd)
+                prepared = (
+                    sandbox.prepare_shell(text, resolved_cwd)
+                    if permission_profile is None
+                    else sandbox.prepare_shell(
+                        text,
+                        resolved_cwd,
+                        permission_profile=permission_profile,
+                    )
+                )
             except SandboxError as exc:
                 raise ShellJobError(f"Sandbox 准备失败: {exc}") from exc
             argv, env = prepared.argv, prepared.env

@@ -529,9 +529,15 @@ def _sandbox_contract(
         )
     backend = str(getattr(sandbox, "backend", "static") or "static")
     if backend == "static":
-        shell_scope = "workspace audit only; OS-level confinement unavailable"
+        shell_scope = (
+            "workspace plus selected user-install roots; "
+            "OS-level confinement unavailable"
+        )
     else:
-        shell_scope = "workspace-only for ordinary paths; dynamic bypasses denied"
+        shell_scope = (
+            "workspace for ordinary paths plus selected user-install roots for "
+            "approved install commands; dynamic bypasses denied"
+        )
     return SandboxContractSnapshot(
         enabled=True,
         backend=backend,

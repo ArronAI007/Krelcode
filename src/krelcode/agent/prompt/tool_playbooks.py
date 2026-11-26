@@ -433,7 +433,10 @@ TOOL_PLAYBOOKS: Tuple[ToolPlaybook, ...] = (
                     "an identical failed command blindly. Inspect stdout, stderr, and exit "
                     "code; after a failure, identify whether the cause is code, test, "
                     "dependency, environment, or command usage and change the approach. "
-                    "Use a background job for long-lived processes."
+                    "Use a background job for long-lived processes. For a requested "
+                    "global command owned by the current user, use the Sandbox "
+                    "user-install scope with ~/.local/bin or ~/.local/share; never "
+                    "use sudo or write to system-wide locations."
                 ),
             ),
             ToolGuidance(

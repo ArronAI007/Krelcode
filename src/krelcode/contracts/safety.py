@@ -20,10 +20,22 @@ class SandboxPort(Protocol):
     @property
     def network(self) -> bool: ...
 
-    def audit_command(self, command: str, cwd: Path) -> str | None:
+    def audit_command(
+        self,
+        command: str,
+        cwd: Path,
+        *,
+        permission_profile: str | None = None,
+    ) -> str | None:
         ...
 
-    def prepare_shell(self, command: str, cwd: Path) -> object:
+    def prepare_shell(
+        self,
+        command: str,
+        cwd: Path,
+        *,
+        permission_profile: str | None = None,
+    ) -> object:
         ...
 
 

@@ -27,7 +27,7 @@ max_unlisted_lines = 800
 "browser/runtime.py" = 859
 "enterprise/auth.py" = 847
 "llm/base.py" = 816
-"safety/sandbox.py" = 926
+"safety/sandbox_audit.py" = 899
 "tools/builtin/database_migration.py" = 892
 "ui/diff_review.py" = 919
 

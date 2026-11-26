@@ -358,6 +358,9 @@ mouse = false                       # TUI 面板/工具行点击；默认关闭�
 [sandbox]
 backend = "auto"                     # macOS seatbelt / Linux bubblewrap / 其他平台 static
 network = false                      # 默认禁止子进程联网；CLI --sandbox-network 可开启
+user_install = true                  # 允许用户级全局安装（~/.local/bin 等）
+install_network = true               # 仅安装类命令可绕过 network=false
+user_install_paths = [".hermes"]     # 可选的额外用户安装目录，必须位于 HOME 下
 
 [daemon]                             # 持久化后台 Job / 子代理
 enabled = "auto"                     # off / auto / on；默认不存在时 off
@@ -1207,6 +1210,7 @@ subject/issuer/授权方式。`KRELCODE_SSO_ACCESS_TOKEN` 仅用于无法交互�
 | 规则作用域 | `session` 仅当前进程；`workspace` 持久化到 `.krelcode/allow_rules.json`；`path` 必须是工作区相对 glob 且拒绝 `..` |
 | ASK 处理链 | 统一规则 → 旧版 allow 规则 → --auto-approve/运行时模式 → 交互 [y/n/a] → 都没有则拒绝（fail-closed） |
 | 文件/命令路径约束 | resolve 后限定工作区（含 symlink 逃逸防护）；Skill 根目录仅额外只读 |
+| 用户级全局安装 | `user-install` scope 额外允许 `~/.local/bin`、`~/.local/share`、`~/.local/lib`、`~/.local/state` 及 `[sandbox].user_install_paths`；普通命令不可使用；`sudo` 与 `/usr/local`、`/etc`、`/System`、`/Library` 始终拒绝 |
 | 子进程环境 | 剥离 API key/token/password/proxy/SSH agent/动态加载注入变量；HOME/TMP/cache 重定向到 `.krelcode/sandbox/`，Windows 同步重定向 USERPROFILE/APPDATA/LOCALAPPDATA |
 | OS 隔离后端 | macOS `seatbelt` 或 Linux `bubblewrap`：工作区可写、系统运行时只读、Home 不可读、网络默认关闭 |
 | 进程树隔离 | POSIX 使用独立 session/process group + `SIGTERM`/`SIGKILL`；Windows 使用 `CREATE_NEW_PROCESS_GROUP` + `taskkill /T`，graceful 超时自动 force |
@@ -1217,6 +1221,13 @@ subject/issuer/授权方式。`KRELCODE_SSO_ACCESS_TOKEN` 仅用于无法交互�
 `static` 审计和 taskkill 进程树隔离，不宣称内核级安全。需要强隔离时应显式检查
 启动日志/`krelcode doctor` 中的 `[sandbox] backend/platform/shell`；Linux 可安装
 bubblewrap，macOS 使用系统 Seatbelt。
+
+全局安装命令应使用用户级安装 scope，而不是 `--no-sandbox`。该 scope 使用合成
+HOME 仅暴露上述允许目录的 symlink；即使安装器读取 `$HOME`，也无法访问
+`.ssh`、`.aws` 等工作区外凭据。`install_network=true` 只对 `pip/uv/npm install`、
+`git clone`、下载器等安装流程临时放行网络，普通 `curl`、`git fetch` 仍受
+`network=false` 约束。所有安装命令仍经过命令审批；`--auto-approve` 不越过
+提权、敏感路径、系统目录或灾难性命令的硬拒绝。
 MCP stdio 子进程默认同样剥离宿主密钥，但 `[mcp_servers.*].env` 中显式配置的
 值视为用户信任输入而保留。
 

@@ -13,7 +13,11 @@ from krelcode.app import build_execution_sandbox, build_loop, build_parser
 from krelcode.mcp.stdio_transport import build_stdio_environment
 from krelcode.safety import sandbox as sandbox_module
 from krelcode.safety.environment import scrub_environment
-from krelcode.safety.sandbox import ExecutionSandbox, SandboxError
+from krelcode.safety.sandbox import (
+    ExecutionSandbox,
+    SandboxError,
+    SandboxPermissionProfile,
+)
 from krelcode.skills import SkillManager
 from krelcode.skills.tools import RunSkillScriptTool
 from krelcode.tools.base import ToolContext
@@ -73,8 +77,6 @@ def test_static_audit_blocks_escape_sensitive_shell_and_network(tmp_path):
         "cat .config/gcloud/credentials.db",
         "cat .ENV",
         "git -C . fetch origin",
-        "pip install requests",
-        "pip --disable-pip-version-check install requests",
     ]
     for command in commands:
         assert sandbox.audit_command(command, tmp_path), command
@@ -128,6 +130,116 @@ def test_network_commands_require_explicit_sandbox_network(tmp_path):
     assert allowed.audit_command("curl https://example.com", tmp_path) is None
     assert allowed.audit_command("git fetch origin", tmp_path) is None
     assert allowed.audit_command("pip install requests", tmp_path) is None
+
+
+def test_user_install_profile_allows_only_user_owned_command_locations(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    target = workspace / "hermes"
+    target.write_text("#!/bin/sh\n", encoding="utf-8")
+    sandbox = ExecutionSandbox(
+        workspace, backend="static", user_home=home)
+    command = f"ln -sf {target} {home}/.local/bin/hermes"
+    home_command = f'ln -sf {target} "$HOME/.local/bin/hermes"'
+
+    assert sandbox.audit_command(command, workspace) is None
+    assert sandbox.audit_command(home_command, workspace) is None
+    prepared = sandbox.prepare_shell(home_command, workspace)
+    assert (
+        prepared.permission_profile
+        is SandboxPermissionProfile.USER_INSTALL
+    )
+    assert Path(prepared.env["HOME"]) != home.resolve()
+    assert (
+        Path(prepared.env["HOME"]) / ".local" / "bin"
+    ).resolve() == (home / ".local" / "bin").resolve()
+
+    result = run(RunCommandTool().execute(
+        {"command": command, "sandbox_permission": "user-install"},
+        ToolContext(
+            workspace_root=workspace,
+            sandbox=sandbox,
+        ),
+    ))
+    assert not result.is_error
+    installed = home / ".local" / "bin" / "hermes"
+    assert installed.is_symlink()
+    assert installed.resolve() == target.resolve()
+    assert result.data["sandbox_permission_profile"] == "user-install"
+
+
+def test_user_install_profile_rejects_system_paths_sudo_and_credentials(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    sandbox = ExecutionSandbox(
+        workspace, backend="static", user_home=home)
+    denied = [
+        f"ln -sf {workspace}/hermes /usr/local/bin/hermes",
+        f"ln -sf {workspace}/hermes /etc/hermes",
+        f"ln -sf {workspace}/hermes /System/hermes",
+        "sudo ln -sf hermes ~/.local/bin/hermes",
+        "cat $HOME/.ssh/id_rsa",
+        "cat $HOME/.local/share/token.json",
+    ]
+    for command in denied:
+        assert sandbox.audit_command(
+            command,
+            workspace,
+            permission_profile="user-install",
+        ), command
+
+    ordinary = f"ln -sf {workspace}/hermes {home}/.local/bin/hermes"
+    assert sandbox.audit_command(
+        ordinary,
+        workspace,
+        permission_profile="workspace",
+    )
+
+
+def test_install_network_is_enabled_only_for_install_commands(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    sandbox = ExecutionSandbox(
+        workspace,
+        backend="static",
+        user_home=home,
+        network=False,
+        install_network=True,
+    )
+    assert sandbox.audit_command("pip install requests", workspace) is None
+    assert sandbox.audit_command("uv tool install hermes-agent", workspace) is None
+    assert sandbox.audit_command("git clone https://example.com/repo", workspace) is None
+    assert sandbox.audit_command("curl https://example.com", workspace)
+    assert sandbox.audit_command("git fetch origin", workspace)
+
+    no_install_network = ExecutionSandbox(
+        workspace,
+        backend="static",
+        user_home=home,
+        network=False,
+        install_network=False,
+    )
+    assert no_install_network.audit_command("pip install requests", workspace)
+
+
+def test_user_install_can_be_disabled_by_policy(tmp_path):
+    sandbox = ExecutionSandbox(
+        tmp_path,
+        backend="static",
+        allow_user_install=False,
+    )
+    violation = sandbox.audit_command(
+        "uv tool install hermes-agent",
+        tmp_path,
+        permission_profile="user-install",
+    )
+    assert violation and "禁用用户级安装权限" in violation
 
 
 def test_exec_audit_and_cwd_must_stay_in_allowed_roots(tmp_path):
@@ -248,6 +360,36 @@ def test_seatbelt_profile_is_workspace_scoped_and_network_denied(tmp_path):
     assert ExecutionSandbox(
         tmp_path, backend="static", network=True)._seatbelt_profile([]).count(
             "(allow network-outbound)") == 1
+
+
+def test_seatbelt_and_bubblewrap_include_user_install_roots(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    sandbox = ExecutionSandbox(
+        tmp_path / "workspace",
+        backend="static",
+        user_home=home,
+    )
+    user_bin = (home / ".local" / "bin").resolve()
+    profile = sandbox._seatbelt_profile(
+        [],
+        permission_profile=SandboxPermissionProfile.USER_INSTALL,
+        network_allowed=True,
+    )
+    assert f'(subpath "{user_bin}")' in profile
+    assert "(allow network-outbound)" in profile
+
+    argv = sandbox._bubblewrap_argv(
+        ["true"],
+        tmp_path / "workspace",
+        [],
+        permission_profile=SandboxPermissionProfile.USER_INSTALL,
+        network_allowed=True,
+    )
+    bind_index = argv.index(str(user_bin))
+    assert argv[bind_index - 1:bind_index + 2] == [
+        "--bind", str(user_bin), str(user_bin)]
+    assert "--share-net" in argv
 
 
 def test_bubblewrap_argv_binds_workspace_and_controls_network(tmp_path):
@@ -426,6 +568,28 @@ def test_build_loop_reads_sandbox_toml_and_cli_overrides(tmp_path):
     no_sandbox = build_execution_sandbox(
         parser.parse_args(base + ["--no-sandbox"]), config, tmp_path)
     assert no_sandbox is None
+
+
+def test_build_execution_sandbox_reads_user_install_config(
+        tmp_path, monkeypatch):
+    parser = build_parser()
+    args = parser.parse_args([
+        "--mock", "--workspace", str(tmp_path), "--no-context", "--no-session"])
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    config = {
+        "sandbox": {
+            "backend": "static",
+            "user_install": True,
+            "install_network": False,
+            "user_install_paths": [".hermes"],
+        },
+    }
+    sandbox = build_execution_sandbox(args, config, tmp_path)
+    assert sandbox is not None
+    assert sandbox.install_network is False
+    assert (home / ".hermes").resolve() in sandbox.user_install_roots
 
 
 def test_rebind_uses_child_worktree_root(tmp_path):

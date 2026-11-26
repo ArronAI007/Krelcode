@@ -482,7 +482,14 @@ class DaemonServer:
             if not cwd.is_absolute():
                 cwd = self.workspace_root / cwd
             sandbox = self._build_sandbox()
-            info = await self.jobs.start(command, cwd=cwd, sandbox=sandbox)
+            permission_profile = str(
+                params.get("sandbox_permission") or "").strip() or None
+            info = await self.jobs.start(
+                command,
+                cwd=cwd,
+                sandbox=sandbox,
+                permission_profile=permission_profile,
+            )
             await asyncio.to_thread(
                 self.job_store.upsert_from_info,
                 info,
@@ -574,8 +581,22 @@ class DaemonServer:
             if self.sandbox_network is not None
             else bool(section.get("network", False))
         )
+        raw_install_paths = (
+            section.get("user_install_paths")
+            or section.get("install_paths")
+            or ()
+        )
+        if isinstance(raw_install_paths, str):
+            raw_install_paths = [raw_install_paths]
         return ExecutionSandbox(
-            self.workspace_root, backend=str(backend), network=network)
+            self.workspace_root,
+            backend=str(backend),
+            network=network,
+            allow_user_install=bool(section.get("user_install", True)),
+            install_network=bool(section.get("install_network", True)),
+            user_install_roots=tuple(
+                Path(path).expanduser() for path in raw_install_paths),
+        )
 
 
 def _required(params: Dict[str, Any], key: str) -> str:

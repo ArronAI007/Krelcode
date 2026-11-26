@@ -68,6 +68,14 @@ cannot be bypassed.
                 "type": "string",
                 "description": "工作目录（相对工作区根；缺省为工作区根）",
             },
+            "sandbox_permission": {
+                "type": "string",
+                "enum": ["auto", "workspace", "user-install"],
+                "description": (
+                    "Sandbox 权限范围；默认 auto。用户级安装使用 "
+                    "user-install（不允许 sudo/系统目录）"
+                ),
+            },
         },
         "required": ["command"],
     }
@@ -83,8 +91,17 @@ cannot be bypassed.
             cwd = resolve_in_workspace(ctx, str(args.get("cwd") or "."))
         except (PathOutsideWorkspaceError, ValueError) as exc:
             return ToolResult(content=str(exc), is_error=True)
+        permission_profile = str(
+            args.get("sandbox_permission") or "auto").strip().lower()
         try:
-            job = await manager.start(command, cwd=cwd, sandbox=ctx.sandbox)
+            job = await manager.start(
+                command,
+                cwd=cwd,
+                sandbox=ctx.sandbox,
+                permission_profile=(
+                    None if permission_profile == "auto" else permission_profile
+                ),
+            )
         except Exception as exc:
             return ToolResult(
                 content=f"后台任务启动失败: {exc}",
