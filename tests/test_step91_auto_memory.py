@@ -330,6 +330,22 @@ def test_memory_mode_command_controls_future_extraction(tmp_path):
     assert report.extracted
 
 
+def test_memory_list_explains_pending_candidates_when_no_accepted_entries(tmp_path):
+    coordinator, _store, loop = make_coordinator(tmp_path, mode="suggest")
+    coordinator.process_turn(
+        "请记住：项目使用 asyncio 事件循环",
+        turn_id="pending-list-1",
+    )
+    controller = SessionController(loop, workspace_root=tmp_path)
+
+    listed = asyncio.run(controller.execute_command("/memory list"))
+    rendered = "\n".join(listed.output)
+
+    assert "没有已确认记忆" in rendered
+    assert "1 条 Auto Memory 候选待审核" in rendered
+    assert "/memory review" in rendered
+
+
 def test_candidate_queue_persists_evidence_and_reloads(tmp_path):
     queue = MemoryCandidateQueue(
         tmp_path, path=tmp_path / ".krelcode" / "memory" / "candidates.jsonl")

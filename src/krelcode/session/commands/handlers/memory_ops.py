@@ -203,9 +203,17 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
             label = SCOPE_LABELS[scope]
         entries = store.list(limit=50, scopes=scopes)
         if not entries:
-            return _ok(
-                f"  [memory] {label}作用域当前没有记忆",
-                "  #内容 添加项目记忆；#user: / #project: / #session: 指定作用域")
+            lines = [
+                f"  [memory] {label}作用域当前没有已确认记忆",
+                "  #内容 添加项目记忆；#user: / #project: / #session: 指定作用域",
+            ]
+            if auto_memory is not None:
+                pending = auto_memory.queue.pending_count()
+                if pending:
+                    lines.append(
+                        f"  有 {pending} 条 Auto Memory 候选待审核"
+                        "（/memory review）")
+            return _ok(*lines)
         lines = [f"  [memory] {len(entries)} 条{label}记忆（最新优先）"]
         lines.extend(_entry_lines(entries))
         if auto_memory is not None:

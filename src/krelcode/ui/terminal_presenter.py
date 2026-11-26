@@ -18,11 +18,12 @@ from typing import Awaitable, Callable, Optional, cast
 
 from ..agent.turn.loop import AgentLoop
 from ..core.tokens import estimate_history_tokens
-from ..core.events import AgentEvent, MemoryWritten
+from ..core.events import AgentEvent, MemoryCandidateObserved, MemoryWritten
 from ..core.redact import SecretRedactor
 from ..session.controller import SessionController
 from ..session.input import InputAction, InputProcessor
 from ..session.memory import MemoryStore
+from ..session.memory_candidates import AutoMemoryCoordinator
 from ..session.memory_models import MemoryStoreSnapshot
 from ..session.repl_session import ReplSessionRunner
 from ..session.state import SessionViewState
@@ -111,6 +112,8 @@ class TerminalPresenter:
         self.approval_review: Optional[DiffReview] = None
         self.git_review: Optional[DiffReview] = None
         self.memory_cache: Optional[MemoryStoreSnapshot] = None
+        self.memory_pending_candidates = 0
+        self.memory_mode = ""
         self.status_cache = ""
         self.last_status_draw = 0.0
         configured_status_renderer = (
@@ -147,7 +150,7 @@ class TerminalPresenter:
         self.state = state
         self.runner = runner
         self.processor = processor
-        self.memory_cache = memory_store.dashboard_snapshot(limit=8)
+        self.refresh_memory_cache()
         self.editor = TerminalLineEditor(
             self.prompt,
             self.suggest,
@@ -201,6 +204,16 @@ class TerminalPresenter:
         if memory_store is not None:
             concrete_memory = cast(MemoryStore, memory_store)
             self.memory_cache = concrete_memory.dashboard_snapshot(limit=8)
+        auto_memory = cast(
+            Optional[AutoMemoryCoordinator],
+            self.loop.services.extensions.auto_memory,
+        )
+        if auto_memory is None:
+            self.memory_pending_candidates = 0
+            self.memory_mode = ""
+        else:
+            self.memory_pending_candidates = auto_memory.queue.pending_count()
+            self.memory_mode = auto_memory.mode.value
 
     def refresh_panels(self, *, queue_size: int = 0) -> None:
         if (self.state is None or self.processor is None
@@ -231,6 +244,8 @@ class TerminalPresenter:
             memory_total=(
                 memory_cache.total_entries if memory_cache is not None else 0),
             memory_tokens=memory_cache.tokens if memory_cache else 0,
+            memory_pending=self.memory_pending_candidates,
+            memory_mode=self.memory_mode,
             quick_status=self.quick_status,
             diff_review=self.approval_review or self.git_review,
         )
@@ -350,7 +365,7 @@ class TerminalPresenter:
 
     def on_session_event(self, event: AgentEvent) -> None:
         self.renderer(event)
-        if isinstance(event, MemoryWritten):
+        if isinstance(event, (MemoryCandidateObserved, MemoryWritten)):
             self.refresh_memory_cache()
             refresh = getattr(self, "refresh_status", None)
             if refresh is not None:

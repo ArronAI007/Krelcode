@@ -68,6 +68,8 @@ def build_panels(
     memory_entries: Iterable[object] = (),
     memory_total: Optional[int] = None,
     memory_tokens: int = 0,
+    memory_pending: int = 0,
+    memory_mode: str = "",
     quick_status: str = "",
     diff_review: Optional[DiffReview] = None,
 ) -> tuple[Panel, ...]:
@@ -257,6 +259,15 @@ def build_panels(
             label=_compact(text, 100),
             detail=_compact(f"{scope_value} · {created}", 32),
             status="•",
+        ))
+    pending_memories = max(0, int(memory_pending))
+    if pending_memories:
+        mode_detail = f" · mode {memory_mode}" if memory_mode else ""
+        memory_items.append(PanelItem(
+            id="memory-pending",
+            label=f"Auto Memory · {pending_memories} 条待审核",
+            detail=_compact(f"/memory review{mode_detail}", 64),
+            status="◐",
         ))
     if not memory_items:
         memory_items.append(PanelItem(

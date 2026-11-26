@@ -163,6 +163,22 @@ def test_panel_view_builder_surfaces_plan_activity_context_and_memory():
     assert memory_item.detail == "输入 #内容 添加"
 
 
+def test_memory_panel_surfaces_pending_auto_memory_candidates():
+    panels = build_panels(
+        SessionViewState(),
+        permission_mode="default",
+        memory_entries=(),
+        memory_pending=3,
+        memory_mode="suggest",
+    )
+    memory = next(panel for panel in panels if panel.id == "memory")
+    assert len(memory.items) == 1
+    assert memory.items[0].id == "memory-pending"
+    assert "3 条待审核" in memory.items[0].label
+    assert "/memory review" in memory.items[0].detail
+    assert "mode suggest" in memory.items[0].detail
+
+
 def test_prompt_writer_renders_panel_dock_above_input():
     from krelcode.ui.repl import IDLE_PROMPT, PromptWriter
 
