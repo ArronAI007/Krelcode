@@ -13,6 +13,7 @@ from typing import Any, Mapping, Sequence
 from krelcode.core.context_usage import ContextUsageSnapshot
 from krelcode.core.events import (
     AgentEvent,
+    AcceptanceEvaluated,
     ApprovalRequested,
     ContextAssembled,
     ContextCheckpointCreated,
@@ -67,6 +68,7 @@ _SNAKE_2 = re.compile(r"([a-z0-9])([A-Z])")
 
 _KIND_BY_EVENT: tuple[tuple[type[AgentEvent], str], ...] = (
     (RunStarted, "run"),
+    (AcceptanceEvaluated, "run"),
     (StepStarted, "step"),
     (LLMStreamDelta, "model"),
     (LLMThinkingDelta, "model"),

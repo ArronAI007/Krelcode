@@ -22,6 +22,7 @@ from krelcode.core.interactions import UserInputPort
 from krelcode.core.redact import SecretRedactor
 from krelcode.core.context_usage import ContextUsageSnapshot
 from krelcode.core.events import (
+    AcceptanceEvaluated,
     AgentEvent,
     ErrorOccurred,
     EventBus,
@@ -50,6 +51,7 @@ from krelcode.agent.context.context_source import (
 from krelcode.agent.turn.dependencies import AgentDependencies
 from krelcode.agent.context.context_cache_ledger import ContextCacheLedger
 from krelcode.agent.turn.context_turn import ContextTurnCoordinator
+from krelcode.agent.turn.acceptance import DefaultAcceptanceEvaluator, acceptance_evidence_from_history
 from krelcode.agent.context.context_source import ContextAssembly
 from krelcode.agent.turn.intent import TurnIntent, infer_turn_intent
 from krelcode.agent.turn.model_turn import (
@@ -442,10 +444,7 @@ class AgentLoop(RuntimeStateHost):
             user_input,
             turn_id=self._current_turn_id,
             session_id=self._turn_tool_context.runtime.session_id or "",
-            application=(
-                self.application_request.to_dict()
-                if self.application_request is not None else {}
-            ),
+            application=(self.application_request.to_dict() if self.application_request is not None else {}),
         ))
         await self._emit(QueryPhaseChanged(
             "awaiting_model", "等待模型响应"))
@@ -465,9 +464,7 @@ class AgentLoop(RuntimeStateHost):
                     self.services.context.working_context.record_error(
                         text, source="budget")
                     self.history.append(Message.assistant(text))
-                    await self._emit(RunFinished(
-                        text, turn_id=self._current_turn_id))
-                    return text
+                    return await self._finish_turn(text)
                 await self._emit(StepStarted(step))
                 await self._emit(QueryPhaseChanged(
                     "model", f"模型生成中（Step {step}）"))
@@ -485,9 +482,7 @@ class AgentLoop(RuntimeStateHost):
                         assistant, finish_failure, llm_turn.finish_reason)
                 if not assistant.tool_calls:
                     final_text = assistant.content or ""
-                    await self._emit(RunFinished(
-                        final_text, turn_id=self._current_turn_id))
-                    return final_text
+                    return await self._finish_turn(final_text)
                 abort_reason = await self._apply_tool_results(
                     assistant.tool_calls, llm_turn.tool_results)
                 if abort_reason:
@@ -495,9 +490,7 @@ class AgentLoop(RuntimeStateHost):
                     self.services.context.working_context.record_error(
                         text, source="loop_guard")
                     self.history.append(Message.assistant(text))
-                    await self._emit(RunFinished(
-                        text, turn_id=self._current_turn_id))
-                    return text
+                    return await self._finish_turn(text)
         except asyncio.CancelledError:
             self._turn_abort_signal.cancel()
             self._repair_after_cancel()
@@ -509,8 +502,15 @@ class AgentLoop(RuntimeStateHost):
         self.services.context.working_context.record_error(
             text, source="max_steps")
         self.history.append(Message.assistant(text))
-        await self._emit(RunFinished(
-            text, turn_id=self._current_turn_id))
+        return await self._finish_turn(text)
+
+    async def _finish_turn(self, text: str) -> str:
+        request = self.application_request
+        if request is not None:
+            result = DefaultAcceptanceEvaluator().evaluate(request, text, acceptance_evidence_from_history(self.history))
+            self.acceptance_result = result
+            await self._emit(AcceptanceEvaluated(result.as_dict()))
+        await self._emit(RunFinished(text, turn_id=self._current_turn_id))
         return text
 
     def _begin_turn(
@@ -689,9 +689,7 @@ class AgentLoop(RuntimeStateHost):
             failure, source="provider", metadata={"finish_reason": finish_reason or ""})
         await self._emit(ErrorOccurred(
             failure, f"finish_reason={finish_reason or 'unknown'}"))
-        await self._emit(RunFinished(
-            final_text, turn_id=self._current_turn_id))
-        return final_text
+        return await self._finish_turn(final_text)
 
     def _current_tool_pool(self) -> TurnToolPool:
         if self._active_tool_pool is None:

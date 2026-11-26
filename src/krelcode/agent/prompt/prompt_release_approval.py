@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Callable, Sequence
+from typing import Callable, Optional, Sequence
 
 from krelcode.agent.prompt.prompt_parity import (
     FROZEN_PROMPT_PARITY_SUITE_HASH,
@@ -25,6 +25,12 @@ from krelcode.agent.prompt.prompt_release_models import (
 )
 from krelcode.agent.prompt.prompt_release_store import PromptReleaseProposalStore
 from krelcode.agent.prompts import CURRENT_PROMPT_RELEASE
+from krelcode.contracts.change_admission import (
+    AdmissionGatePort,
+    ChangeApproval,
+)
+from krelcode.safety.admission import DefaultAdmissionGate
+from .prompt_change_adapter import prompt_change_inputs
 
 
 class PromptReleaseApprovalService:
@@ -36,10 +42,12 @@ class PromptReleaseApprovalService:
         *,
         release: PromptRelease = CURRENT_PROMPT_RELEASE,
         clock: Callable[[], str] = _now,
+        admission_gate: Optional[AdmissionGatePort] = None,
     ) -> None:
         self.store = store
         self.release = release
         self.clock = clock
+        self.admission_gate = admission_gate or DefaultAdmissionGate()
 
     def get(self, proposal_id: str) -> PromptReleaseProposal:
         return self.store.load_proposal(proposal_id)
@@ -55,11 +63,51 @@ class PromptReleaseApprovalService:
         approved_by: str,
         reason: str = "",
     ) -> PromptReleaseProposal:
+        proposal = self.store.load_proposal(proposal_id)
+        if proposal.candidate_hash != str(candidate_hash or "").strip():
+            raise PromptPipelineError("proposal_id 与 candidate_hash 不匹配")
+        if proposal.state is PromptProposalState.STALE:
+            raise PromptPipelineError("当前 proposal 已 stale，必须重新评估")
+        if proposal.state is not PromptProposalState.PENDING_APPROVAL:
+            raise PromptPipelineError(
+                f"proposal 当前状态不可审批: {proposal.state.value}")
+        if not self._identity_current(proposal):
+            stale = replace(
+                proposal,
+                state=PromptProposalState.STALE,
+                decision_reason="release/profile/contract/suite identity changed",
+            )
+            self.store.save_proposal(stale)
+            raise PromptPipelineError("proposal 身份已漂移，已标记为 stale")
+        actor = _text(approved_by, 160)
+        if actor.lower() in {
+            "agent", "assistant", "model", "ai", "bot", "claude", "codex",
+        }:
+            raise PromptPipelineError("Prompt release 只能由人类显式批准或拒绝")
+        inputs = prompt_change_inputs(proposal)
+        admission = self.admission_gate.admit(
+            inputs.candidate,
+            evaluation=inputs.evaluation,
+            approval=ChangeApproval(
+                approved=True,
+                actor=actor,
+                reason=reason or "用户批准 Prompt release",
+                scope="prompt-release",
+                metadata={"proposal_id": proposal_id},
+            ),
+            rollback=inputs.rollback,
+            policy_version=self.release.release_id,
+            audit={"proposal_id": proposal_id},
+        )
+        if not admission.admitted:
+            raise PromptPipelineError(
+                "Prompt release 未通过运行时准入: "
+                f"{admission.status.value}: {admission.reason}")
         return self._decide(
             proposal_id,
             candidate_hash,
             decision="approved",
-            approved_by=approved_by,
+            approved_by=actor,
             reason=reason,
         )
 

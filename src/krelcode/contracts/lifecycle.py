@@ -10,8 +10,9 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping, Optional
 
+from .acceptance import AcceptanceResult
 from .application import ApplicationRequest
-from .change_admission import ChangeCandidate
+from .change_admission import AdmissionDecision, ChangeCandidate
 from .governance import GovernanceDecision
 from .runtime import RuntimeReleaseManifest
 
@@ -22,6 +23,8 @@ class RuntimeLifecycleEnvelope:
     runtime_release: RuntimeReleaseManifest
     governance_decision: GovernanceDecision
     trace_id: str
+    acceptance_result: Optional[AcceptanceResult] = None
+    admission_decision: Optional[AdmissionDecision] = None
     change_candidate: Optional[ChangeCandidate] = None
     next_runtime_release: Optional[RuntimeReleaseManifest] = None
     metadata: Mapping[str, object] = field(default_factory=dict)

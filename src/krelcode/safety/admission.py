@@ -18,6 +18,11 @@ from ..contracts.change_admission import (
     EvaluationReport,
     RollbackManifest,
 )
+from ..contracts.governance import (
+    AuditCorrelation,
+    GovernanceDecision,
+    PolicyVersion,
+)
 
 
 _RISK_RANK = {
@@ -260,6 +265,20 @@ class DefaultAdmissionGate:
             evaluation=evaluation,
             rollback=rollback,
             approval=approval,
+            governance_decision=GovernanceDecision(
+                allowed=status is AdmissionStatus.ADMITTED,
+                reason=reason,
+                policy_version=PolicyVersion(
+                    version=policy_version or "0",
+                    source="admission-gate",
+                ),
+                audit=AuditCorrelation(
+                    correlation_id=str(
+                        dict(audit or {}).get("correlation_id")
+                        or candidate.candidate_id),
+                    request_id=candidate.candidate_id,
+                ),
+            ),
             audit={
                 "change_type": candidate.change_type.value,
                 "target": candidate.target,

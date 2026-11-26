@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
 
 from ..core.events import (
+    AcceptanceEvaluated,
     ApprovalRequested,
     CompactCheckpointCreated,
     ContextAssembled,
@@ -149,6 +150,12 @@ class StreamJsonEncoder:
                 "subtype": "turn_started",
                 "content": event.user_input,
                 "application": dict(event.application),
+            }
+        elif isinstance(event, AcceptanceEvaluated):
+            payload = {
+                "type": "acceptance",
+                "subtype": "evaluated",
+                "acceptance": dict(event.acceptance),
             }
         elif isinstance(event, StepStarted):
             payload = {"type": "step", "subtype": "started", "step": event.step}

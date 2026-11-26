@@ -84,7 +84,7 @@ def test_plain_chat_no_tools():
     assert rec.types() == [
         "RunStarted", "QueryPhaseChanged", "StepStarted",
         "QueryPhaseChanged", "ContextAssembled", "LLMStreamDelta",
-        "LLMResponseReceived", "RunFinished",
+        "LLMResponseReceived", "AcceptanceEvaluated", "RunFinished",
     ]
     assert provider.tools_seen == [None]
 
@@ -120,9 +120,9 @@ def test_full_tool_call_cycle():
             "ToolCallStarted", "ToolProgress", "SecurityDecisionRecorded",
             "ToolProgress",
             "ToolCallCompleted", "StepStarted", "QueryPhaseChanged",
-        "ContextAssembled", "LLMStreamDelta", "LLMResponseReceived",
-        "RunFinished",
-    ]
+            "ContextAssembled", "LLMStreamDelta", "LLMResponseReceived",
+            "AcceptanceEvaluated", "RunFinished",
+        ]
     completed = [e for e in rec.events if isinstance(e, ToolCallCompleted)][0]
     assert not completed.is_error
 

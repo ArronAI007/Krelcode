@@ -99,6 +99,7 @@ if TYPE_CHECKING:
         PrincipalPort,
     )
     from krelcode.contracts.application import ApplicationRequest
+    from krelcode.contracts.acceptance import AcceptanceResult
     from krelcode.contracts.tool import RuntimeSnapshot, ToolContext, TurnAbortSignal
     from krelcode.llm.base import LLMProvider
     from krelcode.safety.contract import ModePermissionContract
@@ -263,6 +264,14 @@ class RuntimeStateView:
         value: Optional[ApplicationRequest],
     ) -> None:
         self.runtime_state.turn.application_request = value
+
+    @property
+    def acceptance_result(self) -> Optional[AcceptanceResult]:
+        return self.runtime_state.turn.acceptance_result
+
+    @acceptance_result.setter
+    def acceptance_result(self, value: Optional[AcceptanceResult]) -> None:
+        self.runtime_state.turn.acceptance_result = value
 
     @property
     def steering_queue(self) -> asyncio.Queue[SteeringInput | str]:

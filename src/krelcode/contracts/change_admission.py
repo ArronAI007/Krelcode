@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Mapping, Optional, Protocol, Tuple
 
 from .application import RiskLevel
+from .governance import GovernanceDecision
 
 
 class ChangeType(str, Enum):
@@ -236,6 +237,7 @@ class AdmissionDecision:
     evaluation: Optional[EvaluationReport] = None
     rollback: Optional[RollbackManifest] = None
     approval: Optional[ChangeApproval] = None
+    governance_decision: Optional[GovernanceDecision] = None
     audit: Mapping[str, object] = field(default_factory=dict)
     decided_at: float = field(default_factory=time.time)
 

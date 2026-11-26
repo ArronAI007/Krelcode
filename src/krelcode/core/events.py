@@ -136,6 +136,13 @@ class SecurityDecisionRecorded(AgentEvent):
 
 
 @dataclass(frozen=True)
+class AcceptanceEvaluated(AgentEvent):
+    """Final acceptance evidence for the current application request."""
+
+    acceptance: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ContextMicrocompacted(AgentEvent):
     """Old tool results were deterministically summarized/referenced.
 

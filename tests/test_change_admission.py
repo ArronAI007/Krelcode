@@ -81,6 +81,9 @@ def test_default_admission_gate_enforces_all_high_risk_steps() -> None:
     )
     assert admitted.status is AdmissionStatus.ADMITTED
     assert admitted.release_id.startswith("admission-")
+    assert admitted.governance_decision is not None
+    assert admitted.governance_decision.allowed
+    assert admitted.governance_decision.audit.request_id == item.candidate_id
 
 
 def test_failed_evaluation_and_denied_approval_are_rejected() -> None:

@@ -9,6 +9,7 @@ import pytest
 from krelcode.agent.query import QueryEvent
 from krelcode.core.context_usage import ContextUsageSnapshot
 from krelcode.core.events import (
+    AcceptanceEvaluated,
     AgentEvent,
     ApprovalRequested,
     CompactCheckpointCreated,
@@ -116,6 +117,11 @@ def all_encoder_events() -> list[object]:
                 "trace_id": "trace-1",
             },
         ),
+        AcceptanceEvaluated({
+            "status": "passed",
+            "request_goal": "hello",
+            "checks": [],
+        }),
         ContextAssembled(ContextUsageSnapshot(
             turn_id="turn-1", step=1, estimated_input_tokens=80)),
         ContextDropped(("workspace:big",), "budget"),

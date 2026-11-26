@@ -16,6 +16,7 @@ from typing import Mapping, TypeAlias, cast
 from .events import (
     AgentEvent,
     ApprovalRequested,
+    AcceptanceEvaluated,
     CompactCheckpointCreated,
     ContextAssembled,
     ContextCheckpointCreated,
@@ -90,6 +91,7 @@ SessionEventPayload: TypeAlias = (
     | ToolCallCompleted
     | HookTriggered
     | ApprovalRequested
+    | AcceptanceEvaluated
     | PermissionDenied
     | SecurityDecisionRecorded
     | ContextMicrocompacted
@@ -131,6 +133,7 @@ SESSION_EVENT_TYPE_TO_KIND: Mapping[type[AgentEvent], SessionEventKind] = {
     ToolCallCompleted: SessionEventKind.TOOL,
     HookTriggered: SessionEventKind.HOOK,
     ApprovalRequested: SessionEventKind.PERMISSION,
+    AcceptanceEvaluated: SessionEventKind.RUN,
     PermissionDenied: SessionEventKind.PERMISSION,
     SecurityDecisionRecorded: SessionEventKind.PERMISSION,
     ContextMicrocompacted: SessionEventKind.CONTEXT,

@@ -10,6 +10,13 @@ from .application import (
     TaskShape,
     TriggerType,
 )
+from .acceptance import (
+    AcceptanceCheck,
+    AcceptanceEvaluatorPort,
+    AcceptanceEvidence,
+    AcceptanceResult,
+    AcceptanceStatus,
+)
 from .change_admission import (
     AdmissionDecision,
     AdmissionGatePort,
@@ -89,6 +96,11 @@ from .tool_execution import (
 
 __all__ = [
     "AcceptanceContract",
+    "AcceptanceCheck",
+    "AcceptanceEvaluatorPort",
+    "AcceptanceEvidence",
+    "AcceptanceResult",
+    "AcceptanceStatus",
     "AdmissionDecision",
     "AdmissionGatePort",
     "AdmissionPolicy",
