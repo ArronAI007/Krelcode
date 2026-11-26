@@ -65,6 +65,7 @@ class TurnToolPool:
         intent: Optional[TurnIntent] = None,
         runtime: Optional[RuntimeSnapshot] = None,
     ) -> None:
+        self._registry = registry
         self._runtime = runtime
         self._entries: Dict[str, ToolPoolEntry] = {}
         self._excluded: Dict[str, str] = {}
@@ -332,6 +333,21 @@ class TurnToolPool:
     def load(self, names: Sequence[str]) -> Tuple[str, ...]:
         """Compatibility alias for ToolSearch and diagnostics callers."""
         return self.load_tools(names)
+
+    def rebuild(
+        self,
+        *,
+        intent: Optional[TurnIntent],
+        runtime: RuntimeSnapshot,
+    ) -> "TurnToolPool":
+        """Rebuild the boundary while retaining tools still eligible to load."""
+        rebuilt = TurnToolPool(
+            self._registry,
+            intent=intent,
+            runtime=runtime,
+        )
+        rebuilt.load_tools(self.loaded_names())
+        return rebuilt
 
     def system_hint(self, *, description_limit: int = 180) -> str:
         """Render the stable three-tier catalogue without full schemas."""

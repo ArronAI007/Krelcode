@@ -314,6 +314,20 @@ def test_tool_search_loads_schema_on_next_provider_step(tmp_path):
     assert "deferred_report" in loop.history[3].content
 
 
+def test_tool_pool_rebuild_preserves_loaded_eligible_tools():
+    deferred = CatalogTool("deferred_report", ToolTier.DEFERRED)
+    pool = TurnToolPool(ToolRegistry([ToolSearchTool(), deferred]))
+    pool.load_tools(["deferred_report"])
+
+    rebuilt = pool.rebuild(
+        intent=None,
+        runtime=RuntimeSnapshot(permission_mode=PermissionMode.AUTO_APPROVE),
+    )
+
+    assert rebuilt.is_loaded("deferred_report")
+    assert "deferred_report" in rebuilt.loaded_names()
+
+
 def test_tool_loaded_in_same_request_is_not_executable_until_next_step(tmp_path):
     deferred = CatalogTool("deferred_once", ToolTier.DEFERRED)
     provider = MockProvider(scripted=[

@@ -520,8 +520,15 @@ class AgentLoop(RuntimeStateHost):
         return self.context_coordinator.current_context_usage_ratio()
 
     def invalidate_tool_pool(self) -> None:
-        """Drop the current capability snapshot after a permission change."""
-        self.runtime_state.turn.active_tool_pool = None
+        """Rebuild capabilities after a permission change, retaining valid loads."""
+        current = self._active_tool_pool
+        self.runtime_state.turn.active_tool_pool = (
+            current.rebuild(
+                intent=self._turn_intent,
+                runtime=self._turn_tool_context.runtime,
+            )
+            if current is not None else None
+        )
 
     def abort_current_turn(self, reason: str = "用户中止") -> None:
         """向正在执行的工具广播协作式取消；Task.cancel 仍由 Runtime 负责。"""
