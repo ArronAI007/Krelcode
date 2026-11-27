@@ -198,6 +198,15 @@ def build_panels(
                 f" · {memory_tokens} tokens",
             ),
         )
+    if state.context_knowledge_hits:
+        context_items += (PanelItem(
+            "context-knowledge",
+            f"knowledge · {state.context_knowledge_hits}",
+            " · ".join(
+                f"{scope} {count}"
+                for scope, count in state.context_knowledge_scopes
+            ) or "hits 0",
+        ),)
     ledger = state.context_cache_ledger
     if isinstance(ledger, Mapping):
         diff = ledger.get("diff")

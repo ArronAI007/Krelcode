@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
-from typing import Optional, cast
+from typing import Any, Optional, cast
 
 from ....agent.context import build_workspace_context_bundle
 from ....agent.context.context_inspection import ContextInspectionService
@@ -26,6 +26,7 @@ from ....core.messages import Message
 from ....mcp.security import render_mcp_prompt_evidence
 from ....safety.runtime import parse_permission_mode
 from ....safety.rules import RuleDecision, RuleScope
+from ....skills import SkillError, SkillReleaseStore
 from ..context import CommandContext
 from ..ports import SkillManagerPort
 from ..sources import (
@@ -72,6 +73,57 @@ async def handle_skills(ctx: CommandContext) -> CommandResult:
             output.append("  用法: /skills show <name>")
         else:
             output.append(_format_skill_details(ctx.skills, parts[1].strip()))
+    elif sub == "release":
+        if len(parts) < 2 or not parts[1].strip():
+            output.append("  用法: /skills release <name>")
+        else:
+            name = parts[1].strip()
+            published = ctx.skills.get(name)
+            if published is None:
+                output.append(f"  （找不到 Skill: {name}）")
+            else:
+                try:
+                    release = _skill_release_store(ctx).record(
+                        cast(Any, published))
+                except SkillError as exc:
+                    output.append(f"  [skills release] {exc}")
+                else:
+                    output.append(
+                        f"  [skills release] {release.name}@{release.version}"
+                        f" · {release.release_id}")
+    elif sub == "releases":
+        name = parts[1].strip() if len(parts) > 1 else ""
+        releases = _skill_release_store(ctx).list(name, limit=50)
+        if not releases:
+            output.append("  （没有 Skill release 记录）")
+        for release in releases:
+            output.append(
+                f"  {release.name}@{release.version} · {release.scope}"
+                f" · {release.release_id} · {release.digest[:12]}")
+    elif sub == "rollback":
+        args = parts[1].split(maxsplit=1) if len(parts) > 1 else []
+        if not args:
+            output.append("  用法: /skills rollback <name> [release-id]")
+        else:
+            name = args[0]
+            target = ctx.skills.get(name)
+            if target is None:
+                output.append(f"  （找不到 Skill: {name}）")
+            else:
+                try:
+                    release = _skill_release_store(ctx).rollback(
+                        cast(Any, target),
+                        args[1].strip() if len(args) > 1 else "",
+                    )
+                    (ctx.skills_reload() if ctx.skills_reload
+                     else ctx.skills.reload())
+                    sync_skill_commands(ctx.command_registry, ctx.skills)
+                except SkillError as exc:
+                    output.append(f"  [skills rollback] {exc}")
+                else:
+                    output.append(
+                        f"  [skills rollback] 已恢复 {release.name}@"
+                        f"{release.version} · {release.release_id}")
     else:
         query = sub
         items = ctx.skills.list(query=query)
@@ -93,6 +145,13 @@ async def handle_skills(ctx: CommandContext) -> CommandResult:
             output.append(
                 f"  [skills] 跳过无效 Skill: {issue.path}: {issue.message}")
     return _ok(*output)
+
+
+def _skill_release_store(ctx: CommandContext) -> SkillReleaseStore:
+    return SkillReleaseStore(
+        ctx.workspace_root,
+        redactor=ctx.loop.services.core.redactor,
+    )
 
 
 async def _refresh_plugin_runtime(ctx: CommandContext) -> None:

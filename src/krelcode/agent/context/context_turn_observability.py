@@ -42,4 +42,50 @@ def memory_selection(
     return (), {}, 0
 
 
-__all__ = ["dropped_context_items", "memory_selection"]
+def knowledge_selection(
+    assembly: ContextAssembly,
+) -> tuple[
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[tuple[str, int], ...],
+    int,
+]:
+    """Extract knowledge document/chunk/source identities and token usage."""
+    for layer in assembly.layers:
+        metadata = layer.metadata or {}
+        raw_documents = metadata.get("knowledge_document_ids", ())
+        raw_chunks = metadata.get("knowledge_hit_ids", ())
+        raw_sources = metadata.get("knowledge_sources", ())
+        documents = tuple(str(item) for item in raw_documents) if isinstance(
+            raw_documents, (list, tuple, set)) else ()
+        chunks = tuple(str(item) for item in raw_chunks) if isinstance(
+            raw_chunks, (list, tuple, set)) else ()
+        sources = tuple(str(item) for item in raw_sources) if isinstance(
+            raw_sources, (list, tuple, set)) else ()
+        scope_counts: dict[str, int] = {}
+        raw_hits = metadata.get("knowledge_hits", ())
+        if isinstance(raw_hits, (list, tuple)):
+            for hit in raw_hits:
+                if not isinstance(hit, dict):
+                    continue
+                scope = str(hit.get("scope") or "")
+                if scope:
+                    scope_counts[scope] = scope_counts.get(scope, 0) + 1
+        tokens = _non_negative_int(metadata.get("knowledge_tokens", 0))
+        if documents or chunks or sources or tokens:
+            return (
+                documents,
+                chunks,
+                sources,
+                tuple(sorted(scope_counts.items())),
+                tokens,
+            )
+    return (), (), (), (), 0
+
+
+__all__ = [
+    "dropped_context_items",
+    "knowledge_selection",
+    "memory_selection",
+]

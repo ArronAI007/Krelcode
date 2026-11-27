@@ -46,6 +46,7 @@ src/krelcode/
 │   ├── registry.py   # ToolRegistry -> OpenAI tools schema
 │   └── builtin/      # 每个工具一个文件，互相独立
 ├── skills/      # 文件系统型 Agent Skills：发现/解析/渐进加载/资源/脚本
+├── knowledge/   # 版本化组织知识：来源/索引/ACL/freshness/Evidence 检索
 ├── plugins/     # 轻量本地插件：manifest → 隔离 import → Tool 适配/命名空间
 ├── security_review/ # Security Review Workflow、只读工具池、结构化报告与 runner
 ├── safety/      # 策略层（实现 ApprovalPolicy 端口）
@@ -55,7 +56,7 @@ src/krelcode/
 │   ├── attachments.py # @文本/图片展开（工作区约束与预算）
 │   ├── state.py      # SessionViewState：idle/running/stopping 与 turn 现场
 │   ├── commands/     # CommandSpec/Registry → dispatcher/handlers
-│   │   ├── builtin.py # 40 个内置命令元数据与 help 渲染
+│   │   ├── builtin.py # 内置命令元数据与 help 渲染
 │   │   ├── registry.py # 解析、别名、隐藏/启用、运行态与来源冲突
 │   │   ├── sources.py # Skill / MCP Prompt → dynamic CommandSpec
 │   │   └── handlers/  # 会话、上下文、Skill、MCP 等执行器
@@ -64,6 +65,8 @@ src/krelcode/
 │   ├── envelope.py   # SessionEnvelope：session/turn/sequence + 轻量 payload
 │   ├── event_router.py # reducer、前台与观测 sink 的唯一事件分发点
 │   ├── restore.py    # 会话恢复
+│   ├── continuation.py # RuntimeCheckpointRef → 会话现场恢复
+│   ├── state_checkpoint.py # StateCheckpointBundle 持久化
 │   └── recorder.py   # JSONL 持久化（事件总线订阅者）
 ├── ui/          # 终端交互：输入、渲染、展示型命令
 │   ├── conversation_host.py  # 前台状态机、动作优先级、队列与 quick shell
@@ -1750,6 +1753,40 @@ Context v3 以 `PromptAssembler` 为唯一请求级装配入口，`ContextAssemb
 Step 94 的离线验收覆盖 Prompt Injection、Memory Poisoning、symlink/path traversal、
 超大/损坏/权限错误文件、compact 取消与摘要失败、长会话 token、Memory 检索质量、跨项目
 隔离、Resume 现场刷新和完整请求 token 守恒。
+
+## Context / State / Memory / Knowledge / Skill 五类对象
+
+系统显式区分五类生命周期不同的对象：
+
+| 对象 | Krelcode 持有者 | 一致性边界 |
+|------|-----------------|------------|
+| Context | `ContextSource` / `PromptAssembler` | 单次请求重建，不作为事实源 |
+| State | Session JSONL、RuntimeTaskState、Plan、Context/Compact/File checkpoint、`StateCheckpointBundle` | 任务级事实与恢复引用 |
+| Memory | `MemoryStore` 与 Auto Memory candidate pipeline | user/project/session 作用域，跨会话治理 |
+| Knowledge | `knowledge.LocalKnowledgeBase` 与 `KnowledgeServicePort` | 来源同步、版本、ACL、freshness |
+| Skill | `SkillManager` + `SkillReleaseStore` | 版本化能力资产与回滚 |
+
+Knowledge 不进入 Instruction：
+
+```text
+KnowledgeSource
+  -> KnowledgeDocument/KnowledgeChunk
+    -> KnowledgeQuery + ACL + freshness
+      -> KnowledgeHit
+        -> EvidenceSource.KNOWLEDGE
+          -> [Evidence: Knowledge]
+```
+
+- 本地文件源扫描 `.krelcode/knowledge`、`~/.krelcode/knowledge` 与可选组织目录；
+  sidecar `*.meta.json` 提供 title/version/tags/acl/expires_at。
+- 检索只读取内存索引，不在 TUI 高频刷新时扫描磁盘。
+- `ContextAssembler` 将其放入独立 `knowledge` category，non-cacheable、
+  untrusted、requires_validation。
+- `knowledge_search` 是只读 discoverable tool；`/knowledge` 提供来源/刷新/搜索入口。
+- StateCheckpointBundle 将 context/compact checkpoint、Working Context sequence、
+  history digest、plan/todo 和 RuntimeTaskState 关联为一个恢复现场。
+- Skill Release ledger 位于 `.krelcode/skills/releases.jsonl`，支持发布、历史与
+  `SKILL.md` 回滚；回滚后重新扫描 Skill 并刷新命令目录。
 
 ## Memory 数据模型与作用域（Step 86）
 

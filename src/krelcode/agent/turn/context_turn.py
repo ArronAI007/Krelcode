@@ -19,6 +19,7 @@ from krelcode.core.events import (
     ContextCompressed,
     ContextDropped,
     ContextMicrocompacted,
+    KnowledgeLoaded,
     MemoryLoaded,
 )
 from krelcode.core.messages import Message, sanitize_history
@@ -41,7 +42,11 @@ from krelcode.agent.context.workspace import WorkspaceContext, build_workspace_c
 from krelcode.agent.context.context_cache_ledger import ContextCacheLedger
 from krelcode.agent.context.context_plan import ContextPlanSnapshot, history_digest
 from krelcode.agent.context.context_source import ContextAssembly, ContextRequest, MemoryContextSource
-from krelcode.agent.context.context_turn_observability import dropped_context_items, memory_selection
+from krelcode.agent.context.context_turn_observability import (
+    dropped_context_items,
+    knowledge_selection,
+    memory_selection,
+)
 from krelcode.agent.context.context_usage import build_context_usage_snapshot
 from krelcode.agent.context.compression import CompactResult
 from krelcode.agent.turn.dependencies import AgentDependencies
@@ -757,6 +762,17 @@ class ContextTurnCoordinator:
                 entry_ids=memory_ids,
                 scope_counts=tuple(sorted(memory_scopes.items())),
                 tokens=memory_tokens,
+            ))
+        document_ids, chunk_ids, knowledge_sources, knowledge_scopes, knowledge_tokens = (
+            knowledge_selection(context_assembly)
+        )
+        if document_ids or chunk_ids or knowledge_sources or knowledge_tokens:
+            await host._emit(KnowledgeLoaded(
+                document_ids=document_ids,
+                chunk_ids=chunk_ids,
+                sources=knowledge_sources,
+                scope_counts=knowledge_scopes,
+                tokens=knowledge_tokens,
             ))
         return ContextTurnRequest(
             messages=messages,

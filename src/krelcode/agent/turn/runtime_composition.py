@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable, Optional
 
+from krelcode.contracts.knowledge import KnowledgeServicePort
+
 from .runtime_ports import CompactCheckpointStorePort
 from .runtime_services import (
     AgentServices,
@@ -61,6 +63,7 @@ def build_agent_services(
     registry_provider: Callable[[], Optional["PromptFragmentRegistry"]],
     execution_runtime: Optional["ExecutionRuntimePort"] = None,
     control_plane: Optional["ControlPlanePort"] = None,
+    knowledge: Optional["KnowledgeServicePort"] = None,
 ) -> AgentServices:
     """Build the stable service graph shared by all turn executors."""
     # Import concrete agent-layer implementations lazily to keep this helper out
@@ -104,7 +107,10 @@ def build_agent_services(
     )
     if context_assembler is None:
         effective_context_assembler = ContextAssembler(
-            default_context_sources(working_context_store=working_context))
+            default_context_sources(
+                working_context_store=working_context,
+                knowledge_retriever=knowledge,
+            ))
     else:
         effective_context_assembler = context_assembler
         if (
@@ -115,6 +121,9 @@ def build_agent_services(
                 WorkingContextSource(working_context))
         if "memory_retrieval" not in effective_context_assembler.source_names:
             effective_context_assembler.register(RetrievedMemoryContextSource())
+        if knowledge is not None and "knowledge" not in effective_context_assembler.source_names:
+            from krelcode.agent.context.context_source import KnowledgeContextSource
+            effective_context_assembler.register(KnowledgeContextSource(knowledge))
     effective_prompt_assembler = prompt_assembler or PromptAssembler(
         effective_context_assembler,
         registry_provider=registry_provider,
@@ -146,6 +155,7 @@ def build_agent_services(
             tool_microcompactor=microcompactor,
             reminder_catalog=reminder_catalog or default_reminder_catalog(),
             compact_checkpoint=compact_checkpoint_store,
+            knowledge=knowledge,
         ),
         prompt=PromptRuntimeServices(
             assembler=effective_prompt_assembler,

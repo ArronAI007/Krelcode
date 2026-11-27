@@ -9,11 +9,13 @@ from krelcode.core.tokens import estimate_text_tokens
 
 CATEGORY_SYSTEM = "system"
 CATEGORY_WORKSPACE = "workspace"
+CATEGORY_KNOWLEDGE = "knowledge"
 CATEGORY_MEMORY = "memory"
 CATEGORY_RUNTIME = "runtime"
 CATEGORY_ORDER = (
     CATEGORY_SYSTEM,
     CATEGORY_WORKSPACE,
+    CATEGORY_KNOWLEDGE,
     CATEGORY_MEMORY,
     CATEGORY_RUNTIME,
 )

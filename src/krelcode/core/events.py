@@ -235,6 +235,17 @@ class MemoryLoaded(AgentEvent):
 
 
 @dataclass(frozen=True)
+class KnowledgeLoaded(AgentEvent):
+    """Content-free identities for knowledge evidence in one request."""
+
+    document_ids: Tuple[str, ...] = ()
+    chunk_ids: Tuple[str, ...] = ()
+    sources: Tuple[str, ...] = ()
+    scope_counts: Tuple[Tuple[str, int], ...] = ()
+    tokens: int = 0
+
+
+@dataclass(frozen=True)
 class MemoryCandidateObserved(AgentEvent):
     """Auto Memory produced or refreshed one review candidate."""
 

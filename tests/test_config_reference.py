@@ -103,6 +103,7 @@ def test_repl_commands_documented():
                     "/compact", "/export", "/reset", "/stop", "/exit",
                     "/thinking", "/tool-output", "/diff", "/plugins", "/fork",
                     "/rewind", "/rename", "/delete", "/memory",
+                    "/knowledge",
                     "/memory list", "/memory show", "/memory add",
                     "/memory search", "/memory pin",
                     "/memory forget", "/memory review", "/memory migrate",
@@ -114,6 +115,7 @@ def test_context_memory_guide_covers_config_storage_commands_and_events():
     text = (ROOT / "docs" / "context-and-memory.md").read_text(encoding="utf-8")
     for required in (
         "[context]", "[memory]", "/context plan", "/context why",
+        "[knowledge]", "/knowledge",
         "/context sources", "/context cache", "/context ledger",
         "/context refresh",
         "/memory list", "/memory show", "/memory add", "/memory search",
@@ -121,6 +123,7 @@ def test_context_memory_guide_covers_config_storage_commands_and_events():
         "/compact", "entries.jsonl", "candidates.jsonl", "backup",
         "context_assembled", "context_dropped", "memory_loaded",
         "memory_candidate", "memory_written", "compact_checkpoint",
+        "knowledge_loaded", "StateCheckpointBundle", "Skill Release",
     ):
         assert required in text, f"context/memory 文档缺少: {required}"
 

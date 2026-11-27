@@ -50,6 +50,22 @@ from .governance import (
     SecurityDecisionValue,
 )
 from .lifecycle import RuntimeLifecycleEnvelope
+from .knowledge import (
+    KnowledgeAccessPolicy,
+    KnowledgeChunk,
+    KnowledgeDocument,
+    KnowledgeFreshness,
+    KnowledgeHit,
+    KnowledgeQuery,
+    KnowledgeRetrieverPort,
+    KnowledgeScope,
+    KnowledgeSearchResult,
+    KnowledgeServicePort,
+    KnowledgeSourceKind,
+    KnowledgeSourcePort,
+    KnowledgeSourceStats,
+    KnowledgeVersion,
+)
 from .runtime import (
     ArtifactIdentity,
     HarnessTurnControlPort,
@@ -72,6 +88,7 @@ from .runtime import (
     RuntimeTaskState,
     RuntimeTaskStatus,
 )
+from .state import StateCheckpointBundle, StateCheckpointStorePort
 from .safety import SandboxPort
 from .service_ports import (
     EnterprisePolicyPort,
@@ -139,6 +156,20 @@ __all__ = [
     "EvaluationHarnessPort",
     "EvaluationReport",
     "HarnessTurnControlPort",
+    "KnowledgeAccessPolicy",
+    "KnowledgeChunk",
+    "KnowledgeDocument",
+    "KnowledgeFreshness",
+    "KnowledgeHit",
+    "KnowledgeQuery",
+    "KnowledgeRetrieverPort",
+    "KnowledgeScope",
+    "KnowledgeSearchResult",
+    "KnowledgeServicePort",
+    "KnowledgeSourceKind",
+    "KnowledgeSourcePort",
+    "KnowledgeSourceStats",
+    "KnowledgeVersion",
     "PermissionMode",
     "PrincipalPort",
     "PromptBenchmarkServicesPort",
@@ -174,6 +205,8 @@ __all__ = [
     "SandboxProfile",
     "SecurityDecision",
     "SecurityDecisionValue",
+    "StateCheckpointBundle",
+    "StateCheckpointStorePort",
     "ShellJobManagerPort",
     "ShellJobPagePort",
     "ShellJobPort",

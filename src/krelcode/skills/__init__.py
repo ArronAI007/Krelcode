@@ -2,6 +2,7 @@
 
 from .manager import BUILTIN_SKILL_ROOT, SkillManager
 from .models import Skill, SkillError, SkillIssue, SkillReloadReport, SkillResource
+from .release import SkillReleaseManifest, SkillReleaseStore
 from .tools import build_skill_tools
 
 __all__ = [
@@ -10,6 +11,8 @@ __all__ = [
     "SkillIssue",
     "SkillReloadReport",
     "SkillResource",
+    "SkillReleaseManifest",
+    "SkillReleaseStore",
     "BUILTIN_SKILL_ROOT",
     "SkillManager",
     "build_skill_tools",

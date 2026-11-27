@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
 from krelcode.agent.context import CONTEXT_ENGINE_V3
@@ -47,6 +48,7 @@ from krelcode.contracts.service_ports import PrincipalPort
 from krelcode.contracts.tool import Tool, ToolDescriptor, ToolSource
 from krelcode.enterprise.policy import EnterprisePolicy
 from krelcode.extensions import ExtensionRegistry, replace_runtime_extensions
+from krelcode.knowledge import KnowledgeSearchTool, LocalKnowledgeBase
 from krelcode.llm.base import LLMProvider
 from krelcode.output_styles import OutputStyleConfig, OutputStyleManager
 from krelcode.safety.policy import Approver
@@ -124,6 +126,28 @@ async def build_loop(
     prompt_calibrations = foundation.prompt_calibrations
     prompt_profile_resolution = foundation.prompt_profile_resolution
     memory_store = foundation.memory_store
+    raw_knowledge_config = config.get("knowledge")
+    knowledge_config: Dict[str, Any] = (
+        dict(raw_knowledge_config)
+        if isinstance(raw_knowledge_config, dict) else {}
+    )
+    knowledge_enabled = str(
+        knowledge_config.get("enabled", True)
+    ).strip().lower() not in {"0", "false", "off", "no"}
+    organization_path = knowledge_config.get("organization_path")
+    organization_root = None
+    if organization_path:
+        organization_root = Path(str(organization_path)).expanduser()
+        if not organization_root.is_absolute():
+            organization_root = workspace_root / organization_root
+    knowledge_base = (
+        LocalKnowledgeBase(
+            workspace_root,
+            organization_root=organization_root,
+            redactor=redactor,
+        )
+        if knowledge_enabled else None
+    )
     base_skill_paths = foundation.base_skill_paths
     custom_commands = foundation.custom_commands
     plugin_manager = foundation.plugin_manager
@@ -151,6 +175,9 @@ async def build_loop(
         notebook_options=notebook_options,
         migration_options=migration_options,
     )
+    if knowledge_base is not None and any(
+            stat.documents for stat in knowledge_base.stats()):
+        builtin_tools.append(KnowledgeSearchTool(knowledge_base))
     if prompt_authoring_enabled:
         builtin_tools.append(PromptLabTool())
 
@@ -165,6 +192,12 @@ async def build_loop(
                 migration_options=migration_options,
             )
             + skill_tools
+            + (
+                [KnowledgeSearchTool(knowledge_base)]
+                if knowledge_base is not None
+                and any(stat.documents for stat in knowledge_base.stats())
+                else []
+            )
             + list(extra_tools or [])
             + list(plugin_manager.tools)
         )
@@ -347,6 +380,7 @@ async def build_loop(
         working_context_store=working_context_store,
         engine=context_options.engine,
         memory_store=memory_store,
+        knowledge_retriever=knowledge_base,
     )
     context_assembler = ContextAssembler(context_sources, engine=context_options.engine)
     directory_rule_source = next(
@@ -372,6 +406,7 @@ async def build_loop(
         user_input_port=user_input_port,
         working_context_store=working_context_store,
         compact_checkpoint_store=compact_checkpoint_store,
+        knowledge=knowledge_base,
     )
     if context_manager is not None:
         context_manager.prompt_surface_registry = loop.prompt_surface_registry

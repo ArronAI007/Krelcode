@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from krelcode.core.interactions import UserInputPort
     from krelcode.core.redact import SecretRedactor
     from krelcode.contracts.service_ports import EnterprisePolicyPort, PrincipalPort
+    from krelcode.contracts.knowledge import KnowledgeServicePort
     from krelcode.contracts.tool import RuntimeSnapshot, ToolContext
     from krelcode.contracts.governance import ControlPlanePort
     from krelcode.contracts.tool_execution import ExecutionRuntimePort
@@ -323,6 +324,7 @@ class ContextRuntimeServices:
     checkpoint_coordinator: Optional["ContextCheckpointCoordinator"] = None
     rule_loader: Optional["RuleLoader"] = None
     directory_rule_source: object | None = None
+    knowledge: Optional["KnowledgeServicePort"] = None
 
 
 @dataclass(slots=True)

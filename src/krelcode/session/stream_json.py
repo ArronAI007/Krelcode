@@ -21,6 +21,7 @@ from ..core.events import (
     ContextMicrocompacted,
     ErrorOccurred,
     HookTriggered,
+    KnowledgeLoaded,
     LLMResponseReceived,
     LLMStreamDelta,
     LLMThinkingDelta,
@@ -266,6 +267,17 @@ class StreamJsonEncoder:
                 "scope_counts": dict(event.scope_counts),
                 "tokens": event.tokens,
                 "source": event.source,
+            }
+        elif isinstance(event, KnowledgeLoaded):
+            payload = {
+                "type": "knowledge",
+                "subtype": "loaded",
+                "event": "knowledge_loaded",
+                "document_ids": list(event.document_ids),
+                "chunk_ids": list(event.chunk_ids),
+                "sources": list(event.sources),
+                "scope_counts": dict(event.scope_counts),
+                "tokens": event.tokens,
             }
         elif isinstance(event, MemoryCandidateObserved):
             payload = {

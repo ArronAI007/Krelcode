@@ -242,6 +242,7 @@ class RuntimeContinuationResult:
     memory_ids: tuple[str, ...] = ()
     workspace_refresh_pending: bool = True
     state: Optional[RuntimeTaskState] = None
+    state_bundle_id: str = ""
 
 
 class RuntimeResourcePort(Protocol):

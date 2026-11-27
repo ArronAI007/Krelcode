@@ -28,6 +28,7 @@ from ..core.events import (
     ContextMicrocompacted,
     EventBus,
     HookTriggered,
+    KnowledgeLoaded,
     MemoryCandidateObserved,
     MemoryLoaded,
     MemoryWritten,
@@ -223,6 +224,16 @@ class SessionRecorder:
                 "scope_counts": dict(event.scope_counts),
                 "tokens": event.tokens,
                 "source": event.source,
+            }
+        if isinstance(event, KnowledgeLoaded):
+            return {
+                "type": "knowledge_loaded",
+                "ts": ts,
+                "document_ids": list(event.document_ids),
+                "chunk_ids": list(event.chunk_ids),
+                "sources": list(event.sources),
+                "scope_counts": dict(event.scope_counts),
+                "tokens": event.tokens,
             }
         if isinstance(event, MemoryCandidateObserved):
             return {

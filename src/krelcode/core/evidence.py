@@ -39,6 +39,7 @@ class EvidenceSource(str, Enum):
     """Non-instruction sources that require interpretation and validation."""
 
     MEMORY = "memory"
+    KNOWLEDGE = "knowledge"
     WEB = "web"
     MCP = "mcp"
     TOOL_RESULT = "tool_result"
@@ -238,6 +239,36 @@ def render_memory_evidence_set(
     return "\n\n".join(blocks)
 
 
+def render_knowledge_evidence_set(
+    records: Sequence[EvidenceRecord],
+    *,
+    origin: str = "",
+) -> str:
+    """Render structured organization knowledge as non-instruction evidence."""
+    blocks: list[str] = []
+    for record in records:
+        if record.source is not EvidenceSource.KNOWLEDGE:
+            raise ValueError(
+                "render_knowledge_evidence_set 只接受 Knowledge evidence")
+        lines = [
+            "[Evidence: Knowledge]",
+            f"source: {_one_line(record.origin or origin or 'knowledge')}",
+            f"scope: {_one_line(record.scope)}",
+            f"confidence: {record.confidence:.2f}",
+            "requires_validation: true",
+            "instruction: false",
+            f"id: {_one_line(record.id)}",
+            f"document_id: {_one_line(record.metadata.get('document_id', ''))}",
+            f"version: {_one_line(record.metadata.get('version', ''))}",
+            f"freshness: {_one_line(record.metadata.get('freshness', 'unknown'))}",
+            f"uri: {_one_line(record.metadata.get('uri', ''))}",
+            "",
+            record.content,
+        ]
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
 def evidence_metadata(
     records: Sequence[EvidenceRecord],
     *,
@@ -339,5 +370,6 @@ __all__ = [
     "evidence_record_from_memory",
     "instruction_source_for",
     "render_evidence_set",
+    "render_knowledge_evidence_set",
     "render_memory_evidence_set",
 ]

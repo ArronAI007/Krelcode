@@ -28,6 +28,7 @@ from ..core.events import (
     LLMResponseReceived,
     LLMStreamDelta,
     LLMThinkingDelta,
+    KnowledgeLoaded,
     MemoryCandidateObserved,
     MemoryLoaded,
     MemoryWritten,
@@ -77,6 +78,8 @@ class SessionViewState:
     context_snapshot: Optional[ContextUsageSnapshot] = None
     context_memory_hits: int = 0
     context_memory_scopes: tuple[tuple[str, int], ...] = ()
+    context_knowledge_hits: int = 0
+    context_knowledge_scopes: tuple[tuple[str, int], ...] = ()
     context_dropped_items: tuple[str, ...] = ()
     context_cache_changed: bool = False
     context_stable_hash: str = ""
@@ -141,6 +144,8 @@ class SessionViewState:
         self.plan_approval_status = "none"
         self.context_snapshot = None
         self.context_cache_ledger = None
+        self.context_knowledge_hits = 0
+        self.context_knowledge_scopes = ()
         self.microcompact_count = 0
         self.microcompact_saved_tokens = 0
         self.input_request_id = ""
@@ -290,6 +295,9 @@ class SessionEventReducer:
         elif isinstance(event, MemoryLoaded):
             state.context_memory_hits = len(event.entry_ids)
             state.context_memory_scopes = tuple(event.scope_counts)
+        elif isinstance(event, KnowledgeLoaded):
+            state.context_knowledge_hits = len(event.document_ids)
+            state.context_knowledge_scopes = tuple(event.scope_counts)
         elif isinstance(event, MemoryCandidateObserved):
             state.memory_last_candidate_id = event.candidate_id
             state.memory_last_candidate_status = event.status

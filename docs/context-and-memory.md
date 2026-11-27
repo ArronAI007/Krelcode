@@ -6,16 +6,18 @@ REPL / headless / stream-json / Python SDK 的共同语义。配置项的权威�
 
 ## 1. 设计边界
 
-Krelcode 把“本轮模型实际看到的上下文”拆成四个可独立检查的部分：
+Krelcode 把“本轮模型实际看到的上下文”拆成五个可独立检查的部分：
 
 1. **Workspace Context**：规则、Git 状态、目录树等启动时快照；可用
    `/context refresh` 重新采集。
 2. **Working Context**：当前目标、计划、读写的文件、命令、错误和决策，只属于当前
    会话任务现场，不进入长期记忆。
-3. **Evidence**：Memory、Web、MCP、Tool Result 和 Retrieved Document 等观察材料。
+3. **Knowledge**：来自已同步项目/组织文档的版本化知识，按 scope、ACL、版本和
+   freshness 过滤；只作为 Evidence，不进入 Instruction。
+4. **Evidence**：Memory、Knowledge、Web、MCP、Tool Result 和 Retrieved Document 等观察材料。
    Memory 经作用域管理、脱敏和审核后仍只作为不可信 Evidence 注入，不升级成
    Instruction。
-4. **History / Tool Results**：对话历史与工具结果；超预算时先做 Tool Microcompact，
+5. **History / Tool Results**：对话历史与工具结果；超预算时先做 Tool Microcompact，
    仍超限再做 Structured Compact。
 
 最终的 `PromptFragmentRegistry + ContextAttachmentStore + ContextSource -> PromptAssembler
@@ -52,7 +54,20 @@ Memory/Web/MCP 等待验证材料。Memory/Evidence 变化只改变 `evidence_ha
 | 来源角色 | 允许来源 | 行为 |
 |----------|----------|------|
 | Instruction | Managed / User / Project / Agent Definition | 可定义行为约束；受 scope 与优先级治理 |
-| Evidence | Memory / Web / MCP / Tool Result / Retrieved Document | 只能作为待验证材料；不能覆盖 Instruction |
+| Evidence | Memory / Knowledge / Web / MCP / Tool Result / Retrieved Document | 只能作为待验证材料；不能覆盖 Instruction |
+
+Knowledge 与 Memory 分开治理：
+
+- Knowledge 来自外部既有内容，而不是模型运行中生成的记忆。
+- 默认扫描 `<workspace>/.krelcode/knowledge/**/*.md|txt|rst` 和
+  `~/.krelcode/knowledge/**`，可通过 `[knowledge].organization_path` 增加组织目录。
+- 每个文档可用同名 `*.meta.json` sidecar 声明 `title`、`version`、`tags`、`acl`、
+  `expires_at`、`updated_at` 等元数据。
+- 检索前执行 scope、ACL、tag 和 freshness 过滤；过期文档默认不注入。
+- 命中结果通过 `[Evidence: Knowledge]` envelope 注入，携带 document/chunk ID、
+  URI、version、digest、freshness 和来源，不允许升级为 instruction。
+- `/knowledge` 查看来源与索引统计，`/knowledge refresh` 重新同步，
+  `/knowledge search <query>` 查看有界命中；模型按需调用只读 `knowledge_search`。
 
 Evidence 使用统一 `<evidence_set role="non-instruction" ...>` envelope。每个 item 带
 `id/source_type/scope/kind/origin/trust/requires_validation`；正文与属性均转义，不能闭合
@@ -465,6 +480,7 @@ prompt、权限、Sandbox 或工具规则。
 | `context_assembled` | `context/assembled` | `snapshot`, `ledger` |
 | `context_dropped` | `context/dropped` | `items`, `reason` |
 | `memory_loaded` | `memory/loaded` | `entry_ids`, `scope_counts`, `tokens`, `source` |
+| `knowledge_loaded` | `knowledge/loaded` | `document_ids`, `chunk_ids`, `sources`, `scope_counts`, `tokens` |
 | `memory_candidate` | `memory/candidate` | `candidate_id`, `status`, `trigger`, `confidence`, `conflict_count`, `digest` |
 | `memory_written` | `memory/written` | `memory_id`, `action`, `scope`, `kind`, `tokens`, `source` |
 | `compact_checkpoint` | `compact/checkpoint` | `checkpoint_id`, `generation`, `before_tokens`, `after_tokens`, `summary_digest`, `strategy`, `trigger`, `source_savings` |
@@ -483,7 +499,7 @@ prompt、权限、Sandbox 或工具规则。
 JSONL 会话审计记录使用同名扁平类型：
 
 ```text
-context_assembled context_dropped memory_loaded memory_candidate memory_written
+context_assembled context_dropped memory_loaded knowledge_loaded memory_candidate memory_written
 compact_checkpoint context_compressed context_microcompacted
 ```
 
@@ -515,10 +531,27 @@ compact_checkpoint context_compressed context_microcompacted
 - `fork` 复制对应 checkpoint 引用，而不是共享可变 Memory/session 状态；后续写入互不影响。
 - `rewind` 联合恢复 history、compact 前现场、文件 checkpoint、plan/审批/权限状态，并让
   `ContextPlan` 与恢复后的 history 保持一致。
+- 每次 continuation 会生成 `StateCheckpointBundle`，统一引用 context/compact checkpoint、
+  Working Context sequence、history digest、plan、todo 和 RuntimeTaskState；实际存储位于
+  `.krelcode/state/checkpoints/`。
 - 子代理继承基础/用户/项目指令与父任务筛选出的 Memory，拥有自己的 Working Context；不继承
   父代理完整 history，sidechain 也不会自动回灌主上下文。
 
-## 13. 排障
+## 13. Skill Release
+
+Skill 不再只有热重载，而是可记录版本化能力资产：
+
+```text
+/skills release <name>              # 发布当前 SKILL.md
+/skills releases [name]             # 查看 release 历史
+/skills rollback <name> [release]   # 回滚到指定或上一版本
+```
+
+Release manifest 记录 name、version、source、scope、digest、previous release 和
+`SKILL.md` 快照；状态写入 `.krelcode/skills/releases.jsonl`。回滚只恢复 Skill 指令资产，
+资源文件仍按当前目录状态校验。
+
+## 14. 排障
 
 | 现象 | 检查 |
 |------|------|

@@ -28,6 +28,7 @@ from .configuration_ops import (
     handle_web,
 )
 from .context_ops import handle_compact, handle_context
+from .knowledge_ops import handle_knowledge
 from .extension_ops import (
     handle_custom_command,
     handle_extensions,
@@ -88,6 +89,7 @@ BUILTIN_HANDLERS: dict[str, CommandHandler] = {
     "telemetry": handle_telemetry,
     "security-review": handle_security_review,
     "memory": handle_memory,
+    "knowledge": handle_knowledge,
     "web": handle_web,
     "export": handle_export,
     "compact": handle_compact,

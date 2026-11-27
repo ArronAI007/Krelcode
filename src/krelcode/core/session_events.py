@@ -25,6 +25,7 @@ from .events import (
     ContextMicrocompacted,
     ErrorOccurred,
     HookTriggered,
+    KnowledgeLoaded,
     LLMResponseReceived,
     LLMStreamDelta,
     LLMThinkingDelta,
@@ -67,6 +68,7 @@ class SessionEventKind(str, Enum):
     PERMISSION = "permission"
     CONTEXT = "context"
     MEMORY = "memory"
+    KNOWLEDGE = "knowledge"
     COMPACT = "compact"
     HOOK = "hook"
     JOB = "job"
@@ -100,6 +102,7 @@ SessionEventPayload: TypeAlias = (
     | ContextAssembled
     | ContextDropped
     | MemoryLoaded
+    | KnowledgeLoaded
     | MemoryCandidateObserved
     | MemoryWritten
     | CompactCheckpointCreated
@@ -142,6 +145,7 @@ SESSION_EVENT_TYPE_TO_KIND: Mapping[type[AgentEvent], SessionEventKind] = {
     ContextAssembled: SessionEventKind.CONTEXT,
     ContextDropped: SessionEventKind.CONTEXT,
     MemoryLoaded: SessionEventKind.MEMORY,
+    KnowledgeLoaded: SessionEventKind.KNOWLEDGE,
     MemoryCandidateObserved: SessionEventKind.MEMORY,
     MemoryWritten: SessionEventKind.MEMORY,
     CompactCheckpointCreated: SessionEventKind.COMPACT,

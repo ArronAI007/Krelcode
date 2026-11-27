@@ -77,7 +77,8 @@ def test_instruction_and_evidence_sources_are_a_closed_distinction():
     ) is InstructionSource.AGENT_DEFINITION
     assert instruction_source_for("untrusted") is None
     assert {item.value for item in EvidenceSource} == {
-        "memory", "web", "mcp", "tool_result", "retrieved_document"}
+        "memory", "knowledge", "web", "mcp", "tool_result",
+        "retrieved_document"}
 
     bundle = InstructionBundle((
         InstructionLayer("managed", "managed-rules", "M"),

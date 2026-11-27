@@ -176,6 +176,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/memory review accept\|reject <id>` | 按候选语义类型接受；feedback/project 结构不完整时 fail-closed，或拒绝且永不自动写入 |
 | `/memory migrate [user\|project\|session]` | 幂等迁移旧 JSONL：补全 schema、脱敏、去重、保留 pinned；仅在变更时备份 |
 | `/memory dream [run\|review\|accept\|reject]` | 运行或审核 AutoDream 的去重、冲突、主题聚合与失效路径治理提案 |
+| `/knowledge [list\|refresh\|search <query>]` | 查看版本化项目/组织 Knowledge 来源与索引统计，重新同步文件源，或检索有 ACL/时效过滤的 Evidence |
 | `/compact` | 立即执行工具微压缩+Structured Compact v2（不等预算），完成后显示 generation、来源节省量、checkpoint 与实际边界 |
 | `/compact preview [--auto]` | 预览工具微压缩与 compact 的 head/compact/keep 边界、高低水位、来源节省量、条数、预计 tokens 与待摘要消息；不改 history。`--auto` 仅在超预算时预览 |
 | `/compact <focus>` | 强制 compact，并把自然语言重点写入交接摘要，例如保留 API 设计、失败测试和下一步 |
@@ -422,6 +423,10 @@ suggest_threshold = 0.55             # 候选入队阈值
 auto_threshold = 0.80                # auto 模式晋级阈值；冲突候选永不自动晋级
 dream_mode = "suggest"               # off / suggest；空闲后生成治理提案
 dream_idle_seconds = 30              # turn 完成后等待多久运行 AutoDream
+
+[knowledge]                          # 版本化组织/项目知识，独立于 Memory
+enabled = true
+# organization_path = "../shared-knowledge"  # 相对 workspace 或绝对路径
 
 ### Observability / 消融实验 CLI
 
@@ -987,6 +992,11 @@ MCP 服务器会让该定义在 spawn 时 fail-closed。`model` 只影响该子�
 Skill 发现目录（后者覆盖前者同名项）：`~/.agents/skills`、`~/.krelcode/skills`、
 `<workspace>/.agents/skills`、`<workspace>/.krelcode/skills`，再追加
 `[skills].paths` / `--skills-dir`。每个 Skill 是包含 `SKILL.md` 的目录。
+
+`/skills release <name>` 把当前 `SKILL.md` 记录为版本化 Release；
+`/skills releases [name]` 查看 digest/previous release；`/skills rollback <name>`
+恢复上一版本或指定 release。Release ledger 位于
+`<workspace>/.krelcode/skills/releases.jsonl`。
 
 Plugin 发现目录（后者覆盖前者同名插件）：`~/.krelcode/plugins`、
 `<workspace>/.krelcode/plugins`，再追加 `[plugins].paths` / `--plugins-dir`。

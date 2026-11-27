@@ -36,11 +36,8 @@ from krelcode.core.events import (
 )
 from krelcode.core.messages import ImageRef, Message, SteeringInput, ToolCall, ToolResultBlock
 from krelcode.llm.base import LLMProvider, PreparedLLMRequest, ToolSpec
-from krelcode.contracts.application import (
-    ApplicationRequest,
-    ApplicationRequestFactory,
-)
-from krelcode.contracts.acceptance import AcceptanceEvaluatorPort
+from krelcode.contracts import AcceptanceEvaluatorPort, KnowledgeServicePort
+from krelcode.contracts.application import ApplicationRequest, ApplicationRequestFactory
 from krelcode.agent.context.attachments import ContextAttachment, ContextAttachmentDiff, ContextAttachmentKind
 from krelcode.agent.context.compression import ContextManager
 from krelcode.agent.context.context_assembler import ContextAssembler
@@ -147,6 +144,7 @@ class AgentLoop(RuntimeStateHost):
         working_context_store: Optional[WorkingContextStore] = None,
         tool_microcompactor: Optional[ToolMicrocompactor] = None,
         compact_checkpoint_store: Optional[CompactCheckpointStorePort] = None,
+        knowledge: Optional[KnowledgeServicePort] = None,
         today_provider: Optional[Callable[[], str]] = None,
         reminder_catalog: Optional[ReminderCatalog] = None,
         execution_runtime: Optional[ExecutionRuntimePort] = None,
@@ -169,6 +167,7 @@ class AgentLoop(RuntimeStateHost):
             tool_microcompactor=tool_microcompactor,
             compact_checkpoint_store=compact_checkpoint_store,
             reminder_catalog=reminder_catalog,
+            knowledge=knowledge,
             registry_provider=lambda: self.services.prompt.registry,
             execution_runtime=execution_runtime,
         )

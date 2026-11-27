@@ -52,6 +52,7 @@ class ContextUsageSnapshot:
     system_tokens: int = 0
     tool_schema_tokens: int = 0
     workspace_tokens: int = 0
+    knowledge_tokens: int = 0
     memory_tokens: int = 0
     history_tokens: int = 0
     runtime_tokens: int = 0
@@ -142,6 +143,7 @@ class ContextUsageSnapshot:
             "system_tokens": self.system_tokens,
             "tool_schema_tokens": self.tool_schema_tokens,
             "workspace_tokens": self.workspace_tokens,
+            "knowledge_tokens": self.knowledge_tokens,
             "memory_tokens": self.memory_tokens,
             "history_tokens": self.history_tokens,
             "runtime_tokens": self.runtime_tokens,

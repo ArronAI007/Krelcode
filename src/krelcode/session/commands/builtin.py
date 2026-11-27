@@ -97,8 +97,10 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             help=("列出后台进程；/jobs output <id> [after] [--wait 秒] 读取增量；\n"
                   "/jobs kill <id> 终止整个进程组")),
         CommandSpec(
-            "skills", "查看或重载 Skills", argument_hint="[reload|show <name>]",
-            help="列出 Skill；/skills reload 热重载；/skills show <name> 查看详情"),
+            "skills", "查看、发布或回滚 Skills",
+            argument_hint="[reload|show|release|releases|rollback] ...",
+            help=("列出 Skill；/skills reload 热重载；/skills show <name> 查看详情；"
+                  "/skills release <name> 发布；/skills rollback <name> 回滚")),
         CommandSpec(
             "plugins", "查看、验证或安装插件",
             argument_hint=("[reload|show|verify|deps|registry|trust] ..."),
@@ -168,6 +170,12 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
                   "/memory mode [off|suggest|auto] 设置 Auto Memory；"
                   "/memory review [pending|accepted|rejected|all|accept|reject <id>]；"
                   "/memory migrate [scope] 迁移旧格式并备份。")),
+        CommandSpec(
+            "knowledge", "查看、刷新或检索组织知识",
+            argument_hint="[list|refresh|search <query>]",
+            help=("查看本地 user/project/organization Knowledge 来源与索引统计；"
+                  "/knowledge refresh 重新同步文件源；"
+                  "/knowledge search <query> 检索有版本和时效约束的知识证据")),
         CommandSpec(
             "context", "查看、启停或刷新上下文槽位",
             argument_hint=("[plan|why|sources|rules|conflicts|authoring|fragments|"
