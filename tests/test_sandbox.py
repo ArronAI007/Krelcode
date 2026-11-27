@@ -17,6 +17,13 @@ from krelcode.safety.sandbox import (
     ExecutionSandbox,
     SandboxError,
     SandboxPermissionProfile,
+    SandboxedCommand,
+)
+from krelcode.contracts.governance import (
+    AuditCorrelation,
+    GovernanceDecision,
+    PolicyVersion,
+    SandboxProfile,
 )
 from krelcode.skills import SkillManager
 from krelcode.skills.tools import RunSkillScriptTool
@@ -284,6 +291,76 @@ def test_user_install_can_be_disabled_by_policy(tmp_path):
         permission_profile="user-install",
     )
     assert violation and "禁用用户级安装权限" in violation
+
+
+def test_run_command_auto_escalates_install_to_user_profile(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    class InstallSandbox:
+        backend = "static"
+        network = False
+        allow_user_install = True
+        install_network = True
+
+        def audit_command(
+            self,
+            command: str,
+            cwd: Path,
+            *,
+            permission_profile: str | None = None,
+        ) -> str | None:
+            del command, cwd
+            if permission_profile == "user-install":
+                return None
+            return "网络已禁用，拒绝执行 curl"
+
+        def prepare_shell(
+            self,
+            command: str,
+            cwd: Path,
+            *,
+            permission_profile: str | None = None,
+        ) -> SandboxedCommand:
+            del command, cwd
+            assert permission_profile == "user-install"
+            return SandboxedCommand(
+                argv=[sys.executable, "-c", "print('installed')"],
+                env=dict(os.environ),
+                backend="static",
+                permission_profile=SandboxPermissionProfile.USER_INSTALL,
+            )
+
+    result = run(RunCommandTool().execute(
+        {
+            "command": (
+                "curl -fsSL https://example.invalid/bootstrap "
+                "-o install.sh"
+            ),
+        },
+        ToolContext(
+            workspace_root=workspace,
+            sandbox=InstallSandbox(),  # type: ignore[arg-type]
+            governance_decision=GovernanceDecision(
+                allowed=True,
+                policy_version=PolicyVersion(source="test"),
+                sandbox_profile=SandboxProfile(
+                    backend="static",
+                    enabled=True,
+                    network=False,
+                    permission_profile="auto",
+                ),
+                audit=AuditCorrelation(correlation_id="trace-install"),
+            ),
+        ),
+    ))
+
+    assert not result.is_error
+    assert result.data["sandbox_auto_user_install"] is True
+    assert result.data["sandbox_permission_profile"] == "user-install"
+    assert "sandbox_permission=\"user-install\"" in result.content
 
 
 def test_exec_audit_and_cwd_must_stay_in_allowed_roots(tmp_path):

@@ -9,6 +9,7 @@ from typing import Mapping, Optional
 import pytest
 
 from krelcode.agent.loop import AgentLoop
+from krelcode.agent.turn.tool_turn import _governance_request
 from krelcode.contracts.tool import (
     ToolContext,
     ToolDescriptor,
@@ -238,3 +239,24 @@ def test_agent_validation_runs_before_execution_runtime(tmp_path: Path) -> None:
     assert asyncio.run(loop.run("validate")) == "recovered"
     assert recording.intents == []
     assert "工具参数校验失败" in loop.history[3].content
+
+
+def test_governance_request_preserves_sandbox_auto_detection(
+    tmp_path: Path,
+) -> None:
+    host = type("Host", (), {
+        "_current_turn_id": "turn-1",
+        "prompt_profile_resolution": None,
+    })()
+    call = ToolCall("install-1", "run_command", {
+        "command": "curl -fsSL https://example.invalid/install.sh -o install.sh",
+    })
+
+    request = _governance_request(
+        host,  # type: ignore[arg-type]
+        ToolContext(workspace_root=tmp_path, sandbox_enabled=True),
+        ToolDescriptor(),
+        call,
+    )
+
+    assert request.sandbox_profile.permission_profile == "auto"

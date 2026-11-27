@@ -625,7 +625,7 @@ def _governance_request(
     release_id = str(getattr(resolution, "release_id", "") or "")
     release_hash = str(getattr(resolution, "release_hash", "") or "")
     permission_profile = str(
-        tool_call.arguments.get("sandbox_permission") or "workspace")
+        tool_call.arguments.get("sandbox_permission") or "auto")
     return GovernanceRequest(
         identity=context.principal,
         enterprise_policy=context.enterprise_policy,

@@ -164,6 +164,7 @@ Sandbox and safety:
             permission_profile_arg = permission_profile
 
         sandbox = getattr(ctx, "sandbox", None)
+        auto_user_install = False
         if sandbox is not None:
             violation = (
                 sandbox.audit_command(command, cwd)
@@ -174,6 +175,27 @@ Sandbox and safety:
                     permission_profile=permission_profile_arg,
                 )
             )
+            if (
+                violation
+                and permission_profile == "auto"
+                and "网络已禁用" in violation
+                and getattr(sandbox, "allow_user_install", False)
+                and _looks_like_user_install(command)
+            ):
+                retry_violation = sandbox.audit_command(
+                    command,
+                    cwd,
+                    permission_profile="user-install",
+                )
+                if retry_violation is None:
+                    permission_profile = "user-install"
+                    permission_profile_arg = "user-install"
+                    violation = None
+                    auto_user_install = True
+                    await ctx.emit_progress(
+                        "检测到用户级安装，自动切换到 user-install（仅限用户目录）",
+                        {"sandbox_permission_profile": "user-install"},
+                    )
             if violation:
                 if (
                     permission_profile_arg is None
@@ -293,6 +315,10 @@ Sandbox and safety:
         output = truncate_middle(output, MAX_OUTPUT_CHARS)
         exit_code = proc.returncode if proc.returncode is not None else -1
         content = f"exit_code: {exit_code}\n{output if output.strip() else '（无输出）'}"
+        if profile_value == "user-install":
+            content += (
+                "\n[sandbox] 本次使用 user-install；验证全局命令时请继续设置 "
+                "sandbox_permission=\"user-install\"，并检查命令路径和 --version。")
         await ctx.emit_progress(
             f"命令结束（exit {exit_code}）",
             {"exit_code": exit_code, "timed_out": False},
@@ -304,6 +330,7 @@ Sandbox and safety:
                 "exit_code": exit_code, "timed_out": False,
                 "sandbox_backend": getattr(sandbox, "backend", "none"),
                 "sandbox_permission_profile": profile_value,
+                "sandbox_auto_user_install": auto_user_install,
             },
         )
 
@@ -314,6 +341,15 @@ def _clamp_timeout(value: Any) -> float:
     except (TypeError, ValueError):
         return DEFAULT_TIMEOUT
     return max(1.0, min(t, MAX_TIMEOUT))
+
+
+def _looks_like_user_install(command: str) -> bool:
+    lowered = command.casefold()
+    return any(marker in lowered for marker in (
+        "install", "installer", "setup", "bootstrap", "postinstall",
+        "pip install", "pip3 install", "uv tool install", "uv pip install",
+        "npm install", "pnpm add", "yarn add", "git clone",
+    ))
 
 
 def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:

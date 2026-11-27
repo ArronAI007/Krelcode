@@ -78,7 +78,7 @@ class SandboxProfile:
     backend: str = "auto"
     enabled: bool = True
     network: bool = False
-    permission_profile: str = "workspace"
+    permission_profile: str = "auto"
     write_scope: str = "workspace"
 
     def __post_init__(self) -> None:
@@ -90,7 +90,7 @@ class SandboxProfile:
         object.__setattr__(
             self,
             "permission_profile",
-            str(self.permission_profile or "workspace").strip(),
+            str(self.permission_profile or "auto").strip(),
         )
         object.__setattr__(
             self, "write_scope", str(self.write_scope or "workspace").strip())
