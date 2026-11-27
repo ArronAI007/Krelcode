@@ -10,6 +10,8 @@ from krelcode.knowledge import LocalKnowledgeBase
 from krelcode.llm.providers.mock import MockProvider
 from krelcode.safety.policy import AllowAllPolicy
 from krelcode.session.controller import SessionController
+from krelcode.session.state_checkpoint import LocalStateCheckpointStore
+from krelcode.contracts.state import StateCheckpointBundle
 from krelcode.skills import SkillManager
 from krelcode.tools.base import ToolContext
 from krelcode.tools.registry import ToolRegistry
@@ -71,3 +73,24 @@ def test_skills_release_command_records_version(tmp_path: Path) -> None:
 
     assert any("review@1.0.0" in line for line in released.output)
     assert any("review@1.0.0" in line for line in history.output)
+
+
+def test_state_command_reads_latest_bundle(tmp_path: Path) -> None:
+    store = LocalStateCheckpointStore(tmp_path)
+    assert store.save(StateCheckpointBundle(
+        bundle_id="state-test",
+        session_id="",
+        turn_id="turn-1",
+        context_checkpoint_id="ctx-1",
+        history_digest="sha256:history",
+        working_context_sequence=3,
+    ))
+    controller = SessionController(
+        make_loop(tmp_path),
+        workspace_root=tmp_path,
+    )
+
+    result = asyncio.run(controller.execute_command("/state"))
+
+    assert any("state-test" in line for line in result.output)
+    assert any("ctx-1" in line for line in result.output)

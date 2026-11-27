@@ -56,6 +56,10 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
             "session", "显示当前会话文件",
             help="显示当前会话文件路径"),
         CommandSpec(
+            "state", "查看最近状态检查点",
+            help=("显示 StateCheckpointBundle 的 task/turn、context/compact "
+                  "checkpoint、history digest 与 Working Context sequence")),
+        CommandSpec(
             "sessions", "列出或搜索工作区会话", argument_hint="[search <关键词>]",
             help="列出工作区的全部会话；/sessions search <关键词> 搜索标题与用户输入"),
         CommandSpec(

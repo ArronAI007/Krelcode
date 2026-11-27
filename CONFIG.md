@@ -189,6 +189,7 @@ Live Model Behavior Benchmark 使用独立 CLI：
 | `/rename <名称>` | 为当前会话设置可搜索标题 |
 | `/delete <n\|path> [--force]` | 二次确认后归档非活动会话到 `sessions/.archive` |
 | `/session` | 当前会话文件、标题、父会话与模型元数据 |
+| `/state` | 查看最近 StateCheckpointBundle 的 task/turn、context/compact checkpoint、history digest、Working Context sequence 与 RuntimeTaskState |
 | `/export [路径]` | 导出 Markdown；`.json` 路径输出可重新 `/resume` 的 native 快照 |
 | `/undo` · `/undo list` | 回滚上一轮文件改动 · 查看检查点栈 |
 | `/agents` · `/agents list` | 子代理状态（定义、轮数、排队深度、feed 游标） |

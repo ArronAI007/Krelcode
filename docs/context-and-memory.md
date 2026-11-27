@@ -533,7 +533,7 @@ compact_checkpoint context_compressed context_microcompacted
   `ContextPlan` 与恢复后的 history 保持一致。
 - 每次 continuation 会生成 `StateCheckpointBundle`，统一引用 context/compact checkpoint、
   Working Context sequence、history digest、plan、todo 和 RuntimeTaskState；实际存储位于
-  `.krelcode/state/checkpoints/`。
+  `.krelcode/state/checkpoints/`，可用 `/state` 查看最近 bundle。
 - 子代理继承基础/用户/项目指令与父任务筛选出的 Memory，拥有自己的 Working Context；不继承
   父代理完整 history，sidechain 也不会自动回灌主上下文。
 

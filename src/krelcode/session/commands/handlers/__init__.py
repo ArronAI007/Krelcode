@@ -53,6 +53,7 @@ from .session_ops import (
     handle_session,
     handle_sessions,
 )
+from .state_ops import handle_state
 
 CommandHandler = Callable[[CommandContext], Awaitable[CommandResult]]
 
@@ -62,6 +63,7 @@ BUILTIN_HANDLERS: dict[str, CommandHandler] = {
     "tools": handle_tools,
     "commands": handle_commands,
     "session": handle_session,
+    "state": handle_state,
     "sessions": handle_sessions,
     "resume": handle_resume,
     "fork": handle_fork,

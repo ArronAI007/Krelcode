@@ -102,7 +102,7 @@ def test_repl_commands_documented():
                     "/context refresh",
                     "/compact", "/export", "/reset", "/stop", "/exit",
                     "/thinking", "/tool-output", "/diff", "/plugins", "/fork",
-                    "/rewind", "/rename", "/delete", "/memory",
+                    "/rewind", "/rename", "/delete", "/state", "/memory",
                     "/knowledge",
                     "/memory list", "/memory show", "/memory add",
                     "/memory search", "/memory pin",
