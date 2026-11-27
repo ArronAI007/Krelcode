@@ -7,8 +7,8 @@ import json
 import time
 from typing import Mapping, Optional
 
-from ..contracts.application import RiskLevel
-from ..contracts.change_admission import (
+from ...contracts.application import RiskLevel
+from ...contracts.change_admission import (
     AdmissionDecision,
     AdmissionPolicy,
     AdmissionStatus,
@@ -18,7 +18,7 @@ from ..contracts.change_admission import (
     EvaluationReport,
     RollbackManifest,
 )
-from ..contracts.governance import (
+from ...contracts.governance import (
     GovernanceDecision,
 )
 

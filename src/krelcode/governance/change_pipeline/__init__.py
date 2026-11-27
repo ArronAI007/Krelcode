@@ -1,6 +1,6 @@
 """Canonical change admission pipeline facade."""
 
-from krelcode.safety.admission import (
+from .gate import (
     AdmissionGate,
     DEFAULT_ADMISSION_POLICIES,
     DefaultAdmissionGate,

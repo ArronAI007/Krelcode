@@ -35,6 +35,7 @@ from krelcode.agent.prompt.prompt_release_pipeline import (
 )
 from krelcode.agent.prompt.prompt_surface_catalog import refresh_prompt_surfaces
 from krelcode.agent.turn.loop import AgentLoop
+from krelcode.governance.change_pipeline import DefaultAdmissionGate
 from krelcode.agent.turn.runtime_services import (
     BrowserRuntimeServicePort,
     MCPServicePort,
@@ -320,7 +321,8 @@ async def build_loop(
             store=release_store,
         )
         prompt_release_pipeline = cast(PromptReleasePipelinePort, release_pipeline)
-        prompt_release_approval_service = PromptReleaseApprovalService(release_store)
+        prompt_release_approval_service = PromptReleaseApprovalService(
+            release_store, admission_gate=DefaultAdmissionGate())
         tool_context.prompt_release_pipeline = prompt_release_pipeline
     directory_rules_enabled = (
         not args.no_context

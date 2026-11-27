@@ -37,7 +37,8 @@ from ...session.memory import MemoryStore
 from ...skills import SkillManager
 from ...agent.turn.runtime_services import MCPServicePort, RuntimeServiceBinderPort
 from ...safety.sandbox import SandboxError
-from ...safety.admission import DefaultAdmissionGate
+from ...governance.change_pipeline import DefaultAdmissionGate
+from ...governance.control_plane import DefaultControlPlane
 from ...governance.control_plane.helpers import governance_for_change
 from ...webui.service import WebUIOptions, WebUIService
 from ...session.elicitation_bridge import MCPElicitationBridge
@@ -214,6 +215,7 @@ async def build_core_services(
         mcp_supervisor=supervisor,
         mcp_reload=reload_mcp,
         acceptance_evaluator=DefaultAcceptanceEvaluator(),
+        control_plane=DefaultControlPlane(),
     )
     observability: Optional[ObservabilitySink] = None
     options = ObservabilityOptions.from_args_and_config(

@@ -23,7 +23,7 @@ from krelcode.contracts.change_admission import (
     RollbackManifest,
 )
 from krelcode.contracts.evaluation import BehaviorFixture
-from krelcode.safety.admission import DefaultAdmissionGate
+from krelcode.governance.change_pipeline import DefaultAdmissionGate
 from krelcode.governance.control_plane.helpers import governance_for_change
 
 

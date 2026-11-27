@@ -15,7 +15,7 @@ from ...contracts.governance import (
 )
 from ...contracts.runtime import RuntimeSnapshot
 from ...contracts.tool import ToolContext
-from ...safety.control_plane import DefaultControlPlane
+from .core import DefaultControlPlane
 
 
 def governance_for_change(

@@ -35,7 +35,7 @@ from ...session.commands.ports import SkillReloadPort
 from ...session.restore import refresh_skill_system_prompt
 from ...skills import SkillIssue, SkillManager, SkillReloadReport
 from ...subagent.definition import AgentDefinitionManager
-from ...safety.admission import DefaultAdmissionGate
+from ...governance.change_pipeline import DefaultAdmissionGate
 from ...governance.control_plane.helpers import governance_for_change
 from .context import ApplicationBuildContext
 from .context_services import ContextServices

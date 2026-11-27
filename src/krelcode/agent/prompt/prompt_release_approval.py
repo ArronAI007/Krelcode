@@ -34,7 +34,6 @@ from krelcode.contracts.governance import (
     GovernanceDecision,
     PolicyVersion,
 )
-from krelcode.safety.admission import DefaultAdmissionGate
 from .prompt_change_adapter import prompt_change_inputs
 
 
@@ -47,13 +46,13 @@ class PromptReleaseApprovalService:
         *,
         release: PromptRelease = CURRENT_PROMPT_RELEASE,
         clock: Callable[[], str] = _now,
-        admission_gate: Optional[AdmissionGatePort] = None,
+        admission_gate: AdmissionGatePort,
         governance_decision: Optional[GovernanceDecision] = None,
     ) -> None:
         self.store = store
         self.release = release
         self.clock = clock
-        self.admission_gate = admission_gate or DefaultAdmissionGate()
+        self.admission_gate = admission_gate
         self.governance_decision = governance_decision
 
     def get(self, proposal_id: str) -> PromptReleaseProposal:

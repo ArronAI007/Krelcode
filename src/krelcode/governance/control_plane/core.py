@@ -15,8 +15,8 @@ import time
 from dataclasses import replace
 from typing import Optional
 
-from ..core.messages import ToolCall
-from ..contracts.governance import (
+from ...core.messages import ToolCall
+from ...contracts.governance import (
     ArtifactIdentity,
     AuditCorrelation,
     GovernanceDecision,
@@ -25,7 +25,7 @@ from ..contracts.governance import (
     SecurityDecision,
     SecurityDecisionValue,
 )
-from ..contracts.runtime import PermissionMode
+from ...contracts.runtime import PermissionMode
 
 
 class DefaultControlPlane:

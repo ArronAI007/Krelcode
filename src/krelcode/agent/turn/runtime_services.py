@@ -296,7 +296,7 @@ class CoreRuntimeServices:
 
     llm: "LLMProvider"
     registry: "ToolRegistry"
-    control_plane: "ControlPlanePort"
+    control_plane: Optional["ControlPlanePort"]
     execution_runtime: "ExecutionRuntimePort"
     tool_context: "ToolContext"
     bus: "EventBus"

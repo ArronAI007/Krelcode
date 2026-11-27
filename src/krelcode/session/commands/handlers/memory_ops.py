@@ -40,7 +40,7 @@ from ....session.memory_models import (
     coerce_memory_scope,
     coerce_memory_type,
 )
-from ....safety.admission import DefaultAdmissionGate
+from ....governance.change_pipeline import DefaultAdmissionGate
 from ....governance.control_plane.helpers import governance_for_change
 from ..context import CommandContext
 from ..types import CommandResult

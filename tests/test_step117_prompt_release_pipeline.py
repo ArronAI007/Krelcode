@@ -37,6 +37,7 @@ from krelcode.benchmarks import (
     BehaviorTrialResult,
     PromptParityBaseline,
 )
+from krelcode.governance.change_pipeline import DefaultAdmissionGate
 from krelcode.session.commands import CommandRegistry, CommandRequest
 from krelcode.session.commands.builtin import builtin_command_registry
 from krelcode.session.commands.context import CommandContext
@@ -269,7 +270,8 @@ def test_parity_baseline_failure_blocks_calibration_and_approval(tmp_path):
 
 def test_human_approval_binds_proposal_and_candidate_hash(tmp_path):
     _, store, proposal = _prepare(tmp_path)
-    service = PromptReleaseApprovalService(store)
+    service = PromptReleaseApprovalService(
+        store, admission_gate=DefaultAdmissionGate())
 
     with pytest.raises(PromptPipelineError, match="不匹配"):
         service.approve(
@@ -310,7 +312,11 @@ def test_identity_drift_marks_proposal_stale_and_refuses_approval(tmp_path):
         PROMPT_PROFILES,
         frozen_at="2026-11-22T00:00:00+00:00",
     )
-    service = PromptReleaseApprovalService(store, release=other_release)
+    service = PromptReleaseApprovalService(
+        store,
+        release=other_release,
+        admission_gate=DefaultAdmissionGate(),
+    )
 
     with pytest.raises(PromptPipelineError, match="stale"):
         service.approve(
@@ -386,7 +392,8 @@ def test_slash_command_is_the_human_approval_path(tmp_path, monkeypatch):
         services=SimpleNamespace(
             extensions=SimpleNamespace(
                 prompt_release_pipeline=pipeline,
-                prompt_release_approval_service=PromptReleaseApprovalService(store),
+                prompt_release_approval_service=PromptReleaseApprovalService(
+                    store, admission_gate=DefaultAdmissionGate()),
             ),
         ),
     )

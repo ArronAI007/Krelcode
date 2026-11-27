@@ -39,6 +39,7 @@ from krelcode.contracts.governance import (
     AuditCorrelation,
     GovernanceDecision,
     GovernanceRequest,
+    PolicyVersion,
     PluginTrustContext,
     PromptReleaseIdentity,
     SandboxProfile,
@@ -395,8 +396,20 @@ class ToolBatchExecutor:
                     "error_kind": "schema_validation",
                 },
             )
-        governance_decision = await deps.control_plane.evaluate(
-            _governance_request(host, execution_ctx, descriptor, tool_call))
+        governance_request = _governance_request(
+            host, execution_ctx, descriptor, tool_call)
+        governance_decision = (
+            await deps.control_plane.evaluate(governance_request)
+            if deps.control_plane is not None
+            else GovernanceDecision(
+                allowed=True,
+                policy_version=PolicyVersion(source="agent-local"),
+                permission_mode=governance_request.runtime.permission_mode,
+                tool_allowlist=governance_request.runtime.tool_allowlist,
+                sandbox_profile=governance_request.sandbox_profile,
+                audit=governance_request.audit,
+            )
+        )
         execution_ctx = replace(
             execution_ctx,
             runtime=replace(

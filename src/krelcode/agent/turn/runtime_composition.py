@@ -82,7 +82,6 @@ def build_agent_services(
     from krelcode.core.events import EventBus
     from krelcode.tools.runtime.execution import resolver_from_registry
     from krelcode.tools.runtime.router import ExecutionRuntimeRouter
-    from krelcode.safety.control_plane import DefaultControlPlane
 
     working_context = working_context_store or WorkingContextStore(
         tool_context.workspace_root,
@@ -131,7 +130,7 @@ def build_agent_services(
         core=CoreRuntimeServices(
             llm=llm,
             registry=registry,
-            control_plane=control_plane or DefaultControlPlane(),
+            control_plane=control_plane,
             execution_runtime=resolved_execution_runtime,
             tool_context=tool_context,
             bus=bus or EventBus(),

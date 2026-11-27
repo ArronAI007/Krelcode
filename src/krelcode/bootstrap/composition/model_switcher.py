@@ -43,7 +43,7 @@ from krelcode.enterprise.policy import EnterprisePolicy
 from krelcode.llm.base import LLMProvider
 from krelcode.llm.registry import create_provider, resolve_settings
 from krelcode.llm.retry import RetryingProvider, RetryPolicy
-from krelcode.safety.admission import DefaultAdmissionGate
+from krelcode.governance.change_pipeline import DefaultAdmissionGate
 from krelcode.governance.control_plane.helpers import governance_for_change
 
 from ...agent.prompt.prompt_release import ModelProfileCalibration

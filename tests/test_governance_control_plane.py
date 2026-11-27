@@ -27,7 +27,7 @@ from krelcode.core.messages import Message, ToolCall
 from krelcode.core.events import SecurityDecisionRecorded
 from krelcode.llm.providers.mock import MockProvider
 from krelcode.plugins import PluginManager, PluginSignatureError
-from krelcode.safety.control_plane import DefaultControlPlane
+from krelcode.governance.control_plane import DefaultControlPlane
 from krelcode.safety.policy import AllowAllPolicy
 from krelcode.safety.policy import SandboxPolicy
 from krelcode.tools.base import ToolContext, ToolResult

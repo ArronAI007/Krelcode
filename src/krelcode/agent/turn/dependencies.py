@@ -37,7 +37,7 @@ class AgentDependencies:
     """Resources shared by the model, context and tool turn executors."""
 
     llm: LLMProvider
-    control_plane: ControlPlanePort
+    control_plane: Optional[ControlPlanePort]
     execution_runtime: ExecutionRuntimePort
     tool_context: ToolContext
     bus: EventBus
