@@ -15,6 +15,7 @@ from ....contracts.change_admission import (
     EvaluationReport,
     RollbackManifest,
 )
+from ....contracts.tool import ToolContext
 from ....core.tokens import estimate_text_tokens
 from ....core.events import AgentEvent, MemoryCandidateObserved, MemoryWritten
 from ....session.memory import MemoryStore, sync_memory_fragment
@@ -40,6 +41,7 @@ from ....session.memory_models import (
     coerce_memory_type,
 )
 from ....safety.admission import DefaultAdmissionGate
+from ....governance.control_plane.helpers import governance_for_change
 from ..context import CommandContext
 from ..types import CommandResult
 
@@ -104,6 +106,7 @@ def _admit_memory_change(
     before: dict[str, object],
     after: dict[str, object],
     risk: RiskLevel,
+    tool_context: Optional[ToolContext],
 ) -> AdmissionDecision:
     candidate = ChangeCandidate(
         change_type=change_type,
@@ -136,6 +139,8 @@ def _admit_memory_change(
             instructions="从迁移备份或 AutoDream 前记忆快照恢复",
         ),
         audit={"entrypoint": "/memory"},
+        governance_decision=governance_for_change(
+            candidate, tool_context=tool_context),
     )
 
 
@@ -530,6 +535,7 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
             before={"scope": str(migrate_scope), "schema": "legacy"},
             after={"scope": str(migrate_scope), "schema": "memory-v2"},
             risk=RiskLevel.MEDIUM,
+            tool_context=ctx.tool_context,
         )
         if not admission.admitted:
             return _ok(
@@ -593,6 +599,7 @@ async def handle_memory(ctx: CommandContext) -> CommandResult:
                 before={"proposal": token, "status": "pending"},
                 after={"proposal": token, "status": "accepted"},
                 risk=RiskLevel.MEDIUM,
+                tool_context=ctx.tool_context,
             )
             if not admission.admitted:
                 return _ok(

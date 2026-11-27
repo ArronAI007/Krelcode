@@ -32,6 +32,9 @@ class DefaultControlPlane:
     """Evaluate every governance input without executing any side effect."""
 
     async def evaluate(self, request: GovernanceRequest) -> GovernanceDecision:
+        return self.evaluate_sync(request)
+
+    def evaluate_sync(self, request: GovernanceRequest) -> GovernanceDecision:
         policy = request.enterprise_policy
         denials: list[str] = []
         constraints: list[str] = []

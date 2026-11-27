@@ -24,6 +24,7 @@ from krelcode.contracts.change_admission import (
 )
 from krelcode.contracts.evaluation import BehaviorFixture
 from krelcode.safety.admission import DefaultAdmissionGate
+from krelcode.governance.control_plane.helpers import governance_for_change
 
 
 def candidate(
@@ -55,12 +56,15 @@ def test_default_admission_gate_enforces_all_high_risk_steps() -> None:
     gate = DefaultAdmissionGate()
     item = candidate()
     report = passing_report(item)
+    governance = governance_for_change(item)
 
-    missing_evaluation = gate.admit(item)
+    missing_evaluation = gate.admit(
+        item, governance_decision=governance)
     assert missing_evaluation.status is AdmissionStatus.REJECTED
     assert "EvaluationReport" in missing_evaluation.reason
 
-    missing_rollback = gate.admit(item, evaluation=report)
+    missing_rollback = gate.admit(
+        item, evaluation=report, governance_decision=governance)
     assert missing_rollback.status is AdmissionStatus.REJECTED
     assert "RollbackManifest" in missing_rollback.reason
 
@@ -69,7 +73,8 @@ def test_default_admission_gate_enforces_all_high_risk_steps() -> None:
         snapshot={"model": "old"},
     )
     pending = gate.admit(
-        item, evaluation=report, rollback=rollback)
+        item, evaluation=report, rollback=rollback,
+        governance_decision=governance)
     assert pending.status is AdmissionStatus.PENDING_APPROVAL
 
     admitted = gate.admit(
@@ -78,6 +83,7 @@ def test_default_admission_gate_enforces_all_high_risk_steps() -> None:
         rollback=rollback,
         approval=ChangeApproval(
             approved=True, actor="user", reason="explicit /model"),
+        governance_decision=governance,
     )
     assert admitted.status is AdmissionStatus.ADMITTED
     assert admitted.release_id.startswith("admission-")
@@ -89,6 +95,7 @@ def test_default_admission_gate_enforces_all_high_risk_steps() -> None:
 def test_failed_evaluation_and_denied_approval_are_rejected() -> None:
     gate = DefaultAdmissionGate()
     item = candidate()
+    governance = governance_for_change(item)
     failed = EvaluationReport.from_checks(
         item.candidate_id,
         [EvaluationCheck(
@@ -99,7 +106,8 @@ def test_failed_evaluation_and_denied_approval_are_rejected() -> None:
         snapshot={"model": "old"},
     )
     rejected = gate.admit(
-        item, evaluation=failed, rollback=rollback)
+        item, evaluation=failed, rollback=rollback,
+        governance_decision=governance)
     assert rejected.status is AdmissionStatus.REJECTED
     assert "评估未通过" in rejected.reason
 
@@ -109,6 +117,7 @@ def test_failed_evaluation_and_denied_approval_are_rejected() -> None:
         rollback=rollback,
         approval=ChangeApproval(
             approved=False, actor="user", reason="not allowed"),
+        governance_decision=governance,
     )
     assert denied.status is AdmissionStatus.REJECTED
     assert "not allowed" in denied.reason
@@ -120,7 +129,11 @@ def test_every_change_type_has_an_admission_policy(
 ) -> None:
     gate = DefaultAdmissionGate()
     item = candidate(change_type, risk=RiskLevel.LOW)
-    decision = gate.admit(item, evaluation=passing_report(item))
+    decision = gate.admit(
+        item,
+        evaluation=passing_report(item),
+        governance_decision=governance_for_change(item),
+    )
     assert decision.status is AdmissionStatus.ADMITTED
 
 
@@ -192,6 +205,7 @@ def test_benchmark_evaluation_feeds_universal_admission_gate() -> None:
             candidate_id=item.candidate_id,
             snapshot={"model": "old"},
         ),
+        governance_decision=governance_for_change(item),
     ))
 
     assert decision.status is AdmissionStatus.ADMITTED

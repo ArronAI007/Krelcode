@@ -11,6 +11,7 @@ from typing import Optional, Sequence, cast
 
 from ... import __version__
 from ...agent.turn.runtime import AgentRuntime
+from ...application.acceptance import DefaultAcceptanceEvaluator
 from ...config import load_config_layers
 from ...contracts.runtime import RunMode
 from ...contracts.application import RiskLevel
@@ -37,6 +38,7 @@ from ...skills import SkillManager
 from ...agent.turn.runtime_services import MCPServicePort, RuntimeServiceBinderPort
 from ...safety.sandbox import SandboxError
 from ...safety.admission import DefaultAdmissionGate
+from ...governance.control_plane.helpers import governance_for_change
 from ...webui.service import WebUIOptions, WebUIService
 from ...session.elicitation_bridge import MCPElicitationBridge
 from ...agent.prompt.prompt_surface_contract import PromptSurfaceExecutor
@@ -186,6 +188,8 @@ async def build_core_services(
                 snapshot=before,
                 instructions="恢复 before 中的 MCP 配置并重启服务器",
             ),
+            governance_decision=governance_for_change(
+                candidate, tool_context=loop.tool_context),
         )
         if not admission.admitted:
             context.note(f"[mcp] 热更新未准入: {admission.reason}")
@@ -209,6 +213,7 @@ async def build_core_services(
         subagents=subagents,
         mcp_supervisor=supervisor,
         mcp_reload=reload_mcp,
+        acceptance_evaluator=DefaultAcceptanceEvaluator(),
     )
     observability: Optional[ObservabilitySink] = None
     options = ObservabilityOptions.from_args_and_config(

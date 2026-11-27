@@ -8,6 +8,7 @@ from ...contracts.acceptance import (
     AcceptanceStatus,
 )
 from ...contracts.application import AcceptanceContract
+from .evaluator import DefaultAcceptanceEvaluator
 
 __all__ = [
     "AcceptanceCheck",
@@ -16,4 +17,5 @@ __all__ = [
     "AcceptanceEvidence",
     "AcceptanceResult",
     "AcceptanceStatus",
+    "DefaultAcceptanceEvaluator",
 ]

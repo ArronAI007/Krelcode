@@ -337,6 +337,7 @@ class SessionController:
             loop=self.loop,
             command_registry=self.command_registry,
             workspace_root=self.workspace_root,
+            tool_context=self.loop.tool_context,
             session_path=self.session_path,
             sessions_dir=self.sessions_dir,
             mcp_supervisor=cast(

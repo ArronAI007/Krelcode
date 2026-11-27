@@ -474,8 +474,7 @@ PACKAGE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "enterprise": frozenset({"contracts", "core"}),
     "agent": frozenset({"contracts", "core", "llm", "safety", "tools"}),
     "runtime": frozenset({
-        "agent", "contracts", "core", "daemon", "jobs", "mcp", "safety",
-        "session", "tools",
+        "contracts", "core", "daemon", "jobs", "mcp", "safety", "tools",
     }),
     "governance": frozenset({"contracts", "core", "enterprise", "safety"}),
     "tuning": frozenset({
@@ -487,8 +486,8 @@ PACKAGE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "subagent": frozenset(
         {"agent", "contracts", "core", "llm", "safety", "skills", "tools"}),
     "session": frozenset({
-        "agent", "contracts", "core", "mcp", "safety", "security_review",
-        "skills", "tools",
+        "agent", "contracts", "core", "governance", "mcp", "safety",
+        "security_review", "skills", "tools",
     }),
     "ui": frozenset({"agent", "contracts", "core", "safety", "session"}),
     "daemon": frozenset({

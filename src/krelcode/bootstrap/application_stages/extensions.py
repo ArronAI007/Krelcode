@@ -36,6 +36,7 @@ from ...session.restore import refresh_skill_system_prompt
 from ...skills import SkillIssue, SkillManager, SkillReloadReport
 from ...subagent.definition import AgentDefinitionManager
 from ...safety.admission import DefaultAdmissionGate
+from ...governance.control_plane.helpers import governance_for_change
 from .context import ApplicationBuildContext
 from .context_services import ContextServices
 from .core import CoreServices
@@ -143,6 +144,8 @@ def build_extension_services(
                 snapshot=before,
                 instructions="重新加载 before 中的 Skill 来源",
             ),
+            governance_decision=governance_for_change(
+                candidate, tool_context=loop.tool_context),
         )
         if not decision.admitted:
             return SkillReloadReport(
@@ -214,6 +217,8 @@ def build_extension_services(
                 snapshot=before,
                 instructions="恢复 before 中的 Plugin 状态并重新加载",
             ),
+            governance_decision=governance_for_change(
+                candidate, tool_context=loop.tool_context),
         )
         if not decision.admitted:
             context.note(

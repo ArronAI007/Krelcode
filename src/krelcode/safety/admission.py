@@ -19,9 +19,7 @@ from ..contracts.change_admission import (
     RollbackManifest,
 )
 from ..contracts.governance import (
-    AuditCorrelation,
     GovernanceDecision,
-    PolicyVersion,
 )
 
 
@@ -102,12 +100,37 @@ class DefaultAdmissionGate:
         rollback: Optional[RollbackManifest] = None,
         policy_version: str = "",
         audit: Optional[Mapping[str, object]] = None,
+        governance_decision: GovernanceDecision,
     ) -> AdmissionDecision:
         policy = self.policies[candidate.change_type]
+        governance = governance_decision
+
+        def decide(
+            status: AdmissionStatus,
+            item: ChangeCandidate,
+            reason: str,
+            *,
+            policy_version: str,
+            evaluation: Optional[EvaluationReport],
+            rollback: Optional[RollbackManifest],
+            approval: Optional[ChangeApproval],
+            audit: Optional[Mapping[str, object]],
+        ) -> AdmissionDecision:
+            return self._decision(
+                status,
+                item,
+                reason,
+                governance_decision=governance,
+                policy_version=policy_version,
+                evaluation=evaluation,
+                rollback=rollback,
+                approval=approval,
+                audit=audit,
+            )
         failed_evidence = [
             item for item in candidate.evidence if not item.passed]
         if failed_evidence:
-            return self._decision(
+            return decide(
                 AdmissionStatus.REJECTED,
                 candidate,
                 "候选变更包含失败证据: " + ", ".join(
@@ -119,7 +142,7 @@ class DefaultAdmissionGate:
                 audit=audit,
             )
         if candidate.expires_at > 0 and candidate.expires_at <= time.time():
-            return self._decision(
+            return decide(
                 AdmissionStatus.REJECTED,
                 candidate,
                 "候选变更已过期",
@@ -131,7 +154,7 @@ class DefaultAdmissionGate:
             )
         if policy.require_evaluation:
             if evaluation is None:
-                return self._decision(
+                return decide(
                     AdmissionStatus.REJECTED,
                     candidate,
                     "缺少 EvaluationReport",
@@ -142,7 +165,7 @@ class DefaultAdmissionGate:
                     audit=audit,
                 )
             if evaluation.candidate_id != candidate.candidate_id:
-                return self._decision(
+                return decide(
                     AdmissionStatus.REJECTED,
                     candidate,
                     "EvaluationReport 与候选变更不匹配",
@@ -153,7 +176,7 @@ class DefaultAdmissionGate:
                     audit=audit,
                 )
             if not evaluation.passed:
-                return self._decision(
+                return decide(
                     AdmissionStatus.REJECTED,
                     candidate,
                     "评估未通过",
@@ -165,7 +188,7 @@ class DefaultAdmissionGate:
                 )
         if _risk_at_least(candidate.risk, policy.require_rollback_at):
             if rollback is None:
-                return self._decision(
+                return decide(
                     AdmissionStatus.REJECTED,
                     candidate,
                     "高风险变更缺少 RollbackManifest",
@@ -176,7 +199,7 @@ class DefaultAdmissionGate:
                     audit=audit,
                 )
             if rollback.candidate_id != candidate.candidate_id:
-                return self._decision(
+                return decide(
                     AdmissionStatus.REJECTED,
                     candidate,
                     "RollbackManifest 与候选变更不匹配",
@@ -188,7 +211,7 @@ class DefaultAdmissionGate:
                 )
         if _risk_at_least(candidate.risk, policy.require_approval_at):
             if approval is None:
-                return self._decision(
+                return decide(
                     AdmissionStatus.PENDING_APPROVAL,
                     candidate,
                     "变更需要人工审批",
@@ -199,7 +222,7 @@ class DefaultAdmissionGate:
                     audit=audit,
                 )
             if not approval.approved:
-                return self._decision(
+                return decide(
                     AdmissionStatus.REJECTED,
                     candidate,
                     approval.reason or "审批被拒绝",
@@ -209,7 +232,7 @@ class DefaultAdmissionGate:
                     approval=approval,
                     audit=audit,
                 )
-        return self._decision(
+        return decide(
             AdmissionStatus.ADMITTED,
             candidate,
             "",
@@ -231,6 +254,7 @@ class DefaultAdmissionGate:
         rollback: Optional[RollbackManifest],
         approval: Optional[ChangeApproval],
         audit: Optional[Mapping[str, object]],
+        governance_decision: GovernanceDecision,
     ) -> AdmissionDecision:
         release_id = ""
         if status is AdmissionStatus.ADMITTED:
@@ -265,20 +289,8 @@ class DefaultAdmissionGate:
             evaluation=evaluation,
             rollback=rollback,
             approval=approval,
-            governance_decision=GovernanceDecision(
-                allowed=status is AdmissionStatus.ADMITTED,
-                reason=reason,
-                policy_version=PolicyVersion(
-                    version=policy_version or "0",
-                    source="admission-gate",
-                ),
-                audit=AuditCorrelation(
-                    correlation_id=str(
-                        dict(audit or {}).get("correlation_id")
-                        or candidate.candidate_id),
-                    request_id=candidate.candidate_id,
-                ),
-            ),
+            governance_decision=governance_decision,
+            security_decision=governance_decision.security_decision,
             audit={
                 "change_type": candidate.change_type.value,
                 "target": candidate.target,

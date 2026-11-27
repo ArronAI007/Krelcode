@@ -20,6 +20,7 @@ from ..contracts.evaluation import (
     TraceReplayPort,
     VersionManifestPort,
 )
+from ..contracts.governance import GovernanceDecision
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,7 @@ async def evaluate_and_admit(
     approval: ChangeApproval | None = None,
     rollback: RollbackManifest | None = None,
     policy_version: str = "",
+    governance_decision: GovernanceDecision,
 ) -> AdmissionDecision:
     """Run production fixtures, aggregate checks, then request admission."""
     reports = await evaluate_candidate(
@@ -87,6 +89,7 @@ async def evaluate_and_admit(
         approval=approval,
         rollback=rollback,
         policy_version=policy_version,
+        governance_decision=governance_decision,
     )
 
 

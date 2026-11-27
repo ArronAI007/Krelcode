@@ -18,6 +18,7 @@ from krelcode.contracts.application import (
     ApplicationRequest,
     ApplicationRequestFactory,
 )
+from krelcode.contracts.acceptance import AcceptanceEvaluatorPort
 from krelcode.contracts.tool import RuntimeSnapshot
 from krelcode.agent.turn.loop import AgentLoop
 from krelcode.agent.turn.query import QueryEngine, QuerySession
@@ -47,6 +48,7 @@ class AgentRuntime:
         mcp_supervisor: Optional[_MCPSupervisorPort] = None,
         mcp_reload: Optional[Callable[[], Awaitable[Sequence[str]]]] = None,
         shell_jobs: Optional[_ShellJobsRuntimePort] = None,
+        acceptance_evaluator: Optional[AcceptanceEvaluatorPort] = None,
     ) -> None:
         self.loop = loop
         self.subagents = subagents
@@ -61,6 +63,7 @@ class AgentRuntime:
         self._query: Optional[QuerySession] = None
         self._closed = False
         self.query_engine = QueryEngine(loop)
+        loop.acceptance_evaluator = acceptance_evaluator
         loop.runtime_snapshot_provider = self._runtime_snapshot
 
     def _runtime_snapshot(self, base: RuntimeSnapshot) -> RuntimeSnapshot:

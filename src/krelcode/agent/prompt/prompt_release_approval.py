@@ -29,6 +29,11 @@ from krelcode.contracts.change_admission import (
     AdmissionGatePort,
     ChangeApproval,
 )
+from krelcode.contracts.governance import (
+    AuditCorrelation,
+    GovernanceDecision,
+    PolicyVersion,
+)
 from krelcode.safety.admission import DefaultAdmissionGate
 from .prompt_change_adapter import prompt_change_inputs
 
@@ -43,11 +48,13 @@ class PromptReleaseApprovalService:
         release: PromptRelease = CURRENT_PROMPT_RELEASE,
         clock: Callable[[], str] = _now,
         admission_gate: Optional[AdmissionGatePort] = None,
+        governance_decision: Optional[GovernanceDecision] = None,
     ) -> None:
         self.store = store
         self.release = release
         self.clock = clock
         self.admission_gate = admission_gate or DefaultAdmissionGate()
+        self.governance_decision = governance_decision
 
     def get(self, proposal_id: str) -> PromptReleaseProposal:
         return self.store.load_proposal(proposal_id)
@@ -85,6 +92,17 @@ class PromptReleaseApprovalService:
         }:
             raise PromptPipelineError("Prompt release 只能由人类显式批准或拒绝")
         inputs = prompt_change_inputs(proposal)
+        governance = self.governance_decision or GovernanceDecision(
+            allowed=True,
+            policy_version=PolicyVersion(
+                version=self.release.release_id,
+                source="prompt-release-approval",
+            ),
+            audit=AuditCorrelation(
+                correlation_id=proposal.proposal_id,
+                request_id=proposal.proposal_id,
+            ),
+        )
         admission = self.admission_gate.admit(
             inputs.candidate,
             evaluation=inputs.evaluation,
@@ -98,6 +116,7 @@ class PromptReleaseApprovalService:
             rollback=inputs.rollback,
             policy_version=self.release.release_id,
             audit={"proposal_id": proposal_id},
+            governance_decision=governance,
         )
         if not admission.admitted:
             raise PromptPipelineError(

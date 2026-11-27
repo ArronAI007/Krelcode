@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from ...contracts.tool import ToolContext
 from .ports import (
     CheckpointManagerPort,
     CommandLoopPort,
@@ -34,6 +35,7 @@ class CommandContext:
     loop: CommandLoopPort
     command_registry: CommandRegistry
     workspace_root: Path
+    tool_context: Optional[ToolContext] = None
     session_path: Optional[str] = None
     sessions_dir: Optional[Path] = None
     mcp_supervisor: Optional[MCPSupervisorPort] = None

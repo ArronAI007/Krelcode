@@ -44,6 +44,7 @@ from krelcode.llm.base import LLMProvider
 from krelcode.llm.registry import create_provider, resolve_settings
 from krelcode.llm.retry import RetryingProvider, RetryPolicy
 from krelcode.safety.admission import DefaultAdmissionGate
+from krelcode.governance.control_plane.helpers import governance_for_change
 
 from ...agent.prompt.prompt_release import ModelProfileCalibration
 from ...core.hooks import HookPort
@@ -219,6 +220,8 @@ def build_model_switcher(
                 "session_id": loop.tool_context.runtime.session_id or "",
                 "entrypoint": "/model",
             },
+            governance_decision=governance_for_change(
+                candidate, tool_context=loop.tool_context),
         )
         if not admission.admitted:
             return (

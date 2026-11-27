@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 
 from krelcode.agent.loop import AgentLoop
-from krelcode.agent.turn.acceptance import DefaultAcceptanceEvaluator
+from krelcode.application.acceptance import DefaultAcceptanceEvaluator as AppEvaluator
 from krelcode.contracts.acceptance import AcceptanceEvidence, AcceptanceStatus
 from krelcode.contracts.application import (
     AcceptanceContract,
@@ -22,7 +22,7 @@ from krelcode.tools.registry import ToolRegistry
 def test_default_acceptance_passes_direct_model_response() -> None:
     request = ApplicationRequestFactory.from_input_source(
         "repl", goal="answer")
-    result = DefaultAcceptanceEvaluator().evaluate(
+    result = AppEvaluator().evaluate(
         request,
         "answer",
         (AcceptanceEvidence(
@@ -47,7 +47,7 @@ def test_required_test_evidence_fails_without_test_result() -> None:
             required_evidence=("tests",),
         ),
     )
-    result = DefaultAcceptanceEvaluator().evaluate(
+    result = AppEvaluator().evaluate(
         request,
         "implemented",
         (),
@@ -56,7 +56,7 @@ def test_required_test_evidence_fails_without_test_result() -> None:
     assert result.status is AcceptanceStatus.FAILED
     assert "缺少验收证据" in result.reason
 
-    passed = DefaultAcceptanceEvaluator().evaluate(
+    passed = AppEvaluator().evaluate(
         request,
         "implemented",
         (AcceptanceEvidence(
@@ -87,6 +87,7 @@ def test_agent_loop_emits_acceptance_result(tmp_path: Path) -> None:
         system_prompt="SYS",
     )
     loop.bus.subscribe(events.append)
+    loop.acceptance_evaluator = AppEvaluator()
 
     assert asyncio.run(loop.run(
         "fix", application_request=request)) == "implemented"

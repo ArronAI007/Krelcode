@@ -40,6 +40,7 @@ from krelcode.contracts.application import (
     ApplicationRequest,
     ApplicationRequestFactory,
 )
+from krelcode.contracts.acceptance import AcceptanceEvaluatorPort
 from krelcode.agent.context.attachments import ContextAttachment, ContextAttachmentDiff, ContextAttachmentKind
 from krelcode.agent.context.compression import ContextManager
 from krelcode.agent.context.context_assembler import ContextAssembler
@@ -51,7 +52,7 @@ from krelcode.agent.context.context_source import (
 from krelcode.agent.turn.dependencies import AgentDependencies
 from krelcode.agent.context.context_cache_ledger import ContextCacheLedger
 from krelcode.agent.turn.context_turn import ContextTurnCoordinator
-from krelcode.agent.turn.acceptance import DefaultAcceptanceEvaluator, acceptance_evidence_from_history
+from krelcode.agent.turn.acceptance import acceptance_evidence_from_history
 from krelcode.agent.context.context_source import ContextAssembly
 from krelcode.agent.turn.intent import TurnIntent, infer_turn_intent
 from krelcode.agent.turn.model_turn import (
@@ -99,7 +100,6 @@ def max_steps_reached_text(max_steps: int) -> str:
 
 INTERRUPTED_NOTE = "[已被用户中止]"
 STEERING_PREFIX = "[用户插话] "
-
 
 class _AsyncClosePort(Protocol):
     async def close(self) -> None: ...
@@ -183,6 +183,7 @@ class AgentLoop(RuntimeStateHost):
         self.compact_scheduler: Optional[_AsyncClosePort] = None
         self.memory_dream_scheduler: Optional[_AsyncClosePort] = None
         self.memory_dream: Optional[object] = None
+        self.acceptance_evaluator: Optional[AcceptanceEvaluatorPort] = None
 
         # Mutable state is initialized by AgentRuntimeState.  Only constructor
         # inputs override the typed defaults here.
@@ -506,8 +507,9 @@ class AgentLoop(RuntimeStateHost):
 
     async def _finish_turn(self, text: str) -> str:
         request = self.application_request
-        if request is not None:
-            result = DefaultAcceptanceEvaluator().evaluate(request, text, acceptance_evidence_from_history(self.history))
+        if request is not None and self.acceptance_evaluator is not None:
+            result = self.acceptance_evaluator.evaluate(
+                request, text, acceptance_evidence_from_history(self.history))
             self.acceptance_result = result
             await self._emit(AcceptanceEvaluated(result.as_dict()))
         await self._emit(RunFinished(text, turn_id=self._current_turn_id))

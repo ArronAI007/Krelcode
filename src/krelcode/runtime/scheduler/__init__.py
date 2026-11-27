@@ -1,6 +1,24 @@
-"""Canonical background scheduler facade."""
+"""Scheduling ports consumed by production runtimes."""
 
-from krelcode.agent.context.compact_scheduler import BackgroundCompactScheduler
-from krelcode.session.memory_dream import MemoryDreamScheduler
+from __future__ import annotations
 
-__all__ = ["BackgroundCompactScheduler", "MemoryDreamScheduler"]
+from typing import Protocol
+
+
+class BackgroundSchedulerPort(Protocol):
+    async def close(self) -> None: ...
+
+
+class CompactSchedulerPort(BackgroundSchedulerPort, Protocol):
+    async def on_event(self, event: object) -> None: ...
+
+
+class MemoryDreamSchedulerPort(BackgroundSchedulerPort, Protocol):
+    async def on_event(self, event: object) -> None: ...
+
+
+__all__ = [
+    "BackgroundSchedulerPort",
+    "CompactSchedulerPort",
+    "MemoryDreamSchedulerPort",
+]
