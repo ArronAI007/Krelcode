@@ -13,7 +13,13 @@ from ... import __version__
 from ...agent.turn.runtime import AgentRuntime
 from ...application.acceptance import DefaultAcceptanceEvaluator
 from ...config import load_config_layers
-from ...contracts.runtime import RunMode
+from ...contracts.runtime import (
+    HarnessReleaseIdentity,
+    RunMode,
+    RuntimeIdentity,
+    RuntimeRetryPolicy,
+    RuntimeSandboxBinding,
+)
 from ...contracts.application import RiskLevel
 from ...contracts.change_admission import (
     ChangeApproval,
@@ -214,6 +220,71 @@ async def build_core_services(
         loop.services.core.tool_context.workspace_root
         / ".krelcode" / "runtime" / "tasks.json"
     )
+    tool_names = tuple(sorted(loop.registry.names()))
+    runtime_release = build_runtime_release_manifest(
+        code_version=__version__,
+        run_mode=context.run_mode.value,
+        loop=loop,
+        supervisor=supervisor,
+        plugin_manager=cast(PluginManager, loop.plugin_manager),
+        skill_manager=cast(SkillManager, loop.skill_manager),
+        memory_store=cast(MemoryStore, loop.memory_store),
+        enterprise_policy=context.enterprise_policy,
+        tool_names=tool_names,
+    )
+    principal = context.principal
+    organization = str(
+        getattr(context.enterprise_policy, "organization", "") or "")
+    runtime_identity = RuntimeIdentity(
+        principal_id=str(
+            getattr(principal, "subject", "") or "local"),
+        tenant_id=organization or "local",
+        organization_id=organization,
+        auth_method=str(
+            getattr(principal, "auth_method", "") or "local"),
+    )
+    harness_release = HarnessReleaseIdentity(
+        release_id=runtime_release.release_id,
+        release_hash=runtime_release.release_hash,
+        prompt_release_id=str(
+            runtime_release.prompt_release.get("release_id", "") or ""),
+        prompt_release_hash=str(
+            runtime_release.prompt_release.get("release_hash", "") or ""),
+        agent_definition_id=str(
+            runtime_release.agent_definition.get("id", "") or ""),
+        policy_version=str(
+            runtime_release.policy_version.get("version", "") or ""),
+    )
+    sandbox = loop.tool_context.sandbox
+    capabilities = getattr(sandbox, "capabilities", None)
+    limits = getattr(sandbox, "resource_limits", None)
+    sandbox_binding = RuntimeSandboxBinding(
+        backend=str(getattr(sandbox, "backend", "static")),
+        enabled=loop.tool_context.sandbox_enabled,
+        network=bool(getattr(sandbox, "network", False)),
+        isolation_level=(
+            str(getattr(
+                getattr(capabilities, "isolation_level", "static"),
+                "value",
+                getattr(capabilities, "isolation_level", "static"),
+            ))
+            if capabilities is not None else "static"),
+        cpu_seconds=getattr(limits, "cpu_seconds", None),
+        memory_mb=getattr(limits, "memory_mb", None),
+        storage_mb=getattr(limits, "storage_mb", None),
+        process_limit=getattr(limits, "process_limit", None),
+    )
+    runtime_config = context.config.get("runtime") or {}
+    if not isinstance(runtime_config, dict):
+        runtime_config = {}
+    retry_attempts = max(1, int(runtime_config.get("retry_attempts", 1) or 1))
+    retry_policy = RuntimeRetryPolicy(
+        max_attempts=retry_attempts,
+        backoff_seconds=float(
+            runtime_config.get("retry_backoff_seconds", 0.0) or 0.0),
+        retry_on_failure=bool(runtime_config.get("retry_on_failure", False)),
+        retry_on_timeout=bool(runtime_config.get("retry_on_timeout", False)),
+    )
     runtime = AgentRuntime(
         loop,
         subagents=subagents,
@@ -224,32 +295,33 @@ async def build_core_services(
         task_runtime=LocalTaskRuntime(
             state_path=runtime_state_path,
             redactor=redactor,
+            max_concurrency=max(
+                1, int(runtime_config.get("max_concurrency", 2) or 2)),
+            max_queue_size=max(
+                0, int(runtime_config.get("max_queue_size", 100) or 100)),
+            default_timeout_seconds=(
+                float(runtime_config["default_timeout_seconds"])
+                if runtime_config.get("default_timeout_seconds") is not None
+                else None
+            ),
         ),
         resource_registry=LocalRuntimeResourceRegistry(),
         strict_application_request=True,
+        runtime_identity=runtime_identity,
+        harness_release=harness_release,
+        retry_policy=retry_policy,
+        sandbox_binding=sandbox_binding,
     )
     observability: Optional[ObservabilitySink] = None
     options = ObservabilityOptions.from_args_and_config(
         context.args, context.config)
     if options.enabled:
-        tool_names = tuple(sorted(loop.registry.names()))
         experiment = context.experiment
         provider_name = str(
             getattr(loop.llm, "name", type(loop.llm).__name__))
         model_name = str(getattr(loop.llm, "model", "") or "")
         run_id = (
             f"{int(time.time())}-{uuid.uuid4().hex[:12]}"
-        )
-        runtime_release = build_runtime_release_manifest(
-            code_version=__version__,
-            run_mode=context.run_mode.value,
-            loop=loop,
-            supervisor=supervisor,
-            plugin_manager=cast(PluginManager, loop.plugin_manager),
-            skill_manager=cast(SkillManager, loop.skill_manager),
-            memory_store=cast(MemoryStore, loop.memory_store),
-            enterprise_policy=context.enterprise_policy,
-            tool_names=tool_names,
         )
         manifest = RunManifest(
             run_id=run_id,

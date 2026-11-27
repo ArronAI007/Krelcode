@@ -31,6 +31,7 @@ _TASKKILL_SUCCESS_CODES = frozenset({0, 128})
 class ProcessIsolationKwargs(TypedDict, total=False):
     creationflags: int
     start_new_session: bool
+    preexec_fn: Callable[[], None]
 
 
 @dataclass(frozen=True)

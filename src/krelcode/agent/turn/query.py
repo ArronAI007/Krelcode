@@ -21,12 +21,17 @@ from krelcode.contracts.application import (
     ApplicationRequestFactory,
 )
 from krelcode.contracts.runtime import (
+    HarnessReleaseIdentity,
     RuntimeCheckpointRef,
     HarnessTurnControlPort,
+    RuntimeIdentity,
     RuntimeTask,
     RuntimeTaskExecutorPort,
     RuntimeTaskHandle,
     RuntimeTaskRuntimePort,
+    RuntimeContinuationPort,
+    RuntimeRetryPolicy,
+    RuntimeSandboxBinding,
     RuntimeStateRef,
     RuntimeTaskState,
     RuntimeTaskStatus,
@@ -83,14 +88,33 @@ class QuerySession:
             self.task.cancel()
         await asyncio.gather(self.task, return_exceptions=True)
 
+    async def pause(self) -> bool:
+        return await self.runtime_handle.pause()
+
+    async def resume(self) -> bool:
+        return await self.runtime_handle.resume()
+
 
 class _LoopTurnExecutor(RuntimeTaskExecutorPort):
     """Adapt the semantic Agent turn to a runtime task executor."""
 
-    def __init__(self, turn: HarnessTurnControlPort) -> None:
+    def __init__(
+        self,
+        turn: HarnessTurnControlPort,
+        continuation: Optional[RuntimeContinuationPort] = None,
+    ) -> None:
         self.turn = turn
+        self.continuation = continuation
 
     async def execute(self, task: RuntimeTask) -> str:
+        self.turn.bind_runtime_identity(task.identity)
+        self.turn.validate_harness_release(task.harness_release)
+        self.turn.validate_sandbox_binding(task.sandbox)
+        if task.resume_from is not None:
+            if self.continuation is None:
+                raise RuntimeError(
+                    "Runtime task 要求恢复 checkpoint，但 ContinuationPort 未配置")
+            self.continuation.resume(task.resume_from)
         return await self.turn.run_turn(
             task.message,
             images=list(task.images) or None,
@@ -141,6 +165,12 @@ class _InlineRuntimeHandle(RuntimeTaskHandle):
     async def cancel(self) -> None:
         await self._runtime.cancel(self._task_id)
 
+    async def pause(self) -> bool:
+        return False
+
+    async def resume(self) -> bool:
+        return False
+
 
 class _InlineTaskRuntime:
     """Small fallback for direct QueryEngine users.
@@ -189,6 +219,12 @@ class _InlineTaskRuntime:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         return True
+
+    async def pause(self, task_id: str) -> bool:
+        return False
+
+    async def resume(self, task_id: str) -> bool:
+        return False
 
     def inspect(self, task_id: str) -> RuntimeTaskState:
         return self._states[task_id]
@@ -257,6 +293,11 @@ class QueryEngine:
         queue_size: int = 256,
         task_runtime: Optional[RuntimeTaskRuntimePort] = None,
         require_application_request: bool = False,
+        runtime_identity: Optional[RuntimeIdentity] = None,
+        harness_release: Optional[HarnessReleaseIdentity] = None,
+        retry_policy: Optional[RuntimeRetryPolicy] = None,
+        sandbox_binding: Optional[RuntimeSandboxBinding] = None,
+        continuation: Optional[RuntimeContinuationPort] = None,
     ) -> None:
         self.turn = as_turn_control(loop)
         if queue_size < 1:
@@ -265,6 +306,11 @@ class QueryEngine:
         self._counter = count(1)
         self._task_runtime = task_runtime or _InlineTaskRuntime()
         self.require_application_request = require_application_request
+        self.runtime_identity = runtime_identity or RuntimeIdentity()
+        self.harness_release = harness_release or HarnessReleaseIdentity()
+        self.retry_policy = retry_policy or RuntimeRetryPolicy()
+        self.sandbox_binding = sandbox_binding or RuntimeSandboxBinding()
+        self.continuation = continuation
 
     def start(
         self,
@@ -294,6 +340,10 @@ class QueryEngine:
                 if tool_allowlist is not None else None
             ),
             reminder_ids=tuple(reminder_ids or ()),
+            identity=self.runtime_identity,
+            harness_release=self.harness_release,
+            retry_policy=self.retry_policy,
+            sandbox=self.sandbox_binding,
         )
         queue: asyncio.Queue[QueryEvent | _QueryEnd] = asyncio.Queue(
             maxsize=self.queue_size)
@@ -313,7 +363,7 @@ class QueryEngine:
         unsubscribe: Callable[[], None] = self.turn.bus.subscribe(on_event)
         handle = self._task_runtime.submit(
             runtime_task,
-            _LoopTurnExecutor(self.turn),
+            _LoopTurnExecutor(self.turn, self.continuation),
         )
         task = asyncio.create_task(handle.wait())
 

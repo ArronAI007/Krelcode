@@ -360,12 +360,29 @@ diff_review = true                  # REPL 的 write_file/edit_file 写前显示
 mouse = false                       # 默认保留原生复制和滚轮；true 启用点击交互
 mode = "fullscreen"                  # fullscreen（应用管理视口与剪贴板）/ native
 
+[runtime]
+max_concurrency = 2                  # 本地 Runtime 并发槽
+max_queue_size = 100                 # 排队上限；0 表示只接受空闲槽任务
+# default_timeout_seconds = 3600     # 未在 TaskBudget 中指定 deadline 时使用
+retry_attempts = 1                    # 默认不重试
+retry_backoff_seconds = 0             # 指数退避基数
+retry_on_failure = false
+retry_on_timeout = false
+
 [sandbox]
-backend = "auto"                     # macOS seatbelt / Linux bubblewrap / 其他平台 static
+backend = "auto"                     # auto/static/seatbelt/bubblewrap/container
 network = false                      # 默认禁止子进程联网；CLI --sandbox-network 可开启
 user_install = true                  # 允许用户级全局安装（~/.local/bin 等）
 install_network = true               # 仅安装类命令可绕过 network=false
 user_install_paths = [".hermes"]     # 可选的额外用户安装目录，必须位于 HOME 下
+# allowed_domains = ["docs.example.com"]  # network=true 时的显式域名 allowlist
+# container_image = "python:3.12-slim"
+
+[sandbox.resources]                   # 默认已在生产 composition 中启用
+cpu_seconds = 3600
+memory_mb = 4096
+storage_mb = 10240                   # RLIMIT_FSIZE / 容器 tmpfs+fsize
+process_limit = 512                  # RLIMIT_NPROC / 容器 pids-limit
 
 [daemon]                             # 持久化后台 Job / 子代理
 enabled = "auto"                     # off / auto / on；默认不存在时 off

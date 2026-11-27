@@ -33,10 +33,15 @@ from krelcode.contracts.governance import ControlPlanePort
 from krelcode.contracts.runtime import (
     HarnessTurnControlPort,
     RuntimeCheckpointRef,
+    HarnessReleaseIdentity,
+    RuntimeIdentity,
     RuntimeSnapshot,
     RuntimeResourceRegistryPort,
     RuntimeStateRef,
     RuntimeTaskRuntimePort,
+    RuntimeContinuationPort,
+    RuntimeRetryPolicy,
+    RuntimeSandboxBinding,
     RuntimeTaskState,
 )
 from krelcode.agent.turn.loop import AgentLoop
@@ -82,6 +87,11 @@ class HarnessRuntimeFacade:
         task_runtime: Optional[RuntimeTaskRuntimePort] = None,
         resource_registry: Optional[RuntimeResourceRegistryPort] = None,
         strict_application_request: bool = False,
+        runtime_identity: Optional[RuntimeIdentity] = None,
+        harness_release: Optional[HarnessReleaseIdentity] = None,
+        retry_policy: Optional[RuntimeRetryPolicy] = None,
+        sandbox_binding: Optional[RuntimeSandboxBinding] = None,
+        continuation: Optional[RuntimeContinuationPort] = None,
     ) -> None:
         self._turn = as_turn_control(loop)
         self.subagents = subagents
@@ -104,6 +114,11 @@ class HarnessRuntimeFacade:
             self._turn,
             task_runtime=task_runtime,
             require_application_request=strict_application_request,
+            runtime_identity=runtime_identity,
+            harness_release=harness_release,
+            retry_policy=retry_policy,
+            sandbox_binding=sandbox_binding,
+            continuation=continuation,
         )
         self._turn.set_acceptance_evaluator(acceptance_evaluator)
         self._turn.set_control_plane(control_plane)
@@ -201,6 +216,12 @@ class HarnessRuntimeFacade:
         """绑定持久会话 id；每轮由 AgentLoop 生成新的 turn snapshot。"""
         self._session_id = session_id or ""
         self._turn.bind_session(session_id)
+
+    def set_continuation(
+        self,
+        continuation: Optional[RuntimeContinuationPort],
+    ) -> None:
+        self.query_engine.continuation = continuation
 
     def _record_checkpoint_event(self, event: AgentEvent) -> None:
         """Project Harness checkpoint events into physical task state."""

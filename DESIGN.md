@@ -2039,7 +2039,12 @@ HarnessRuntimeFacade
         -> RuntimeTaskState / RuntimeStateRef / RuntimeLease
 ```
 
-- `LocalTaskRuntime` 负责 asyncio task、并发互斥、lease、取消和终态。
+- `LocalTaskRuntime` 负责有界队列、并发槽、lease、deadline、timeout、retry、
+  pause/resume、取消和终态；并发任务由 semaphore 控制，而非拒绝第二个任务。
+- `RuntimeTask` 绑定 `RuntimeIdentity`（principal/tenant/org/auth）、
+  `HarnessReleaseIdentity`（runtime/prompt/policy identity）、`TaskBudget`、
+  `RuntimeRetryPolicy` 和 `RuntimeSandboxBinding`。这些字段进入持久化与恢复，
+  不能由执行中的 Tool 临时替换。
 - `QueryEngine` 只把 `RuntimeTaskHandle` 适配为有序 `QueryEvent`，不再自行启动
   `AgentLoop.run_turn()`。
 - `ContextCheckpointCreated` 和 `CompactCheckpointCreated` 会投影为
@@ -2056,12 +2061,40 @@ HarnessRuntimeFacade
 - 生产 composition 注入 `LocalTaskRuntime` 并开启严格 `ApplicationRequest` 校验；
   生产源码不再访问 `runtime.loop`；`AgentRuntime.loop` 只作为公开兼容视图存在。
 
+### Runtime 与 Sandbox 的物理边界
+
+Runtime 将外部 ApplicationRequest 变成固定资产的 RuntimeTask；Sandbox 只约束该执行环境的
+技术可达范围，不负责业务授权或结果验收：
+
+```text
+ApplicationRequest
+  -> RuntimeTask(identity, harness_release, budget, deadline, retry, sandbox)
+    -> LocalTaskRuntime(queue/concurrency/timeout/pause/recovery)
+      -> GovernanceDecision(tool permission, approval, policy)
+        -> ExecutionRuntime
+          -> ExecutionSandbox(fs/process/network/resources)
+            -> ToolResult
+              -> AcceptanceEvaluator
+```
+
+- `RuntimeSandboxBinding` 与 `ToolContext.sandbox` 在执行前做 backend/resource 一致性校验；
+  Runtime 不会静默忽略任务绑定的 Sandbox。
+- `SandboxResourceLimits` 支持 CPU seconds、memory MB、storage MB 和 process limit；
+  POSIX 通过 `RLIMIT_CPU/AS/FSIZE/NPROC`，container backend 使用
+  `--memory/--pids-limit/--ulimit/--tmpfs`。
+- `backend=container` 支持 Docker/Podman/nerdctl，使用 `--cap-drop ALL`、
+  `no-new-privileges`、默认 `--network none`、workspace bind 和用户 uid/gid。
+  Windows 可显式使用 container backend 获得比 static 更强的隔离。
+- `allowed_domains` 提供命令 URL 显式 allowlist；网络关闭仍是默认 fail-closed 策略。
+- `SandboxPolicy` 公开名保留兼容，但实现类型改为 `ToolPermissionPolicy`：
+  它回答“动作是否获授权”，`ExecutionSandbox` 才回答“动作技术上能到达哪里”。
+
 ## REPL 前台协调、审批与事件背压（Step 71）
 
 交互层不再让安全策略直接 `input()`，也不让 QueryEngine 使用无界队列：
 
 ```
-SandboxPolicy ──async request──> ApprovalBroker ──request queue──> REPL 前台
+ToolPermissionPolicy ──async request──> ApprovalBroker ──request queue──> REPL 前台
        ▲                               │                               │
        └──────── yes / no / always ────┴────────── y / n / a ──────────┘
 

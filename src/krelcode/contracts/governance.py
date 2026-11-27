@@ -71,6 +71,30 @@ class AuditCorrelation:
 
 
 @dataclass(frozen=True)
+class SandboxResourceLimits:
+    """Kernel/container resource ceilings for process-capable tools."""
+
+    cpu_seconds: Optional[int] = None
+    memory_mb: Optional[int] = None
+    storage_mb: Optional[int] = None
+    process_limit: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        for name in ("cpu_seconds", "memory_mb", "storage_mb", "process_limit"):
+            value = getattr(self, name)
+            object.__setattr__(
+                self, name, max(1, int(value)) if value is not None else None)
+
+    def as_dict(self) -> dict[str, Optional[int]]:
+        return {
+            "cpu_seconds": self.cpu_seconds,
+            "memory_mb": self.memory_mb,
+            "storage_mb": self.storage_mb,
+            "process_limit": self.process_limit,
+        }
+
+
+@dataclass(frozen=True)
 class SandboxProfile:
     """Effective Sandbox controls consumed by process-capable tools."""
 
@@ -80,6 +104,8 @@ class SandboxProfile:
     network: bool = False
     permission_profile: str = "auto"
     write_scope: str = "workspace"
+    resource_limits: SandboxResourceLimits = field(
+        default_factory=SandboxResourceLimits)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", str(self.name or "workspace").strip())
@@ -94,6 +120,8 @@ class SandboxProfile:
         )
         object.__setattr__(
             self, "write_scope", str(self.write_scope or "workspace").strip())
+        if not isinstance(self.resource_limits, SandboxResourceLimits):
+            raise TypeError("resource_limits 必须是 SandboxResourceLimits")
 
 
 @dataclass(frozen=True)
@@ -192,6 +220,7 @@ class SecurityDecision:
                 "network": self.sandbox_profile.network,
                 "permission_profile": self.sandbox_profile.permission_profile,
                 "write_scope": self.sandbox_profile.write_scope,
+                "resource_limits": self.sandbox_profile.resource_limits.as_dict(),
             },
             "trace_id": self.trace_id,
             "evidence": dict(self.evidence),
@@ -334,6 +363,7 @@ class GovernanceDecision:
                 "network": self.sandbox_profile.network,
                 "permission_profile": self.sandbox_profile.permission_profile,
                 "write_scope": self.sandbox_profile.write_scope,
+                "resource_limits": self.sandbox_profile.resource_limits.as_dict(),
             },
             "plugin": {
                 "name": self.plugin_trust.name,
@@ -412,6 +442,7 @@ __all__ = [
     "PolicyVersion",
     "PromptReleaseIdentity",
     "SandboxProfile",
+    "SandboxResourceLimits",
     "SecurityDecision",
     "SecurityDecisionValue",
 ]

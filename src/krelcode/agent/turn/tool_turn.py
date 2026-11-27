@@ -43,6 +43,7 @@ from krelcode.contracts.governance import (
     PluginTrustContext,
     PromptReleaseIdentity,
     SandboxProfile,
+    SandboxResourceLimits,
     SecurityDecision,
     SecurityDecisionValue,
 )
@@ -626,6 +627,7 @@ def _governance_request(
     release_hash = str(getattr(resolution, "release_hash", "") or "")
     permission_profile = str(
         tool_call.arguments.get("sandbox_permission") or "auto")
+    sandbox_limits = getattr(sandbox, "resource_limits", None)
     return GovernanceRequest(
         identity=context.principal,
         enterprise_policy=context.enterprise_policy,
@@ -641,6 +643,12 @@ def _governance_request(
             enabled=context.sandbox_enabled,
             network=bool(getattr(sandbox, "network", False)),
             permission_profile=permission_profile,
+            resource_limits=SandboxResourceLimits(
+                cpu_seconds=getattr(sandbox_limits, "cpu_seconds", None),
+                memory_mb=getattr(sandbox_limits, "memory_mb", None),
+                storage_mb=getattr(sandbox_limits, "storage_mb", None),
+                process_limit=getattr(sandbox_limits, "process_limit", None),
+            ),
         ),
         plugin_trust=PluginTrustContext(
             name=plugin_name,

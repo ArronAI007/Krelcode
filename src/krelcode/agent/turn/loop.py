@@ -73,6 +73,7 @@ from krelcode.agent.turn.runtime_ports import (
     ContextTurnHostPort,
     ModelTurnHostPort,
     ToolTurnHostPort,
+    effective_turn_limits,
 )
 from krelcode.agent.turn.runtime_state import AgentRuntimeState, RuntimeStateHost
 from krelcode.agent.turn.runtime_composition import build_agent_services
@@ -425,8 +426,8 @@ class AgentLoop(RuntimeStateHost):
         # ``previous_context_snapshot`` so /context cache can compare stable
         # prefixes across turn boundaries as well as across tool steps.
         self.history.append(Message.user(user_input, images=images or None))
-        self._failure_counts = {}
-        self._token_total = 0
+        self._failure_counts, self._token_total = {}, 0
+        max_steps, token_budget = effective_turn_limits(self.application_request, self.max_steps, self.token_budget)
         self._turn_intent = infer_turn_intent(
             self.services.core.tool_context.workspace_root, user_input)
         self._turn_workflow = select_task_workflow(
@@ -454,13 +455,13 @@ class AgentLoop(RuntimeStateHost):
         )
 
         try:
-            for step in range(1, self.max_steps + 1):
+            for step in range(1, max_steps + 1):
                 if self.step_gate is not None:
                     await self.step_gate()
                 await self._inject_steering()
-                if self.token_budget is not None and self._token_total > self.token_budget:
+                if token_budget is not None and self._token_total > token_budget:
                     text = (f"[krelcode] token 预算耗尽（已用 {self._token_total} > "
-                            f"预算 {self.token_budget}），中止本轮。")
+                            f"预算 {token_budget}），中止本轮。")
                     self.services.context.working_context.record_error(
                         text, source="budget")
                     self.history.append(Message.assistant(text))
@@ -498,7 +499,7 @@ class AgentLoop(RuntimeStateHost):
                 turn_id=self._current_turn_id))
             raise
 
-        text = max_steps_reached_text(self.max_steps)
+        text = max_steps_reached_text(max_steps)
         self.services.context.working_context.record_error(
             text, source="max_steps")
         self.history.append(Message.assistant(text))

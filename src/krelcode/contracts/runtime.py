@@ -25,7 +25,7 @@ from typing import (
 
 from ..core.events import EventBus
 from ..core.messages import ImageRef, SteeringInput
-from .application import ApplicationRequest
+from .application import ApplicationRequest, TaskBudget
 
 RUNTIME_RELEASE_SCHEMA_VERSION = 1
 
@@ -68,10 +68,13 @@ class RuntimeTaskStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
     WAITING = "waiting"
+    PAUSED = "paused"
+    RETRYING = "retrying"
     CANCELLING = "cancelling"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    TIMED_OUT = "timed_out"
     INTERRUPTED = "interrupted"
 
     @property
@@ -80,8 +83,120 @@ class RuntimeTaskStatus(str, Enum):
             RuntimeTaskStatus.COMPLETED,
             RuntimeTaskStatus.FAILED,
             RuntimeTaskStatus.CANCELLED,
+            RuntimeTaskStatus.TIMED_OUT,
             RuntimeTaskStatus.INTERRUPTED,
         }
+
+
+@dataclass(frozen=True)
+class RuntimeIdentity:
+    """Task-scoped identity and tenant binding."""
+
+    principal_id: str = "local"
+    tenant_id: str = "local"
+    organization_id: str = ""
+    auth_method: str = "local"
+    scopes: tuple[str, ...] = ()
+    metadata: Mapping[str, object] = dataclass_field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for name in (
+            "principal_id", "tenant_id", "organization_id", "auth_method"):
+            object.__setattr__(
+                self, name, str(getattr(self, name) or "").strip())
+        object.__setattr__(
+            self,
+            "scopes",
+            tuple(dict.fromkeys(str(item) for item in self.scopes if str(item))),
+        )
+        object.__setattr__(
+            self, "metadata", MappingProxyType(dict(self.metadata)))
+
+@dataclass(frozen=True)
+class HarnessReleaseIdentity:
+    """Harness/policy artifacts pinned for one task."""
+
+    release_id: str = ""
+    release_hash: str = ""
+    prompt_release_id: str = ""
+    prompt_release_hash: str = ""
+    agent_definition_id: str = ""
+    policy_version: str = ""
+    metadata: Mapping[str, object] = dataclass_field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for name in (
+            "release_id", "release_hash", "prompt_release_id",
+            "prompt_release_hash", "agent_definition_id", "policy_version",
+        ):
+            object.__setattr__(
+                self, name, str(getattr(self, name) or "").strip())
+        object.__setattr__(
+            self, "metadata", MappingProxyType(dict(self.metadata)))
+
+
+@dataclass(frozen=True)
+class RuntimeRetryPolicy:
+    """Bounded retry behavior for one task."""
+
+    max_attempts: int = 1
+    backoff_seconds: float = 0.0
+    max_backoff_seconds: float = 30.0
+    retry_on_failure: bool = False
+    retry_on_timeout: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "max_attempts", max(1, int(self.max_attempts)))
+        object.__setattr__(
+            self, "backoff_seconds", max(0.0, float(self.backoff_seconds)))
+        object.__setattr__(
+            self,
+            "max_backoff_seconds",
+            max(self.backoff_seconds, float(self.max_backoff_seconds)),
+        )
+
+    def delay_for(self, attempt: int) -> float:
+        if self.backoff_seconds <= 0:
+            return 0.0
+        return float(min(
+            self.max_backoff_seconds,
+            self.backoff_seconds * (2 ** max(0, attempt - 1)),
+        ))
+
+
+@dataclass(frozen=True)
+class RuntimeSandboxBinding:
+    """Immutable Sandbox/resource envelope selected for one task."""
+
+    profile: str = "workspace"
+    backend: str = "auto"
+    enabled: bool = True
+    network: bool = False
+    permission_profile: str = "workspace"
+    write_scope: str = "workspace"
+    isolation_level: str = "os"
+    cpu_seconds: Optional[int] = None
+    memory_mb: Optional[int] = None
+    storage_mb: Optional[int] = None
+    process_limit: Optional[int] = None
+    metadata: Mapping[str, object] = dataclass_field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for name in (
+            "profile", "backend", "permission_profile", "write_scope",
+            "isolation_level",
+        ):
+            object.__setattr__(
+                self, name, str(getattr(self, name) or "").strip())
+        for name in (
+            "cpu_seconds", "memory_mb", "storage_mb", "process_limit"):
+            value = getattr(self, name)
+            object.__setattr__(
+                self, name, max(1, int(value)) if value is not None else None)
+        object.__setattr__(self, "enabled", bool(self.enabled))
+        object.__setattr__(self, "network", bool(self.network))
+        object.__setattr__(
+            self, "metadata", MappingProxyType(dict(self.metadata)))
 
 
 @dataclass(frozen=True)
@@ -126,6 +241,11 @@ class RuntimeTaskState:
     checkpoint: Optional[RuntimeCheckpointRef] = None
     sequence: int = 0
     error: str = ""
+    attempts: int = 0
+    deadline_at: Optional[float] = None
+    started_at: Optional[float] = None
+    paused_at: Optional[float] = None
+    resume_from_checkpoint_id: str = ""
     updated_at: float = 0.0
 
     def __post_init__(self) -> None:
@@ -154,6 +274,15 @@ class RuntimeTask:
     images: tuple[ImageRef, ...] = ()
     tool_allowlist: Optional[tuple[str, ...]] = None
     reminder_ids: tuple[str, ...] = ()
+    identity: RuntimeIdentity = dataclass_field(default_factory=RuntimeIdentity)
+    harness_release: HarnessReleaseIdentity = dataclass_field(
+        default_factory=HarnessReleaseIdentity)
+    retry_policy: RuntimeRetryPolicy = dataclass_field(
+        default_factory=RuntimeRetryPolicy)
+    sandbox: RuntimeSandboxBinding = dataclass_field(
+        default_factory=RuntimeSandboxBinding)
+    deadline_at: Optional[float] = None
+    resume_from: Optional[RuntimeCheckpointRef] = None
     metadata: Mapping[str, object] = dataclass_field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -166,7 +295,16 @@ class RuntimeTask:
         object.__setattr__(
             self, "reminder_ids", tuple(self.reminder_ids or ()))
         object.__setattr__(
+            self,
+            "deadline_at",
+            float(self.deadline_at) if self.deadline_at is not None else None,
+        )
+        object.__setattr__(
             self, "metadata", MappingProxyType(dict(self.metadata)))
+
+    @property
+    def budget(self) -> TaskBudget:
+        return self.application.budget
 
 
 class RuntimeTaskHandle(Protocol):
@@ -188,6 +326,10 @@ class RuntimeTaskHandle(Protocol):
 
     async def cancel(self) -> None: ...
 
+    async def pause(self) -> bool: ...
+
+    async def resume(self) -> bool: ...
+
 
 class RuntimeTaskExecutorPort(Protocol):
     """Harness operation executed by a production runtime."""
@@ -205,6 +347,10 @@ class RuntimeTaskRuntimePort(Protocol):
     ) -> RuntimeTaskHandle: ...
 
     async def cancel(self, task_id: str) -> bool: ...
+
+    async def pause(self, task_id: str) -> bool: ...
+
+    async def resume(self, task_id: str) -> bool: ...
 
     def inspect(self, task_id: str) -> RuntimeTaskState: ...
 
@@ -279,6 +425,13 @@ class HarnessTurnControlPort(Protocol):
 
     def bind_session(self, session_id: Optional[str]) -> None: ...
 
+    def bind_runtime_identity(self, identity: RuntimeIdentity) -> None: ...
+
+    def validate_harness_release(
+        self,
+        release: HarnessReleaseIdentity,
+    ) -> None: ...
+
     def set_acceptance_evaluator(
         self,
         evaluator: object | None,
@@ -292,6 +445,11 @@ class HarnessTurnControlPort(Protocol):
     def set_runtime_snapshot_provider(
         self,
         provider: Optional[Callable[[RuntimeSnapshot], RuntimeSnapshot]],
+    ) -> None: ...
+
+    def validate_sandbox_binding(
+        self,
+        binding: RuntimeSandboxBinding,
     ) -> None: ...
 
     async def run_turn(
@@ -493,6 +651,7 @@ def _stable_hash(value: object) -> str:
 
 __all__ = [
     "ArtifactIdentity",
+    "HarnessReleaseIdentity",
     "HarnessTurnControlPort",
     "PermissionMode",
     "RunMode",
@@ -501,8 +660,11 @@ __all__ = [
     "RuntimeContinuationPort",
     "RuntimeContinuationResult",
     "RuntimeLease",
+    "RuntimeIdentity",
+    "RuntimeRetryPolicy",
     "RuntimeResourcePort",
     "RuntimeResourceRegistryPort",
+    "RuntimeSandboxBinding",
     "RuntimeReleaseManifest",
     "RuntimeSnapshot",
     "RuntimeStateRef",

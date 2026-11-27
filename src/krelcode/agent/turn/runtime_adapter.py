@@ -12,8 +12,11 @@ from krelcode.contracts.application import ApplicationRequest
 from krelcode.contracts.governance import ControlPlanePort
 from krelcode.contracts.runtime import (
     HarnessTurnControlPort,
+    HarnessReleaseIdentity,
     RuntimeResourcePort,
     RuntimeResourceRegistryPort,
+    RuntimeIdentity,
+    RuntimeSandboxBinding,
     RuntimeSnapshot,
 )
 from krelcode.core.events import EventBus
@@ -55,12 +58,38 @@ class AgentLoopTurnAdapter(HarnessTurnControlPort):
         )
         self._loop.services.core.tool_context.runtime = runtime
 
+    def bind_runtime_identity(self, identity: RuntimeIdentity) -> None:
+        principal = _RuntimePrincipal(identity)
+        self._loop.services.core.tool_context.principal = principal
+
     def set_acceptance_evaluator(
         self,
         evaluator: object | None,
     ) -> None:
         self._loop.acceptance_evaluator = cast(
             Optional[AcceptanceEvaluatorPort], evaluator)
+
+    def validate_harness_release(
+        self,
+        release: HarnessReleaseIdentity,
+    ) -> None:
+        resolution = self._loop.prompt_profile_resolution
+        actual_id = str(getattr(resolution, "release_id", "") or "")
+        actual_hash = str(getattr(resolution, "release_hash", "") or "")
+        if (
+            release.prompt_release_id
+            and actual_id
+            and release.prompt_release_id != actual_id
+        ):
+            raise RuntimeError(
+                "Runtime Prompt release 与当前 Harness 不一致")
+        if (
+            release.prompt_release_hash
+            and actual_hash
+            and release.prompt_release_hash != actual_hash
+        ):
+            raise RuntimeError(
+                "Runtime Prompt release hash 与当前 Harness 不一致")
 
     def set_control_plane(self, control_plane: object | None) -> None:
         resolved = cast(Optional[ControlPlanePort], control_plane)
@@ -72,6 +101,29 @@ class AgentLoopTurnAdapter(HarnessTurnControlPort):
         provider: Optional[Callable[[RuntimeSnapshot], RuntimeSnapshot]],
     ) -> None:
         self._loop.runtime_snapshot_provider = provider
+
+    def validate_sandbox_binding(self, binding: RuntimeSandboxBinding) -> None:
+        sandbox = self._loop.services.core.tool_context.sandbox
+        enabled = self._loop.services.core.tool_context.sandbox_enabled
+        if binding.enabled and sandbox is None and enabled:
+            raise RuntimeError("Runtime 要求 Sandbox，但 Harness 未提供执行沙箱")
+        backend = str(getattr(sandbox, "backend", "static"))
+        if (
+            binding.backend not in {"", "auto"}
+            and binding.backend != backend
+        ):
+            raise RuntimeError(
+                "Runtime Sandbox binding 与当前执行环境不一致: "
+                f"{binding.backend} != {backend}")
+        limits = getattr(sandbox, "resource_limits", None)
+        for name in (
+            "cpu_seconds", "memory_mb", "storage_mb", "process_limit"):
+            expected = getattr(binding, name)
+            actual = getattr(limits, name, None)
+            if expected is not None and expected != actual:
+                raise RuntimeError(
+                    f"Runtime Sandbox {name} 与执行环境不一致: "
+                    f"{expected} != {actual}")
 
     async def run_turn(
         self,
@@ -175,6 +227,18 @@ class AsyncCloseResource(RuntimeResourcePort):
             return
         self._closed = True
         await self._closer()
+
+
+class _RuntimePrincipal:
+    """PrincipalPort view backed by a task-scoped RuntimeIdentity."""
+
+    def __init__(self, identity: RuntimeIdentity) -> None:
+        self.subject = identity.principal_id
+        self.issuer = identity.organization_id or identity.tenant_id
+        self.display_name = identity.principal_id
+        self.email_hash = ""
+        self.expires_at = 0.0
+        self.auth_method = identity.auth_method
 
 
 def as_turn_control(

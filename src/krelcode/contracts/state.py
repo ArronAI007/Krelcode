@@ -103,6 +103,11 @@ def _task_state_to_dict(state: RuntimeTaskState) -> dict[str, object]:
         ),
         "sequence": state.sequence,
         "error": state.error,
+        "attempts": state.attempts,
+        "deadline_at": state.deadline_at,
+        "started_at": state.started_at,
+        "paused_at": state.paused_at,
+        "resume_from_checkpoint_id": state.resume_from_checkpoint_id,
         "updated_at": state.updated_at,
     }
 

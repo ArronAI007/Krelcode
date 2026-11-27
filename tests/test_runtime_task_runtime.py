@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 
 import pytest
@@ -10,12 +11,17 @@ import pytest
 from krelcode.contracts.application import ApplicationRequestFactory
 from krelcode.contracts.runtime import (
     RuntimeCheckpointRef,
+    HarnessReleaseIdentity,
+    RuntimeIdentity,
+    RuntimeRetryPolicy,
+    RuntimeSandboxBinding,
     RuntimeTask,
     RuntimeTaskExecutorPort,
     RuntimeTaskStatus,
 )
 from krelcode.core.redact import SecretRedactor
 from krelcode.runtime.execution import LocalTaskRuntime
+from krelcode.runtime.execution.task_runtime import RuntimeTaskTimeout
 
 
 def make_task(turn_id: str = "turn-test") -> RuntimeTask:
@@ -92,18 +98,21 @@ def test_local_task_runtime_cancellation_and_checkpoint_ref() -> None:
     asyncio.run(scenario())
 
 
-def test_local_task_runtime_rejects_concurrent_tasks() -> None:
+def test_local_task_runtime_queues_above_concurrency_limit() -> None:
     class SlowExecutor(RuntimeTaskExecutorPort):
         async def execute(self, task: RuntimeTask) -> str:
             await asyncio.sleep(30)
             return task.message
 
     async def scenario() -> None:
-        runtime = LocalTaskRuntime()
+        runtime = LocalTaskRuntime(max_concurrency=1, max_queue_size=2)
         first = runtime.submit(make_task("turn-1"), SlowExecutor())
-        with pytest.raises(RuntimeError, match="已有任务正在运行"):
-            runtime.submit(make_task("turn-2"), SlowExecutor())
+        second = runtime.submit(make_task("turn-2"), SlowExecutor())
+        assert runtime.inspect(first.task_id).status in {
+            RuntimeTaskStatus.QUEUED, RuntimeTaskStatus.RUNNING}
+        assert runtime.inspect(second.task_id).status is RuntimeTaskStatus.QUEUED
         await runtime.cancel(first.task_id)
+        await runtime.cancel(second.task_id)
 
     asyncio.run(scenario())
 
@@ -174,3 +183,118 @@ def test_local_task_runtime_redacts_persisted_task_spec(tmp_path: Path) -> None:
     persisted = state_path.read_text(encoding="utf-8")
     assert "sk-abcdefghijklmnop" not in persisted
     assert "***" in persisted
+
+
+def test_runtime_task_persists_identity_release_and_sandbox_binding(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "runtime-state.json"
+
+    class Executor(RuntimeTaskExecutorPort):
+        async def execute(self, task: RuntimeTask) -> str:
+            return "ok"
+
+    task = RuntimeTask(
+        turn_id="turn-bind",
+        message="bound",
+        application=ApplicationRequestFactory.from_input_source(
+            "headless", goal="bound"),
+        identity=RuntimeIdentity(
+            principal_id="alice",
+            tenant_id="tenant-a",
+            organization_id="org-a",
+        ),
+        harness_release=HarnessReleaseIdentity(
+            release_id="runtime-1",
+            release_hash="sha256:release",
+        ),
+        sandbox=RuntimeSandboxBinding(
+            backend="seatbelt",
+            isolation_level="os",
+            memory_mb=512,
+        ),
+    )
+
+    async def scenario() -> None:
+        runtime = LocalTaskRuntime(state_path=state_path)
+        handle = runtime.submit(task, Executor())
+        assert await handle.wait() == "ok"
+
+    asyncio.run(scenario())
+    restored = LocalTaskRuntime(state_path=state_path)
+    persisted = restored.task("task-1")
+    assert persisted.identity.tenant_id == "tenant-a"
+    assert persisted.harness_release.release_id == "runtime-1"
+    assert persisted.sandbox.memory_mb == 512
+
+
+def test_local_task_runtime_timeout_and_retry() -> None:
+    class FlakyExecutor(RuntimeTaskExecutorPort):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def execute(self, task: RuntimeTask) -> str:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("transient")
+            return "retried"
+
+    async def scenario() -> None:
+        runtime = LocalTaskRuntime()
+        retry_task = RuntimeTask(
+            turn_id="turn-retry",
+            message="retry",
+            application=ApplicationRequestFactory.from_input_source(
+                "headless", goal="retry"),
+            retry_policy=RuntimeRetryPolicy(
+                max_attempts=2,
+                retry_on_failure=True,
+            ),
+        )
+        handle = runtime.submit(retry_task, FlakyExecutor())
+        assert await handle.wait() == "retried"
+        assert runtime.inspect(handle.task_id).attempts == 2
+
+        timeout_task = RuntimeTask(
+            turn_id="turn-timeout",
+            message="timeout",
+            application=ApplicationRequestFactory.from_input_source(
+                "headless", goal="timeout"),
+            deadline_at=time.time() + 0.05,
+        )
+
+        class SlowExecutor(RuntimeTaskExecutorPort):
+            async def execute(self, task: RuntimeTask) -> str:
+                await asyncio.sleep(1)
+                return "late"
+
+        timed = runtime.submit(timeout_task, SlowExecutor())
+        with pytest.raises(RuntimeTaskTimeout):
+            await timed.wait()
+        assert runtime.inspect(timed.task_id).status is RuntimeTaskStatus.TIMED_OUT
+
+    asyncio.run(scenario())
+
+
+def test_local_task_runtime_pause_and_resume() -> None:
+    class PausableExecutor(RuntimeTaskExecutorPort):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def execute(self, task: RuntimeTask) -> str:
+            self.calls += 1
+            if self.calls == 1:
+                await asyncio.sleep(30)
+            return "resumed"
+
+    async def scenario() -> None:
+        runtime = LocalTaskRuntime()
+        handle = runtime.submit(make_task("turn-pause"), PausableExecutor())
+        await asyncio.sleep(0.02)
+        assert await runtime.pause(handle.task_id) is True
+        assert runtime.inspect(handle.task_id).status is RuntimeTaskStatus.PAUSED
+        assert await runtime.resume(handle.task_id) is True
+        assert await handle.wait() == "resumed"
+        assert runtime.inspect(handle.task_id).status is RuntimeTaskStatus.COMPLETED
+
+    asyncio.run(scenario())

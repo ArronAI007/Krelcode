@@ -10,13 +10,16 @@ import pytest
 
 from krelcode.agent.loop import AgentLoop
 from krelcode.agent.turn.runtime import AgentRuntime
+from krelcode.agent.turn.runtime_ports import effective_turn_limits
 from krelcode.agent.context.context_source import ContextRequest
 from krelcode.agent.query import QueryEngine
 from krelcode.contracts.application import (
     ApplicationRequestFactory,
+    TaskBudget,
     TaskShape,
     TriggerType,
 )
+from krelcode.contracts.runtime import RuntimeIdentity
 from krelcode.core.events import RunStarted
 from krelcode.daemon.server_agents import _daemon_application_request
 from krelcode.llm.providers.mock import MockProvider
@@ -97,6 +100,40 @@ def test_session_prompt_builds_repl_contract_by_default() -> None:
     assert prompt.application_request is not None
     assert prompt.application_request.trigger is TriggerType.REPL
     assert prompt.application_request.goal == "run tests"
+
+
+def test_task_budget_overrides_turn_limits() -> None:
+    request = ApplicationRequestFactory.from_input_source(
+        "headless",
+        goal="bounded",
+        budget=TaskBudget(max_steps=3, max_tokens=120),
+    )
+
+    assert effective_turn_limits(request, 64, None) == (3, 120)
+
+
+def test_runtime_identity_is_bound_before_tool_execution(tmp_path: Path) -> None:
+    loop = make_loop(tmp_path)
+    runtime = AgentRuntime(
+        loop,
+        runtime_identity=RuntimeIdentity(
+            principal_id="alice",
+            tenant_id="tenant-a",
+            organization_id="org-a",
+            auth_method="oidc",
+        ),
+    )
+    request = ApplicationRequestFactory.from_input_source(
+        "headless",
+        goal="identity",
+    )
+
+    asyncio.run(runtime.run_once("identity", application_request=request))
+
+    principal = loop.tool_context.principal
+    assert principal is not None
+    assert principal.subject == "alice"
+    assert principal.auth_method == "oidc"
 
 
 def test_stream_json_parses_explicit_application_contract() -> None:

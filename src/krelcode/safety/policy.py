@@ -89,8 +89,8 @@ JOB_CONTROL_TOOLS = {"job_kill"}
 Approver = Callable[[ToolCall, str], Union[str, Awaitable[str]]]
 
 
-class SandboxPolicy:
-    """规则分级 + 持久化 allow 规则 + 交互审批（fail-closed）。"""
+class ToolPermissionPolicy:
+    """Tool authorization/approval policy; execution isolation lives elsewhere."""
 
     def __init__(
         self,
@@ -382,3 +382,8 @@ def classify_protected_path(raw_path: str, workspace_root: Path) -> Optional[str
     if secret_category is not None:
         return f"凭据文件（{secret_category}）"
     return None
+
+
+# Compatibility: this class has always represented authorization/approval,
+# not the execution sandbox itself.
+SandboxPolicy = ToolPermissionPolicy

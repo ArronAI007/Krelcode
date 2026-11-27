@@ -24,6 +24,7 @@ from krelcode.contracts.governance import (
     GovernanceDecision,
     PolicyVersion,
     SandboxProfile,
+    SandboxResourceLimits,
 )
 from krelcode.skills import SkillManager
 from krelcode.skills.tools import RunSkillScriptTool
@@ -137,6 +138,76 @@ def test_network_commands_require_explicit_sandbox_network(tmp_path):
     assert allowed.audit_command("curl https://example.com", tmp_path) is None
     assert allowed.audit_command("git fetch origin", tmp_path) is None
     assert allowed.audit_command("pip install requests", tmp_path) is None
+
+
+def test_sandbox_resource_limits_and_egress_allowlist(tmp_path):
+    sandbox = ExecutionSandbox(
+        tmp_path,
+        backend="static",
+        network=True,
+        allowed_domains=("example.com",),
+        resource_limits=SandboxResourceLimits(
+            cpu_seconds=2,
+            memory_mb=128,
+            storage_mb=1,
+            process_limit=12,
+        ),
+    )
+    assert sandbox.audit_command(
+        "curl https://example.com/docs", tmp_path) is None
+    assert sandbox.audit_command(
+        "curl https://evil.invalid/file", tmp_path)
+    kwargs = sandbox.runtime_policy.process_kwargs(sandbox.process_platform)
+    assert "preexec_fn" in kwargs
+    capabilities = sandbox.capabilities
+    assert capabilities.cpu_limit is True
+    assert capabilities.memory_limit is True
+    assert capabilities.storage_limit is True
+    assert capabilities.process_limit is True
+
+
+def test_sandbox_storage_quota_rejects_oversized_runtime_dir(tmp_path):
+    sandbox = ExecutionSandbox(
+        tmp_path,
+        backend="static",
+        resource_limits=SandboxResourceLimits(storage_mb=1),
+    )
+    runtime = tmp_path / ".krelcode" / "sandbox"
+    runtime.mkdir(parents=True)
+    (runtime / "large.bin").write_bytes(b"x" * (1024 * 1024 + 1))
+    with pytest.raises(SandboxError, match="存储已超过配额"):
+        sandbox.prepare_shell("true", tmp_path)
+
+
+def test_container_backend_argv_applies_resource_limits(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "krelcode.safety.sandbox_runtime.shutil.which",
+        lambda name: "/usr/bin/docker" if name == "docker" else None,
+    )
+    sandbox = ExecutionSandbox(
+        tmp_path,
+        backend="static",
+        network=False,
+        resource_limits=SandboxResourceLimits(
+            cpu_seconds=3,
+            memory_mb=256,
+            storage_mb=2,
+            process_limit=20,
+        ),
+    )
+    argv = sandbox.runtime_policy.container_argv(
+        ["/bin/true"],
+        tmp_path,
+        workspace_root=tmp_path,
+        permission_profile="workspace",
+        network_allowed=False,
+        platform=sandbox.process_platform,
+    )
+    text = " ".join(argv)
+    assert "--network none" in text
+    assert "--memory 256m" in text
+    assert "--pids-limit 20" in text
+    assert "--ulimit cpu=3" in text
 
 
 def test_user_install_profile_allows_only_user_owned_command_locations(tmp_path):

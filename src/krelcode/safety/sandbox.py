@@ -16,8 +16,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, cast
 
+from ..contracts.governance import SandboxResourceLimits
 from .environment import scrub_environment
 from .sandbox_install import inferred_user_install_roots
+from .sandbox_runtime import SandboxRuntimePolicy
 from .sandbox_audit import (
     SYSTEM_READ_ROOTS,
     _inside,
@@ -50,6 +52,15 @@ class SandboxPermissionProfile(str, Enum):
     USER_INSTALL = "user-install"
 
 
+class SandboxIsolationLevel(str, Enum):
+    STATIC = "static"
+    PROCESS = "process"
+    OS = "os"
+    CONTAINER = "container"
+    MICROVM = "microvm"
+    VM = "vm"
+
+
 @dataclass(frozen=True)
 class SandboxedCommand:
     argv: List[str]
@@ -73,6 +84,11 @@ class SandboxCapabilities:
     process_tree_isolation: bool = True
     static_path_audit: bool = True
     user_install: bool = False
+    isolation_level: SandboxIsolationLevel = SandboxIsolationLevel.STATIC
+    cpu_limit: bool = False
+    memory_limit: bool = False
+    storage_limit: bool = False
+    process_limit: bool = False
 
 
 class ExecutionSandbox:
@@ -89,6 +105,9 @@ class ExecutionSandbox:
         allow_user_install: bool = True,
         install_network: bool = True,
         user_install_roots: Iterable[Path] = (),
+        resource_limits: Optional[SandboxResourceLimits] = None,
+        allowed_domains: Iterable[str] = (),
+        container_image: str = "python:3.12-slim",
     ) -> None:
         self.workspace_root = Path(workspace_root).resolve()
         self.network = bool(network)
@@ -97,9 +116,25 @@ class ExecutionSandbox:
         self.install_network = bool(install_network)
         self.user_install_roots = _validated_user_install_roots(
             self.user_home, user_install_roots)
+        self.resource_limits = resource_limits or SandboxResourceLimits()
+        self.allowed_domains = tuple(
+            dict.fromkeys(
+                str(item).strip().lower()
+                for item in allowed_domains
+                if str(item).strip()
+            )
+        )
+        self.container_image = str(container_image or "python:3.12-slim")
+        self.runtime_policy = SandboxRuntimePolicy(
+            self.resource_limits,
+            allowed_domains=self.allowed_domains,
+            container_image=self.container_image,
+        )
         self.process_platform = process_platform or current_process_platform()
         requested = (backend or "auto").strip().lower()
-        if requested not in {"auto", "static", "seatbelt", "bubblewrap"}:
+        if requested not in {
+            "auto", "static", "seatbelt", "bubblewrap", "container",
+        }:
             raise SandboxError(f"未知 sandbox backend: {backend!r}")
         self.requested_backend = requested
         self.backend = _detect_backend(requested)
@@ -115,11 +150,21 @@ class ExecutionSandbox:
             allow_user_install=self.allow_user_install,
             install_network=self.install_network,
             user_install_roots=self.user_install_roots,
+            resource_limits=self.resource_limits,
+            allowed_domains=self.allowed_domains,
+            container_image=self.container_image,
         )
 
     @property
     def capabilities(self) -> SandboxCapabilities:
-        isolated = self.backend in {"seatbelt", "bubblewrap"}
+        isolated = self.backend in {"seatbelt", "bubblewrap", "container"}
+        isolation_level = (
+            SandboxIsolationLevel.CONTAINER
+            if self.backend == "container"
+            else SandboxIsolationLevel.OS
+            if isolated
+            else SandboxIsolationLevel.STATIC
+        )
         return SandboxCapabilities(
             backend=self.backend,
             platform=self.process_platform.system,
@@ -129,6 +174,11 @@ class ExecutionSandbox:
             process_tree_isolation=True,
             static_path_audit=True,
             user_install=self.allow_user_install,
+            isolation_level=isolation_level,
+            cpu_limit=self.resource_limits.cpu_seconds is not None,
+            memory_limit=self.resource_limits.memory_mb is not None,
+            storage_limit=self.resource_limits.storage_mb is not None,
+            process_limit=self.resource_limits.process_limit is not None,
         )
 
     def resolve_permission_profile(
@@ -181,6 +231,13 @@ class ExecutionSandbox:
             if profile is SandboxPermissionProfile.USER_INSTALL
             else ()
         )
+        egress_violation = self.runtime_policy.egress_violation(command)
+        if egress_violation and self._network_allowed(
+            command,
+            profile,
+            explicitly_requested=permission_profile is not None,
+        ):
+            return egress_violation
         return audit_command(
             command,
             Path(cwd),
@@ -225,6 +282,14 @@ class ExecutionSandbox:
         permission_profile: SandboxPermissionProfile | str | None = None,
     ) -> SandboxedCommand:
         profile = self.resolve_permission_profile(command, permission_profile)
+        egress_violation = self.runtime_policy.egress_violation(command)
+        network_allowed = self._network_allowed(
+            command,
+            profile,
+            explicitly_requested=permission_profile is not None,
+        )
+        if egress_violation and network_allowed:
+            raise SandboxError(egress_violation)
         install_roots = (
             self._install_roots_for_command(command)
             if profile is SandboxPermissionProfile.USER_INSTALL
@@ -236,11 +301,7 @@ class ExecutionSandbox:
             extra_read_roots=(),
             permission_profile=profile,
             install_roots=install_roots,
-            network_allowed=self._network_allowed(
-                command,
-                profile,
-                explicitly_requested=permission_profile is not None,
-            ),
+            network_allowed=network_allowed,
         )
 
     def prepare_exec(
@@ -276,7 +337,12 @@ class ExecutionSandbox:
             raise SandboxError(f"cwd 越出 Sandbox 允许范围: {cwd}")
         if install_roots:
             self._ensure_user_install_roots(install_roots)
+        try:
+            self.runtime_policy.ensure_storage(self.workspace_root)
+        except ValueError as exc:
+            raise SandboxError(str(exc)) from exc
         env = self._sandbox_env(cwd, permission_profile, install_roots)
+        process_kwargs = self.runtime_policy.process_kwargs(self.process_platform)
         if self.backend == "seatbelt":
             profile = self._seatbelt_profile(
                 extra_read_roots,
@@ -295,7 +361,7 @@ class ExecutionSandbox:
                 wrapped,
                 env,
                 self.backend,
-                self.process_platform.subprocess_kwargs(),
+                process_kwargs,
                 permission_profile,
             )
         if self.backend == "bubblewrap":
@@ -311,6 +377,23 @@ class ExecutionSandbox:
                 wrapped,
                 env,
                 self.backend,
+                process_kwargs,
+                permission_profile,
+            )
+        if self.backend == "container":
+            wrapped = self.runtime_policy.container_argv(
+                argv,
+                cwd,
+                workspace_root=self.workspace_root,
+                permission_profile=permission_profile,
+                install_roots=install_roots,
+                network_allowed=network_allowed,
+                platform=self.process_platform,
+            )
+            return SandboxedCommand(
+                wrapped,
+                env,
+                self.backend,
                 self.process_platform.subprocess_kwargs(),
                 permission_profile,
             )
@@ -318,7 +401,7 @@ class ExecutionSandbox:
             argv,
             env,
             self.backend,
-            self.process_platform.subprocess_kwargs(),
+            process_kwargs,
             permission_profile,
         )
 
@@ -593,6 +676,16 @@ def _detect_backend(requested: str, platform: Optional[str] = None) -> str:
         if requested == "bubblewrap":
             raise SandboxError(
                 "bubblewrap 不可用：需要 Linux、bwrap 和可用的用户命名空间")
+    if requested == "container":
+        executable = (
+            shutil.which("docker")
+            or shutil.which("podman")
+            or shutil.which("nerdctl")
+        )
+        if executable:
+            return "container"
+        raise SandboxError(
+            "container backend 需要 docker、podman 或 nerdctl")
     return "static"
 
 
@@ -655,6 +748,7 @@ __all__ = [
     "ExecutionSandbox",
     "SandboxCapabilities",
     "SandboxError",
+    "SandboxIsolationLevel",
     "SandboxPermissionProfile",
     "SandboxedCommand",
 ]

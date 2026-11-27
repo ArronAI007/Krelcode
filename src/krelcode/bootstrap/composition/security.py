@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, cast
 
 from krelcode.config import load_managed_config
+from krelcode.contracts.governance import SandboxResourceLimits
 from krelcode.contracts.tool import PermissionMode, RunMode
 from krelcode.core.events import EventBus
 from krelcode.enterprise.policy import (
@@ -154,6 +155,12 @@ def build_execution_sandbox(
     )
     if isinstance(raw_install_paths, str):
         raw_install_paths = [raw_install_paths]
+    resources = section.get("resources") or {}
+    if not isinstance(resources, dict):
+        resources = {}
+    allowed_domains = section.get("allowed_domains") or ()
+    if isinstance(allowed_domains, str):
+        allowed_domains = [allowed_domains]
     return ExecutionSandbox(
         workspace_root,
         backend=str(backend),
@@ -161,4 +168,26 @@ def build_execution_sandbox(
         allow_user_install=bool(section.get("user_install", True)),
         install_network=bool(section.get("install_network", True)),
         user_install_roots=tuple(Path(path).expanduser() for path in raw_install_paths),
+        resource_limits=SandboxResourceLimits(
+            cpu_seconds=_optional_positive_int(
+                resources.get("cpu_seconds", 3600)),
+            memory_mb=_optional_positive_int(
+                resources.get("memory_mb", 4096)),
+            storage_mb=_optional_positive_int(
+                resources.get("storage_mb", 10240)),
+            process_limit=_optional_positive_int(
+                resources.get("process_limit", 512)),
+        ),
+        allowed_domains=tuple(str(item) for item in allowed_domains),
+        container_image=str(
+            section.get("container_image") or "python:3.12-slim"),
     )
+
+
+def _optional_positive_int(value: object) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        return max(1, int(str(value)))
+    except (TypeError, ValueError):
+        return None

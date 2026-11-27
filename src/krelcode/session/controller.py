@@ -107,6 +107,7 @@ class SessionController:
             memory_store=self.loop.services.session.memory,
             task_runtime=self.runtime.task_runtime,
         )
+        self.runtime.set_continuation(self.continuation)
         self.session_lifecycle = SessionLifecycle(
             self.loop,
             sessions_dir,

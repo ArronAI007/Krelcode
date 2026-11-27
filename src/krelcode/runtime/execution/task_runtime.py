@@ -1,48 +1,54 @@
 """In-process production runtime for submitted Agent tasks.
 
-The runtime owns physical execution concerns only: task identity, leases,
-asyncio task creation, cancellation, lifecycle state and optional durable
-state. It knows nothing about prompts, tools or session commands.
+The runtime owns physical execution concerns only: identity, task lifecycle,
+leases, bounded concurrency, deadlines, retries, pause/resume, cancellation,
+checkpoint references and optional durable state.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import time
 import uuid
+from dataclasses import replace
 from itertools import count
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Optional
 
-from krelcode.contracts.application import ApplicationRequest
 from krelcode.contracts.runtime import (
     RuntimeCheckpointRef,
     RuntimeLease,
+    RuntimeStateRef,
     RuntimeTask,
     RuntimeTaskExecutorPort,
     RuntimeTaskHandle,
     RuntimeTaskRuntimePort,
-    RuntimeStateRef,
     RuntimeTaskState,
     RuntimeTaskStatus,
 )
-from krelcode.core.messages import ImageRef
 from krelcode.core.redact import SecretRedactor
+from .task_state_store import (
+    RUNTIME_TASK_STATE_VERSION,
+    build_runtime_task_payload,
+    load_runtime_task_records,
+    persist_runtime_task_payload,
+)
 
-RUNTIME_TASK_STATE_VERSION = 1
+
+class RuntimeTaskTimeout(TimeoutError):
+    """Raised when a task exhausts its wall-clock deadline."""
 
 
 class LocalRuntimeTaskHandle:
-    """Control surface for one asyncio-backed task."""
+    """Control surface for one logical task across queued/retry/pause cycles."""
 
     def __init__(
         self,
         runtime: "LocalTaskRuntime",
         task_id: str,
         turn_id: str,
-        task: asyncio.Task[str],
+        task: Optional[asyncio.Task[str]] = None,
     ) -> None:
         self._runtime = runtime
         self._task_id = task_id
@@ -63,22 +69,31 @@ class LocalRuntimeTaskHandle:
 
     @property
     def done(self) -> bool:
-        return self._task.done()
+        return self._runtime.is_done(self._task_id)
 
     @property
-    def task(self) -> asyncio.Task[str]:
-        """Compatibility view for event consumers that wait on asyncio tasks."""
+    def task(self) -> Optional[asyncio.Task[str]]:
+        """Current physical task, absent while queued or paused."""
         return self._task
 
+    def set_task(self, task: Optional[asyncio.Task[str]]) -> None:
+        self._task = task
+
     async def wait(self) -> str:
-        return await self._task
+        return await self._runtime.wait(self._task_id)
 
     async def cancel(self) -> None:
         await self._runtime.cancel(self._task_id)
 
+    async def pause(self) -> bool:
+        return await self._runtime.pause(self._task_id)
+
+    async def resume(self) -> bool:
+        return await self._runtime.resume(self._task_id)
+
 
 class LocalTaskRuntime(RuntimeTaskRuntimePort):
-    """Single-process task runtime with optional durable state."""
+    """Durable, bounded-concurrency in-process runtime."""
 
     def __init__(
         self,
@@ -88,6 +103,9 @@ class LocalTaskRuntime(RuntimeTaskRuntimePort):
         state_path: Optional[Path] = None,
         redactor: Optional[SecretRedactor] = None,
         autoload: bool = True,
+        max_concurrency: int = 2,
+        max_queue_size: int = 100,
+        default_timeout_seconds: Optional[float] = None,
     ) -> None:
         if lease_seconds <= 0:
             raise ValueError("lease_seconds 必须大于 0")
@@ -95,11 +113,19 @@ class LocalTaskRuntime(RuntimeTaskRuntimePort):
         self.owner = owner or f"local:{os.getpid()}:{id(self):x}"
         self.state_path = Path(state_path) if state_path is not None else None
         self.redactor = redactor
+        self.max_concurrency = max(1, int(max_concurrency))
+        self.max_queue_size = max(0, int(max_queue_size))
+        self.default_timeout_seconds = (
+            max(0.001, float(default_timeout_seconds))
+            if default_timeout_seconds is not None else None
+        )
+        self._semaphore = asyncio.Semaphore(self.max_concurrency)
         self._states: dict[str, RuntimeTaskState] = {}
         self._task_specs: dict[str, RuntimeTask] = {}
+        self._executors: dict[str, RuntimeTaskExecutorPort] = {}
         self._tasks: dict[str, asyncio.Task[str]] = {}
+        self._completions: dict[str, asyncio.Future[str]] = {}
         self._handles: dict[str, LocalRuntimeTaskHandle] = {}
-        self._active_task_id = ""
         self._closed = False
         self.last_persist_error = ""
         self.recovered_task_ids: tuple[str, ...] = ()
@@ -109,7 +135,18 @@ class LocalTaskRuntime(RuntimeTaskRuntimePort):
 
     @property
     def active_task_id(self) -> str:
-        return self._active_task_id
+        running = [
+            task_id for task_id, state in self._states.items()
+            if state.status is RuntimeTaskStatus.RUNNING
+        ]
+        return running[0] if running else ""
+
+    @property
+    def active_task_ids(self) -> tuple[str, ...]:
+        return tuple(
+            task_id for task_id, state in self._states.items()
+            if state.status is RuntimeTaskStatus.RUNNING
+        )
 
     def submit(
         self,
@@ -118,49 +155,66 @@ class LocalTaskRuntime(RuntimeTaskRuntimePort):
     ) -> RuntimeTaskHandle:
         if self._closed:
             raise RuntimeError("LocalTaskRuntime 已关闭")
-        if self._active_task_id:
-            active = self._states.get(self._active_task_id)
-            if active is not None and not active.status.terminal:
-                raise RuntimeError("已有任务正在运行")
-            self._active_task_id = ""
-
+        queued = sum(
+            1 for state in self._states.values()
+            if state.status in {
+                RuntimeTaskStatus.QUEUED,
+                RuntimeTaskStatus.RETRYING,
+                RuntimeTaskStatus.RUNNING,
+            }
+        )
+        if queued >= self.max_concurrency + self.max_queue_size:
+            raise RuntimeError("Runtime task queue 已满")
         task_id = f"task-{next(self._counter)}"
         self._task_specs[task_id] = task
-        state = self._new_queued_state(task_id, task.turn_id)
-        self._states[task_id] = state
+        self._executors[task_id] = executor
+        self._completions[task_id] = (
+            asyncio.get_running_loop().create_future())
+        self._states[task_id] = self._new_queued_state(task_id, task)
+        handle = LocalRuntimeTaskHandle(self, task_id, task.turn_id)
+        self._handles[task_id] = handle
         self._persist()
-        return self._launch(task_id, task, executor)
+        self._schedule(handle, task)
+        return handle
 
     async def recover(
         self,
         task_id: str,
         executor: RuntimeTaskExecutorPort,
     ) -> RuntimeTaskHandle:
-        """Re-launch an interrupted task from its persisted specification."""
+        """Resume an interrupted task from its last checkpoint reference."""
         if self._closed:
             raise RuntimeError("LocalTaskRuntime 已关闭")
-        if self._active_task_id:
-            raise RuntimeError("已有任务正在运行")
         task = self._task_specs.get(task_id)
         if task is None:
             raise KeyError(f"未知 runtime task: {task_id}")
         state = self.inspect(task_id)
-        if state.status is not RuntimeTaskStatus.INTERRUPTED:
+        if state.status not in {
+            RuntimeTaskStatus.INTERRUPTED,
+            RuntimeTaskStatus.PAUSED,
+        }:
             raise RuntimeError(
-                f"只有 interrupted task 可恢复，当前为 {state.status.value}")
-        new_state = self._new_queued_state(task_id, state.turn_id)
-        self._states[task_id] = RuntimeTaskState(
-            task_id=new_state.task_id,
-            turn_id=new_state.turn_id,
-            status=new_state.status,
-            lease=new_state.lease,
-            checkpoint=state.checkpoint,
+                f"只有 interrupted/paused task 可恢复，当前为 {state.status.value}")
+        self._executors[task_id] = executor
+        self._reset_completion(task_id)
+        self._states[task_id] = replace(
+            state,
+            status=RuntimeTaskStatus.QUEUED,
+            lease=self._new_lease(task_id),
             sequence=state.sequence + 1,
             error="",
-            updated_at=new_state.updated_at,
+            paused_at=None,
+            updated_at=time.time(),
+            resume_from_checkpoint_id=(
+                state.checkpoint.checkpoint_id if state.checkpoint else ""),
         )
+        handle = self._handles.get(task_id)
+        if handle is None:
+            handle = LocalRuntimeTaskHandle(self, task_id, task.turn_id)
+            self._handles[task_id] = handle
         self._persist()
-        return self._launch(task_id, task, executor)
+        self._schedule(handle, task)
+        return handle
 
     async def recover_latest(
         self,
@@ -175,13 +229,67 @@ class LocalTaskRuntime(RuntimeTaskRuntimePort):
         latest = max(interrupted, key=lambda item: item.updated_at)
         return await self.recover(latest.task_id, executor)
 
-    async def cancel(self, task_id: str) -> bool:
+    async def pause(self, task_id: str) -> bool:
+        state = self.inspect(task_id)
+        if state.status in {
+            RuntimeTaskStatus.PAUSED,
+            RuntimeTaskStatus.CANCELLING,
+        } or state.status.terminal:
+            return False
+        self._transition(
+            task_id,
+            RuntimeTaskStatus.PAUSED,
+            lease=None,
+            paused_at=time.time(),
+        )
         task = self._tasks.get(task_id)
-        if task is None or task.done():
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        return True
+
+    async def resume(self, task_id: str) -> bool:
+        state = self.inspect(task_id)
+        if state.status is not RuntimeTaskStatus.PAUSED:
+            return False
+        task_spec = self._task_specs.get(task_id)
+        executor = self._executors.get(task_id)
+        if task_spec is None or executor is None:
+            return False
+        handle = self._handles.get(task_id)
+        if handle is None:
+            handle = LocalRuntimeTaskHandle(self, task_id, task_spec.turn_id)
+            self._handles[task_id] = handle
+        self._ensure_completion(task_id)
+        self._states[task_id] = replace(
+            state,
+            status=RuntimeTaskStatus.QUEUED,
+            lease=self._new_lease(task_id),
+            sequence=state.sequence + 1,
+            paused_at=None,
+            updated_at=time.time(),
+            resume_from_checkpoint_id=(
+                state.checkpoint.checkpoint_id if state.checkpoint else ""),
+        )
+        self._persist()
+        self._schedule(handle, task_spec)
+        return True
+
+    async def cancel(self, task_id: str) -> bool:
+        state = self.inspect(task_id)
+        if state.status.terminal:
             return False
         self._transition(task_id, RuntimeTaskStatus.CANCELLING)
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        task = self._tasks.get(task_id)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self._transition(
+            task_id,
+            RuntimeTaskStatus.CANCELLED,
+            lease=None,
+        )
+        self._cancel_completion(task_id)
         return True
 
     def inspect(self, task_id: str) -> RuntimeTaskState:
@@ -223,100 +331,214 @@ class LocalTaskRuntime(RuntimeTaskRuntimePort):
         checkpoint: RuntimeCheckpointRef,
     ) -> RuntimeTaskState:
         state = self.inspect(task_id)
-        updated = RuntimeTaskState(
-            task_id=state.task_id,
-            turn_id=state.turn_id,
-            status=state.status,
-            lease=state.lease,
+        updated = replace(
+            state,
             checkpoint=checkpoint,
             sequence=state.sequence + 1,
-            error=state.error,
             updated_at=time.time(),
         )
         self._states[task_id] = updated
         self._persist()
         return updated
 
+    async def wait(self, task_id: str) -> str:
+        completion = self._completions.get(task_id)
+        if completion is None:
+            state = self.inspect(task_id)
+            completion = asyncio.get_running_loop().create_future()
+            if state.status.terminal:
+                completion.set_result("")
+            self._completions[task_id] = completion
+        return await asyncio.shield(completion)
+
+    def is_done(self, task_id: str) -> bool:
+        completion = self._completions.get(task_id)
+        if completion is not None:
+            return completion.done()
+        state = self._states.get(task_id)
+        return state is not None and state.status.terminal
+
     async def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        active = self._active_task_id
-        if active:
-            await self.cancel(active)
-        self._active_task_id = ""
+        for task_id, state in list(self._states.items()):
+            if not state.status.terminal:
+                await self.cancel(task_id)
         self._persist()
 
-    def _new_queued_state(self, task_id: str, turn_id: str) -> RuntimeTaskState:
-        now = time.time()
-        return RuntimeTaskState(
-            task_id=task_id,
-            turn_id=turn_id,
-            status=RuntimeTaskStatus.QUEUED,
-            lease=RuntimeLease(
-                lease_id=f"lease-{uuid.uuid4().hex[:12]}",
-                task_id=task_id,
-                owner=self.owner,
-                acquired_at=now,
-                expires_at=now + self.lease_seconds,
-            ),
-            sequence=1,
-            updated_at=now,
-        )
-
-    def _launch(
+    def _schedule(
         self,
-        task_id: str,
+        handle: LocalRuntimeTaskHandle,
         task: RuntimeTask,
-        executor: RuntimeTaskExecutorPort,
-    ) -> LocalRuntimeTaskHandle:
-        async def run() -> str:
+    ) -> None:
+        existing = self._tasks.get(handle.task_id)
+        if existing is not None and not existing.done():
+            return
+        asyncio_task = asyncio.get_running_loop().create_task(
+            self._run_task(handle.task_id, task),
+            name=f"krelcode-task-{handle.task_id}",
+        )
+        self._tasks[handle.task_id] = asyncio_task
+        handle.set_task(asyncio_task)
+
+    async def _run_task(self, task_id: str, task: RuntimeTask) -> str:
+        acquired = False
+        executor = self._executors.get(task_id)
+        if executor is None:
+            self._fail_task(task_id, RuntimeError("Executor 未注册"))
+            return ""
+        try:
+            await self._semaphore.acquire()
+            acquired = True
             state = self.inspect(task_id)
+            if state.status is RuntimeTaskStatus.PAUSED:
+                return ""
             self._transition(
                 task_id,
                 RuntimeTaskStatus.RUNNING,
                 lease=state.lease,
+                started_at=state.started_at or time.time(),
             )
-            return await executor.execute(task)
+            max_attempts = max(1, task.retry_policy.max_attempts)
+            while True:
+                state = self.inspect(task_id)
+                attempt = state.attempts + 1
+                self._states[task_id] = replace(
+                    state,
+                    attempts=attempt,
+                    sequence=state.sequence + 1,
+                    updated_at=time.time(),
+                )
+                effective_task = replace(
+                    task,
+                    resume_from=state.checkpoint or task.resume_from,
+                )
+                try:
+                    timeout = self._remaining_timeout(state)
+                    result = await asyncio.wait_for(
+                        executor.execute(effective_task),
+                        timeout=timeout,
+                    )
+                except asyncio.CancelledError:
+                    current = self.inspect(task_id)
+                    if current.status is RuntimeTaskStatus.PAUSED:
+                        return ""
+                    if current.status is not RuntimeTaskStatus.CANCELLING:
+                        self._transition(
+                            task_id,
+                            RuntimeTaskStatus.CANCELLED,
+                            lease=None,
+                        )
+                    self._cancel_completion(task_id)
+                    raise
+                except (asyncio.TimeoutError, RuntimeTaskTimeout) as exc:
+                    if (
+                        attempt < max_attempts
+                        and task.retry_policy.retry_on_timeout
+                    ):
+                        self._transition(
+                            task_id,
+                            RuntimeTaskStatus.RETRYING,
+                            lease=None,
+                            error=str(exc),
+                        )
+                        await asyncio.sleep(task.retry_policy.delay_for(attempt))
+                        self._transition(
+                            task_id,
+                            RuntimeTaskStatus.RUNNING,
+                            lease=self._new_lease(task_id),
+                        )
+                        continue
+                    error = RuntimeTaskTimeout(
+                        f"task exceeded deadline after {attempt} attempt(s)")
+                    self._transition(
+                        task_id,
+                        RuntimeTaskStatus.TIMED_OUT,
+                        lease=None,
+                        error=str(error),
+                    )
+                    self._set_completion_exception(task_id, error)
+                    return ""
+                except Exception as exc:
+                    if (
+                        attempt < max_attempts
+                        and task.retry_policy.retry_on_failure
+                    ):
+                        self._transition(
+                            task_id,
+                            RuntimeTaskStatus.RETRYING,
+                            lease=None,
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
+                        await asyncio.sleep(task.retry_policy.delay_for(attempt))
+                        self._transition(
+                            task_id,
+                            RuntimeTaskStatus.RUNNING,
+                            lease=self._new_lease(task_id),
+                        )
+                        continue
+                    self._transition(
+                        task_id,
+                        RuntimeTaskStatus.FAILED,
+                        lease=None,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                    self._set_completion_exception(task_id, exc)
+                    return ""
+                self._transition(
+                    task_id,
+                    RuntimeTaskStatus.COMPLETED,
+                    lease=None,
+                )
+                self._set_completion_result(task_id, result)
+                return result
+        except asyncio.CancelledError:
+            current = self.inspect(task_id)
+            if current.status is RuntimeTaskStatus.PAUSED:
+                return ""
+            raise
+        finally:
+            if acquired:
+                self._semaphore.release()
+            if self.is_done(task_id):
+                self._tasks.pop(task_id, None)
 
-        asyncio_task = asyncio.get_running_loop().create_task(
-            run(), name=f"krelcode-task-{task_id}")
-        self._tasks[task_id] = asyncio_task
-        self._active_task_id = task_id
-        handle = LocalRuntimeTaskHandle(
-            self,
+    def _new_queued_state(self, task_id: str, task: RuntimeTask) -> RuntimeTaskState:
+        now = time.time()
+        deadline_at = task.deadline_at
+        budget_timeout = task.budget.timeout_seconds
+        if deadline_at is None and budget_timeout is not None:
+            deadline_at = now + budget_timeout
+        if deadline_at is None and self.default_timeout_seconds is not None:
+            deadline_at = now + self.default_timeout_seconds
+        return RuntimeTaskState(
             task_id=task_id,
             turn_id=task.turn_id,
-            task=asyncio_task,
+            status=RuntimeTaskStatus.QUEUED,
+            lease=self._new_lease(task_id),
+            sequence=1,
+            deadline_at=deadline_at,
+            updated_at=now,
         )
-        self._handles[task_id] = handle
-        asyncio_task.add_done_callback(
-            lambda finished: self._finish(task_id, finished))
-        return handle
 
-    def _finish(self, task_id: str, finished: asyncio.Task[str]) -> None:
-        current = self._states.get(task_id)
-        if current is None:
-            return
-        if finished.cancelled():
-            status = RuntimeTaskStatus.CANCELLED
-            error = ""
-        else:
-            exception = finished.exception()
-            if exception is None:
-                status = RuntimeTaskStatus.COMPLETED
-                error = ""
-            else:
-                status = RuntimeTaskStatus.FAILED
-                error = f"{type(exception).__name__}: {exception}"
-        self._transition(
-            task_id,
-            status,
-            lease=None,
-            error=error,
+    def _new_lease(self, task_id: str) -> RuntimeLease:
+        now = time.time()
+        return RuntimeLease(
+            lease_id=f"lease-{uuid.uuid4().hex[:12]}",
+            task_id=task_id,
+            owner=self.owner,
+            acquired_at=now,
+            expires_at=now + self.lease_seconds,
         )
-        if self._active_task_id == task_id:
-            self._active_task_id = ""
+
+    def _remaining_timeout(self, state: RuntimeTaskState) -> Optional[float]:
+        if state.deadline_at is None:
+            return None
+        remaining = state.deadline_at - time.time()
+        if remaining <= 0:
+            raise RuntimeTaskTimeout("task deadline exceeded")
+        return remaining
 
     def _transition(
         self,
@@ -325,55 +547,71 @@ class LocalTaskRuntime(RuntimeTaskRuntimePort):
         *,
         lease: Optional[RuntimeLease] = None,
         error: str = "",
+        started_at: Optional[float] = None,
+        paused_at: Optional[float] = None,
     ) -> None:
         current = self._states[task_id]
-        self._states[task_id] = RuntimeTaskState(
-            task_id=current.task_id,
-            turn_id=current.turn_id,
+        self._states[task_id] = replace(
+            current,
             status=status,
             lease=lease,
-            checkpoint=current.checkpoint,
             sequence=current.sequence + 1,
             error=error,
+            started_at=current.started_at if started_at is None else started_at,
+            paused_at=paused_at,
             updated_at=time.time(),
         )
         self._persist()
 
+    def _fail_task(self, task_id: str, error: Exception) -> None:
+        self._transition(
+            task_id,
+            RuntimeTaskStatus.FAILED,
+            lease=None,
+            error=f"{type(error).__name__}: {error}",
+        )
+        self._set_completion_exception(task_id, error)
+
+    def _reset_completion(self, task_id: str) -> None:
+        self._completions[task_id] = asyncio.get_running_loop().create_future()
+
+    def _ensure_completion(self, task_id: str) -> None:
+        if task_id not in self._completions:
+            self._reset_completion(task_id)
+
+    def _set_completion_result(self, task_id: str, result: str) -> None:
+        completion = self._completions.get(task_id)
+        if completion is not None and not completion.done():
+            completion.set_result(result)
+
+    def _set_completion_exception(
+        self,
+        task_id: str,
+        error: BaseException,
+    ) -> None:
+        completion = self._completions.get(task_id)
+        if completion is not None and not completion.done():
+            completion.set_exception(error)
+
+    def _cancel_completion(self, task_id: str) -> None:
+        completion = self._completions.get(task_id)
+        if completion is not None and not completion.done():
+            completion.cancel()
+
     def _load(self) -> None:
-        if self.state_path is None or not self.state_path.is_file():
+        if self.state_path is None:
             return
-        try:
-            raw = json.loads(self.state_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return
-        if not isinstance(raw, Mapping):
-            return
-        if raw.get("version") != RUNTIME_TASK_STATE_VERSION:
-            return
-        records = raw.get("tasks")
-        if not isinstance(records, Mapping):
-            return
+        tasks, loaded_states, next_id = load_runtime_task_records(self.state_path)
         recovered: list[str] = []
-        maximum = 0
-        for raw_id, record in records.items():
-            if not isinstance(record, Mapping):
-                continue
-            try:
-                task = _task_from_mapping(record.get("task"))
-                state = _state_from_mapping(record.get("state"))
-            except (TypeError, ValueError, KeyError):
-                continue
-            task_id = str(raw_id)
-            if state.task_id != task_id:
-                continue
-            maximum = max(maximum, _task_number(task_id))
-            if not state.status.terminal:
-                state = RuntimeTaskState(
-                    task_id=state.task_id,
-                    turn_id=state.turn_id,
+        for task_id, task in tasks.items():
+            state = loaded_states[task_id]
+            if state.status is RuntimeTaskStatus.PAUSED:
+                state = replace(state, lease=None)
+            elif not state.status.terminal:
+                state = replace(
+                    state,
                     status=RuntimeTaskStatus.INTERRUPTED,
                     lease=None,
-                    checkpoint=state.checkpoint,
                     sequence=state.sequence + 1,
                     error="runtime restarted before task completed",
                     updated_at=time.time(),
@@ -381,7 +619,9 @@ class LocalTaskRuntime(RuntimeTaskRuntimePort):
                 recovered.append(task_id)
             self._task_specs[task_id] = task
             self._states[task_id] = state
-        self._counter = count(maximum + 1)
+            self._handles[task_id] = LocalRuntimeTaskHandle(
+                self, task_id, state.turn_id)
+        self._counter = count(next_id)
         self.recovered_task_ids = tuple(sorted(recovered))
         if recovered:
             self._persist()
@@ -389,198 +629,16 @@ class LocalTaskRuntime(RuntimeTaskRuntimePort):
     def _persist(self) -> bool:
         if self.state_path is None:
             return True
-        payload = {
-            "version": RUNTIME_TASK_STATE_VERSION,
-            "owner": self.owner,
-            "updated_at": time.time(),
-            "tasks": {
-                task_id: {
-                    "task": _task_to_mapping(self._task_specs[task_id]),
-                    "state": _state_to_mapping(state),
-                }
-                for task_id, state in self._states.items()
-                if task_id in self._task_specs
-            },
-        }
-        try:
-            self.state_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.state_path.with_suffix(
-                self.state_path.suffix + ".tmp")
-            line = json.dumps(
-                payload,
-                ensure_ascii=False,
-                sort_keys=True,
-                default=str,
-            )
-            if self.redactor is not None:
-                line = self.redactor.redact(line)
-            temporary.write_text(line + "\n", encoding="utf-8")
-            try:
-                os.chmod(temporary, 0o600)
-            except OSError:
-                pass
-            temporary.replace(self.state_path)
-        except (OSError, TypeError, ValueError) as exc:
-            self.last_persist_error = f"{type(exc).__name__}: {exc}"
-            return False
-        self.last_persist_error = ""
-        return True
-
-
-def _task_number(task_id: str) -> int:
-    suffix = task_id.rsplit("-", 1)[-1]
-    return int(suffix) if suffix.isdigit() else 0
-
-
-def _task_to_mapping(task: RuntimeTask) -> dict[str, object]:
-    return {
-        "turn_id": task.turn_id,
-        "message": task.message,
-        "application": task.application.to_dict(),
-        "images": [
-            {
-                "media_type": image.media_type,
-                "data_b64": image.data_b64,
-                "source_path": image.source_path,
-            }
-            for image in task.images
-        ],
-        "tool_allowlist": (
-            list(task.tool_allowlist)
-            if task.tool_allowlist is not None else None
-        ),
-        "reminder_ids": list(task.reminder_ids),
-        "metadata": dict(task.metadata),
-    }
-
-
-def _task_from_mapping(raw: object) -> RuntimeTask:
-    if not isinstance(raw, Mapping):
-        raise TypeError("runtime task 记录缺失")
-    application = raw.get("application")
-    if not isinstance(application, Mapping):
-        raise TypeError("runtime task application 缺失")
-    images_raw = raw.get("images")
-    images = tuple(
-        ImageRef(
-            media_type=str(item.get("media_type") or ""),
-            data_b64=str(item.get("data_b64") or ""),
-            source_path=(
-                str(item["source_path"])
-                if item.get("source_path") is not None else None
-            ),
-        )
-        for item in (images_raw if isinstance(images_raw, list) else ())
-        if isinstance(item, Mapping)
-    )
-    allowlist_raw = raw.get("tool_allowlist")
-    metadata_raw = raw.get("metadata")
-    return RuntimeTask(
-        turn_id=str(raw.get("turn_id") or ""),
-        message=str(raw.get("message") or ""),
-        application=ApplicationRequest.from_mapping(application),
-        images=images,
-        tool_allowlist=(
-            tuple(str(item) for item in allowlist_raw)
-            if isinstance(allowlist_raw, list) else None
-        ),
-        reminder_ids=tuple(
-            str(item) for item in (raw.get("reminder_ids") or ())
-            if isinstance(item, (str, int, float))
-        ),
-        metadata=(
-            dict(metadata_raw)
-            if isinstance(metadata_raw, Mapping) else {}
-        ),
-    )
-
-
-def _checkpoint_to_mapping(
-    checkpoint: RuntimeCheckpointRef,
-) -> dict[str, object]:
-    return {
-        "checkpoint_id": checkpoint.checkpoint_id,
-        "kind": checkpoint.kind,
-        "session_id": checkpoint.session_id,
-        "turn_id": checkpoint.turn_id,
-        "task_id": checkpoint.task_id,
-        "digest": checkpoint.digest,
-        "path": checkpoint.path,
-        "metadata": dict(checkpoint.metadata),
-    }
-
-
-def _checkpoint_from_mapping(raw: object) -> Optional[RuntimeCheckpointRef]:
-    if not isinstance(raw, Mapping):
-        return None
-    metadata_raw = raw.get("metadata")
-    return RuntimeCheckpointRef(
-        checkpoint_id=str(raw.get("checkpoint_id") or ""),
-        kind=str(raw.get("kind") or "context"),
-        session_id=str(raw.get("session_id") or ""),
-        turn_id=str(raw.get("turn_id") or ""),
-        task_id=str(raw.get("task_id") or ""),
-        digest=str(raw.get("digest") or ""),
-        path=str(raw.get("path") or ""),
-        metadata=(
-            dict(metadata_raw)
-            if isinstance(metadata_raw, Mapping) else {}
-        ),
-    )
-
-
-def _state_to_mapping(state: RuntimeTaskState) -> dict[str, object]:
-    lease = None
-    if state.lease is not None:
-        lease = {
-            "lease_id": state.lease.lease_id,
-            "task_id": state.lease.task_id,
-            "owner": state.lease.owner,
-            "acquired_at": state.lease.acquired_at,
-            "expires_at": state.lease.expires_at,
-        }
-    return {
-        "task_id": state.task_id,
-        "turn_id": state.turn_id,
-        "status": state.status.value,
-        "lease": lease,
-        "checkpoint": (
-            _checkpoint_to_mapping(state.checkpoint)
-            if state.checkpoint is not None else None
-        ),
-        "sequence": state.sequence,
-        "error": state.error,
-        "updated_at": state.updated_at,
-    }
-
-
-def _state_from_mapping(raw: object) -> RuntimeTaskState:
-    if not isinstance(raw, Mapping):
-        raise TypeError("runtime task state 缺失")
-    lease_raw = raw.get("lease")
-    lease = None
-    if isinstance(lease_raw, Mapping):
-        lease = RuntimeLease(
-            lease_id=str(lease_raw.get("lease_id") or ""),
-            task_id=str(lease_raw.get("task_id") or ""),
-            owner=str(lease_raw.get("owner") or ""),
-            acquired_at=float(lease_raw.get("acquired_at") or 0.0),
-            expires_at=float(lease_raw.get("expires_at") or 0.0),
-        )
-    return RuntimeTaskState(
-        task_id=str(raw.get("task_id") or ""),
-        turn_id=str(raw.get("turn_id") or ""),
-        status=RuntimeTaskStatus(str(raw.get("status") or "interrupted")),
-        lease=lease,
-        checkpoint=_checkpoint_from_mapping(raw.get("checkpoint")),
-        sequence=int(raw.get("sequence") or 0),
-        error=str(raw.get("error") or ""),
-        updated_at=float(raw.get("updated_at") or 0.0),
-    )
+        payload = build_runtime_task_payload(
+            self.owner, self._task_specs, self._states)
+        self.last_persist_error = persist_runtime_task_payload(
+            self.state_path, payload, self.redactor)
+        return not self.last_persist_error
 
 
 __all__ = [
     "LocalRuntimeTaskHandle",
     "LocalTaskRuntime",
     "RUNTIME_TASK_STATE_VERSION",
+    "RuntimeTaskTimeout",
 ]

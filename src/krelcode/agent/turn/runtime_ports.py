@@ -20,6 +20,7 @@ from typing import (
     Sequence,
     Tuple,
 )
+from ...contracts.application import ApplicationRequest
 
 if TYPE_CHECKING:
     from krelcode.core.context_usage import ContextUsageSnapshot
@@ -195,6 +196,21 @@ class ToolMicrocompactorPort(Protocol):
         trigger: str = "manual",
         current_turn_id: str = "",
     ) -> "MicrocompactReport": ...
+
+
+def effective_turn_limits(
+    request: Optional[ApplicationRequest],
+    default_steps: int,
+    default_tokens: Optional[int],
+) -> tuple[int, Optional[int]]:
+    """Apply task-level budget ceilings without mutating loop defaults."""
+    if request is None:
+        return default_steps, default_tokens
+    budget = request.budget
+    return (
+        budget.max_steps or default_steps,
+        budget.max_tokens or default_tokens,
+    )
 
 
 class CompactSummaryResultPort(Protocol):
@@ -394,6 +410,7 @@ __all__ = [
     "ReminderCatalogPort",
     "ToolMicrocompactorPort",
     "ToolTurnHostPort",
+    "effective_turn_limits",
     "WorkingContextPort",
     "WorkspaceFingerprintPort",
 ]

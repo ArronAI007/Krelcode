@@ -145,6 +145,12 @@ def _task_state_from_mapping(raw: object) -> Optional[RuntimeTaskState]:
         checkpoint=_checkpoint_from_mapping(raw.get("checkpoint")),
         sequence=int(raw.get("sequence") or 0),
         error=str(raw.get("error") or ""),
+        attempts=int(raw.get("attempts") or 0),
+        deadline_at=_optional_float(raw.get("deadline_at")),
+        started_at=_optional_float(raw.get("started_at")),
+        paused_at=_optional_float(raw.get("paused_at")),
+        resume_from_checkpoint_id=str(
+            raw.get("resume_from_checkpoint_id") or ""),
         updated_at=float(raw.get("updated_at") or 0.0),
     )
 
@@ -179,6 +185,15 @@ def _checkpoint_from_mapping(raw: object) -> Optional[RuntimeCheckpointRef]:
 
 def _mapping(raw: object) -> dict[str, object]:
     return dict(raw) if isinstance(raw, Mapping) else {}
+
+
+def _optional_float(value: object) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _safe_id(value: str) -> str:

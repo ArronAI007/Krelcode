@@ -15,6 +15,7 @@ Krelcode 强调可操作、可观测和可控：所有重要行为都能检查�
 - **完整权限与安全边界**：支持权限模式、路径规则、写前 Diff 审阅、命令审批、敏感信息保护和运行时 Sandbox。
 - **可扩展 Agent 生态**：支持 Plugins、Skills、Agent Definitions、Commands、Hooks 和 MCP。
 - **持久化后台任务**：后台 Shell Job 和子代理可在 REPL 退出后继续运行，并支持重新连接、暂停、恢复和终止。
+- **生产任务运行时**：RuntimeTask 绑定身份、租户、Harness release、预算、deadline、retry 与 Sandbox profile，支持队列、并发槽、暂停/恢复、超时和 checkpoint 续跑。
 - **多端接入**：支持交互式终端、单次执行、JSON、Stream JSON、Python SDK、TypeScript SDK、VS Code 和 JetBrains。
 - **多模型 Provider**：支持 OpenAI-compatible、DeepSeek、Anthropic 和 Gemini，并支持运行时模型切换。
 
@@ -354,7 +355,10 @@ Sandbox 能力因平台而异：
 |------|----------|
 | macOS | Seatbelt，可用时自动启用 |
 | Linux | Bubblewrap，可用时自动启用 |
-| Windows | 当前使用静态命令与路径策略，并明确提示限制 |
+| Windows | 静态策略；安装 Docker/Podman 后可显式使用 container backend |
+
+Sandbox 同时执行 CPU、内存、文件大小/临时存储和进程数配额；
+`backend = "container"` 时使用容器 network/pids/memory/ulimit 控制。
 
 `krelcode doctor` 会显示当前实际使用的 Sandbox 后端。
 
