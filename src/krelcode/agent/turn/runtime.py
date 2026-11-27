@@ -10,19 +10,37 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from pathlib import Path
-from typing import Awaitable, Callable, Mapping, Optional, Protocol, Sequence
-
-from krelcode.core.events import EventBus
-from krelcode.core.messages import ImageRef, SteeringInput
-from krelcode.contracts.application import (
-    ApplicationRequest,
-    ApplicationRequestFactory,
+from typing import (
+    Awaitable,
+    Callable,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    cast,
 )
+
+from krelcode.core.events import (
+    AgentEvent,
+    CompactCheckpointCreated,
+    ContextCheckpointCreated,
+    EventBus,
+)
+from krelcode.core.messages import ImageRef, SteeringInput
+from krelcode.contracts.application import ApplicationRequest
 from krelcode.contracts.acceptance import AcceptanceEvaluatorPort
 from krelcode.contracts.governance import ControlPlanePort
-from krelcode.contracts.tool import RuntimeSnapshot
+from krelcode.contracts.runtime import (
+    HarnessTurnControlPort,
+    RuntimeCheckpointRef,
+    RuntimeSnapshot,
+    RuntimeStateRef,
+    RuntimeTaskRuntimePort,
+    RuntimeTaskState,
+)
 from krelcode.agent.turn.loop import AgentLoop
 from krelcode.agent.turn.query import QueryEngine, QuerySession
+from krelcode.agent.turn.runtime_adapter import as_turn_control
 
 
 class _SubagentRuntimePort(Protocol):
@@ -38,12 +56,17 @@ class _ShellJobsRuntimePort(Protocol):
     async def shutdown(self) -> None: ...
 
 
-class AgentRuntime:
-    """拥有一次进程内的 Agent 执行生命周期。"""
+class HarnessRuntimeFacade:
+    """Runtime-facing facade for one semantic Agent session.
+
+    Physical task scheduling and leases live in ``RuntimeTaskRuntimePort``
+    implementations such as ``LocalTaskRuntime``.  This facade only translates
+    Harness controls and Query events to the runtime boundary.
+    """
 
     def __init__(
         self,
-        loop: AgentLoop,
+        loop: AgentLoop | HarnessTurnControlPort,
         *,
         subagents: Optional[_SubagentRuntimePort] = None,
         mcp_supervisor: Optional[_MCPSupervisorPort] = None,
@@ -51,23 +74,45 @@ class AgentRuntime:
         shell_jobs: Optional[_ShellJobsRuntimePort] = None,
         acceptance_evaluator: Optional[AcceptanceEvaluatorPort] = None,
         control_plane: Optional[ControlPlanePort] = None,
+        task_runtime: Optional[RuntimeTaskRuntimePort] = None,
+        strict_application_request: bool = False,
     ) -> None:
-        self.loop = loop
+        self._turn = as_turn_control(loop)
         self.subagents = subagents
         self.mcp_supervisor = mcp_supervisor
         self.mcp_reload = mcp_reload
         self.shell_jobs = (
             shell_jobs
             if shell_jobs is not None
-            else getattr(loop.tool_context, "shell_jobs", None)
+            else cast(Optional[_ShellJobsRuntimePort], self._turn.shell_jobs)
         )
         self._task: Optional[asyncio.Task[str]] = None
         self._query: Optional[QuerySession] = None
+        self._session_id = ""
         self._closed = False
-        self.query_engine = QueryEngine(loop)
-        loop.acceptance_evaluator = acceptance_evaluator
-        loop.dependencies.control_plane = control_plane
-        loop.runtime_snapshot_provider = self._runtime_snapshot
+        self.task_runtime = task_runtime
+        self.query_engine = QueryEngine(
+            self._turn,
+            task_runtime=task_runtime,
+            require_application_request=strict_application_request,
+        )
+        self._turn.set_acceptance_evaluator(acceptance_evaluator)
+        self._turn.set_control_plane(control_plane)
+        self._turn.set_runtime_snapshot_provider(self._runtime_snapshot)
+        self._unsubscribe_checkpoints = self.bus.subscribe(
+            self._record_checkpoint_event)
+
+    @property
+    def loop(self) -> AgentLoop:
+        """Legacy AgentLoop view retained for session command adapters."""
+        loop = getattr(self._turn, "loop", None)
+        if not isinstance(loop, AgentLoop):
+            raise RuntimeError("当前 Harness 端口不暴露 AgentLoop 兼容视图")
+        return loop
+
+    @property
+    def turn_host(self) -> HarnessTurnControlPort:
+        return self._turn
 
     def _runtime_snapshot(self, base: RuntimeSnapshot) -> RuntimeSnapshot:
         """每轮开始时刷新 MCP 健康状态，其余配置保持不可变快照。"""
@@ -85,15 +130,15 @@ class AgentRuntime:
 
     @property
     def bus(self) -> EventBus:
-        return self.loop.services.core.bus
+        return self._turn.bus
 
     @property
     def workspace_root(self) -> Path:
-        return self.loop.services.core.tool_context.workspace_root
+        return self._turn.workspace_root
 
     @property
     def tool_names(self) -> list[str]:
-        return list(self.loop.services.core.registry.names())
+        return list(self._turn.tool_names)
 
     @property
     def active_task(self) -> Optional[asyncio.Task[str]]:
@@ -126,8 +171,35 @@ class AgentRuntime:
 
     def bind_session(self, session_id: Optional[str]) -> None:
         """绑定持久会话 id；每轮由 AgentLoop 生成新的 turn snapshot。"""
-        runtime = replace(self.loop.tool_context.runtime, session_id=session_id)
-        self.loop.tool_context.runtime = runtime
+        self._session_id = session_id or ""
+        self._turn.bind_session(session_id)
+
+    def _record_checkpoint_event(self, event: AgentEvent) -> None:
+        """Project Harness checkpoint events into physical task state."""
+        if self.task_runtime is None or self._query is None:
+            return
+        if isinstance(event, ContextCheckpointCreated):
+            checkpoint = RuntimeCheckpointRef(
+                checkpoint_id=event.checkpoint_id,
+                kind="context",
+                session_id=event.session_id or self._session_id,
+                turn_id=event.turn_id or self._query.turn_id,
+                task_id=self._query.task_id,
+                digest=event.history_hash,
+            )
+        elif isinstance(event, CompactCheckpointCreated):
+            checkpoint = RuntimeCheckpointRef(
+                checkpoint_id=event.checkpoint_id,
+                kind="compact",
+                session_id=self._session_id,
+                turn_id=self._query.turn_id,
+                task_id=self._query.task_id,
+                digest=event.summary_digest,
+            )
+        else:
+            return
+        self.task_runtime.record_checkpoint(
+            self._query.task_id, checkpoint)
 
     def start_query(
         self,
@@ -146,12 +218,7 @@ class AgentRuntime:
             images=images,
             tool_allowlist=tool_allowlist,
             reminder_ids=reminder_ids,
-            application_request=application_request or (
-                ApplicationRequestFactory.from_input_source(
-                    "headless",
-                    goal=message or "[image attachment]",
-                )
-            ),
+            application_request=application_request,
         )
         self._task = self._query.task
         return self._query
@@ -183,18 +250,12 @@ class AgentRuntime:
         item: SteeringInput | str = (
             SteeringInput(text, tuple(images or ())) if images else text
         )
-        self.loop.steering_queue.put_nowait(item)
+        self._turn.submit_steering(item)
         return text if len(text) <= 40 else text[:40] + "…"
 
     def drain_steering(self) -> list[SteeringInput | str]:
         """取走任务结束后未送达的 steering 项。"""
-        pending: list[SteeringInput | str] = []
-        while not self.loop.steering_queue.empty():
-            try:
-                pending.append(self.loop.steering_queue.get_nowait())
-            except asyncio.QueueEmpty:
-                break
-        return pending
+        return self._turn.drain_steering()
 
     async def stop(self) -> bool:
         """取消当前 turn 并等待清理；无活动任务返回 False。"""
@@ -203,7 +264,7 @@ class AgentRuntime:
             self._task = None
             return False
         if self._query is not None:
-            self.loop.abort_current_turn()
+            self._turn.abort_current_turn()
             await self._query.cancel()
         else:
             task.cancel()
@@ -223,16 +284,55 @@ class AgentRuntime:
             return
         self._closed = True
         await self.stop()
-        if self.loop.compact_scheduler is not None:
-            await self.loop.compact_scheduler.close()
-        if self.loop.memory_dream_scheduler is not None:
-            await self.loop.memory_dream_scheduler.close()
+        self._unsubscribe_checkpoints()
+        await self._turn.close_runtime_resources()
         if self.shell_jobs is not None:
             await self.shell_jobs.shutdown()
         if self.subagents is not None:
             await self.subagents.shutdown()
         if self.mcp_supervisor is not None:
             await self.mcp_supervisor.close_all()
-        lsp = self.loop.services.extensions.lsp
-        if lsp is not None:
-            await lsp.close()
+
+    def inspect_task(self, task_id: Optional[str] = None) -> Optional[RuntimeTaskState]:
+        """Return physical state without exposing the underlying asyncio task."""
+        if self.task_runtime is None:
+            return None
+        resolved = task_id or (
+            self._query.task_id if self._query is not None else "")
+        if not resolved:
+            return None
+        return self.task_runtime.inspect(resolved)
+
+    def task_state_ref(
+        self,
+        task_id: Optional[str] = None,
+    ) -> Optional[RuntimeStateRef]:
+        """Return an opaque immutable reference to the current task state."""
+        if self.task_runtime is None:
+            return None
+        resolved = task_id or (
+            self._query.task_id if self._query is not None else "")
+        if not resolved:
+            return None
+        return self.task_runtime.state_ref(resolved)
+
+    def checkpoint_task(
+        self,
+        task_id: Optional[str] = None,
+    ) -> Optional[RuntimeCheckpointRef]:
+        """Return the task's latest durable checkpoint reference."""
+        if self.task_runtime is None:
+            return None
+        resolved = task_id or (
+            self._query.task_id if self._query is not None else "")
+        if not resolved:
+            return None
+        return self.task_runtime.checkpoint(resolved)
+
+
+# Public compatibility name retained while callers migrate to the explicit
+# Harness/Production Runtime split.
+AgentRuntime = HarnessRuntimeFacade
+
+
+__all__ = ["AgentRuntime", "HarnessRuntimeFacade"]

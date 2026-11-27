@@ -1978,12 +1978,37 @@ CommandSpec.kind
 |----|----------|------|
 | 入口分流层 | `entrypoints.cli/main` | fast-path、参数解析；不创建 Agent |
 | 交互会话层 | `ui.repl` + `session.InputProcessor/CommandRegistry/SessionViewState/SessionController/runner` | 输入与命令先结构化；终端只负责 I/O/渲染，会话控制器负责命令分发、turn 生命周期、steering、恢复 |
-| 执行推进层 | `agent.AgentRuntime/AgentLoop` + 能力适配器 | 统一 turn/cancel/reload/close；Provider/工具差异在适配器消化 |
+| 执行推进层 | `HarnessRuntimeFacade/AgentLoop` + `runtime.execution.LocalTaskRuntime` | Harness 负责 turn 语义；Production Runtime 负责任务、租约、取消与物理状态 |
 | 基础架构层 | `core`、配置、事件总线、JSONL、Sandbox、脱敏 | 提供无业务偏向的契约、持久化和安全边界 |
 
 `bootstrap/` 横跨四层完成对象装配，但 `BootstrappedApplication` 只暴露 run/close，
-`AsyncMain` 只拥有进程生命周期。headless 与 REPL 都通过 `AgentRuntime` 执行，因此
+`AsyncMain` 只拥有进程生命周期。headless 与 REPL 都通过 Harness runtime facade 执行，因此
 未来增加 API/IDE 入口时可复用同一会话、事件路由与执行门面。
+
+### Harness 与 Production Runtime 的任务/状态边界
+
+`AgentRuntime` 作为公开兼容名保留，但实现已收敛为
+`HarnessRuntimeFacade`。它只消费 `HarnessTurnControlPort` 和
+`RuntimeTaskRuntimePort`，不再直接访问 AgentLoop 的 steering queue、scheduler、
+ToolContext 或扩展服务。
+
+Production Runtime 使用显式 DTO：
+
+```text
+HarnessRuntimeFacade
+  -> RuntimeTask(turn_id, message, ApplicationRequest, ...)
+    -> RuntimeTaskRuntimePort.submit()
+      -> RuntimeTaskHandle
+        -> RuntimeTaskState / RuntimeStateRef / RuntimeLease
+```
+
+- `LocalTaskRuntime` 负责 asyncio task、并发互斥、lease、取消和终态。
+- `QueryEngine` 只把 `RuntimeTaskHandle` 适配为有序 `QueryEvent`，不再自行启动
+  `AgentLoop.run_turn()`。
+- `ContextCheckpointCreated` 和 `CompactCheckpointCreated` 会投影为
+  `RuntimeCheckpointRef`，因此上层可以只凭不可变引用查询 checkpoint。
+- 生产 composition 注入 `LocalTaskRuntime` 并开启严格 `ApplicationRequest` 校验；
+  `QueryEngine(loop)` 和 `AgentRuntime(loop)` 的隐式请求只保留给直接调用和迁移期测试。
 
 ## REPL 前台协调、审批与事件背压（Step 71）
 

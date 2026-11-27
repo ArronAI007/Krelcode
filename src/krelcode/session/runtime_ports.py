@@ -8,12 +8,15 @@ those implementations.  This module is the single boundary for that bundle.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Protocol, Sequence
+from typing import TYPE_CHECKING, Optional, Protocol, Sequence
 
 from ..core.hooks import HookPort
 from ..core.interactions import UserInputPort
 from ..core.messages import ToolCall
 from .commands.ports import CheckpointManagerPort, MCPSupervisorPort
+
+if TYPE_CHECKING:
+    from ..agent.turn.loop import AgentLoop
 
 
 class CheckpointGroupPort(Protocol):
@@ -113,6 +116,7 @@ class SessionRuntimePorts:
     hooks: Optional[HookPort] = None
     approval: Optional[ApprovalBrokerPort] = None
     user_input: Optional[UserInputBrokerPort] = None
+    harness: Optional["AgentLoop"] = None
 
 
 __all__ = [

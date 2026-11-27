@@ -63,7 +63,7 @@ async def run_session(
     output_stream: Optional[TextIO] = None,
 ) -> int:
     """按 CLI 参数运行 headless turn 或交互 REPL。"""
-    loop = runtime.loop
+    loop = ports.harness or runtime.loop
     supervisor = ports.supervisor
     checkpoints = ports.checkpoints
     approval_broker = ports.approval
@@ -97,6 +97,7 @@ async def run_session(
                 approval_broker=approval_broker,
                 user_input_broker=user_input_broker,
                 log=log,
+                loop=loop,
             )
 
         if args.message:
@@ -114,6 +115,7 @@ async def run_session(
                 elif action.kind is InputKind.COMMAND:
                     controller = SessionController(
                         runtime,
+                        loop=loop,
                         mcp_supervisor=supervisor,
                         mcp_reload=runtime.mcp_reload,
                         subagents=cast(

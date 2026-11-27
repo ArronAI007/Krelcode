@@ -33,6 +33,7 @@ from ...observability.models import stable_hash
 from ...observability.settings import ObservabilityOptions
 from ...mcp.supervisor import MCPSupervisor
 from ...plugins import PluginManager
+from ...runtime.execution import LocalTaskRuntime
 from ...session.memory import MemoryStore
 from ...skills import SkillManager
 from ...agent.turn.runtime_services import MCPServicePort, RuntimeServiceBinderPort
@@ -216,6 +217,8 @@ async def build_core_services(
         mcp_reload=reload_mcp,
         acceptance_evaluator=DefaultAcceptanceEvaluator(),
         control_plane=DefaultControlPlane(),
+        task_runtime=LocalTaskRuntime(),
+        strict_application_request=True,
     )
     observability: Optional[ObservabilitySink] = None
     options = ObservabilityOptions.from_args_and_config(

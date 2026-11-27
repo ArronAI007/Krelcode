@@ -113,7 +113,7 @@ class ConversationHost:
             mcp_supervisor=mcp_supervisor,
             mcp_reload=mcp_reload,
         )
-        self.loop = self.runtime.loop
+        self.loop = loop
         self.tool_names = tool_names
         self.session_path = session_path
         self.sessions_dir = sessions_dir
@@ -136,6 +136,7 @@ class ConversationHost:
             self.loop.tool_context.workspace_root)
         self.controller = SessionController(
             self.runtime,
+            loop=self.loop,
             session_path=session_path,
             sessions_dir=sessions_dir,
             mcp_supervisor=mcp_supervisor,

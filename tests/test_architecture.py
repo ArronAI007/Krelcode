@@ -898,6 +898,55 @@ def test_agent_package_does_not_import_production_runtime_package():
     assert not violations, violations
 
 
+def test_harness_runtime_facade_uses_task_and_turn_ports():
+    path = ROOT / "agent" / "turn" / "runtime.py"
+    source = path.read_text(encoding="utf-8")
+
+    assert "HarnessTurnControlPort" in source
+    assert "RuntimeTaskRuntimePort" in source
+    assert "HarnessRuntimeFacade" in source
+    for forbidden in (
+        "loop.tool_context",
+        "loop.steering_queue",
+        "loop.dependencies",
+        "loop.compact_scheduler",
+        "loop.memory_dream_scheduler",
+        "loop.services.extensions",
+    ):
+        assert forbidden not in source
+
+
+def test_query_engine_submits_runtime_tasks_instead_of_scheduling_loop():
+    path = ROOT / "agent" / "turn" / "query.py"
+    source = path.read_text(encoding="utf-8")
+
+    assert "RuntimeTaskRuntimePort" in source
+    assert "RuntimeTaskExecutorPort" in source
+    assert "self.loop.run_turn" not in source
+    assert "asyncio.create_task(\n            self.loop.run_turn" not in source
+
+
+def test_local_task_runtime_has_no_agent_or_session_dependency():
+    path = ROOT / "runtime" / "execution" / "task_runtime.py"
+    imports = imported_modules(path)
+
+    assert not depends_on(imports, "krelcode.agent")
+    assert not depends_on(imports, "krelcode.session")
+
+
+def test_production_composition_injects_runtime_and_harness_ports():
+    core = (ROOT / "bootstrap" / "application_stages" / "core.py").read_text(
+        encoding="utf-8")
+    app = (ROOT / "bootstrap" / "application.py").read_text(encoding="utf-8")
+    ui_host = (ROOT / "ui" / "conversation_host.py").read_text(
+        encoding="utf-8")
+
+    assert "task_runtime=LocalTaskRuntime()" in core
+    assert "strict_application_request=True" in core
+    assert "harness=core.loop" in app
+    assert "runtime.loop" not in ui_host
+
+
 def test_agent_loop_is_a_thin_turn_orchestration_facade():
     path = ROOT / "agent" / "turn" / "loop.py"
     source = path.read_text(encoding="utf-8")

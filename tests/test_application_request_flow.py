@@ -6,7 +6,10 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 from krelcode.agent.loop import AgentLoop
+from krelcode.agent.turn.runtime import AgentRuntime
 from krelcode.agent.context.context_source import ContextRequest
 from krelcode.agent.query import QueryEngine
 from krelcode.contracts.application import (
@@ -17,6 +20,7 @@ from krelcode.contracts.application import (
 from krelcode.core.events import RunStarted
 from krelcode.daemon.server_agents import _daemon_application_request
 from krelcode.llm.providers.mock import MockProvider
+from krelcode.runtime.execution import LocalTaskRuntime
 from krelcode.safety.policy import AllowAllPolicy
 from krelcode.session.repl_session import SessionPrompt
 from krelcode.session.stream_json import parse_input_line
@@ -72,6 +76,19 @@ def test_application_request_reaches_run_event_and_context(tmp_path: Path) -> No
     assert started.application == request.to_dict()
     assert capture.requests[-1].application_request == request
     assert loop.application_request == request
+
+
+def test_strict_agent_runtime_rejects_implicit_application_request(
+    tmp_path: Path,
+) -> None:
+    runtime = AgentRuntime(
+        make_loop(tmp_path),
+        task_runtime=LocalTaskRuntime(),
+        strict_application_request=True,
+    )
+
+    with pytest.raises(ValueError, match="ApplicationRequest"):
+        asyncio.run(runtime.run_once("run tests"))
 
 
 def test_session_prompt_builds_repl_contract_by_default() -> None:

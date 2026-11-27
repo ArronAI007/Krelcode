@@ -1,8 +1,8 @@
-"""查询引擎事件协议：把一次 Agent turn 包装为有序 SessionEvent 流。
+"""查询引擎事件协议：把一次 Harness turn 包装为有序 SessionEvent 流。
 
-REPL/headless/SDK 消费 ``QuerySession.events``；EventBus 仍作为持久化、用量、
-审计等旁路订阅者的兼容通道。这样查询结果不再只有最终字符串，而是稳定的
-增量事件协议。``QueryEvent`` 是 ``SessionEvent`` 的兼容别名。
+Task scheduling, leases and physical cancellation belong to a
+``RuntimeTaskRuntimePort``.  This module only adapts the runtime handle to the
+stable query event protocol consumed by REPL/headless/SDK.
 """
 
 from __future__ import annotations
@@ -10,13 +10,29 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from itertools import count
+import time
 from typing import AsyncIterator, Callable, Optional
 
 from krelcode.core.events import AgentEvent
 from krelcode.core.messages import ImageRef
 from krelcode.core.session_events import SessionEvent, as_session_event_payload
-from krelcode.contracts.application import ApplicationRequest
+from krelcode.contracts.application import (
+    ApplicationRequest,
+    ApplicationRequestFactory,
+)
+from krelcode.contracts.runtime import (
+    RuntimeCheckpointRef,
+    HarnessTurnControlPort,
+    RuntimeTask,
+    RuntimeTaskExecutorPort,
+    RuntimeTaskHandle,
+    RuntimeTaskRuntimePort,
+    RuntimeStateRef,
+    RuntimeTaskState,
+    RuntimeTaskStatus,
+)
 from krelcode.agent.turn.loop import AgentLoop
+from krelcode.agent.turn.runtime_adapter import as_turn_control
 
 
 QueryEvent = SessionEvent
@@ -33,13 +49,25 @@ class QuerySession:
 
     def __init__(
         self,
-        turn_id: str,
+        handle: RuntimeTaskHandle,
         task: asyncio.Task[str],
         events: AsyncIterator[QueryEvent],
     ) -> None:
-        self.turn_id = turn_id
+        self.runtime_handle = handle
         self.task = task
         self.events = events
+
+    @property
+    def task_id(self) -> str:
+        return self.runtime_handle.task_id
+
+    @property
+    def turn_id(self) -> str:
+        return self.runtime_handle.turn_id
+
+    @property
+    def state(self) -> RuntimeTaskState:
+        return self.runtime_handle.state
 
     @property
     def done(self) -> bool:
@@ -50,20 +78,193 @@ class QuerySession:
         return await self.task
 
     async def cancel(self) -> None:
+        await self.runtime_handle.cancel()
         if not self.task.done():
             self.task.cancel()
         await asyncio.gather(self.task, return_exceptions=True)
 
 
+class _LoopTurnExecutor(RuntimeTaskExecutorPort):
+    """Adapt the semantic Agent turn to a runtime task executor."""
+
+    def __init__(self, turn: HarnessTurnControlPort) -> None:
+        self.turn = turn
+
+    async def execute(self, task: RuntimeTask) -> str:
+        return await self.turn.run_turn(
+            task.message,
+            images=list(task.images) or None,
+            turn_id=task.turn_id,
+            tool_allowlist=(
+                list(task.tool_allowlist)
+                if task.tool_allowlist is not None else None
+            ),
+            reminder_ids=list(task.reminder_ids) or None,
+            application_request=task.application,
+        )
+
+
+class _InlineRuntimeHandle(RuntimeTaskHandle):
+    """Compatibility handle when callers construct QueryEngine directly."""
+
+    def __init__(
+        self,
+        runtime: "_InlineTaskRuntime",
+        task_id: str,
+        turn_id: str,
+        task: asyncio.Task[str],
+    ) -> None:
+        self._runtime = runtime
+        self._task_id = task_id
+        self._turn_id = turn_id
+        self._task = task
+
+    @property
+    def task_id(self) -> str:
+        return self._task_id
+
+    @property
+    def turn_id(self) -> str:
+        return self._turn_id
+
+    @property
+    def state(self) -> RuntimeTaskState:
+        return self._runtime.inspect(self._task_id)
+
+    @property
+    def done(self) -> bool:
+        return self._task.done()
+
+    async def wait(self) -> str:
+        return await self._task
+
+    async def cancel(self) -> None:
+        await self._runtime.cancel(self._task_id)
+
+
+class _InlineTaskRuntime:
+    """Small fallback for direct QueryEngine users.
+
+    Production composition injects ``LocalTaskRuntime`` instead.  The fallback
+    keeps the historical ``QueryEngine(loop)`` API working without making the
+    production runtime path own AgentLoop internals.
+    """
+
+    def __init__(self) -> None:
+        self._counter = count(1)
+        self._states: dict[str, RuntimeTaskState] = {}
+        self._tasks: dict[str, asyncio.Task[str]] = {}
+
+    def submit(
+        self,
+        task: RuntimeTask,
+        executor: RuntimeTaskExecutorPort,
+    ) -> RuntimeTaskHandle:
+        task_id = f"inline-{next(self._counter)}"
+        asyncio_task = asyncio.get_running_loop().create_task(
+            executor.execute(task),
+            name=f"krelcode-inline-{task_id}",
+        )
+        self._tasks[task_id] = asyncio_task
+        self._states[task_id] = RuntimeTaskState(
+            task_id=task_id,
+            turn_id=task.turn_id,
+            status=RuntimeTaskStatus.RUNNING,
+            sequence=1,
+            updated_at=time.time(),
+        )
+        asyncio_task.add_done_callback(
+            lambda finished: self._finish(task_id, finished))
+        return _InlineRuntimeHandle(
+            self,
+            task_id=task_id,
+            turn_id=task.turn_id,
+            task=asyncio_task,
+        )
+
+    async def cancel(self, task_id: str) -> bool:
+        task = self._tasks.get(task_id)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        return True
+
+    def inspect(self, task_id: str) -> RuntimeTaskState:
+        return self._states[task_id]
+
+    def state_ref(self, task_id: str) -> RuntimeStateRef:
+        state = self.inspect(task_id)
+        return RuntimeStateRef(
+            state_id=f"{task_id}:{state.sequence}",
+            task_id=task_id,
+            turn_id=state.turn_id,
+            sequence=state.sequence,
+            updated_at=state.updated_at,
+            checkpoint=state.checkpoint,
+        )
+
+    def checkpoint(self, task_id: str) -> Optional[RuntimeCheckpointRef]:
+        return self.inspect(task_id).checkpoint
+
+    def record_checkpoint(
+        self,
+        task_id: str,
+        checkpoint: RuntimeCheckpointRef,
+    ) -> RuntimeTaskState:
+        current = self.inspect(task_id)
+        updated = RuntimeTaskState(
+            task_id=current.task_id,
+            turn_id=current.turn_id,
+            status=current.status,
+            checkpoint=checkpoint,
+            sequence=current.sequence + 1,
+            error=current.error,
+            updated_at=time.time(),
+        )
+        self._states[task_id] = updated
+        return updated
+
+    def _finish(self, task_id: str, finished: asyncio.Task[str]) -> None:
+        current = self._states[task_id]
+        if finished.cancelled():
+            status = RuntimeTaskStatus.CANCELLED
+        elif finished.exception() is not None:
+            status = RuntimeTaskStatus.FAILED
+        else:
+            status = RuntimeTaskStatus.COMPLETED
+        self._states[task_id] = RuntimeTaskState(
+            task_id=current.task_id,
+            turn_id=current.turn_id,
+            status=status,
+            checkpoint=current.checkpoint,
+            sequence=current.sequence + 1,
+            error=(
+                f"{type(finished.exception()).__name__}: {finished.exception()}"
+                if finished.exception() is not None else ""
+            ),
+            updated_at=time.time(),
+        )
+
+
 class QueryEngine:
     """创建带 turn id、sequence 和完成/异常传播的查询会话。"""
 
-    def __init__(self, loop: AgentLoop, *, queue_size: int = 256) -> None:
-        self.loop = loop
+    def __init__(
+        self,
+        loop: AgentLoop | HarnessTurnControlPort,
+        *,
+        queue_size: int = 256,
+        task_runtime: Optional[RuntimeTaskRuntimePort] = None,
+        require_application_request: bool = False,
+    ) -> None:
+        self.turn = as_turn_control(loop)
         if queue_size < 1:
             raise ValueError("QueryEvent 队列容量必须大于 0")
         self.queue_size = queue_size
         self._counter = count(1)
+        self._task_runtime = task_runtime or _InlineTaskRuntime()
+        self.require_application_request = require_application_request
 
     def start(
         self,
@@ -75,6 +276,25 @@ class QueryEngine:
         application_request: Optional[ApplicationRequest] = None,
     ) -> QuerySession:
         turn_id = f"turn-{next(self._counter)}"
+        if application_request is None and self.require_application_request:
+            raise ValueError("生产 QueryEngine 必须显式提供 ApplicationRequest")
+        resolved_application = application_request or (
+            ApplicationRequestFactory.from_input_source(
+                "headless",
+                goal=user_input or "[image attachment]",
+            )
+        )
+        runtime_task = RuntimeTask(
+            turn_id=turn_id,
+            message=user_input,
+            application=resolved_application,
+            images=tuple(images or ()),
+            tool_allowlist=(
+                tuple(tool_allowlist)
+                if tool_allowlist is not None else None
+            ),
+            reminder_ids=tuple(reminder_ids or ()),
+        )
         queue: asyncio.Queue[QueryEvent | _QueryEnd] = asyncio.Queue(
             maxsize=self.queue_size)
         sequence = count()
@@ -90,16 +310,12 @@ class QueryEngine:
             ))
 
         # 先订阅再启动 task，确保 RunStarted 不会丢失。
-        unsubscribe: Callable[[], None] = self.loop.bus.subscribe(on_event)
-        task = asyncio.create_task(
-            self.loop.run_turn(
-                user_input,
-                images=images,
-                turn_id=turn_id,
-                tool_allowlist=tool_allowlist,
-                reminder_ids=reminder_ids,
-                application_request=application_request,
-            ))
+        unsubscribe: Callable[[], None] = self.turn.bus.subscribe(on_event)
+        handle = self._task_runtime.submit(
+            runtime_task,
+            _LoopTurnExecutor(self.turn),
+        )
+        task = asyncio.create_task(handle.wait())
 
         def on_done(finished: asyncio.Task[str]) -> None:
             try:
@@ -118,13 +334,14 @@ class QueryEngine:
                 pass  # 事件循环已关闭
 
         task.add_done_callback(on_done)
-        events = self._iter_events(queue, task, marker_tasks)
-        session = QuerySession(turn_id=turn_id, task=task, events=events)
+        events = self._iter_events(queue, handle, task, marker_tasks)
+        session = QuerySession(handle=handle, task=task, events=events)
         return session
 
     async def _iter_events(
         self,
         queue: asyncio.Queue[QueryEvent | _QueryEnd],
+        handle: RuntimeTaskHandle,
         task: asyncio.Task[str],
         marker_tasks: list[asyncio.Task[None]],
     ) -> AsyncIterator[QueryEvent]:
@@ -138,7 +355,7 @@ class QueryEngine:
                 yield item
         finally:
             if not task.done():
-                task.cancel()
+                await handle.cancel()
                 await asyncio.gather(task, return_exceptions=True)
             for marker in marker_tasks:
                 if not marker.done():

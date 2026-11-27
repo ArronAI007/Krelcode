@@ -67,6 +67,7 @@ class SessionController:
         self,
         runtime: AgentRuntime | AgentLoop,
         *,
+        loop: Optional[AgentLoop] = None,
         session_path: Optional[str] = None,
         sessions_dir: Optional[Path] = None,
         mcp_supervisor: Optional[MCPSupervisorPort] = None,
@@ -88,7 +89,7 @@ class SessionController:
     ) -> None:
         self.runtime = (runtime if isinstance(runtime, AgentRuntime)
                         else AgentRuntime(runtime))
-        self.loop = self.runtime.loop
+        self.loop = loop or self.runtime.loop
         self.session_path = session_path
         self.sessions_dir = sessions_dir
         self.session_lifecycle = SessionLifecycle(

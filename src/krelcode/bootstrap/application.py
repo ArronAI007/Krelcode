@@ -123,6 +123,7 @@ class BootstrappedApplication:
                 hooks=core.hooks,
                 approval=core.approval_broker,
                 user_input=core.input_broker,
+                harness=core.loop,
             ),
             usage=core.usage,
             model_switch=core.model_switch,

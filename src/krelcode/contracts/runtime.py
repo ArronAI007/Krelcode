@@ -12,8 +12,20 @@ import hashlib
 import json
 from dataclasses import dataclass, field as dataclass_field
 from enum import Enum
+from pathlib import Path
 from types import MappingProxyType
-from typing import FrozenSet, Mapping, Optional
+from typing import (
+    Callable,
+    FrozenSet,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+)
+
+from ..core.events import EventBus
+from ..core.messages import ImageRef, SteeringInput
+from .application import ApplicationRequest
 
 RUNTIME_RELEASE_SCHEMA_VERSION = 1
 
@@ -48,6 +60,221 @@ class PermissionMode(str, Enum):
     READ_ONLY = "read-only"
     AUTO_APPROVE = "auto-approve"
     PLAN = "plan"
+
+
+class RuntimeTaskStatus(str, Enum):
+    """Lifecycle state owned by a production task runtime."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    WAITING = "waiting"
+    CANCELLING = "cancelling"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
+
+    @property
+    def terminal(self) -> bool:
+        return self in {
+            RuntimeTaskStatus.COMPLETED,
+            RuntimeTaskStatus.FAILED,
+            RuntimeTaskStatus.CANCELLED,
+            RuntimeTaskStatus.INTERRUPTED,
+        }
+
+
+@dataclass(frozen=True)
+class RuntimeLease:
+    """Ownership proof for one physically running task."""
+
+    lease_id: str
+    task_id: str
+    owner: str
+    acquired_at: float
+    expires_at: float
+
+
+@dataclass(frozen=True)
+class RuntimeCheckpointRef:
+    """Content-light reference to durable task or context state."""
+
+    checkpoint_id: str
+    kind: str
+    session_id: str = ""
+    turn_id: str = ""
+    task_id: str = ""
+    digest: str = ""
+    path: str = ""
+    metadata: Mapping[str, object] = dataclass_field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "checkpoint_id", str(self.checkpoint_id or ""))
+        object.__setattr__(self, "kind", str(self.kind or "context"))
+        object.__setattr__(
+            self, "metadata", MappingProxyType(dict(self.metadata)))
+
+
+@dataclass(frozen=True)
+class RuntimeTaskState:
+    """Physical task state exchanged across the runtime boundary."""
+
+    task_id: str
+    turn_id: str
+    status: RuntimeTaskStatus
+    lease: Optional[RuntimeLease] = None
+    checkpoint: Optional[RuntimeCheckpointRef] = None
+    sequence: int = 0
+    error: str = ""
+    updated_at: float = 0.0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "status", RuntimeTaskStatus(self.status))
+
+
+@dataclass(frozen=True)
+class RuntimeStateRef:
+    """Opaque reference to one immutable task-state revision."""
+
+    state_id: str
+    task_id: str
+    turn_id: str
+    sequence: int
+    updated_at: float
+    checkpoint: Optional[RuntimeCheckpointRef] = None
+
+
+@dataclass(frozen=True)
+class RuntimeTask:
+    """Provider-neutral task submitted to a production runtime."""
+
+    turn_id: str
+    message: str
+    application: ApplicationRequest
+    images: tuple[ImageRef, ...] = ()
+    tool_allowlist: Optional[tuple[str, ...]] = None
+    reminder_ids: tuple[str, ...] = ()
+    metadata: Mapping[str, object] = dataclass_field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "turn_id", str(self.turn_id or ""))
+        object.__setattr__(self, "message", str(self.message or ""))
+        object.__setattr__(self, "images", tuple(self.images or ()))
+        if self.tool_allowlist is not None:
+            object.__setattr__(
+                self, "tool_allowlist", tuple(self.tool_allowlist))
+        object.__setattr__(
+            self, "reminder_ids", tuple(self.reminder_ids or ()))
+        object.__setattr__(
+            self, "metadata", MappingProxyType(dict(self.metadata)))
+
+
+class RuntimeTaskHandle(Protocol):
+    """Control surface returned by a runtime after task submission."""
+
+    @property
+    def task_id(self) -> str: ...
+
+    @property
+    def turn_id(self) -> str: ...
+
+    @property
+    def state(self) -> RuntimeTaskState: ...
+
+    @property
+    def done(self) -> bool: ...
+
+    async def wait(self) -> str: ...
+
+    async def cancel(self) -> None: ...
+
+
+class RuntimeTaskExecutorPort(Protocol):
+    """Harness operation executed by a production runtime."""
+
+    async def execute(self, task: RuntimeTask) -> str: ...
+
+
+class RuntimeTaskRuntimePort(Protocol):
+    """Task/state boundary between Harness orchestration and execution."""
+
+    def submit(
+        self,
+        task: RuntimeTask,
+        executor: RuntimeTaskExecutorPort,
+    ) -> RuntimeTaskHandle: ...
+
+    async def cancel(self, task_id: str) -> bool: ...
+
+    def inspect(self, task_id: str) -> RuntimeTaskState: ...
+
+    def state_ref(self, task_id: str) -> RuntimeStateRef: ...
+
+    def checkpoint(self, task_id: str) -> Optional[RuntimeCheckpointRef]: ...
+
+    def record_checkpoint(
+        self,
+        task_id: str,
+        checkpoint: RuntimeCheckpointRef,
+    ) -> RuntimeTaskState: ...
+
+
+class RuntimeContinuationPort(Protocol):
+    """Restore semantic task state from a durable checkpoint."""
+
+    async def resume(self, checkpoint: RuntimeCheckpointRef) -> RuntimeTaskState: ...
+
+
+class HarnessTurnControlPort(Protocol):
+    """Semantic Harness controls consumed by the runtime-facing facade."""
+
+    @property
+    def bus(self) -> EventBus: ...
+
+    @property
+    def workspace_root(self) -> Path: ...
+
+    @property
+    def tool_names(self) -> Sequence[str]: ...
+
+    @property
+    def shell_jobs(self) -> object | None: ...
+
+    def bind_session(self, session_id: Optional[str]) -> None: ...
+
+    def set_acceptance_evaluator(
+        self,
+        evaluator: object | None,
+    ) -> None: ...
+
+    def set_control_plane(
+        self,
+        control_plane: object | None,
+    ) -> None: ...
+
+    def set_runtime_snapshot_provider(
+        self,
+        provider: Optional[Callable[[RuntimeSnapshot], RuntimeSnapshot]],
+    ) -> None: ...
+
+    async def run_turn(
+        self,
+        user_input: str,
+        images: Optional[list[ImageRef]] = None,
+        *,
+        turn_id: Optional[str] = None,
+        tool_allowlist: Optional[list[str]] = None,
+        reminder_ids: Optional[Sequence[str]] = None,
+        application_request: Optional[ApplicationRequest] = None,
+    ) -> str: ...
+
+    def submit_steering(self, item: SteeringInput | str) -> None: ...
+
+    def drain_steering(self) -> list[SteeringInput | str]: ...
+
+    def abort_current_turn(self, reason: str = "用户中止") -> None: ...
+
+    async def close_runtime_resources(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -229,9 +456,20 @@ def _stable_hash(value: object) -> str:
 
 __all__ = [
     "ArtifactIdentity",
+    "HarnessTurnControlPort",
     "PermissionMode",
     "RunMode",
     "RUNTIME_RELEASE_SCHEMA_VERSION",
+    "RuntimeCheckpointRef",
+    "RuntimeContinuationPort",
+    "RuntimeLease",
     "RuntimeReleaseManifest",
     "RuntimeSnapshot",
+    "RuntimeStateRef",
+    "RuntimeTask",
+    "RuntimeTaskExecutorPort",
+    "RuntimeTaskHandle",
+    "RuntimeTaskRuntimePort",
+    "RuntimeTaskState",
+    "RuntimeTaskStatus",
 ]

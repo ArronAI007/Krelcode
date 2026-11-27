@@ -7,9 +7,12 @@ from krelcode.tools.runtime import (
     SandboxRuntime,
 )
 from krelcode.tools.runtime.router import ExecutionRuntimeRouter
+from .task_runtime import LocalRuntimeTaskHandle, LocalTaskRuntime
 
 __all__ = [
     "ExecutionRuntimeRouter",
+    "LocalRuntimeTaskHandle",
+    "LocalTaskRuntime",
     "LocalToolRuntime",
     "MCPRuntime",
     "RemoteRuntime",

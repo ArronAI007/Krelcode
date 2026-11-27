@@ -19,6 +19,7 @@ from itertools import count
 from pathlib import Path
 from typing import Any, cast, Callable, Iterator, Optional, TextIO
 
+from ..agent.turn.loop import AgentLoop
 from ..agent.turn.runtime import AgentRuntime
 from ..agent.usage import UsageTotals, UsageTracker
 from ..core.events import (
@@ -86,11 +87,12 @@ async def run_stream_json_session(
     approval_broker: Optional[ApprovalBrokerPort] = None,
     user_input_broker: Optional[UserInputBrokerPort] = None,
     log: Callable[[str], None] = print,
+    loop: Optional[AgentLoop] = None,
 ) -> int:
     """运行 stream-json 输入输出；返回进程退出码。"""
     input_stream = input_stream or sys.stdin
     output_stream = output_stream or sys.stdout
-    loop = runtime.loop
+    loop = loop or runtime.loop
     encoder = StreamJsonEncoder(StreamJsonMetadata(
         session_id=Path(session_path).stem if session_path else None,
         cwd=str(runtime.workspace_root),
@@ -105,6 +107,7 @@ async def run_stream_json_session(
     writer.emit(encoder.init_message())
     controller = SessionController(
         runtime,
+        loop=loop,
         mcp_supervisor=cast(
             Optional[MCPSupervisorPort], runtime.mcp_supervisor),
         mcp_reload=runtime.mcp_reload,
