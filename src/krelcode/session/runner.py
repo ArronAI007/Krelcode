@@ -63,7 +63,9 @@ async def run_session(
     output_stream: Optional[TextIO] = None,
 ) -> int:
     """按 CLI 参数运行 headless turn 或交互 REPL。"""
-    loop = ports.harness or runtime.loop
+    if ports.harness is None:
+        raise ValueError("run_session 必须显式注入 SessionRuntimePorts.harness")
+    loop = ports.harness
     supervisor = ports.supervisor
     checkpoints = ports.checkpoints
     approval_broker = ports.approval

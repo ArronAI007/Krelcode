@@ -222,7 +222,7 @@ def test_repl_runner_routes_user_input_and_finishes_query(tmp_path):
         user_input_port=broker,
     )
     runner = ReplSessionRunner(
-        SessionController(AgentRuntime(loop)),
+        SessionController(AgentRuntime(loop), loop=loop),
         SessionViewState(),
         on_event=lambda _event: None,
         input_broker=broker,
@@ -353,7 +353,7 @@ def test_interrupt_cancels_pending_user_input_and_repairs_history(tmp_path):
         user_input_port=UserInputBroker(),
     )
     runner = ReplSessionRunner(
-        SessionController(AgentRuntime(loop)),
+        SessionController(AgentRuntime(loop), loop=loop),
         SessionViewState(),
         on_event=lambda _event: None,
         input_broker=loop.user_input_port,
@@ -448,6 +448,7 @@ def test_stream_json_headless_ask_user_fails_closed_without_hanging(tmp_path):
         initial_prompt="执行",
         input_stream=io.StringIO(""),
         output_stream=output,
+        loop=loop,
     ), timeout=2))
     rows = [json.loads(line) for line in output.getvalue().splitlines()]
     assert rc == 0

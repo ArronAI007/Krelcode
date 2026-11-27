@@ -489,7 +489,8 @@ def test_rewind_restores_pre_compact_history_from_checkpoint(tmp_path):
         context_manager=ContextManager(provider, max_tokens=10_000),
     )
     loop.compact_checkpoint_store = CompactCheckpointStore(tmp_path)
-    controller = SessionController(AgentRuntime(loop), checkpoints=None)
+    controller = SessionController(
+        AgentRuntime(loop), loop=loop, checkpoints=None)
 
     original = [
         Message.system("SYS"),
@@ -558,7 +559,8 @@ def test_rewind_restores_working_context_and_invalidates_changed_compact_file(
     )
     store = CompactCheckpointStore(tmp_path)
     loop.compact_checkpoint_store = store
-    controller = SessionController(AgentRuntime(loop), checkpoints=None)
+    controller = SessionController(
+        AgentRuntime(loop), loop=loop, checkpoints=None)
     loop.history = [
         Message.system("SYS"),
         Message.user("original goal"),

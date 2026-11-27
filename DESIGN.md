@@ -2007,8 +2007,17 @@ HarnessRuntimeFacade
   `AgentLoop.run_turn()`。
 - `ContextCheckpointCreated` 和 `CompactCheckpointCreated` 会投影为
   `RuntimeCheckpointRef`，因此上层可以只凭不可变引用查询 checkpoint。
+- `LocalTaskRuntime` 可把 task spec、状态、lease 和 checkpoint 引用原子写入
+  `.krelcode/runtime/tasks.json`；重启后旧的非终态任务转为 `interrupted`，
+  可通过 `recover(task_id, executor)` 或 `recover_latest(executor)` 重新领取。
+- `SessionContinuationAdapter` 把 `RuntimeCheckpointRef` 映射到
+  `restore_context_checkpoint()`；resume、session fork 和 rewind 均走同一
+  ContinuationPort，而不是各自重复解释 checkpoint。
+- `RuntimeResourceRegistry` 统一拥有 subagent、MCP、shell jobs、LSP 和
+  Harness 后台资源，按逆序、幂等关闭；daemon 的 `DaemonAgentRuntime` 也使用
+  `task_runtime + resources + bus + tool_context`，不再暴露 `loop`。
 - 生产 composition 注入 `LocalTaskRuntime` 并开启严格 `ApplicationRequest` 校验；
-  `QueryEngine(loop)` 和 `AgentRuntime(loop)` 的隐式请求只保留给直接调用和迁移期测试。
+  生产源码不再访问 `runtime.loop`；`AgentRuntime.loop` 只作为公开兼容视图存在。
 
 ## REPL 前台协调、审批与事件背压（Step 71）
 

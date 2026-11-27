@@ -43,7 +43,8 @@ from .checkpoint import (
 )
 from .compact_checkpoint import restore_compact_checkpoint
 from .compact_checkpoint import CompactCheckpointStore
-from ..agent.context.context_checkpoint import restore_context_checkpoint
+from ..contracts.runtime import RuntimeCheckpointRef
+from .continuation import SessionContinuationAdapter
 from .lifecycle import SessionLifecycle
 from .runtime_ports import CheckpointPort, RestoreTurnsResultPort
 
@@ -271,6 +272,7 @@ class RewindCoordinator:
         context_checkpoints: Optional[ContextCheckpointStore] = None,
         context_coordinator: Optional[object] = None,
         timeline: Optional[TurnTimeline] = None,
+        continuation: Optional[SessionContinuationAdapter] = None,
     ) -> None:
         self.runtime = runtime
         self.loop = loop
@@ -280,6 +282,13 @@ class RewindCoordinator:
         self.compact_checkpoints = compact_checkpoints
         self.context_checkpoints = context_checkpoints
         self.context_coordinator = context_coordinator
+        self.continuation = continuation or SessionContinuationAdapter(
+            loop,
+            context_checkpoints=context_checkpoints,
+            compact_checkpoints=compact_checkpoints,
+            memory_store=loop.services.session.memory,
+            task_runtime=runtime.task_runtime,
+        )
         self.timeline = timeline or TurnTimeline(
             loop.bus, lambda: self.loop.history, plan_manager, checkpoints,
             context_checkpoints)
@@ -332,14 +341,16 @@ class RewindCoordinator:
                 and restored_compact.pre_compact_history
             ):
                 history_before = restored_compact.pre_compact_history
-        restore_result = None
+        continuation_result = None
         if context_before is not None:
-            restore_result = restore_context_checkpoint(
-                self.loop,
-                context_before,
-                compact_store=self.compact_checkpoints,
-                memory_store=self.loop.services.session.memory,
-                history_override=history_before,
+            continuation_result = self.continuation.resume(
+                RuntimeCheckpointRef(
+                    checkpoint_id=context_before.id,
+                    kind="context",
+                    session_id=entry.session_id,
+                    turn_id=context_before.turn_id,
+                ),
+                refresh_skills=False,
             )
         else:
             self.loop.history = self._history_with_current_system(history_before)
@@ -371,7 +382,8 @@ class RewindCoordinator:
             removed_turns=len(removed),
             files=files,
             context_checkpoint_id=(
-                restore_result.checkpoint_id if restore_result is not None else ""),
+                continuation_result.checkpoint_id
+                if continuation_result is not None else ""),
         )
 
     def fork_turn(self, turn_index: int, title: str = "") -> TurnForkResult:

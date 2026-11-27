@@ -171,7 +171,7 @@ async def _run_headless(root: Path) -> _ScenarioOutcome:
                 no_session=True,
             ),
             runtime,
-            SessionRuntimePorts(),
+            SessionRuntimePorts(harness=fixture.loop),
             usage=_UsageTrackerFactory(),
             model_switch=None,
             skills_reload=None,
@@ -223,6 +223,7 @@ async def _run_stream_json(root: Path) -> _ScenarioOutcome:
         initial_prompt="explain src/a.py",
         input_stream=io.StringIO(""),
         output_stream=output,
+        loop=fixture.loop,
         log=lambda _line: None,
     )
     rows = [
@@ -629,7 +630,7 @@ async def _run_rewind(root: Path) -> _ScenarioOutcome:
     coordinator = ContextCheckpointCoordinator(loop=loop, store=store)
     coordinator.attach(loop.bus)
     loop.context_checkpoint_coordinator = coordinator
-    controller = SessionController(AgentRuntime(loop))
+    controller = SessionController(AgentRuntime(loop), loop=loop)
     await loop.run("rewind first request", turn_id="rewind-1")
     before_second = list(loop.history)
     await loop.run("rewind second request", turn_id="rewind-2")

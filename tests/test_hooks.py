@@ -473,7 +473,7 @@ def test_session_start_context_and_session_end_hook_run_around_session(tmp_path)
     rc = asyncio.run(run_session(
         args,
         runtime,
-        SessionRuntimePorts(hooks=hooks),
+        SessionRuntimePorts(hooks=hooks, harness=loop),
         usage=UsageTracker(),
         model_switch=None,
         skills_reload=None,

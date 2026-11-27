@@ -418,7 +418,9 @@ class DaemonServer:
 
     # Compatibility wrappers for callers that used the historical private
     # methods before agent runtime management became a composed service.
-    async def _ensure_agent_runtime(self) -> Tuple[Any, Any]:
+    async def _ensure_agent_runtime(
+        self,
+    ) -> Tuple[DaemonAgentRuntime, Any]:
         return await self.agent_service._ensure_runtime()
 
     async def _dispatch_agent(self, operation: str, params: Dict[str, Any]) -> Any:

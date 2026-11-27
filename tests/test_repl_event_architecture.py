@@ -276,7 +276,7 @@ def test_repl_session_runner_owns_queue_and_starts_next_prompt(tmp_path):
             system_prompt="SYS",
         )
         runtime = AgentRuntime(loop)
-        controller = SessionController(runtime)
+        controller = SessionController(runtime, loop=loop)
         state = SessionViewState()
         notices = []
         runner = ReplSessionRunner(
@@ -337,7 +337,7 @@ def test_repl_session_runner_interrupt_cleans_state_and_history(tmp_path):
             system_prompt="SYS",
         )
         runner = ReplSessionRunner(
-            SessionController(AgentRuntime(loop)),
+            SessionController(AgentRuntime(loop), loop=loop),
             SessionViewState(),
             on_event=lambda _event: None,
             on_notice=lambda _message: None,

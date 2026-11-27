@@ -941,10 +941,45 @@ def test_production_composition_injects_runtime_and_harness_ports():
     ui_host = (ROOT / "ui" / "conversation_host.py").read_text(
         encoding="utf-8")
 
-    assert "task_runtime=LocalTaskRuntime()" in core
+    assert "task_runtime=LocalTaskRuntime(" in core
+    assert "state_path=runtime_state_path" in core
     assert "strict_application_request=True" in core
     assert "harness=core.loop" in app
     assert "runtime.loop" not in ui_host
+
+
+def test_production_source_has_no_runtime_loop_penetration():
+    violations: dict[str, str] = {}
+    for path in sorted(ROOT.rglob("*.py")):
+        relative = path.relative_to(ROOT)
+        if "__pycache__" in relative.parts:
+            continue
+        if "runtime.loop" in path.read_text(encoding="utf-8"):
+            violations[relative.as_posix()] = "runtime.loop"
+    assert not violations, violations
+
+
+def test_daemon_runtime_uses_task_and_resource_ports():
+    source = (ROOT / "daemon" / "server_runtime.py").read_text(
+        encoding="utf-8")
+    service = (ROOT / "daemon" / "server_agents.py").read_text(
+        encoding="utf-8")
+
+    assert "task_runtime: RuntimeTaskRuntimePort" in source
+    assert "resources: RuntimeResourceRegistryPort" in source
+    assert "loop: Any" not in source
+    assert "resources.close_all()" in service
+
+
+def test_restore_rewind_use_continuation_adapter():
+    lifecycle = (ROOT / "session" / "lifecycle.py").read_text(encoding="utf-8")
+    rewind = (ROOT / "session" / "rewind.py").read_text(encoding="utf-8")
+    bootstrap = (ROOT / "session" / "bootstrap.py").read_text(
+        encoding="utf-8")
+
+    assert "SessionContinuationAdapter" in lifecycle
+    assert "self.continuation.resume(" in rewind
+    assert "continuation.resume_session(" in bootstrap
 
 
 def test_agent_loop_is_a_thin_turn_orchestration_facade():

@@ -433,6 +433,7 @@ def run_jsonl(
         output_stream=output,
         approval_broker=approval_broker,
         user_input_broker=user_input_broker,
+        loop=runtime.loop,
     ))
     rows = [json.loads(line) for line in output.getvalue().splitlines()]
     return rc, rows

@@ -9,10 +9,10 @@ from typing import Callable, Optional, cast
 
 from ..agent.turn.loop import AgentLoop
 from ..core.redact import SecretRedactor
-from ..agent.context.context_checkpoint import restore_context_checkpoint
+from ..contracts.runtime import RuntimeCheckpointRef
+from .continuation import SessionContinuationAdapter
 from .memory import MemoryStore, sync_memory_fragment
 from .recorder import SessionRecorder, latest_session, new_session_path
-from .restore import restore_session
 
 
 def setup_session(
@@ -23,6 +23,7 @@ def setup_session(
 ) -> Optional[Path]:
     """恢复历史（--resume）并挂载 JSONL 录制器；返回会话文件路径或 None。"""
     sessions_dir = loop.tool_context.workspace_root / ".krelcode" / "sessions"
+    continuation = SessionContinuationAdapter(loop)
     resumed_from = ""
     resumed_path = None
 
@@ -32,12 +33,12 @@ def setup_session(
             if path is None:
                 log(f"（{sessions_dir} 下没有可恢复的会话，从空白开始）")
             else:
-                if restore_session(loop, path, log=log):
+                if continuation.resume_session(path, log=log) is not None:
                     resumed_from = path.stem
                     resumed_path = path
         else:
             resumed_path = Path(args.resume)
-            if restore_session(loop, resumed_path, log=log):
+            if continuation.resume_session(resumed_path, log=log) is not None:
                 resumed_from = resumed_path.stem
 
     if args.no_session:
@@ -77,10 +78,10 @@ def setup_session(
             )
             if copied is not None:
                 recorder.record_context_checkpoint(copied.metadata_record())
-                restore_context_checkpoint(
-                    loop,
-                    copied,
-                    compact_store=loop.services.context.compact_checkpoint,
-                    memory_store=memory_store,
-                )
+                continuation.resume(RuntimeCheckpointRef(
+                    checkpoint_id=copied.id,
+                    kind="context",
+                    session_id=session_path.stem,
+                    turn_id=copied.turn_id,
+                ))
     return session_path

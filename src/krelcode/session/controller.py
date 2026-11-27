@@ -21,6 +21,7 @@ from ..safety.runtime import PlanApprovalCoordinator, RuntimePermissionManager
 from ..contracts.tool import CommandDescriptor, ToolResult, ToolServices
 from ..core.messages import ImageRef, SteeringInput
 from .compact_checkpoint import CompactCheckpointStore
+from .continuation import SessionContinuationAdapter
 from .lifecycle import SessionLifecycle
 from .rewind import RewindCoordinator
 from .runtime_ports import CheckpointPort
@@ -87,17 +88,32 @@ class SessionController:
         rewind: Optional[RewindPort] = None,
         jobs: Optional[ShellJobCommandPort] = None,
     ) -> None:
-        self.runtime = (runtime if isinstance(runtime, AgentRuntime)
-                        else AgentRuntime(runtime))
-        self.loop = loop or self.runtime.loop
+        if isinstance(runtime, AgentRuntime):
+            if loop is None:
+                raise ValueError("传入 AgentRuntime 时必须显式提供 Harness loop")
+            self.runtime = runtime
+            self.loop = loop
+        else:
+            if loop is not None and loop is not runtime:
+                raise ValueError("AgentLoop 与显式 loop 参数不一致")
+            self.runtime = AgentRuntime(runtime)
+            self.loop = runtime
         self.session_path = session_path
         self.sessions_dir = sessions_dir
+        self.continuation = SessionContinuationAdapter(
+            self.loop,
+            context_checkpoints=self.loop.services.context.checkpoint,
+            compact_checkpoints=self.loop.services.context.compact_checkpoint,
+            memory_store=self.loop.services.session.memory,
+            task_runtime=self.runtime.task_runtime,
+        )
         self.session_lifecycle = SessionLifecycle(
             self.loop,
             sessions_dir,
             session_path,
             runtime=self.runtime,
             redactor=self.loop.services.core.redactor,
+            continuation=self.continuation,
         )
         self.mcp_supervisor = (mcp_supervisor
                                if mcp_supervisor is not None
@@ -146,6 +162,7 @@ class SessionController:
                 context_checkpoints=self.loop.services.context.checkpoint,
                 context_coordinator=(
                     self.loop.services.context.checkpoint_coordinator),
+                continuation=self.continuation,
             )
         )
         self.command_registry = command_registry or builtin_command_registry()

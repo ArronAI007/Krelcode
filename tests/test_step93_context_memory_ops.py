@@ -358,6 +358,7 @@ def test_stream_json_executes_context_and_memory_commands_without_model(tmp_path
             initial_prompt=prompt,
             input_stream=io.StringIO(stdin),
             output_stream=output,
+            loop=loop,
         )
         return code, [json.loads(line) for line in output.getvalue().splitlines()]
 

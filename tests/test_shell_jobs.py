@@ -397,6 +397,7 @@ def test_stream_json_runner_emits_job_events_outside_turn_lifecycle(tmp_path):
             redactor=SecretRedactor(),
             initial_prompt="hello",
             output_stream=output,
+            loop=loop,
         )
         return code, output.getvalue()
 

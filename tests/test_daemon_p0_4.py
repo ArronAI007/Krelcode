@@ -211,10 +211,11 @@ def test_daemon_agent_runtime_uses_mcp_supervisor(tmp_path, monkeypatch):
         )
         await server.start()
         try:
-            loop, _agents = await server._ensure_agent_runtime()
+            runtime, _agents = await server._ensure_agent_runtime()
             supervisor = FakeSupervisor.instances[-1]
             assert supervisor.servers == {"demo": {"command": "true"}}
-            assert loop.mcp_supervisor is supervisor
+            assert runtime.mcp_supervisor is supervisor
+            assert runtime.task_runtime.state_path is not None
         finally:
             await server.stop()
         assert supervisor.closed is True

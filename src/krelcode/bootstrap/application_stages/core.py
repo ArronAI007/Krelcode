@@ -33,7 +33,7 @@ from ...observability.models import stable_hash
 from ...observability.settings import ObservabilityOptions
 from ...mcp.supervisor import MCPSupervisor
 from ...plugins import PluginManager
-from ...runtime.execution import LocalTaskRuntime
+from ...runtime.execution import LocalRuntimeResourceRegistry, LocalTaskRuntime
 from ...session.memory import MemoryStore
 from ...skills import SkillManager
 from ...agent.turn.runtime_services import MCPServicePort, RuntimeServiceBinderPort
@@ -210,6 +210,10 @@ async def build_core_services(
             refresh()
         return restarted
 
+    runtime_state_path = (
+        loop.services.core.tool_context.workspace_root
+        / ".krelcode" / "runtime" / "tasks.json"
+    )
     runtime = AgentRuntime(
         loop,
         subagents=subagents,
@@ -217,7 +221,11 @@ async def build_core_services(
         mcp_reload=reload_mcp,
         acceptance_evaluator=DefaultAcceptanceEvaluator(),
         control_plane=DefaultControlPlane(),
-        task_runtime=LocalTaskRuntime(),
+        task_runtime=LocalTaskRuntime(
+            state_path=runtime_state_path,
+            redactor=redactor,
+        ),
+        resource_registry=LocalRuntimeResourceRegistry(),
         strict_application_request=True,
     )
     observability: Optional[ObservabilitySink] = None

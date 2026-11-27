@@ -5,12 +5,17 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Optional, Sequence, cast
+from typing import Awaitable, Callable, Optional, Sequence, cast
 
 from krelcode.contracts.acceptance import AcceptanceEvaluatorPort
 from krelcode.contracts.application import ApplicationRequest
 from krelcode.contracts.governance import ControlPlanePort
-from krelcode.contracts.runtime import HarnessTurnControlPort, RuntimeSnapshot
+from krelcode.contracts.runtime import (
+    HarnessTurnControlPort,
+    RuntimeResourcePort,
+    RuntimeResourceRegistryPort,
+    RuntimeSnapshot,
+)
 from krelcode.core.events import EventBus
 from krelcode.core.messages import ImageRef, SteeringInput
 from krelcode.agent.turn.loop import AgentLoop
@@ -117,6 +122,61 @@ class AgentLoopTurnAdapter(HarnessTurnControlPort):
             await lsp.close()
 
 
+class InlineRuntimeResourceRegistry(RuntimeResourceRegistryPort):
+    """Compatibility registry for directly constructed AgentRuntime values."""
+
+    def __init__(self) -> None:
+        self._resources: list[RuntimeResourcePort] = []
+        self._names: set[str] = set()
+        self._closed = False
+        self.last_errors: tuple[str, ...] = ()
+
+    def register(self, resource: RuntimeResourcePort) -> None:
+        if self._closed:
+            raise RuntimeError("RuntimeResourceRegistry 已关闭")
+        if resource.resource_name in self._names:
+            return
+        self._names.add(resource.resource_name)
+        self._resources.append(resource)
+
+    async def close_all(self) -> tuple[str, ...]:
+        if self._closed:
+            return self.last_errors
+        self._closed = True
+        errors: list[str] = []
+        for resource in reversed(self._resources):
+            try:
+                await resource.close()
+            except Exception as exc:
+                errors.append(
+                    f"{resource.resource_name}: {type(exc).__name__}: {exc}")
+        self.last_errors = tuple(errors)
+        return self.last_errors
+
+
+class AsyncCloseResource(RuntimeResourcePort):
+    """Adapt a concrete async close method to RuntimeResourcePort."""
+
+    def __init__(
+        self,
+        name: str,
+        closer: Callable[[], Awaitable[None]],
+    ) -> None:
+        self._name = name
+        self._closer = closer
+        self._closed = False
+
+    @property
+    def resource_name(self) -> str:
+        return self._name
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        await self._closer()
+
+
 def as_turn_control(
     host: AgentLoop | HarnessTurnControlPort,
 ) -> HarnessTurnControlPort:
@@ -125,4 +185,9 @@ def as_turn_control(
     return host
 
 
-__all__ = ["AgentLoopTurnAdapter", "as_turn_control"]
+__all__ = [
+    "AgentLoopTurnAdapter",
+    "AsyncCloseResource",
+    "InlineRuntimeResourceRegistry",
+    "as_turn_control",
+]

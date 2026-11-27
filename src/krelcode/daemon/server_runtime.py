@@ -6,6 +6,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional
 
+from ..contracts.runtime import (
+    RuntimeResourceRegistryPort,
+    RuntimeTaskRuntimePort,
+)
+from ..contracts.tool import ToolContext
+from ..core.events import EventBus
+from ..core.redact import SecretRedactor
+
 
 @dataclass(frozen=True)
 class DaemonAgentRuntimeRequest:
@@ -26,8 +34,12 @@ class DaemonAgentRuntimeRequest:
 class DaemonAgentRuntime:
     """Concrete agent runtime returned by an injected composition factory."""
 
-    loop: Any
+    task_runtime: RuntimeTaskRuntimePort
+    resources: RuntimeResourceRegistryPort
+    bus: EventBus
     agents: Any
+    tool_context: Optional[ToolContext] = None
+    redactor: Optional[SecretRedactor] = None
     mcp_supervisor: Any = None
 
 

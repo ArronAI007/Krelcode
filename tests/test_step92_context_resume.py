@@ -359,7 +359,8 @@ def test_rewind_restores_context_plan_matching_history(tmp_path):
         loop.context_checkpoint_store = store
         coordinator = ContextCheckpointCoordinator(loop=loop, store=store)
         coordinator.attach(loop.bus)
-        controller = SessionController(AgentRuntime(loop), checkpoints=None)
+        controller = SessionController(
+            AgentRuntime(loop), loop=loop, checkpoints=None)
         loop.history = [Message.system("SYS")]
 
         loop.history.append(Message.user("first"))

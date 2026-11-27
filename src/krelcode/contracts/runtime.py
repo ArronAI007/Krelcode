@@ -222,7 +222,43 @@ class RuntimeTaskRuntimePort(Protocol):
 class RuntimeContinuationPort(Protocol):
     """Restore semantic task state from a durable checkpoint."""
 
-    async def resume(self, checkpoint: RuntimeCheckpointRef) -> RuntimeTaskState: ...
+    def resume(
+        self,
+        checkpoint: RuntimeCheckpointRef,
+    ) -> "RuntimeContinuationResult": ...
+
+
+@dataclass(frozen=True)
+class RuntimeContinuationResult:
+    """Content-light outcome of applying one continuation checkpoint."""
+
+    checkpoint_id: str
+    session_id: str = ""
+    turn_id: str = ""
+    history_messages: int = 0
+    compact_checkpoint_id: str = ""
+    working_context_entries: int = 0
+    stale_files: tuple[str, ...] = ()
+    memory_ids: tuple[str, ...] = ()
+    workspace_refresh_pending: bool = True
+    state: Optional[RuntimeTaskState] = None
+
+
+class RuntimeResourcePort(Protocol):
+    """One long-lived runtime resource with idempotent closure."""
+
+    @property
+    def resource_name(self) -> str: ...
+
+    async def close(self) -> None: ...
+
+
+class RuntimeResourceRegistryPort(Protocol):
+    """Unified ownership for runtime-scoped long-lived resources."""
+
+    def register(self, resource: RuntimeResourcePort) -> None: ...
+
+    async def close_all(self) -> tuple[str, ...]: ...
 
 
 class HarnessTurnControlPort(Protocol):
@@ -462,7 +498,10 @@ __all__ = [
     "RUNTIME_RELEASE_SCHEMA_VERSION",
     "RuntimeCheckpointRef",
     "RuntimeContinuationPort",
+    "RuntimeContinuationResult",
     "RuntimeLease",
+    "RuntimeResourcePort",
+    "RuntimeResourceRegistryPort",
     "RuntimeReleaseManifest",
     "RuntimeSnapshot",
     "RuntimeStateRef",

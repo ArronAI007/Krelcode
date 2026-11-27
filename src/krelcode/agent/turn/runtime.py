@@ -34,13 +34,18 @@ from krelcode.contracts.runtime import (
     HarnessTurnControlPort,
     RuntimeCheckpointRef,
     RuntimeSnapshot,
+    RuntimeResourceRegistryPort,
     RuntimeStateRef,
     RuntimeTaskRuntimePort,
     RuntimeTaskState,
 )
 from krelcode.agent.turn.loop import AgentLoop
 from krelcode.agent.turn.query import QueryEngine, QuerySession
-from krelcode.agent.turn.runtime_adapter import as_turn_control
+from krelcode.agent.turn.runtime_adapter import (
+    AsyncCloseResource,
+    InlineRuntimeResourceRegistry,
+    as_turn_control,
+)
 
 
 class _SubagentRuntimePort(Protocol):
@@ -75,6 +80,7 @@ class HarnessRuntimeFacade:
         acceptance_evaluator: Optional[AcceptanceEvaluatorPort] = None,
         control_plane: Optional[ControlPlanePort] = None,
         task_runtime: Optional[RuntimeTaskRuntimePort] = None,
+        resource_registry: Optional[RuntimeResourceRegistryPort] = None,
         strict_application_request: bool = False,
     ) -> None:
         self._turn = as_turn_control(loop)
@@ -90,7 +96,10 @@ class HarnessRuntimeFacade:
         self._query: Optional[QuerySession] = None
         self._session_id = ""
         self._closed = False
+        self.last_close_errors: tuple[str, ...] = ()
         self.task_runtime = task_runtime
+        self.resource_registry = (
+            resource_registry or InlineRuntimeResourceRegistry())
         self.query_engine = QueryEngine(
             self._turn,
             task_runtime=task_runtime,
@@ -99,6 +108,25 @@ class HarnessRuntimeFacade:
         self._turn.set_acceptance_evaluator(acceptance_evaluator)
         self._turn.set_control_plane(control_plane)
         self._turn.set_runtime_snapshot_provider(self._runtime_snapshot)
+        self.resource_registry.register(AsyncCloseResource(
+            "harness",
+            self._turn.close_runtime_resources,
+        ))
+        if self.subagents is not None:
+            self.resource_registry.register(AsyncCloseResource(
+                "subagents",
+                self.subagents.shutdown,
+            ))
+        if self.shell_jobs is not None:
+            self.resource_registry.register(AsyncCloseResource(
+                "shell_jobs",
+                self.shell_jobs.shutdown,
+            ))
+        if self.mcp_supervisor is not None:
+            self.resource_registry.register(AsyncCloseResource(
+                "mcp",
+                self.mcp_supervisor.close_all,
+            ))
         self._unsubscribe_checkpoints = self.bus.subscribe(
             self._record_checkpoint_event)
 
@@ -285,13 +313,7 @@ class HarnessRuntimeFacade:
         self._closed = True
         await self.stop()
         self._unsubscribe_checkpoints()
-        await self._turn.close_runtime_resources()
-        if self.shell_jobs is not None:
-            await self.shell_jobs.shutdown()
-        if self.subagents is not None:
-            await self.subagents.shutdown()
-        if self.mcp_supervisor is not None:
-            await self.mcp_supervisor.close_all()
+        self.last_close_errors = await self.resource_registry.close_all()
 
     def inspect_task(self, task_id: Optional[str] = None) -> Optional[RuntimeTaskState]:
         """Return physical state without exposing the underlying asyncio task."""

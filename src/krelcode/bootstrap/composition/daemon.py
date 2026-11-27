@@ -6,10 +6,14 @@ import argparse
 from typing import TYPE_CHECKING, cast
 
 from krelcode.core.redact import SecretRedactor
-from krelcode.mcp.supervisor import MCPSupervisor
 
 from ...agent.prompt.prompt_surface_contract import PromptSurfaceExecutor
 from ...agent.turn.runtime_services import MCPServicePort
+from ...runtime.execution import (
+    LocalRuntimeResourceRegistry,
+    LocalTaskRuntime,
+    RuntimeResourceAdapter,
+)
 from ..parser import build_parser as _build_parser
 from .mcp import build_mcp_roots, build_mcp_sampler, compose_mcp_config
 from .runtime import build_loop
@@ -71,8 +75,34 @@ async def build_daemon_agent_runtime(
         )
         loop.mcp_supervisor = cast(MCPServicePort, supervisor)
         loop.sync_context_attachments(include_mcp=True)
+    resources = LocalRuntimeResourceRegistry()
+    resources.register(RuntimeResourceAdapter(
+        "subagents",
+        agents.shutdown,
+    ))
+    if supervisor is not None:
+        resources.register(RuntimeResourceAdapter(
+            "mcp",
+            supervisor.close_all,
+        ))
+    lsp = loop.services.extensions.lsp
+    if lsp is not None:
+        resources.register(RuntimeResourceAdapter(
+            "lsp",
+            lsp.close,
+        ))
     return DaemonAgentRuntime(
-        loop=loop,
+        task_runtime=LocalTaskRuntime(
+            state_path=(
+                request.workspace_root
+                / ".krelcode" / "runtime" / "daemon-tasks.json"
+            ),
+            redactor=redactor,
+        ),
+        resources=resources,
+        bus=loop.services.core.bus,
         agents=agents,
+        tool_context=loop.services.core.tool_context,
+        redactor=redactor,
         mcp_supervisor=supervisor,
     )

@@ -1,10 +1,17 @@
 """Production runtime adapters."""
 
-from .execution import LocalRuntimeTaskHandle, LocalTaskRuntime
+from .execution import (
+    LocalRuntimeResourceRegistry,
+    LocalRuntimeTaskHandle,
+    LocalTaskRuntime,
+    RuntimeResourceAdapter,
+)
 
 __all__ = [
     "LocalRuntimeTaskHandle",
+    "LocalRuntimeResourceRegistry",
     "LocalTaskRuntime",
+    "RuntimeResourceAdapter",
     "daemon",
     "execution",
     "jobs",

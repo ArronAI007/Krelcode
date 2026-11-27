@@ -6,8 +6,10 @@ import asyncio
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, cast
 
+from ..contracts.runtime import RuntimeResourcePort, RuntimeResourceRegistryPort
+from ..contracts.service_ports import ShellJobManagerPort
 from ..core.events import (
     AgentEvent,
     SubagentFeedUpdated,
@@ -24,8 +26,33 @@ from ..contracts.application import (
 )
 from ..jobs import ShellJobManager
 from .protocol import RPCError
-from .server_runtime import DaemonAgentRuntimeFactory, DaemonAgentRuntimeRequest
+from .server_runtime import (
+    DaemonAgentRuntime,
+    DaemonAgentRuntimeFactory,
+    DaemonAgentRuntimeRequest,
+)
 from .storage import AgentRecordStore
+
+
+class _AsyncCloseResource(RuntimeResourcePort):
+    def __init__(
+        self,
+        name: str,
+        closer: Callable[[], Awaitable[None]],
+    ) -> None:
+        self._name = name
+        self._closer = closer
+        self._closed = False
+
+    @property
+    def resource_name(self) -> str:
+        return self._name
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        await self._closer()
 
 
 class DaemonAgentService:
@@ -63,8 +90,7 @@ class DaemonAgentService:
         self.redactor = redactor
         self.instance_id = instance_id
         self.log = log
-        self._agent_loop: Any = None
-        self._agent_mcp_supervisor: Any = None
+        self._agent_runtime: Optional[DaemonAgentRuntime] = None
         self._agents: Any = None
         self._agent_lock = asyncio.Lock()
 
@@ -84,31 +110,21 @@ class DaemonAgentService:
             return False
 
     async def shutdown(self) -> None:
-        if self._agents is not None:
+        if self._agent_runtime is not None:
+            resources: RuntimeResourceRegistryPort = self._agent_runtime.resources
             try:
-                await self._agents.shutdown()
+                await resources.close_all()
             except Exception:
                 pass
+            self._agent_runtime = None
             self._agents = None
-        if self._agent_mcp_supervisor is not None:
-            try:
-                await self._agent_mcp_supervisor.close_all()
-            except Exception:
-                pass
-            self._agent_mcp_supervisor = None
-        if self._agent_loop is not None:
-            lsp_manager = getattr(self._agent_loop, "lsp_manager", None)
-            if lsp_manager is not None:
-                try:
-                    await lsp_manager.close()
-                except Exception:
-                    pass
-            self._agent_loop = None
 
-    async def _ensure_runtime(self) -> Tuple[Any, Any]:
+    async def _ensure_runtime(self) -> Tuple[DaemonAgentRuntime, Any]:
         async with self._agent_lock:
             if self._agents is not None:
-                return self._agent_loop, self._agents
+                if self._agent_runtime is None:
+                    raise RuntimeError("daemon agent runtime 状态不一致")
+                return self._agent_runtime, self._agents
             if self.runtime_factory is None:
                 raise RuntimeError(
                     "daemon agent runtime 未配置；请由组合根注入 "
@@ -124,21 +140,25 @@ class DaemonAgentService:
                 permission_mode=self.permission_mode,
                 log=lambda text: self.log(f"[daemon:agent] {text}"),
             ))
-            loop = runtime.loop
             agents = runtime.agents
-            self._agent_mcp_supervisor = runtime.mcp_supervisor
-            redactor = loop.services.core.redactor or self.redactor
+            redactor = runtime.redactor or self.redactor
             agents.redactor = redactor
             agents.sidechains.redactor = redactor
             # Child tools use the daemon's durable job manager, so jobs started
             # by subagents remain controllable after the spawning client leaves.
-            loop.services.core.tool_context.shell_jobs = self.job_manager
+            if runtime.tool_context is not None:
+                runtime.tool_context.shell_jobs = cast(
+                    ShellJobManagerPort, self.job_manager)
             if getattr(agents, "tool_context", None) is not None:
                 agents.tool_context.shell_jobs = self.job_manager
-            agents.bus.subscribe(self.on_event)
-            self._agent_loop = loop
+            runtime.resources.register(_AsyncCloseResource(
+                "daemon_jobs",
+                self.job_manager.shutdown,
+            ))
+            runtime.bus.subscribe(self.on_event)
+            self._agent_runtime = runtime
             self._agents = agents
-            return loop, agents
+            return runtime, agents
 
     async def on_event(self, event: AgentEvent) -> None:
         try:

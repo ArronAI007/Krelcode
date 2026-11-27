@@ -68,7 +68,7 @@ def test_headless_mode_runs_through_runtime(tmp_path, capsys):
     rc = asyncio.run(run_session(
         base_args(message="hello"),
         runtime,
-        SessionRuntimePorts(),
+        SessionRuntimePorts(harness=runtime.loop),
         usage=usage,
         model_switch=None,
         skills_reload=None,
@@ -93,7 +93,7 @@ def test_headless_input_processor_applies_user_input_hook(tmp_path, capsys):
     rc = asyncio.run(run_session(
         base_args(message="hello"),
         runtime,
-        SessionRuntimePorts(),
+        SessionRuntimePorts(harness=runtime.loop),
         usage=UsageTracker(),
         model_switch=None,
         skills_reload=None,
@@ -120,7 +120,7 @@ def test_interactive_mode_delegates_without_importing_terminal_ui(tmp_path):
     rc = asyncio.run(run_session(
         base_args(),
         runtime,
-        SessionRuntimePorts(),
+        SessionRuntimePorts(harness=runtime.loop),
         usage=UsageTracker(),
         model_switch=None,
         skills_reload=None,

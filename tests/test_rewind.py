@@ -65,6 +65,7 @@ def build_controller(tmp_path: Path, *, session: bool = False):
     runtime = AgentRuntime(loop)
     controller = SessionController(
         runtime,
+        loop=loop,
         session_path=str(session_path) if session_path else None,
         sessions_dir=sessions_dir,
         checkpoints=checkpoints,
@@ -192,7 +193,8 @@ def test_agent_loop_turn_is_rewindable_end_to_end(tmp_path):
     checkpoints = CheckpointManager(tmp_path)
     checkpoints.attach(bus)
     runtime = AgentRuntime(loop)
-    controller = SessionController(runtime, checkpoints=checkpoints)
+    controller = SessionController(
+        runtime, loop=loop, checkpoints=checkpoints)
 
     assert asyncio.run(runtime.run_once("修改 a.txt")) == "已完成"
     assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "v2"

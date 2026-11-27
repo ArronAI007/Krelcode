@@ -92,7 +92,8 @@ async def run_stream_json_session(
     """运行 stream-json 输入输出；返回进程退出码。"""
     input_stream = input_stream or sys.stdin
     output_stream = output_stream or sys.stdout
-    loop = loop or runtime.loop
+    if loop is None:
+        raise ValueError("run_stream_json_session 必须显式提供 Harness loop")
     encoder = StreamJsonEncoder(StreamJsonMetadata(
         session_id=Path(session_path).stem if session_path else None,
         cwd=str(runtime.workspace_root),

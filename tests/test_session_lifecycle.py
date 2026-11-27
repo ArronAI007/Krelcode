@@ -231,7 +231,11 @@ def test_session_commands_fork_rename_search_and_export_native(tmp_path):
     loop.session_recorder.flush_history()
     runtime = AgentRuntime(loop)
     controller = SessionController(
-        runtime, session_path=str(original), sessions_dir=sessions)
+        runtime,
+        loop=loop,
+        session_path=str(original),
+        sessions_dir=sessions,
+    )
 
     renamed = asyncio.run(controller.execute_command("/rename beta"))
     assert "已重命名" in "\n".join(renamed.output)

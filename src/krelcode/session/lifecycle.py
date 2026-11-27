@@ -11,7 +11,9 @@ from ..agent.turn.loop import AgentLoop
 from ..agent.turn.runtime import AgentRuntime
 from ..core.messages import Message
 from ..core.redact import SecretRedactor
-from ..agent.context.context_checkpoint import ContextCheckpoint, restore_context_checkpoint
+from ..agent.context.context_checkpoint import ContextCheckpoint
+from ..contracts.runtime import RuntimeCheckpointRef
+from .continuation import SessionContinuationAdapter
 from .memory import MemoryStore, sync_memory_fragment
 from .manager import (
     SessionInfo,
@@ -21,7 +23,6 @@ from .manager import (
     resolve_session_target,
 )
 from .recorder import SessionRecorder, new_session_path
-from .restore import restore_session
 
 
 class SessionLifecycleError(RuntimeError):
@@ -53,6 +54,7 @@ class SessionLifecycle:
         *,
         runtime: Optional[AgentRuntime] = None,
         redactor: Optional[SecretRedactor] = None,
+        continuation: Optional[SessionContinuationAdapter] = None,
     ) -> None:
         self.loop = loop
         self.sessions_dir = Path(sessions_dir) if sessions_dir else None
@@ -61,6 +63,14 @@ class SessionLifecycle:
         self.redactor = redactor
         self.on_switch: Optional[Callable[[], None]] = None
         self.context_checkpoints = loop.services.context.checkpoint
+        self.continuation = continuation or SessionContinuationAdapter(
+            loop,
+            context_checkpoints=self.context_checkpoints,
+            compact_checkpoints=loop.services.context.compact_checkpoint,
+            memory_store=loop.services.session.memory,
+            task_runtime=(
+                runtime.task_runtime if runtime is not None else None),
+        )
         memory_store = loop.services.session.memory
         if memory_store is not None and self.session_path is not None:
             memory_store.bind_session(self.session_path.stem)
@@ -132,12 +142,12 @@ class SessionLifecycle:
         if context_checkpoint is not None:
             recorder.record_context_checkpoint(
                 context_checkpoint.metadata_record())
-            restore_context_checkpoint(
-                self.loop,
-                context_checkpoint,
-                compact_store=self.loop.services.context.compact_checkpoint,
-                memory_store=memory_store,
-            )
+            self.continuation.resume(RuntimeCheckpointRef(
+                checkpoint_id=context_checkpoint.id,
+                kind="context",
+                session_id=path.stem,
+                turn_id=context_checkpoint.turn_id,
+            ))
 
     def fork(
         self,
@@ -184,7 +194,7 @@ class SessionLifecycle:
         path = Path(path)
         old_path = self.session_path
         if old_path is not None and path.resolve() == old_path.resolve():
-            restored = restore_session(self.loop, path, log=log)
+            restored = self.continuation.resume_session(path, log=log) is not None
             if restored and self.on_switch is not None:
                 self.on_switch()
             return restored
@@ -193,7 +203,7 @@ class SessionLifecycle:
         title_source = (info.title or info.preview) if info is not None else ""
         title = f"Resumed · {title_source}" if title_source else "Resumed session"
         self._flush_current()
-        if not restore_session(self.loop, path, log=log):
+        if self.continuation.resume_session(path, log=log) is None:
             return False
         if self.sessions_dir is not None:
             new_path = new_session_path(self.sessions_dir)
