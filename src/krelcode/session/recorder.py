@@ -52,6 +52,7 @@ from ..core.events import (
 from ..core.messages import Message
 from ..core.redact import SecretRedactor
 from ..core.codec import history_to_dicts, history_from_dicts
+from ..storage.event_log import LocalEventLog
 
 
 class SessionRecorder:
@@ -70,6 +71,10 @@ class SessionRecorder:
         self._unsub: Optional[object] = None
         self._session_start_written = False
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.event_log = LocalEventLog(
+            self.path,
+            redactor=self._redactor,
+        )
 
     def attach(self, bus: EventBus) -> None:
         self._unsub = bus.subscribe(self.on_event)
@@ -340,12 +345,17 @@ class SessionRecorder:
 
     def _write(self, record: dict[str, Any]) -> None:
         try:
-            line = json.dumps(record, ensure_ascii=False)
-            if self._redactor is not None:
-                line = self._redactor.redact(line)
-            with open(self.path, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
-        except OSError:
+            self.event_log.append(
+                record,
+                event_type=str(record.get("type") or ""),
+                session_id=str(
+                    record.get("session_id")
+                    or self.metadata.get("session_id")
+                    or ""
+                ),
+                turn_id=str(record.get("turn_id") or ""),
+            )
+        except (OSError, TypeError, ValueError):
             pass  # 持久化失败不阻断对话
 
 

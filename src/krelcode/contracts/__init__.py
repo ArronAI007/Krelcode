@@ -17,6 +17,7 @@ from .acceptance import (
     AcceptanceResult,
     AcceptanceStatus,
 )
+from .artifact import ArtifactRef, ArtifactStorePort
 from .change_admission import (
     AdmissionDecision,
     AdmissionGatePort,
@@ -36,6 +37,25 @@ from .evaluation import (
     EvaluationHarnessPort,
     TraceReplayPort,
     VersionManifestPort,
+)
+from .event_log import EventLogAppendResult, EventLogEntry, EventLogPort
+from .gateway import (
+    AgentGatewayPort,
+    AgentGatewayRequest,
+    AgentGatewayResult,
+    GatewayAuditPort,
+    GatewayContext,
+    GatewayDecision,
+    GatewayLayer,
+    GatewayPorts,
+    LLMGatewayPort,
+    LLMGatewayRequest,
+    LLMGatewayRoute,
+    MCPGatewayPort,
+    MCPGatewayRequest,
+    MCPGatewayResult,
+    TenantQuota,
+    TenantQuotaPort,
 )
 from .governance import (
     AuditCorrelation,
@@ -93,7 +113,17 @@ from .runtime import (
     RuntimeTaskState,
     RuntimeTaskStatus,
 )
-from .state import StateCheckpointBundle, StateCheckpointStorePort
+from .state import (
+    StateCheckpointBundle,
+    StateCheckpointStorePort,
+    StateSnapshot,
+    StateSnapshotStatus,
+    StateSnapshotStorePort,
+    StateStorePort,
+    canonical_digest,
+    component_digest,
+)
+from .storage import StoragePorts
 from .safety import SandboxPort
 from .service_ports import (
     EnterprisePolicyPort,
@@ -144,6 +174,8 @@ __all__ = [
     "ApplicationRequest",
     "ApplicationRequestFactory",
     "ArtifactIdentity",
+    "ArtifactRef",
+    "ArtifactStorePort",
     "AuditCorrelation",
     "BehaviorFixture",
     "BehaviorFixturePort",
@@ -154,9 +186,17 @@ __all__ = [
     "ChangeType",
     "ControlPlanePort",
     "EnterprisePolicyPort",
+    "EventLogAppendResult",
+    "EventLogEntry",
+    "EventLogPort",
     "ExecutionRuntimePort",
     "GovernanceDecision",
     "GovernanceRequest",
+    "GatewayAuditPort",
+    "GatewayContext",
+    "GatewayDecision",
+    "GatewayLayer",
+    "GatewayPorts",
     "EvaluationCheck",
     "EvaluationHarnessPort",
     "EvaluationReport",
@@ -176,6 +216,12 @@ __all__ = [
     "KnowledgeSourcePort",
     "KnowledgeSourceStats",
     "KnowledgeVersion",
+    "LLMGatewayPort",
+    "LLMGatewayRequest",
+    "LLMGatewayRoute",
+    "MCPGatewayPort",
+    "MCPGatewayRequest",
+    "MCPGatewayResult",
     "PermissionMode",
     "PrincipalPort",
     "PromptBenchmarkServicesPort",
@@ -217,6 +263,11 @@ __all__ = [
     "SecurityDecisionValue",
     "StateCheckpointBundle",
     "StateCheckpointStorePort",
+    "StateSnapshotStatus",
+    "StateSnapshot",
+    "StateSnapshotStorePort",
+    "StateStorePort",
+    "StoragePorts",
     "ShellJobManagerPort",
     "ShellJobPagePort",
     "ShellJobPort",
@@ -241,4 +292,11 @@ __all__ = [
     "TaskShape",
     "TriggerType",
     "PromptReleaseIdentity",
+    "AgentGatewayPort",
+    "AgentGatewayRequest",
+    "AgentGatewayResult",
+    "TenantQuota",
+    "TenantQuotaPort",
+    "canonical_digest",
+    "component_digest",
 ]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, cast
 
 from ..agent.context.context_checkpoint import (
     ContextCheckpoint,
@@ -176,6 +176,29 @@ class SessionContinuationAdapter(RuntimeContinuationPort):
                 state_ref = self.task_runtime.state_ref(checkpoint.task_id)
             except KeyError:
                 state_ref = None
+        working_sequence = int(
+            getattr(
+                self.loop.working_context_store.snapshot(),
+                "sequence",
+                0,
+            ) or 0
+        )
+        resolved_history_digest = history_digest(self.loop.history)
+        event_sequence = 0
+        event_digest = ""
+        recorder = getattr(
+            self.loop.services.session, "recorder", None)
+        event_log = getattr(recorder, "event_log", None)
+        if event_log is not None:
+            event_sequence = int(
+                getattr(event_log, "latest_sequence", 0) or 0)
+            if event_sequence > 0:
+                entries = event_log.read(
+                    after_sequence=event_sequence - 1,
+                    limit=1,
+                )
+                if entries:
+                    event_digest = entries[-1].digest
         bundle = StateCheckpointBundle(
             bundle_id=bundle_id,
             session_id=str(getattr(result, "session_id", "") or ""),
@@ -184,21 +207,70 @@ class SessionContinuationAdapter(RuntimeContinuationPort):
             context_checkpoint_id=checkpoint.checkpoint_id,
             compact_checkpoint_id=str(
                 getattr(result, "compact_checkpoint_id", "") or ""),
-            working_context_sequence=int(
-                getattr(
-                    self.loop.working_context_store.snapshot(),
-                    "sequence",
-                    0,
-                ) or 0
-            ),
-            history_digest=history_digest(self.loop.history),
+            working_context_sequence=working_sequence,
+            history_digest=resolved_history_digest,
+            event_sequence=event_sequence,
+            event_digest=event_digest,
             plan=(
                 plan.as_dict()
                 if plan is not None and hasattr(plan, "as_dict") else {}
             ),
             runtime_state=task_state,
             state_ref=state_ref,
+            components={
+                "context": {
+                    "checkpoint_id": checkpoint.checkpoint_id,
+                    "working_context_sequence": working_sequence,
+                },
+                "compact": {
+                    "checkpoint_id": str(
+                        getattr(result, "compact_checkpoint_id", "") or ""),
+                },
+                "history": {
+                    "messages": int(
+                        getattr(result, "history_messages", 0) or 0),
+                    "digest": resolved_history_digest,
+                },
+                "event_log": {
+                    "sequence": event_sequence,
+                    "digest": event_digest,
+                },
+                "memory": {
+                    "ids": list(
+                        getattr(result, "memory_ids", ()) or ()),
+                },
+                "workspace": {
+                    "stale_files": list(
+                        getattr(result, "stale_files", ()) or ()),
+                    "refresh_pending": bool(
+                        getattr(
+                            result,
+                            "workspace_refresh_pending",
+                            True,
+                        )
+                    ),
+                },
+                "runtime": {
+                    "state_ref": (
+                        {
+                            "state_id": state_ref.state_id,
+                            "sequence": state_ref.sequence,
+                            "checkpoint_id": (
+                                state_ref.checkpoint.checkpoint_id
+                                if state_ref.checkpoint is not None else ""
+                            ),
+                        }
+                        if state_ref is not None else None
+                    ),
+                },
+            },
         )
+        commit = getattr(self.state_checkpoints, "commit", None)
+        if callable(commit):
+            try:
+                return cast(StateCheckpointBundle, commit(bundle))
+            except Exception:
+                return None
         return bundle if self.state_checkpoints.save(bundle) else None
 
 
