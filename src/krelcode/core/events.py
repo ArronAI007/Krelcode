@@ -397,6 +397,13 @@ class SubagentSpawned(AgentEvent):
     agent_id: str
     task: str
     definition: str = ""
+    delegation_id: str = ""
+    parent_task_id: str = ""
+    parent_turn_id: str = ""
+    parent_session_id: str = ""
+    relation_kind: str = "delegation"
+    responsibility_owner: str = ""
+    contract_hash: str = ""
 
 
 @dataclass(frozen=True)
@@ -415,6 +422,8 @@ class SubagentStateChanged(AgentEvent):
     agent_id: str
     status: str
     reason: str = ""
+    delegation_id: str = ""
+    responsibility_owner: str = ""
 
 
 @dataclass(frozen=True)
@@ -423,6 +432,9 @@ class SubagentFinished(AgentEvent):
     agent_id: str
     status: str
     preview: str
+    delegation_id: str = ""
+    accepted: bool = False
+    responsibility_owner: str = ""
 
 
 @dataclass(frozen=True)

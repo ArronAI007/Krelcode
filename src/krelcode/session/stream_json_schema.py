@@ -121,6 +121,7 @@ STREAM_JSON_FIELD_TYPES: Mapping[str, Mapping[str, object]] = {
     "blocked": _FIELD_BOOLEAN,
     "allow_free_text": _FIELD_BOOLEAN,
     "answered": _FIELD_BOOLEAN,
+    "accepted": _FIELD_BOOLEAN,
     "phase": {"type": "string"},
     "detail": {"type": "string"},
     "tool_call_id": {"type": "string"},
@@ -143,6 +144,13 @@ STREAM_JSON_FIELD_TYPES: Mapping[str, Mapping[str, object]] = {
     "tool": {"type": "string"},
     "system_message": {"type": "string"},
     "agent_id": {"type": "string"},
+    "delegation_id": {"type": "string"},
+    "parent_task_id": {"type": "string"},
+    "parent_turn_id": {"type": "string"},
+    "parent_session_id": {"type": "string"},
+    "relation_kind": {"type": "string"},
+    "responsibility_owner": {"type": "string"},
+    "contract_hash": {"type": "string"},
     "task": {"type": "string"},
     "definition": {"type": "string"},
     "preview": {"type": "string"},
@@ -261,14 +269,21 @@ OUTPUT_EVENT_SCHEMAS: Mapping[tuple[str, str], StreamJsonEventSchema] = {
         "job", "finished", "job_id", "command", "status", "exit_code", "preview",
         envelope=_JOB_ENVELOPE),
     ("subagent", "started"): _event(
-        "subagent", "started", "agent_id", "task", "definition"),
+        "subagent", "started", "agent_id", "task", "definition",
+        optional=(
+            "delegation_id", "parent_task_id", "parent_turn_id",
+            "parent_session_id", "relation_kind", "responsibility_owner",
+            "contract_hash",
+        )),
     ("subagent", "feed"): _event(
         "subagent", "feed", "agent_id", "agent_sequence", "kind", "text",
         "data"),
     ("subagent", "state"): _event(
-        "subagent", "state", "agent_id", "status", "reason"),
+        "subagent", "state", "agent_id", "status", "reason",
+        optional=("delegation_id", "responsibility_owner")),
     ("subagent", "finished"): _event(
-        "subagent", "finished", "agent_id", "status", "preview"),
+        "subagent", "finished", "agent_id", "status", "preview",
+        optional=("delegation_id", "accepted", "responsibility_owner")),
     ("user", "steered"): _event("user", "steered", "content"),
     ("plan", "updated"): _event(
         "plan", "updated", "items", "active_index", "statuses", "explanation",

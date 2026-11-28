@@ -548,7 +548,12 @@ TOOL_PLAYBOOKS: Tuple[ToolPlaybook, ...] = (
                     "because Krelcode does not copy the parent's full history. Do not duplicate "
                     "the delegated work locally. For risky changes, delegate independent "
                     "verification to definition=\"verifier\" and provide the change scope, "
-                    "baseline, commands already run, and claims that must be challenged."
+                    "baseline, commands already run, and claims that must be challenged. "
+                    "For non-trivial delegation prefer the structured delegation contract: "
+                    "scope, known_context, capabilities, budget, output schema, evidence, "
+                    "failure_policy, retry_policy and acceptance. Use relation_kind=handoff "
+                    "only with recovery_checkpoint_id and explicit handoff_state; otherwise "
+                    "keep it a delegation with parent ownership."
                 ),
             ),
             ToolGuidance(

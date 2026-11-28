@@ -78,8 +78,14 @@ def test_spawn_agent_prompt_hash_is_deterministic():
 def test_spawn_agent_schema_still_uses_the_existing_argument_contract():
     properties = SpawnAgentTool.parameters["properties"]
 
-    assert set(properties) == {"task", "isolated", "fork_context", "definition"}
-    assert SpawnAgentTool.parameters["required"] == ["task"]
+    assert set(properties) == {
+        "task", "delegation", "isolated", "fork_context", "definition",
+    }
+    assert SpawnAgentTool.parameters["anyOf"] == [
+        {"required": ["task"]},
+        {"required": ["delegation"]},
+    ]
+    assert "required" not in SpawnAgentTool.parameters
     assert "心智模型" in properties["task"]["description"]
     assert "不得依赖父对话" in properties["task"]["description"]
 

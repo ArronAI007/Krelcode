@@ -13,6 +13,18 @@ from krelcode.contracts.loop import (
 from krelcode.contracts.tool_execution import ToolExecutionResult
 from krelcode.core.messages import ToolCall
 
+_SUBAGENT_TOOL_NAMES = frozenset({
+    "spawn_agent",
+    "wait_agent",
+    "send_to_agent",
+    "get_agent_feed",
+    "list_agents",
+    "list_agent_definitions",
+    "pause_agent",
+    "resume_agent",
+    "kill_agent",
+})
+
 
 def tool_observation(
     *,
@@ -25,7 +37,7 @@ def tool_observation(
         ObservationSource.MCP
         if result.runtime.value == "mcp"
         else ObservationSource.SUBAGENT
-        if tool_call.name in {"spawn_agent", "wait_agent", "send_input"}
+        if tool_call.name in _SUBAGENT_TOOL_NAMES
         else ObservationSource.JOB
         if tool_call.name.startswith("job_")
         else ObservationSource.TOOL
@@ -36,6 +48,33 @@ def tool_observation(
         for key in ("artifact_id", "checkpoint_id")
         if payload.data.get(key)
     )
+    delegation_result = payload.data.get("delegation_result")
+    if isinstance(delegation_result, dict):
+        evidence = delegation_result.get("evidence")
+        evidence_ids = (
+            *evidence_ids,
+            *(
+                str(item.get("id") or "")
+                for item in (evidence if isinstance(evidence, list) else ())
+                if isinstance(item, dict) and item.get("id")
+            ),
+        )
+    delegation_results = payload.data.get("delegation_results")
+    if isinstance(delegation_results, list):
+        for item in delegation_results:
+            if not isinstance(item, dict):
+                continue
+            evidence = item.get("evidence")
+            if not isinstance(evidence, list):
+                continue
+            evidence_ids = (
+                *evidence_ids,
+                *(
+                    str(value.get("id") or "")
+                    for value in evidence
+                    if isinstance(value, dict) and value.get("id")
+                ),
+            )
     return Observation(
         observation_id=f"obs-tool-{tool_call.id}-{digest[:12]}",
         turn_id=turn_id,
@@ -119,7 +158,7 @@ def user_input_observation(
 
 
 def tool_wait_kind(tool_name: str) -> WaitKind | None:
-    if tool_name in {"spawn_agent", "wait_agent", "send_input"}:
+    if tool_name in {"spawn_agent", "wait_agent", "send_to_agent"}:
         return WaitKind.SUBAGENT
     if tool_name in {"job_output", "job_wait"}:
         return WaitKind.JOB

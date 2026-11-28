@@ -8,7 +8,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import (
-    Awaitable, Callable, Dict, FrozenSet, Optional, Protocol, Sequence, Tuple,
+    Awaitable, Callable, Dict, FrozenSet, Mapping, Optional, Protocol, Sequence,
+    Tuple,
     Union,
 )
 
@@ -38,6 +39,7 @@ from .service_ports import (
 from .loop import WaitCondition
 from .external_event import ExternalEventPort
 from .plan import PlanControl, PlanControlMode
+from .delegation import DelegationParentContext
 
 @dataclass
 class ToolResult:
@@ -192,6 +194,13 @@ class ToolContext:
     plan_control_emitter: Optional[
         Callable[[PlanControl], Awaitable[None]]
     ] = field(default=None, repr=False)
+    delegation_parent: Optional[DelegationParentContext] = field(
+        default=None, repr=False)
+    delegation_usage_recorder: Optional[
+        Callable[[Mapping[str, float]], None]
+    ] = field(default=None, repr=False)
+    skill_allowlist: Optional[FrozenSet[str]] = field(
+        default=None, repr=False)
     shell_jobs: Optional[ShellJobManagerPort] = field(
         default=None, repr=False)
     tool_catalog: Optional[ToolCatalog] = field(default=None, repr=False)

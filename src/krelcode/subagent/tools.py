@@ -6,12 +6,20 @@ ToolContext 保持纯工作区语义。
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+import inspect
+from typing import Any, Dict, List, Mapping, cast
 
 from ..contracts.tool import ToolContext, ToolResult
+from ..contracts.delegation import DelegationFailurePolicy
 from ..tools.prompt import ToolPromptExample
 from .contracts import STATUS_PAUSED, STATUS_RUNNING, SubagentManagerPort
+from .delegation_collection import collect_delegations
+from .delegation_schema import (
+    SPAWN_AGENT_PARAMETERS,
+    delegation_contract_from_args,
+)
 from .prompt import SPAWN_AGENT_PROMPT_VERSION, build_spawn_agent_prompt
+from .workspace_version import capture_workspace_version
 
 
 class SpawnAgentTool:
@@ -23,6 +31,9 @@ class SpawnAgentTool:
         "分支中工作（互不冲突，改动提交到 krelcode/agent-<id> 分支）。"
         "子代理始终继承 Base/Managed/User/Project 指令和与本任务相关的 Memory，"
         "但不会继承父代理完整对话历史。fork_context 仅保留兼容标记。"
+        "非简单任务优先使用 delegation 结构化契约，声明范围、已知上下文、"
+        "预算、输出 Schema、验收证据和失败策略；真正 Handoff 还必须提供"
+        " recovery_checkpoint_id 与 handoff_state。"
         "返回子代理 id；用 wait_agent 等待结果，list_agents 查看状态。"
         "省略 definition 时默认使用 builtin general-purpose。"
         "可显式选择 Explore、Plan、general-purpose、claude、statusline-setup、"
@@ -101,45 +112,32 @@ class SpawnAgentTool:
             ),
         ),
     )
-    parameters: Dict[str, Any] = {
-        "type": "object",
-        "properties": {
-            "task": {
-                "type": "string",
-                "description": (
-                    "自包含委派说明：写明当前状态/心智模型、已验证事实与假设、"
-                    "为什么委派、精确文件/符号/命令/错误、禁止范围、交付物和验证方式；"
-                    "不得依赖父对话或要求子代理猜测。"
-                ),
-            },
-            "isolated": {"type": "boolean",
-                         "description": "true=在独立 git worktree 分支中执行（需工作区为 git 仓库）"},
-            "fork_context": {"type": "boolean",
-                             "description": "兼容标记；子代理只继承指令与任务相关 Memory，不复制完整历史"},
-            "definition": {"type": "string",
-                           "description": (
-                               "可选 Agent Definition 名称；省略时使用 general-purpose。"
-                               "内置值: Explore、Plan、general-purpose、claude、"
-                               "statusline-setup、claude-code-guide、verifier")},
-        },
-        "required": ["task"],
-    }
+    parameters: Dict[str, Any] = SPAWN_AGENT_PARAMETERS
 
     def __init__(self, manager: SubagentManagerPort) -> None:
         self.manager = manager
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
-        task = args.get("task")
-        if not isinstance(task, str) or not task.strip():
-            return ToolResult(content="task 必须是非空字符串", is_error=True)
         try:
-            handle = await self.manager.spawn(
-                task.strip(),
-                isolated=(bool(args["isolated"]) if "isolated" in args else None),
-                fork_context=(bool(args["fork_context"]) if "fork_context" in args else None),
-                definition=(str(args["definition"]).strip()
-                            if args.get("definition") else None),
-            )
+            contract = delegation_contract_from_args(args, ctx)
+            spawn_kwargs: Dict[str, Any] = {
+                "isolated": (
+                    bool(args["isolated"]) if "isolated" in args else None),
+                "fork_context": (
+                    bool(args["fork_context"])
+                    if "fork_context" in args else None),
+                "definition": contract.capabilities.definition,
+            }
+            parameters: Mapping[str, Any]
+            try:
+                parameters = inspect.signature(
+                    self.manager.spawn).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            if "contract" in parameters:
+                spawn_kwargs["contract"] = contract
+                spawn_kwargs["parent_context"] = contract.parent
+            handle = await self.manager.spawn(contract.task, **spawn_kwargs)
         except (ValueError, RuntimeError) as e:
             return ToolResult(content=str(e), is_error=True)
         extra = (f"，隔离分支 {handle.branch}（worktree: {handle.worktree}）"
@@ -148,12 +146,24 @@ class SpawnAgentTool:
             extra += f"，定义 {handle.definition}"
         if handle.forked:
             extra += "，已继承指令与筛选 Memory（不含完整历史）"
+        handle_contract = getattr(handle, "delegation_contract", None)
         return ToolResult(
             content=f"已启动子代理 {handle.id}（后台运行）{extra}。"
                     f"用 wait_agent(agent_id=\"{handle.id}\") 等待结果。",
             data={"agent_id": handle.id, "branch": handle.branch,
                   "forked": handle.forked, "definition": handle.definition,
-                  "sidechain": str(handle.sidechain_path or "")},
+                  "sidechain": str(handle.sidechain_path or ""),
+                  "delegation_id": (
+                      handle_contract.delegation_id
+                      if handle_contract else ""),
+                  "contract_hash": (
+                      handle_contract.contract_hash
+                      if handle_contract else ""),
+                  "relation_kind": (
+                      str(handle_contract.relation_kind.value)
+                      if handle_contract else "delegation"),
+                  "responsibility_owner": getattr(
+                      handle, "responsibility_owner", "")},
         )
 
 
@@ -215,42 +225,115 @@ status and report; do not treat an intermediate feed message as a completed resu
         except (TypeError, ValueError):
             timeout = 60.0
         try:
-            if len(agent_ids) == 1:
-                handles = [await self.manager.wait(agent_ids[0], timeout=timeout)]
-            else:
-                handles = await self.manager.wait_many(agent_ids, timeout=timeout)
-        except (KeyError, RuntimeError) as e:
+            handles = []
+            for agent_id in agent_ids:
+                handle = self.manager.get(agent_id)
+                if handle is None:
+                    raise KeyError(f"未知子代理: {agent_id}")
+                handles.append(handle)
+            async def request_policy_input(
+                prompt: str,
+                options: tuple[str, ...],
+                allow_free_text: bool,
+            ) -> str | None:
+                return await ctx.request_user_input(
+                    prompt, options, allow_free_text=allow_free_text)
+
+            report = await collect_delegations(
+                self.manager,
+                handles,
+                timeout=timeout,
+                current_workspace=capture_workspace_version(ctx.workspace_root),
+                request_input=request_policy_input,
+                usage_recorder=ctx.delegation_usage_recorder,
+            )
+        except (KeyError, RuntimeError, ValueError) as e:
             return ToolResult(content=str(e), is_error=True)
 
         sections = []
-        all_completed = True
-        for handle in handles:
+        for handle in report.handles:
             if handle.status in (STATUS_RUNNING, STATUS_PAUSED):
-                all_completed = False
                 label = "已暂停" if handle.status == STATUS_PAUSED else "仍在运行"
                 sections.append(
                     f"[{handle.id}] {label}（等待 {timeout:g}s 超时）。可稍后再次 wait_agent。")
             else:
                 body = handle.result if handle.status == "completed" else (handle.error or "")
-                if handle.status != "completed":
-                    all_completed = False
+                result = next(
+                    (item for item in report.results if item.agent_id == handle.id),
+                    None,
+                )
+                legacy = bool(
+                    handle.delegation_contract is not None
+                    and handle.delegation_contract.metadata.get(
+                        "legacy_task_compat"))
+                suffix = ""
+                if result is not None:
+                    if not result.accepted:
+                        suffix = (
+                            "（delegation rejected: "
+                            + "; ".join(result.validation_errors) + "）")
+                    elif not legacy:
+                        suffix = "（delegation accepted）"
+                    if not result.accepted and not legacy:
+                        body = (
+                            "子代理原始报告未进入权威任务状态；"
+                            "请检查 sidechain/feed 证据并根据验收错误重试、"
+                            "重新分配或升级。"
+                        )
                 if handle.branch:
                     body += (f"\n[隔离模式: 改动已提交到分支 {handle.branch}，"
                              f"可 git merge/cherry-pick 合入；会话结束后 worktree 自动回收]")
-                sections.append(f"[{handle.id}] {handle.status}\n{body}")
+                sections.append(
+                    f"[{handle.id}] {handle.status}{suffix}\n{body}")
         if len(agent_ids) == 1:
             # 单 id：保持与旧版完全一致的内容格式
-            handle = handles[0]
+            handle = report.handles[0]
             if handle.status in (STATUS_RUNNING, STATUS_PAUSED):
                 return ToolResult(content=sections[0],
                                   data={"status": handle.status})
+            result = next(
+                (item for item in report.results if item.agent_id == handle.id),
+                None,
+            )
+            legacy = bool(
+                handle.delegation_contract is not None
+                and handle.delegation_contract.metadata.get(
+                    "legacy_task_compat"))
             return ToolResult(
-                content=sections[0], is_error=handle.status != "completed",
-                data={"status": handle.status})
+                content=sections[0],
+                is_error=(
+                    handle.status != "completed"
+                    or (result is not None and not result.accepted)
+                    or (legacy and result is None)
+                ),
+                data={
+                    "status": handle.status,
+                    "delegation_result": (
+                        cast(Any, result.to_dict())
+                        if result is not None else {}),
+                    "policy_actions": list(report.actions),
+                    "escalated": report.escalated,
+                })
+        best_effort = all(
+            h.delegation_contract is not None
+            and DelegationFailurePolicy(h.delegation_contract.failure_policy)
+            is DelegationFailurePolicy.BEST_EFFORT
+            for h in report.handles
+        )
         return ToolResult(
             content="\n---\n".join(sections),
-            is_error=not all_completed,
-            data={"statuses": {h.id: h.status for h in handles}},
+            is_error=not (
+                report.all_accepted
+                or (best_effort and report.any_accepted)
+            ),
+            data={
+                "statuses": {h.id: h.status for h in report.handles},
+                "accepted": {r.agent_id: r.accepted for r in report.results},
+                "delegation_results": cast(
+                    Any, [r.to_dict() for r in report.results]),
+                "policy_actions": list(report.actions),
+                "escalated": report.escalated,
+            },
         )
 
 

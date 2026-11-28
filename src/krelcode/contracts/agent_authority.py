@@ -100,6 +100,8 @@ class AuthorityEnvelope:
     network_allowed: bool = False
     allowed_domains: tuple[str, ...] = ()
     write_scope: str = "workspace"
+    allowed_read_paths: tuple[str, ...] = ()
+    allowed_write_paths: tuple[str, ...] = ()
     denied_paths: tuple[str, ...] = ()
     approval_rules: tuple[ApprovalRule, ...] = ()
     metadata: Mapping[str, object] = field(default_factory=dict)
@@ -108,7 +110,8 @@ class AuthorityEnvelope:
         for name in (
             "allowed_systems", "denied_systems", "denied_tools",
             "allowed_mcp_servers", "denied_mcp_servers",
-            "allowed_domains", "denied_paths",
+            "allowed_domains", "allowed_read_paths", "allowed_write_paths",
+            "denied_paths",
         ):
             value = getattr(self, name)
             object.__setattr__(
@@ -211,6 +214,24 @@ class AuthorityEnvelope:
                 f"路径被契约禁止: {path}",
                 system=system,
             )
+        if path:
+            write_tool = tool_name in {
+                "write_file", "edit_file", "replace_all", "apply_patch",
+                "notebook_edit", "database_migration_apply",
+            }
+            allowed_paths = (
+                self.allowed_write_paths
+                if write_tool else self.allowed_read_paths
+            )
+            if allowed_paths and not any(
+                fnmatch.fnmatchcase(path, pattern)
+                for pattern in allowed_paths
+            ):
+                return AuthorityDecision(
+                    ApprovalDecision.DENY,
+                    f"路径不在契约允许范围: {path}",
+                    system=system,
+                )
         matched_rules = [
             rule for rule in self.approval_rules
             if rule.matches(
@@ -255,6 +276,8 @@ class AuthorityEnvelope:
             "network_allowed": self.network_allowed,
             "allowed_domains": list(self.allowed_domains),
             "write_scope": self.write_scope,
+            "allowed_read_paths": list(self.allowed_read_paths),
+            "allowed_write_paths": list(self.allowed_write_paths),
             "denied_paths": list(self.denied_paths),
             "approval_rules": [
                 rule.to_dict() for rule in self.approval_rules
@@ -288,6 +311,8 @@ class AuthorityEnvelope:
             network_allowed=bool(raw.get("network_allowed", False)),
             allowed_domains=_string_tuple(raw.get("allowed_domains")),
             write_scope=str(raw.get("write_scope") or "workspace"),
+            allowed_read_paths=_string_tuple(raw.get("allowed_read_paths")),
+            allowed_write_paths=_string_tuple(raw.get("allowed_write_paths")),
             denied_paths=_string_tuple(raw.get("denied_paths")),
             approval_rules=rules,
             metadata=_mapping(raw.get("metadata")),

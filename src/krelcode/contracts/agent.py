@@ -416,6 +416,8 @@ class AgentContract:
                     network_allowed=self.authority.network_allowed,
                     allowed_domains=self.authority.allowed_domains,
                     write_scope=self.authority.write_scope,
+                    allowed_read_paths=self.authority.allowed_read_paths,
+                    allowed_write_paths=self.authority.allowed_write_paths,
                     denied_paths=self.authority.denied_paths,
                     approval_rules=tuple(rules),
                     metadata=self.authority.metadata,

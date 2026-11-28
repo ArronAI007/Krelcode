@@ -9,7 +9,7 @@ managed tool contract.
 from __future__ import annotations
 
 
-SPAWN_AGENT_PROMPT_VERSION = "1"
+SPAWN_AGENT_PROMPT_VERSION = "2"
 
 
 SPAWN_AGENT_BASE_PROMPT = """\
@@ -57,6 +57,24 @@ Bad delegation examples:
 Before calling spawn_agent, confirm that the task contains enough evidence for
 an independent agent to begin without guessing. Keep the scope minimal and do
 not delegate work you will also do locally.
+
+Prefer the machine-readable `delegation` object for non-trivial work. It should
+carry:
+- objective and scope: readable, writable and denied paths/systems;
+- known_context: confirmed facts, assumptions, decisions, completed work and blockers;
+- capabilities: definition, tools, MCP servers and permission mode;
+- budget: bounded steps, tokens, time, cost and high-risk actions;
+- output: text/json format, JSON Schema, required fields and evidence;
+- failure_policy: fail_fast, best_effort, retry_or_reassign or escalate;
+- retry_policy: retry count and optional reassignment definition;
+- acceptance: parent-defined criteria, required evidence and workspace freshness.
+
+The legacy `task` string remains valid for short work, but it is treated as a
+default delegation contract and cannot override structured fields.
+
+True responsibility handoff uses `relation_kind="handoff"` and must include a
+recovery_checkpoint_id plus handoff_state. A normal delegation keeps ownership
+with the parent. Do not label work as a handoff merely because fork_context=true.
 
 When `definition` is omitted, the runtime selects the built-in
 `general-purpose` agent for complex exploration-plus-action tasks. Prefer

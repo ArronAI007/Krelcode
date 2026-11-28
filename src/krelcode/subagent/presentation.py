@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable, List
 
+from ..contracts.delegation import DelegationKind
 from .contracts import TERMINAL_STATUSES
 from .definition import AgentDefinitionManager
 from .models import AgentHandle
@@ -33,8 +34,21 @@ def format_status_lines(handles: Iterable[AgentHandle]) -> List[str]:
         if handle.mcp_servers:
             runtime_parts.append(f"mcp={','.join(handle.mcp_servers)}")
         runtime = " · " + " · ".join(runtime_parts) if runtime_parts else ""
+        contract = handle.delegation_contract
+        delegation = (
+            f" · delegation={contract.delegation_id}"
+            f" · relation={DelegationKind(contract.relation_kind).value}"
+            if contract is not None else "")
+        owner = (
+            f" · owner={handle.responsibility_owner}"
+            if handle.responsibility_owner else "")
+        accepted = (
+            " · accepted"
+            if handle.delegation_result is not None
+            and handle.delegation_result.accepted else "")
         line = (f"{handle.id} [{handle.status}] {handle.turns} 轮{queued}{branch}"
-                f"{definition}{runtime}{memory}{sequence} · 任务: "
+                f"{definition}{runtime}{delegation}{owner}{accepted}"
+                f"{memory}{sequence} · 任务: "
                 f"{task_preview.replace(chr(10), ' ')}")
         if handle.status in TERMINAL_STATUSES:
             line += f" · 结果: {handle.preview()}"

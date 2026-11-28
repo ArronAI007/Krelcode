@@ -6,10 +6,17 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Mapping, Optional, Tuple
 
 from ..agent.turn.loop import AgentLoop
 from ..agent.prompts import PROMPT_PROFILE_AUTO, build_system_prompt
+from ..contracts.delegation import (
+    DelegationContract,
+    DelegationRelation,
+    DelegationResult,
+    HandoffContract,
+    WorkspaceVersion,
+)
 from ..contracts.application import ApplicationRequest
 from ..contracts.agent import AgentContract
 from .control import AgentControl
@@ -52,6 +59,7 @@ class AgentHandle:
     task: str
     loop: AgentLoop
     started_at: float = field(default_factory=time.time)
+    finished_at: float = 0.0
     status: str = STATUS_RUNNING
     result: Optional[str] = None
     error: Optional[str] = None
@@ -81,6 +89,18 @@ class AgentHandle:
     application_request: Optional[ApplicationRequest] = None
     agent_contract: Optional[AgentContract] = None
     global_slot_acquired: bool = False
+    delegation_contract: Optional[DelegationContract] = None
+    delegation_relation: Optional[DelegationRelation] = None
+    handoff_contract: Optional[HandoffContract] = None
+    responsibility_owner: str = ""
+    base_workspace_version: WorkspaceVersion = field(
+        default_factory=WorkspaceVersion)
+    result_workspace_version: WorkspaceVersion = field(
+        default_factory=WorkspaceVersion)
+    delegation_result: Optional[DelegationResult] = None
+    retry_count: int = 0
+    budget_usage: Mapping[str, float] = field(default_factory=dict)
+    reported_budget_usage: Mapping[str, float] = field(default_factory=dict)
 
     def preview(self) -> str:
         text = self.result or self.error or ""

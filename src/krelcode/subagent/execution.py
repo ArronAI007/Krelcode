@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Protocol
 
 from krelcode.contracts.application import (
     ApplicationRequestFactory,
     TaskShape,
 )
+from krelcode.contracts.delegation import DelegationKind
 from krelcode.core.events import (
     EventBus,
     SubagentFinished,
@@ -22,6 +24,7 @@ from .contracts import (
     STATUS_RUNNING,
 )
 from .models import AgentHandle
+from .workspace_version import capture_workspace_version
 
 
 class SubagentRunHost(Protocol):
@@ -47,6 +50,7 @@ async def run_handle(
     while True:
         handle.result = None
         handle.error = None
+        handle.delegation_result = None
         await manager._set_state(handle, STATUS_RUNNING, "执行任务")
         try:
             result = await handle.loop.run(
@@ -56,11 +60,26 @@ async def run_handle(
             )
             handle.result = result
             handle.turns += 1
+            _capture_usage(handle)
+            handle.result_workspace_version = capture_workspace_version(
+                handle.loop.tool_context.workspace_root)
+            handle.finished_at = time.time()
             await manager._set_state(handle, STATUS_COMPLETED, "本轮完成")
         except asyncio.CancelledError:
             killed = handle.kill_requested
             handle.status = STATUS_KILLED if killed else STATUS_CANCELLED
+            if (
+                handle.delegation_relation is not None
+                and DelegationKind(handle.delegation_relation.kind)
+                is DelegationKind.HANDOFF
+            ):
+                handle.responsibility_owner = (
+                    handle.delegation_relation.from_owner)
             handle.error = "用户终止子代理" if killed else "任务被打断/取消"
+            _capture_usage(handle)
+            handle.result_workspace_version = capture_workspace_version(
+                handle.loop.tool_context.workspace_root)
+            handle.finished_at = time.time()
             if handle.sidechain is not None:
                 handle.sidechain.append_state(
                     handle.status, reason=handle.error, turns=handle.turns,
@@ -68,13 +87,32 @@ async def run_handle(
                 handle.sidechain.append_history(
                     handle.loop.history, turn=handle.turns)
             await manager.bus.emit(SubagentStateChanged(
-                handle.id, handle.status, handle.error))
+                handle.id,
+                handle.status,
+                handle.error,
+                delegation_id=(
+                    handle.delegation_contract.delegation_id
+                    if handle.delegation_contract is not None else ""),
+                responsibility_owner=handle.responsibility_owner,
+            ))
             await manager.bus.emit(SubagentFinished(
-                handle.id, handle.status, handle.preview()))
+                handle.id,
+                handle.status,
+                handle.preview(),
+                delegation_id=(
+                    handle.delegation_contract.delegation_id
+                    if handle.delegation_contract is not None else ""),
+                accepted=False,
+                responsibility_owner=handle.responsibility_owner,
+            ))
             raise
         except Exception as exc:
             handle.error = f"{type(exc).__name__}: {exc}"
             handle.turns += 1
+            _capture_usage(handle)
+            handle.result_workspace_version = capture_workspace_version(
+                handle.loop.tool_context.workspace_root)
+            handle.finished_at = time.time()
             await manager._set_state(handle, STATUS_FAILED, handle.error)
         await manager._emit_finished(handle)
 
@@ -101,6 +139,17 @@ async def run_handle(
         if handle.worktree is not None:
             await manager._finalize_worktree(handle)
         return
+
+
+def _capture_usage(handle: AgentHandle) -> None:
+    ledger = handle.loop.budget_ledger
+    if ledger is None:
+        return
+    usage = ledger.usage_record()
+    previous = dict(handle.budget_usage)
+    for key, value in usage.items():
+        previous[key] = previous.get(key, 0.0) + float(value)
+    handle.budget_usage = previous
 
 
 __all__ = ["run_handle"]

@@ -75,6 +75,54 @@ class BudgetLedger:
         self.usage[BudgetDimension.HIGH_RISK_ACTIONS] += 1
         return int(self.usage[BudgetDimension.HIGH_RISK_ACTIONS])
 
+    def record_external_usage(self, usage: Mapping[str, float]) -> None:
+        """Roll delegated child usage into the parent task ledger."""
+        for raw_dimension, raw_value in usage.items():
+            try:
+                dimension = BudgetDimension(str(raw_dimension))
+            except ValueError:
+                continue
+            self.usage[dimension] += max(0.0, float(raw_value))
+
+    def usage_record(self) -> dict[str, float]:
+        return {
+            dimension.value: float(value)
+            for dimension, value in self.usage.items()
+        }
+
+    def remaining_task_budget(self) -> TaskBudget:
+        """Return the residual hard limits available to delegated work."""
+        def remaining(name: str) -> Optional[int]:
+            limit = self.limits.get(BudgetDimension(name))
+            if limit is None:
+                return None
+            return max(0, int(limit - self.usage[BudgetDimension(name)]))
+
+        timeout = self.limits.get(BudgetDimension.ELAPSED_SECONDS)
+        cost_limit = self.limits.get(BudgetDimension.COST_USD)
+        remaining_timeout = (
+            None if timeout is None else
+            max(0.0, timeout - self.usage[BudgetDimension.ELAPSED_SECONDS])
+        )
+        return TaskBudget(
+            max_steps=remaining(BudgetDimension.STEPS.value),
+            max_tokens=remaining(BudgetDimension.TOKENS.value),
+            timeout_seconds=remaining_timeout,
+            max_cost_usd=(
+                None if cost_limit is None
+                else max(
+                    0.0, cost_limit - self.usage[BudgetDimension.COST_USD])
+            ),
+            max_tool_calls=remaining(BudgetDimension.TOOL_CALLS.value),
+            max_subagents=remaining(BudgetDimension.SUBAGENTS.value),
+            max_high_risk_actions=remaining(
+                BudgetDimension.HIGH_RISK_ACTIONS.value),
+            soft_limit_ratio=self.budget.soft_limit_ratio,
+            ask_user_at_soft_limit=self.budget.ask_user_at_soft_limit,
+            allow_budget_extension=self.budget.allow_budget_extension,
+            budget_extension_ratio=self.budget.budget_extension_ratio,
+        )
+
     def snapshot(self) -> BudgetSnapshot:
         elapsed = max(0.0, time.monotonic() - self.started_at)
         self.usage[BudgetDimension.ELAPSED_SECONDS] = elapsed

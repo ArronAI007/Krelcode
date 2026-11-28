@@ -8,6 +8,14 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
 
 from ..core.redact import SecretRedactor
 from ..contracts.application import ApplicationRequest
+from ..contracts.delegation import (
+    DelegationContract,
+    DelegationParentContext,
+    DelegationRelation,
+    DelegationResult,
+    HandoffContract,
+    WorkspaceVersion,
+)
 from ..subagent.feed import AgentFeedEntry, AgentFeedPage
 from ..subagent.sidechain import SidechainStore, read_sidechain
 from .client_transport import DaemonClient, DaemonUnavailable
@@ -34,6 +42,20 @@ class RemoteAgentHandle:
     mcp_servers: Tuple[str, ...] = field(default_factory=tuple)
     latest_sequence: int = 0
     application_request: Optional[ApplicationRequest] = None
+    delegation_contract: Optional[DelegationContract] = None
+    delegation_relation: Optional[DelegationRelation] = None
+    handoff_contract: Optional[HandoffContract] = None
+    delegation_result: Optional[DelegationResult] = None
+    responsibility_owner: str = ""
+    base_workspace_version: WorkspaceVersion = field(
+        default_factory=WorkspaceVersion)
+    result_workspace_version: WorkspaceVersion = field(
+        default_factory=WorkspaceVersion)
+    budget_usage: Dict[str, float] = field(default_factory=dict)
+    reported_budget_usage: Dict[str, float] = field(default_factory=dict)
+    retry_count: int = 0
+    context_checkpoint_id: str = ""
+    finished_at: float = 0.0
 
     def preview(self) -> str:
         text = self.result or self.error or ""
@@ -113,6 +135,8 @@ class DaemonSubagentManager:
         *,
         definition: Optional[str] = None,
         application_request: Optional[ApplicationRequest] = None,
+        contract: Optional[DelegationContract] = None,
+        parent_context: Optional[DelegationParentContext] = None,
     ) -> RemoteAgentHandle:
         data = await self._request("spawn", {
             "task": task,
@@ -123,6 +147,11 @@ class DaemonSubagentManager:
                 application_request.to_dict()
                 if application_request is not None else None
             ),
+            "delegation_contract": (
+                contract.to_dict() if contract is not None else None),
+            "delegation_parent": (
+                parent_context.to_dict()
+                if parent_context is not None else None),
         }, timeout=60.0)
         handle = _remote_handle(data)
         self._cache[handle.id] = handle
@@ -157,6 +186,31 @@ class DaemonSubagentManager:
 
     async def kill(self, agent_id: str) -> RemoteAgentHandle:
         return await self._control("kill", agent_id)
+
+    async def retry(
+        self,
+        agent_id: str,
+        *,
+        definition: str = "",
+    ) -> RemoteAgentHandle:
+        data = await self._request("retry", {
+            "agent_id": agent_id,
+            "definition": definition,
+        }, timeout=60.0)
+        handle = _remote_handle(data.get("agent") or {})
+        self._cache[handle.id] = handle
+        return handle
+
+    async def record_delegation_result(
+        self,
+        handle: RemoteAgentHandle,
+        result: DelegationResult,
+    ) -> None:
+        handle.delegation_result = result
+        await self._request("record_result", {
+            "agent_id": handle.id,
+            "result": result.to_dict(),
+        }, timeout=20.0)
 
     async def _control(self, operation: str, agent_id: str) -> RemoteAgentHandle:
         data = await self._request(operation, {"agent_id": agent_id}, timeout=20.0)
@@ -280,6 +334,13 @@ def _remote_handle(raw: Dict[str, Any]) -> RemoteAgentHandle:
     if not agent_id:
         raise ValueError("daemon 返回了无效 agent 信息")
     application = raw.get("application")
+    contract_raw = raw.get("delegation_contract")
+    relation_raw = raw.get("delegation_relation")
+    handoff_raw = raw.get("handoff_contract")
+    result_raw = raw.get("delegation_result")
+    base_workspace = raw.get("base_workspace_version")
+    result_workspace = raw.get("result_workspace_version")
+    usage_raw = raw.get("budget_usage")
     return RemoteAgentHandle(
         id=agent_id,
         task=str(raw.get("task") or ""),
@@ -303,6 +364,36 @@ def _remote_handle(raw: Dict[str, Any]) -> RemoteAgentHandle:
             ApplicationRequest.from_mapping(application)
             if isinstance(application, dict) else None
         ),
+        delegation_contract=(
+            DelegationContract.from_mapping(contract_raw)
+            if isinstance(contract_raw, dict) else None
+        ),
+        delegation_relation=(
+            DelegationRelation.from_mapping(relation_raw)
+            if isinstance(relation_raw, dict) else None
+        ),
+        handoff_contract=HandoffContract.from_mapping(
+            handoff_raw if isinstance(handoff_raw, dict) else None),
+        delegation_result=(
+            DelegationResult.from_mapping(result_raw)
+            if isinstance(result_raw, dict) else None
+        ),
+        responsibility_owner=str(
+            raw.get("responsibility_owner") or ""),
+        base_workspace_version=WorkspaceVersion.from_mapping(
+            base_workspace if isinstance(base_workspace, dict) else None),
+        result_workspace_version=WorkspaceVersion.from_mapping(
+            result_workspace if isinstance(result_workspace, dict) else None),
+        budget_usage={
+            str(key): float(value)
+            for key, value in (
+                usage_raw.items() if isinstance(usage_raw, dict) else ()
+            )
+        },
+        reported_budget_usage={},
+        retry_count=int(raw.get("retry_count") or 0),
+        context_checkpoint_id=str(raw.get("context_checkpoint_id") or ""),
+        finished_at=float(raw.get("finished_at") or 0.0),
     )
 
 

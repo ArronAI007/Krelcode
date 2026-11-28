@@ -407,6 +407,13 @@ class StreamJsonEncoder:
                 "agent_id": event.agent_id,
                 "task": event.task,
                 "definition": event.definition,
+                "delegation_id": event.delegation_id,
+                "parent_task_id": event.parent_task_id,
+                "parent_turn_id": event.parent_turn_id,
+                "parent_session_id": event.parent_session_id,
+                "relation_kind": event.relation_kind,
+                "responsibility_owner": event.responsibility_owner,
+                "contract_hash": event.contract_hash,
             }
         elif isinstance(event, SubagentFeedUpdated):
             payload = {
@@ -425,6 +432,8 @@ class StreamJsonEncoder:
                 "agent_id": event.agent_id,
                 "status": event.status,
                 "reason": event.reason,
+                "delegation_id": event.delegation_id,
+                "responsibility_owner": event.responsibility_owner,
             }
         elif isinstance(event, SubagentFinished):
             payload = {
@@ -433,6 +442,9 @@ class StreamJsonEncoder:
                 "agent_id": event.agent_id,
                 "status": event.status,
                 "preview": event.preview,
+                "delegation_id": event.delegation_id,
+                "accepted": event.accepted,
+                "responsibility_owner": event.responsibility_owner,
             }
         elif isinstance(event, UserSteered):
             payload = {

@@ -24,6 +24,11 @@ from ..contracts.application import (
     TaskShape,
     TriggerType,
 )
+from ..contracts.delegation import (
+    DelegationContract,
+    DelegationParentContext,
+    DelegationResult,
+)
 from ..jobs import ShellJobManager
 from .protocol import RPCError
 from .server_runtime import (
@@ -205,6 +210,20 @@ class DaemonAgentService:
         if operation == "spawn":
             _, manager = await self._ensure_runtime()
             task = _required(params, "task")
+            contract_raw = params.get("delegation_contract")
+            parent_raw = params.get("delegation_parent")
+            parent_context = (
+                DelegationParentContext.from_mapping(parent_raw)
+                if isinstance(parent_raw, dict) else None
+            )
+            contract = (
+                DelegationContract.from_mapping(
+                    contract_raw,
+                    parent=parent_context,
+                    task_fallback=task,
+                )
+                if isinstance(contract_raw, dict) else None
+            )
             handle = await manager.spawn(
                 task,
                 isolated=_optional_bool(params.get("isolated")),
@@ -214,6 +233,8 @@ class DaemonAgentService:
                     params,
                     goal=task,
                 ),
+                contract=contract,
+                parent_context=parent_context,
             )
             await asyncio.to_thread(
                 self.agent_store.upsert,
@@ -221,7 +242,10 @@ class DaemonAgentService:
                 _agent_record(handle, self.instance_id),
             )
             return _handle_dict(handle)
-        if operation in {"wait", "feed", "send_input", "pause", "resume", "kill"}:
+        if operation in {
+            "wait", "feed", "send_input", "pause", "resume", "kill",
+            "retry", "record_result",
+        }:
             agent_id = _required(params, "agent_id")
             durable = self.agent_store.load(agent_id)
             if operation == "feed" and (
@@ -281,6 +305,22 @@ class DaemonAgentService:
                         goal=message,
                     ),
                 )
+            elif operation == "retry":
+                handle = await manager.retry(
+                    agent_id,
+                    definition=str(params.get("definition") or ""),
+                )
+                action = "retried"
+            elif operation == "record_result":
+                result_raw = params.get("result")
+                if not isinstance(result_raw, dict):
+                    raise RPCError("record_result 缺少 result", code="invalid_request")
+                handle = manager.get(agent_id)
+                if handle is None:
+                    raise RPCError(f"未知子代理: {agent_id}", code="not_found")
+                await manager.record_delegation_result(
+                    handle, DelegationResult.from_mapping(result_raw))
+                action = "recorded"
             elif operation == "pause":
                 handle = await manager.pause(agent_id)
                 action = "paused"
@@ -383,6 +423,30 @@ def _agent_record(handle: Any, instance_id: str) -> Dict[str, Any]:
             handle.application_request.to_dict()
             if getattr(handle, "application_request", None) is not None else {}
         ),
+        "delegation_contract": _delegation_contract_dict(handle),
+        "delegation_relation": _delegation_relation_dict(handle),
+        "handoff_contract": _handoff_contract_dict(handle),
+        "responsibility_owner": getattr(
+            handle, "responsibility_owner", ""),
+        "retry_count": getattr(handle, "retry_count", 0),
+        "context_checkpoint_id": getattr(
+            handle, "context_checkpoint_id", ""),
+        "finished_at": getattr(handle, "finished_at", 0.0),
+        "delegation_result": (
+            handle.delegation_result.to_dict()
+            if getattr(handle, "delegation_result", None) is not None else {}
+        ),
+        "base_workspace_version": (
+            handle.base_workspace_version.to_dict()
+            if getattr(handle, "base_workspace_version", None) is not None
+            else {}
+        ),
+        "result_workspace_version": (
+            handle.result_workspace_version.to_dict()
+            if getattr(handle, "result_workspace_version", None) is not None
+            else {}
+        ),
+        "budget_usage": dict(getattr(handle, "budget_usage", {}) or {}),
     }
 
 
@@ -410,7 +474,43 @@ def _handle_dict(handle: Any) -> Dict[str, Any]:
             handle.application_request.to_dict()
             if getattr(handle, "application_request", None) is not None else {}
         ),
+        "delegation_contract": _delegation_contract_dict(handle),
+        "delegation_relation": _delegation_relation_dict(handle),
+        "handoff_contract": _handoff_contract_dict(handle),
+        "delegation_result": (
+            handle.delegation_result.to_dict()
+            if getattr(handle, "delegation_result", None) is not None else {}
+        ),
+        "responsibility_owner": getattr(
+            handle, "responsibility_owner", ""),
+        "base_workspace_version": (
+            handle.base_workspace_version.to_dict()
+            if getattr(handle, "base_workspace_version", None) is not None
+            else {}
+        ),
+        "result_workspace_version": (
+            handle.result_workspace_version.to_dict()
+            if getattr(handle, "result_workspace_version", None) is not None
+            else {}
+        ),
+        "budget_usage": dict(getattr(handle, "budget_usage", {}) or {}),
+        "retry_count": getattr(handle, "retry_count", 0),
     }
+
+
+def _delegation_contract_dict(handle: Any) -> Dict[str, Any]:
+    contract = getattr(handle, "delegation_contract", None)
+    return cast(Dict[str, Any], contract.to_dict()) if contract is not None else {}
+
+
+def _delegation_relation_dict(handle: Any) -> Dict[str, Any]:
+    relation = getattr(handle, "delegation_relation", None)
+    return cast(Dict[str, Any], relation.to_dict()) if relation is not None else {}
+
+
+def _handoff_contract_dict(handle: Any) -> Dict[str, Any]:
+    handoff = getattr(handle, "handoff_contract", None)
+    return cast(Dict[str, Any], handoff.to_dict()) if handoff is not None else {}
 
 
 def _daemon_application_request(

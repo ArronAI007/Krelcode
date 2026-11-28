@@ -35,8 +35,11 @@ from krelcode.daemon.storage import (
 )
 from krelcode.daemon.transport import DaemonEndpoint
 from krelcode.core.events import EventBus, ShellJobFinished, ShellJobOutput
+from krelcode.contracts.delegation import DelegationParentContext
 from krelcode.entrypoints.main import build_parser
 from krelcode.jobs import ShellJobStatus
+from krelcode.subagent.tools import WaitAgentTool
+from krelcode.tools.base import ToolContext
 
 
 def force_file_transport(monkeypatch):
@@ -294,6 +297,18 @@ def test_subagent_daemon_spawn_wait_and_restart_audit(tmp_path, monkeypatch):
             finished = await manager.wait(handle.id, timeout=8)
             assert finished.status == "completed"
             assert "mock" in (finished.result or "").lower()
+            collected = await WaitAgentTool(manager).execute(
+                {"agent_id": handle.id, "timeout": 5},
+                ToolContext(
+                    workspace_root=tmp_path,
+                    delegation_parent=DelegationParentContext(
+                        parent_task_id="daemon-test",
+                        owner="parent",
+                    ),
+                ),
+            )
+            assert collected.is_error is False
+            assert collected.data["delegation_result"]["accepted"] is True
             rows = await client.request("agent.list", {})
             assert rows[0]["agent_id"] == handle.id
             assert rows[0]["status"] == "completed"

@@ -244,7 +244,14 @@ class SessionRecorder:
         if isinstance(event, SubagentSpawned):
             return {"type": "subagent_spawned", "ts": ts,
                     "agent_id": event.agent_id, "task": event.task[:200],
-                    "definition": event.definition}
+                    "definition": event.definition,
+                    "delegation_id": event.delegation_id,
+                    "parent_task_id": event.parent_task_id,
+                    "parent_turn_id": event.parent_turn_id,
+                    "parent_session_id": event.parent_session_id,
+                    "relation_kind": event.relation_kind,
+                    "responsibility_owner": event.responsibility_owner,
+                    "contract_hash": event.contract_hash}
         if isinstance(event, SubagentFeedUpdated):
             return {"type": "subagent_feed", "ts": ts,
                     "agent_id": event.agent_id, "sequence": event.sequence,
@@ -253,11 +260,16 @@ class SessionRecorder:
         if isinstance(event, SubagentStateChanged):
             return {"type": "subagent_state", "ts": ts,
                     "agent_id": event.agent_id, "status": event.status,
-                    "reason": event.reason[:300]}
+                    "reason": event.reason[:300],
+                    "delegation_id": event.delegation_id,
+                    "responsibility_owner": event.responsibility_owner}
         if isinstance(event, SubagentFinished):
             return {"type": "subagent_finished", "ts": ts,
                     "agent_id": event.agent_id, "status": event.status,
-                    "preview": event.preview}
+                    "preview": event.preview,
+                    "delegation_id": event.delegation_id,
+                    "accepted": event.accepted,
+                    "responsibility_owner": event.responsibility_owner}
         if isinstance(event, ContextAssembled):
             record = {
                 "type": "context_assembled",

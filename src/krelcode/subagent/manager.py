@@ -77,6 +77,15 @@ from ..contracts.application import (
 )
 from ..contracts.agent import AgentContractFactory
 from ..contracts.artifact import ArtifactStorePort
+from ..contracts.delegation import (
+    DelegationContract,
+    DelegationKind,
+    DelegationParentContext,
+    DelegationRelation,
+    DelegationResult,
+    DelegationStatus,
+    HandoffContract,
+)
 from ..contracts.runtime import (
     HarnessReleaseIdentity,
     RuntimeIdentity,
@@ -85,6 +94,7 @@ from ..contracts.runtime import (
 from ..contracts.service_ports import PromptFragmentRegistryPort
 from ..tools.registry import ToolRegistry
 from .builtin_agents import DEFAULT_BUILTIN_SUBAGENT_NAME
+from .authority import build_subagent_authority, paths_overlap
 from .control import AgentControl
 from .definition import AgentDefinition, AgentDefinitionManager
 from .feed import AgentFeed, AgentFeedEntry
@@ -98,7 +108,13 @@ from .models import (
     build_subagent_system_prompt,
 )
 from .execution import run_handle
+from .delegation_runtime import (
+    build_delegation_contract,
+    prepare_delegation_runtime,
+    render_delegation_task,
+)
 from .manager_reads import MemoryStorePort, SubagentReadMixin
+from .manager_control import SubagentControlMixin
 from .sidechain import SidechainStore
 from .tool_scope import (
     mcp_server_name,
@@ -114,8 +130,10 @@ from .contracts import (
     STATUS_RUNNING,
 )
 from .worktrees import SubagentWorktreeManager
+from .workspace_version import capture_workspace_version
 
-class SubagentManager(SubagentReadMixin):
+
+class SubagentManager(SubagentReadMixin, SubagentControlMixin):
     def __init__(
         self,
         llm: LLMProvider,
@@ -194,6 +212,8 @@ class SubagentManager(SubagentReadMixin):
         *,
         definition: Optional[str] = None,
         application_request: Optional[ApplicationRequest] = None,
+        contract: Optional[DelegationContract] = None,
+        parent_context: Optional[DelegationParentContext] = None,
     ) -> AgentHandle:
         """创建并启动后台子代理。
 
@@ -204,6 +224,20 @@ class SubagentManager(SubagentReadMixin):
         """
         if self._closed:
             raise RuntimeError("SubagentManager 已关闭")
+        parent_context = parent_context or (
+            contract.parent if contract is not None
+            else DelegationParentContext(
+                parent_session_id=(
+                    self.tool_context.runtime.session_id or ""),
+                owner="parent",
+            )
+        )
+        if not parent_context.workspace_version.available:
+            parent_context = replace(
+                parent_context,
+                workspace_version=capture_workspace_version(
+                    self.tool_context.workspace_root),
+            )
         application_request = application_request or (
             ApplicationRequestFactory.from_input_source(
                 "subagent",
@@ -211,10 +245,25 @@ class SubagentManager(SubagentReadMixin):
                 task_shape=TaskShape.MULTI_AGENT,
             )
         )
+        contract = contract or build_delegation_contract(
+            task=task,
+            parent=parent_context,
+            application_request=application_request,
+        )
+        if not contract.parent.workspace_version.available:
+            contract = replace(
+                contract,
+                parent=parent_context,
+                contract_hash="",
+                delegation_id="",
+            )
         if self.sidechains.redactor is None and self.redactor is not None:
             self.sidechains.redactor = self.redactor
         await self.worktrees.ensure_workspace_ready()
-        definition_name = str(definition or "").strip() or DEFAULT_BUILTIN_SUBAGENT_NAME
+        definition_name = (
+            str(definition or contract.capabilities.definition).strip()
+            or DEFAULT_BUILTIN_SUBAGENT_NAME
+        )
         try:
             definition_obj: Optional[AgentDefinition] = self.definitions.get(
                 definition_name)
@@ -227,26 +276,38 @@ class SubagentManager(SubagentReadMixin):
                 definition_obj.default_fork_context if definition_obj else False)
 
         child_llm = self.llm
-        if definition_obj is not None and definition_obj.model:
+        requested_model = (
+            contract.capabilities.model
+            or (definition_obj.model if definition_obj is not None else "")
+        )
+        if requested_model:
             if self.llm_resolver is None:
                 raise ValueError(
-                    f"Agent Definition {definition_obj.name!r} 配置了独立 model，"
+                    f"DelegationCapabilities 配置了独立 model {requested_model!r}，"
                     "但当前运行环境没有 provider resolver")
-            child_llm = self.llm_resolver(definition_obj.model)
+            child_llm = self.llm_resolver(requested_model)
 
         tools = list(self.tool_factory())
         selected_mcp: Optional[set[str]] = None
-        if definition_obj is not None and definition_obj.mcp_servers is not None:
+        requested_mcp_servers = (
+            contract.capabilities.mcp_servers
+            if contract.capabilities.mcp_servers
+            else (
+                definition_obj.mcp_servers
+                if definition_obj is not None else None
+            )
+        )
+        if requested_mcp_servers is not None:
             available_mcp = set(self.mcp_servers_provider() if
                                 self.mcp_servers_provider is not None else ())
             available_mcp.update(
                 item for item in (mcp_server_name(tool) for tool in tools) if item)
-            requested = set(definition_obj.mcp_servers)
+            requested = set(requested_mcp_servers)
             if "*" not in requested:
                 missing = sorted(requested - available_mcp)
                 if missing:
                     raise ValueError(
-                        f"Agent Definition {definition_obj.name!r} 引用了未知 MCP 服务器: "
+                        "DelegationCapabilities 引用了未知 MCP 服务器: "
                         + ", ".join(missing))
                 selected_mcp = requested
             elif requested == {"*"}:
@@ -271,12 +332,27 @@ class SubagentManager(SubagentReadMixin):
                 tool for tool in tools
                 if tool.name in allowed or tool.name == "tool_search"
             ]
+        if contract.capabilities.allowed_tools:
+            contract_allowed = frozenset(normalize_tool_allowlist(
+                contract.capabilities.allowed_tools))
+            available = {tool.name for tool in tools}
+            missing = sorted(contract_allowed - available)
+            if missing:
+                raise ValueError(
+                    "DelegationCapabilities 引用了当前定义不可用或未知工具: "
+                    + ", ".join(missing))
+            tools = [
+                tool for tool in tools
+                if tool.name in contract_allowed or tool.name == "tool_search"
+            ]
 
         self._counter += 1
         agent_id = f"a{self._counter}"
         parent_runtime = self.tool_context.runtime
         requested_permission = (
-            PermissionMode(definition_obj.permission_mode)
+            PermissionMode(contract.capabilities.permission_mode)
+            if contract.capabilities.permission_mode
+            else PermissionMode(definition_obj.permission_mode)
             if definition_obj is not None and definition_obj.permission_mode
             else parent_runtime.permission_mode
         )
@@ -308,6 +384,29 @@ class SubagentManager(SubagentReadMixin):
                 & frozenset(normalize_tool_allowlist(
                     parent_runtime.tool_allowlist)))
         mcp_servers = tuple(sorted(effective_mcp_allowlist or ()))
+        effective_contract, application_request = prepare_delegation_runtime(
+            contract,
+            parent=parent_context,
+            tools=tools,
+            mcp_servers=mcp_servers,
+            permission_mode=permission_mode.value,
+            definition_name=(
+                definition_obj.name if definition_obj is not None
+                else definition_name),
+            model=str(getattr(child_llm, "model", "") or ""),
+            application_request=application_request,
+        )
+        if not isolated and effective_contract.scope.write_paths:
+            for active in self._handles.values():
+                if not self.is_running(active) or active.delegation_contract is None:
+                    continue
+                if paths_overlap(
+                    effective_contract.scope.write_paths,
+                    active.delegation_contract.scope.write_paths,
+                ):
+                    raise ValueError(
+                        "非隔离子代理的写入范围与活动子代理重叠: "
+                        f"{active.id}；请启用 isolated=true 或缩小 write_paths")
         worktree_path: Optional[Path] = None
         branch: Optional[str] = None
         child_runtime = replace(
@@ -331,6 +430,10 @@ class SubagentManager(SubagentReadMixin):
             self.tool_context,
             runtime=child_runtime,
             abort=TurnAbortSignal(),
+            skill_allowlist=(
+                frozenset(effective_contract.capabilities.skills)
+                if effective_contract.capabilities.skills else None
+            ),
         )
         if isolated:
             worktree_path, branch = await self.worktrees.create(agent_id)
@@ -343,6 +446,10 @@ class SubagentManager(SubagentReadMixin):
                 runtime=child_runtime,
                 services=self.tool_context.services,
                 shell_jobs=getattr(self.tool_context, "shell_jobs", None),
+                skill_allowlist=(
+                    frozenset(effective_contract.capabilities.skills)
+                    if effective_contract.capabilities.skills else None
+                ),
             )
         parent_sandbox = getattr(self.tool_context, "sandbox", None)
         sandbox_binding = RuntimeSandboxBinding(
@@ -353,6 +460,13 @@ class SubagentManager(SubagentReadMixin):
             permission_profile=permission_mode.value,
         )
         principal = self.tool_context.principal
+        authority = build_subagent_authority(
+            effective_contract,
+            tools=tools,
+            mcp_servers=mcp_servers,
+            network_allowed=bool(
+                getattr(parent_sandbox, "network", False)),
+        )
         agent_contract = AgentContractFactory.from_application(
             application_request,
             principal=RuntimeIdentity(
@@ -367,8 +481,50 @@ class SubagentManager(SubagentReadMixin):
             sandbox=sandbox_binding,
             tool_allowlist=tuple(tool.name for tool in tools),
             mcp_allowlist=mcp_servers,
-            metadata={"subagent_id": agent_id},
+            authority=authority,
+            metadata={
+                "subagent_id": agent_id,
+                "delegation_id": effective_contract.delegation_id,
+                "delegation_contract_hash": effective_contract.contract_hash,
+                "parent_task_id": parent_context.parent_task_id,
+                "parent_turn_id": parent_context.parent_turn_id,
+                "parent_session_id": parent_context.parent_session_id,
+                "relation_kind": DelegationKind(
+                    effective_contract.relation_kind).value,
+            },
         )
+        relation_kind = DelegationKind(effective_contract.relation_kind)
+        responsibility_owner = (
+            f"subagent:{agent_id}"
+            if relation_kind is DelegationKind.HANDOFF
+            else parent_context.owner
+        )
+        delegation_relation = DelegationRelation(
+            delegation_id=effective_contract.delegation_id,
+            parent_task_id=parent_context.parent_task_id,
+            parent_turn_id=parent_context.parent_turn_id,
+            parent_session_id=parent_context.parent_session_id,
+            agent_id=agent_id,
+            kind=relation_kind,
+            from_owner=parent_context.owner,
+            responsibility_owner=responsibility_owner,
+            recovery_checkpoint_id=effective_contract.recovery_checkpoint_id,
+        )
+        handoff_contract = None
+        if relation_kind is DelegationKind.HANDOFF:
+            handoff_contract = HandoffContract(
+                handoff_id="",
+                delegation_id=effective_contract.delegation_id,
+                from_owner=parent_context.owner,
+                to_owner=f"subagent:{agent_id}",
+                recovery_checkpoint_id=(
+                    effective_contract.recovery_checkpoint_id),
+                state_digest="",
+                state=(
+                    dict(effective_contract.handoff_state)
+                    or effective_contract.known_context.to_dict()
+                ),
+            )
 
         control = AgentControl()
         child_bus = EventBus()
@@ -458,7 +614,7 @@ class SubagentManager(SubagentReadMixin):
         loop.subagent_definition_name = definition_obj.name if definition_obj is not None else ''
         apply_prompt_snapshot(loop, prompt_snapshot)
 
-        effective_task = task
+        effective_task = render_delegation_task(effective_contract)
         forked = bool(fork_context)
         loop.subagent_instruction_layers = cast(
             tuple[InstructionLayerPort, ...], instruction_bundle.layers
@@ -527,6 +683,12 @@ class SubagentManager(SubagentReadMixin):
             "inherited_memory_ids": list(memory_ids),
             "instruction_layers": instruction_bundle.metadata(),
             "parent_policy_instruction_hash": parent_policy_hash,
+            "delegation_contract": effective_contract.to_dict(),
+            "delegation_relation": delegation_relation.to_dict(),
+            "handoff_contract": (
+                handoff_contract.to_dict()
+                if handoff_contract is not None else {}
+            ),
             "application": (
                 application_request.to_dict()
                 if application_request is not None else {}
@@ -555,6 +717,11 @@ class SubagentManager(SubagentReadMixin):
             mcp_servers=mcp_servers,
             application_request=application_request,
             agent_contract=agent_contract,
+            delegation_contract=effective_contract,
+            delegation_relation=delegation_relation,
+            handoff_contract=handoff_contract,
+            responsibility_owner=responsibility_owner,
+            base_workspace_version=parent_context.workspace_version,
         )
         self._handles[agent_id] = handle
         child_bus.subscribe(partial(self._on_child_event, handle))
@@ -570,201 +737,20 @@ class SubagentManager(SubagentReadMixin):
             handle.global_slot_acquired = False
             raise
         await self.bus.emit(SubagentSpawned(
-            agent_id, task, definition=handle.definition))
+            agent_id,
+            task,
+            definition=handle.definition,
+            delegation_id=effective_contract.delegation_id,
+            parent_task_id=parent_context.parent_task_id,
+            parent_turn_id=parent_context.parent_turn_id,
+            parent_session_id=parent_context.parent_session_id,
+            relation_kind=relation_kind.value,
+            responsibility_owner=responsibility_owner,
+            contract_hash=effective_contract.contract_hash,
+        ))
         return handle
 
     # -- child feed ---------------------------------------------------------------
-
-    async def _on_child_event(
-        self,
-        handle: AgentHandle,
-        event: AgentEvent,
-    ) -> None:
-        if isinstance(event, ContextAssembled):
-            ledger = handle.loop.runtime_state.context.last_context_cache_ledger
-            if (
-                ledger is not None
-                and ledger.complete_request_hash
-                and ledger.complete_request_hash != handle.cache_ledger_hash
-            ):
-                handle.cache_ledger_hash = ledger.complete_request_hash
-                if handle.sidechain is not None:
-                    handle.sidechain.write({
-                        "type": "context_cache_ledger",
-                        "ledger": ledger.as_dict(),
-                    })
-        if isinstance(event, ContextCheckpointCreated):
-            handle.context_checkpoint_id = event.checkpoint_id
-            if handle.sidechain is not None:
-                handle.sidechain.write({
-                    "type": "context_checkpoint",
-                    "checkpoint_id": event.checkpoint_id,
-                    "turn_id": event.turn_id,
-                    "phase": event.phase,
-                    "history_hash": event.history_hash,
-                })
-        if handle.feed is None:
-            return
-        now = time.time()
-        if isinstance(event, (ToolCallCompleted, RunFinished, RunCancelled,
-                              ErrorOccurred)):
-            await self._publish_feed_entries(handle, handle.feed.flush_all(ts=now))
-        mapped = _feed_event(event)
-        if mapped is None:
-            return
-        kind, text, data = mapped
-        entry = handle.feed.add(kind, text, ts=now, data=data)
-        if entry is not None:
-            await self._publish_feed_entries(handle, (entry,))
-
-    async def _publish_feed_entries(
-        self,
-        handle: AgentHandle,
-        entries: Iterable[AgentFeedEntry],
-    ) -> None:
-        for entry in entries:
-            if handle.sidechain is not None:
-                handle.sidechain.append_feed(entry)
-            await self.bus.emit(SubagentFeedUpdated(
-                handle.id, entry.sequence, entry.kind, entry.text, entry.data))
-
-    # -- 运行状态机 ---------------------------------------------------------------
-
-    async def _set_state(self, handle: AgentHandle, status: str, reason: str = "") -> None:
-        if handle.status == status:
-            return
-        handle.status = status
-        if handle.sidechain is not None:
-            handle.sidechain.append_state(
-                status, reason=reason, turns=handle.turns,
-                result=handle.result, error=handle.error)
-        await self.bus.emit(SubagentStateChanged(handle.id, status, reason))
-
-    async def _emit_finished(self, handle: AgentHandle) -> None:
-        if handle.sidechain is not None:
-            handle.sidechain.append_history(handle.loop.history, turn=handle.turns)
-        await self.bus.emit(SubagentFinished(
-            handle.id, handle.status, handle.preview()))
-    async def _finalize_worktree(self, handle: AgentHandle) -> None:
-        await self.worktrees.finalize(handle)
-    async def _run(self, handle: AgentHandle, message: str) -> None:
-        """执行一条消息；队列非空时在同一 Task 内继续排空。"""
-        try:
-            await run_handle(self, handle, message)
-        finally:
-            if handle.global_slot_acquired:
-                self._spawn_slots.release()
-                handle.global_slot_acquired = False
-
-    def get(self, agent_id: str) -> Optional[AgentHandle]:
-        return self._handles.get(agent_id)
-
-    def is_running(self, handle: AgentHandle) -> bool:
-        return handle.task_obj is not None and not handle.task_obj.done()
-
-    # -- 交互：send / pause / resume / kill --------------------------------------
-
-    async def send_input(
-        self,
-        agent_id: str,
-        message: str,
-        interrupt: bool = False,
-        *,
-        application_request: Optional[ApplicationRequest] = None,
-    ) -> Tuple[AgentHandle, str]:
-        handle = self._require_handle(agent_id)
-        if handle.status == STATUS_KILLED:
-            raise RuntimeError(f"子代理 {agent_id} 已被终止，不能追加任务")
-
-        if not self.is_running(handle):
-            handle.kill_requested = False
-            handle.task = message
-            handle.application_request = application_request
-            if handle.sidechain is not None:
-                handle.sidechain.append_message("user", message, source="input")
-            handle.task_obj = asyncio.create_task(self._run(handle, message))
-            return handle, "started"
-
-        if not interrupt:
-            handle.queue.append(message)
-            handle.queued_application_requests.append(application_request)
-            if handle.sidechain is not None:
-                handle.sidechain.append_message("user", message, source="queued")
-            return handle, "queued"
-
-        if handle.control.paused:
-            handle.control.resume()
-        running_task = handle.task_obj
-        if running_task is None:
-            raise RuntimeError(f"子代理 {agent_id} 缺少运行任务")
-        running_task.cancel()
-        await asyncio.gather(running_task, return_exceptions=True)
-        sanitize_history(handle.loop.history)
-        if handle.loop.history and handle.loop.history[-1].role == "user":
-            first = ((handle.loop.history[-1].content or "")
-                     + INTERRUPT_MARKER + message)
-            handle.loop.history.pop()
-        else:
-            first = message
-        handle.kill_requested = False
-        handle.task = message
-        handle.application_request = application_request
-        if handle.sidechain is not None:
-            handle.sidechain.append_message("user", message, source="interrupt")
-        handle.task_obj = asyncio.create_task(self._run(handle, first))
-        return handle, "interrupted"
-
-    async def pause(self, agent_id: str) -> AgentHandle:
-        handle = self._require_handle(agent_id)
-        if not self.is_running(handle):
-            raise ValueError(f"子代理 {agent_id} 当前未运行，无法暂停")
-        if handle.control.pause():
-            await self._set_state(handle, STATUS_PAUSED, "用户暂停")
-        return handle
-
-    async def resume(self, agent_id: str) -> AgentHandle:
-        handle = self._require_handle(agent_id)
-        if not handle.control.paused:
-            raise ValueError(f"子代理 {agent_id} 当前未暂停")
-        handle.control.resume()
-        await self._set_state(handle, STATUS_RUNNING, "用户恢复")
-        return handle
-
-    async def kill(self, agent_id: str) -> AgentHandle:
-        handle = self._require_handle(agent_id)
-        if not self.is_running(handle):
-            raise ValueError(f"子代理 {agent_id} 当前未运行，无法终止")
-        handle.kill_requested = True
-        handle.control.resume()
-        await self._set_state(handle, STATUS_KILLED, "用户终止")
-        assert handle.task_obj is not None
-        handle.task_obj.cancel()
-        await asyncio.gather(handle.task_obj, return_exceptions=True)
-        if handle.worktree is not None:
-            await self.worktrees.finalize(handle)
-            await self.worktrees.remove(handle)
-        return handle
-
-    # -- 等待 ---------------------------------------------------------------------
-
-    async def wait(self, agent_id: str, timeout: Optional[float] = None) -> AgentHandle:
-        handle = self._require_handle(agent_id)
-        await self._wait_handles([handle], timeout)
-        return handle
-
-    async def wait_many(
-        self, agent_ids: List[str], timeout: Optional[float] = None
-    ) -> List[AgentHandle]:
-        handles = [self._require_handle(agent_id) for agent_id in agent_ids]
-        await self._wait_handles(handles, timeout)
-        return handles
-
-    @staticmethod
-    async def _wait_handles(handles: List[AgentHandle], timeout: Optional[float]) -> None:
-        tasks = [h.task_obj for h in handles
-                 if h.task_obj is not None and not h.task_obj.done()]
-        if tasks:
-            await asyncio.wait(tasks, timeout=timeout)
 
     async def shutdown(self) -> None:
         """取消所有运行/暂停子代理，存档 worktree 并关闭 sidechain。"""

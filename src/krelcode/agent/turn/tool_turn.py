@@ -55,6 +55,9 @@ from krelcode.contracts.tool import (
 from krelcode.contracts.loop import WaitCondition, WaitKind
 from krelcode.contracts.plan import PlanControl
 from krelcode.agent.turn.plan_event import build_plan_control_event
+from krelcode.agent.turn.delegation_context import (
+    build_parent_delegation_context,
+)
 from krelcode.agent.turn.observation import (
     tool_observation,
     tool_wait_kind,
@@ -81,7 +84,6 @@ from krelcode.agent.turn.runtime_ports import ToolTurnHostPort
 from krelcode.agent.turn.streaming_tools import StreamingToolExecutor
 from krelcode.agent.turn.tool_pool import TurnToolPool
 from krelcode.agent.context.working_context import compact_tool_metadata
-
 class ToolBatchExecutor:
     """Execute and persist model-requested tools without owning the turn loop."""
 
@@ -360,10 +362,10 @@ class ToolBatchExecutor:
                 turn_id=host._current_turn_id,
             )
             host._turn_tool_context = replace(
-                host._turn_tool_context, plan_control=control,
-                plan_control_mode=control.mode)
+            host._turn_tool_context, plan_control=control,
+            plan_control_mode=control.mode)
             await host._emit(event)
-
+        delegation_parent, usage_recorder = build_parent_delegation_context(host)
         execution_ctx = replace(
             host._turn_tool_context,
             tool_descriptor=descriptor,
@@ -373,8 +375,9 @@ class ToolBatchExecutor:
             input_requester=request_user_input,
             plan_emitter=emit_plan,
             plan_control_emitter=emit_plan_control,
-            waiting_emitter=host._enter_waiting,
-            resume_emitter=host._resume_waiting,
+            delegation_parent=delegation_parent,
+            delegation_usage_recorder=usage_recorder,
+            waiting_emitter=host._enter_waiting, resume_emitter=host._resume_waiting,
         )
         intent = ToolIntent(
             call=tool_call,

@@ -393,6 +393,8 @@ class ToolTurnHostPort(_EventHostPort, _ToolPoolHostPort, Protocol):
     _turn_tool_context: "ToolContext"
     prompt_profile_resolution: Optional["PromptProfileResolution"]
     agent_contract: Optional["AgentContract"]
+    application_request: Optional[ApplicationRequest]
+    budget_ledger: Optional["BudgetLedger"]
 
     async def _before_tool_hook(
         self, tool_call: "ToolCall") -> "HookResult": ...

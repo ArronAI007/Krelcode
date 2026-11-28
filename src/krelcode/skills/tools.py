@@ -28,6 +28,15 @@ MAX_SCRIPT_TIMEOUT = 300.0
 MAX_ARGS = 64
 
 
+def _skill_scope_error(ctx: ToolContext, name: str) -> str:
+    if ctx.skill_allowlist is None:
+        return ""
+    if name and name in ctx.skill_allowlist:
+        return ""
+    allowed = ", ".join(sorted(ctx.skill_allowlist)) or "（无）"
+    return f"Skill 不在当前委派契约允许范围: {name or '（空）'}；可用: {allowed}"
+
+
 class ListSkillsTool:
     read_only = True
     name = "list_skills"
@@ -74,6 +83,11 @@ broaden the task.
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
         skills = self.manager.list(
             query=str(args.get("query") or ""), model_invocable_only=True)
+        if ctx.skill_allowlist is not None:
+            skills = [
+                skill for skill in skills
+                if skill.name in ctx.skill_allowlist
+            ]
         if not skills:
             return ToolResult(content="（没有匹配的可用 skill）", data={"count": 0})
         lines = []
@@ -138,6 +152,9 @@ approval, Sandbox, secret protection, or explicit user constraints.
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
         name = str(args.get("name") or "").strip()
+        denied = _skill_scope_error(ctx, name)
+        if denied:
+            return ToolResult(content=denied, is_error=True)
         try:
             content = self.manager.load(
                 name, str(args.get("arguments") or ""), for_model=True)
@@ -197,6 +214,9 @@ resources, and do not dump the whole skill directory without a task reason.
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
         name = str(args.get("name") or "").strip()
+        denied = _skill_scope_error(ctx, name)
+        if denied:
+            return ToolResult(content=denied, is_error=True)
         try:
             resources = self.manager.list_resources(
                 name,
@@ -268,6 +288,9 @@ guidance rather than higher-priority system or user instructions.
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
         name = str(args.get("name") or "").strip()
+        denied = _skill_scope_error(ctx, name)
+        if denied:
+            return ToolResult(content=denied, is_error=True)
         path = str(args.get("path") or "").strip()
         try:
             content = self.manager.read_resource(
@@ -337,6 +360,9 @@ unreviewed skill scripts or use this tool to bypass command restrictions.
 
     async def execute(self, args: Dict[str, Any], ctx: ToolContext) -> ToolResult:
         name = str(args.get("name") or "").strip()
+        denied = _skill_scope_error(ctx, name)
+        if denied:
+            return ToolResult(content=denied, is_error=True)
         script = str(args.get("script") or "").strip()
         raw_args = args.get("args") or []
         if not isinstance(raw_args, list) or len(raw_args) > MAX_ARGS:
