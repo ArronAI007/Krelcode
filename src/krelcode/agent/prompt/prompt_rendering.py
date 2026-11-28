@@ -97,7 +97,7 @@ def _fragment_from_context_layer(layer: ContextLayer) -> PromptFragment:
         compactable=layer.compactable,
         toggleable=False,
         metadata=dict(layer.metadata),
-        scope=_scope_for_trust(trust),
+        scope=layer.scope or _scope_for_trust(trust),
         layer=layer_id,
         stability=stability,
         trust=trust,
@@ -606,4 +606,6 @@ def _compatibility_assembly(
         provider_meta=provider_meta,
         prompt_snapshot=snapshot,
         dynamic_hash=cache.dynamic_hash,
+        omitted_layer_ids=dynamic_assembly.omitted_layer_ids,
+        budget_decisions=dynamic_assembly.budget_decisions,
     )

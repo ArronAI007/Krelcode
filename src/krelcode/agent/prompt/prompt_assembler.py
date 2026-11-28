@@ -149,6 +149,18 @@ class PromptAssembler:
             prompt_snapshot=None,
         )
         dynamic_assembly = await self.context_assembler.assemble(dynamic_request)
+        budget_omissions = tuple(
+            PromptOmissionSnapshot(
+                id=layer_id,
+                source="context",
+                reason="budget",
+            )
+            for layer_id in dynamic_assembly.omitted_layer_ids
+        )
+        all_omissions = _dedupe_omissions((
+            *all_omissions,
+            *budget_omissions,
+        ))
         dynamic_fragments = tuple(
             _fragment_from_context_layer(layer)
             for layer in dynamic_assembly.layers

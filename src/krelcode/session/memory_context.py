@@ -37,8 +37,11 @@ from .memory_models import (
     MemoryTopic,
     coerce_memory_scope,
     coerce_memory_type,
+    memory_asset_allowed,
+    memory_lifecycle_score,
 )
 from .memory_utils import _entry_topic_slug
+
 
 class MemoryStoreContextMixin(MemoryStoreBase):
     def refresh_index_views(self) -> None:
@@ -152,11 +155,23 @@ class MemoryStoreContextMixin(MemoryStoreBase):
         max_entries: int = INJECT_ENTRIES,
         max_chars: int = INJECT_CHARS,
         scopes: Optional[Iterable[MemoryScope | str]] = None,
+        principal_id: str = "",
+        tenant_id: str = "",
+        organization_id: str = "",
+        project_id: str = "",
+        session_id: str = "",
+        task_id: str = "",
     ) -> str:
         content, _entries = self.context_view(
             max_entries=max_entries,
             max_chars=max_chars,
             scopes=scopes,
+            principal_id=principal_id,
+            tenant_id=tenant_id,
+            organization_id=organization_id,
+            project_id=project_id,
+            session_id=session_id,
+            task_id=task_id,
         )
         return content
 
@@ -166,12 +181,24 @@ class MemoryStoreContextMixin(MemoryStoreBase):
         max_entries: int = INJECT_ENTRIES,
         max_chars: int = INJECT_CHARS,
         scopes: Optional[Iterable[MemoryScope | str]] = None,
+        principal_id: str = "",
+        tenant_id: str = "",
+        organization_id: str = "",
+        project_id: str = "",
+        session_id: str = "",
+        task_id: str = "",
     ) -> tuple[str, tuple[MemoryEntry, ...]]:
         """Render the injected memory block and its exact entry selection."""
         included = self._select_context_entries(
             max_entries=max_entries,
             max_chars=max_chars,
             scopes=scopes,
+            principal_id=principal_id,
+            tenant_id=tenant_id,
+            organization_id=organization_id,
+            project_id=project_id,
+            session_id=session_id,
+            task_id=task_id,
         )
         content = self._render_context_entries(included, max_chars=max_chars)
         selected = tuple(
@@ -186,6 +213,12 @@ class MemoryStoreContextMixin(MemoryStoreBase):
         max_entries: int = INJECT_ENTRIES,
         max_chars: int = INJECT_CHARS,
         scopes: Optional[Iterable[MemoryScope | str]] = None,
+        principal_id: str = "",
+        tenant_id: str = "",
+        organization_id: str = "",
+        project_id: str = "",
+        session_id: str = "",
+        task_id: str = "",
     ) -> tuple[MemoryEntry, ...]:
         """Return the exact entries selected by ``render_context``.
 
@@ -196,6 +229,12 @@ class MemoryStoreContextMixin(MemoryStoreBase):
             max_entries=max_entries,
             max_chars=max_chars,
             scopes=scopes,
+            principal_id=principal_id,
+            tenant_id=tenant_id,
+            organization_id=organization_id,
+            project_id=project_id,
+            session_id=session_id,
+            task_id=task_id,
         )
         return selected
 
@@ -205,12 +244,24 @@ class MemoryStoreContextMixin(MemoryStoreBase):
         max_entries: int = MAX_INDEX_ENTRIES,
         max_chars: int = MAX_INDEX_CHARS,
         scopes: Optional[Iterable[MemoryScope | str]] = None,
+        principal_id: str = "",
+        tenant_id: str = "",
+        organization_id: str = "",
+        project_id: str = "",
+        session_id: str = "",
+        task_id: str = "",
     ) -> tuple[str, tuple[MemoryEntry, ...], tuple[MemoryTopic, ...]]:
         """Render the always-on index as one bounded Memory Evidence block."""
         snapshot = self.index_snapshot(
             scopes=scopes,
             max_entries=max_entries,
             max_chars=max_chars,
+            principal_id=principal_id,
+            tenant_id=tenant_id,
+            organization_id=organization_id,
+            project_id=project_id,
+            session_id=session_id,
+            task_id=task_id,
         )
         if not snapshot.entries:
             return "", (), ()
@@ -239,12 +290,29 @@ class MemoryStoreContextMixin(MemoryStoreBase):
         max_entries: int,
         max_chars: int,
         scopes: Optional[Iterable[MemoryScope | str]] = None,
+        principal_id: str = "",
+        tenant_id: str = "",
+        organization_id: str = "",
+        project_id: str = "",
+        session_id: str = "",
+        task_id: str = "",
     ) -> dict[MemoryScope, list[MemoryEntry]]:
         if max_entries <= 0 or max_chars <= 0:
             return {}
         selected_scopes = self._coerce_scopes(scopes)
         by_scope = {
-            scope: list(self.list(limit=0, scopes=(scope,)))
+            scope: [
+                item for item in self.list(limit=0, scopes=(scope,))
+                if memory_asset_allowed(
+                    item,
+                    principal_id=principal_id,
+                    tenant_id=tenant_id,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    session_id=session_id,
+                    task_id=task_id,
+                )
+            ]
             for scope in selected_scopes
         }
         included: dict[MemoryScope, list[MemoryEntry]] = defaultdict(list)
@@ -257,7 +325,11 @@ class MemoryStoreContextMixin(MemoryStoreBase):
                 item for _index, item in sorted(
                     enumerate(by_scope[scope]),
                     key=lambda pair: (
-                        pair[1].pinned, pair[1].created_at, pair[0]),
+                        pair[1].pinned,
+                        memory_lifecycle_score(pair[1]),
+                        pair[1].updated_at,
+                        pair[0],
+                    ),
                     reverse=True,
                 )
             ]

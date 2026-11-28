@@ -43,6 +43,7 @@ from krelcode.contracts.runtime import (
     RuntimeTaskState,
     RuntimeTaskStatus,
 )
+from krelcode.contracts.call import CallContext
 from krelcode.contracts.task_lifecycle import (
     SideEffectStatus,
     TaskAttachment,
@@ -489,6 +490,7 @@ class QueryEngine:
         task_id: str = "",
         parent_task_id: str = "",
         idempotency_key: str = "",
+        call_id: str = "",
         continuation: Optional[TaskContinuation] = None,
         cancel_mode: TaskCancelMode | str = TaskCancelMode.COOPERATIVE,
     ) -> QuerySession:
@@ -535,6 +537,17 @@ class QueryEngine:
             str(task_id or "").strip()
             or f"task-{uuid.uuid4().hex[:16]}"
         )
+        resolved_call_id = (
+            str(call_id or idempotency_key).strip()
+            or f"call-{uuid.uuid4().hex[:16]}"
+        )
+        call_context = CallContext(
+            call_id=resolved_call_id,
+            task_id=resolved_task_id,
+            principal=resolved_contract.principal,
+            channel=resolved_application.trigger.value,
+            metadata={"entrypoint": resolved_application.trigger.value},
+        )
         runtime_task = RuntimeTask(
             turn_id=turn_id,
             message=user_input,
@@ -574,6 +587,7 @@ class QueryEngine:
                 {
                     "session_event": _jsonable(item.event),
                     "session_id": item.session_id,
+                    "call_id": item.call_id,
                     "timestamp": item.timestamp,
                 },
                 event_type=item.event_type,
@@ -591,6 +605,7 @@ class QueryEngine:
                 parent_task_id=(
                     parent_task_id_ref[0]
                     if parent_task_id_ref else ""),
+                call_id=call_context.call_id,
             )
             if task_id_ref:
                 journal_event(task_id_ref[0], item)
@@ -642,6 +657,7 @@ class QueryEngine:
                 limit=limit,
             ),
             attach=self._task_runtime.attach,
+            call_context=call_context,
         )
         return session
 
@@ -655,6 +671,12 @@ class QueryEngine:
         handle = await self._task_runtime.recover(
             task_id,
             _LoopTurnExecutor(self.turn, self.continuation),
+        )
+        recovered_call = CallContext(
+            call_id=f"call-recover-{uuid.uuid4().hex[:16]}",
+            task_id=handle.task_id,
+            principal=self.runtime_identity,
+            channel="recover",
         )
         queue: asyncio.Queue[QueryEvent | _QueryEnd] = asyncio.Queue(
             maxsize=self.queue_size)
@@ -670,6 +692,7 @@ class QueryEngine:
                 event=as_session_event_payload(event),
                 task_id=handle.task_id,
                 parent_task_id=handle.state.parent_task_id,
+                call_id=recovered_call.call_id,
             )
             if not isinstance(item.event, (
                 LLMStreamDelta, LLMThinkingDelta, ToolOutputDelta,
@@ -679,6 +702,7 @@ class QueryEngine:
                     {
                         "session_event": _jsonable(item.event),
                         "session_id": item.session_id,
+                        "call_id": item.call_id,
                         "timestamp": item.timestamp,
                     },
                     event_type=item.event_type,
@@ -717,6 +741,7 @@ class QueryEngine:
                 limit=limit,
             ),
             attach=self._task_runtime.attach,
+            call_context=recovered_call,
         )
 
     async def _iter_events(

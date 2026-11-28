@@ -42,6 +42,7 @@ from krelcode.agent.context.workspace import WorkspaceContext, build_workspace_c
 from krelcode.agent.context.context_cache_ledger import ContextCacheLedger
 from krelcode.agent.context.context_plan import ContextPlanSnapshot, history_digest
 from krelcode.agent.context.context_source import ContextAssembly, ContextRequest, MemoryContextSource
+from krelcode.agent.context.context_request import resolve_runtime_identity
 from krelcode.agent.context.context_turn_observability import (
     dropped_context_items,
     knowledge_selection,
@@ -551,6 +552,8 @@ class ContextTurnCoordinator:
             host.history[0]
             if host.history and host.history[0].role == "system" else None
         )
+        resolved_principal = resolve_runtime_identity(
+            deps.tool_context.principal)
         context_request = ContextRequest(
             turn_id=host._current_turn_id,
             step=step,
@@ -568,6 +571,9 @@ class ContextTurnCoordinator:
             relevant_memory=tuple(host.restored_memory_context),
             application_request=host.application_request,
             agent_contract=host.agent_contract,
+            principal=resolved_principal,
+            project_id=str(deps.workspace_root),
+            session_id=deps.tool_context.runtime.session_id or "",
         )
         reminder_selection = self.select_turn_reminders()
         prompt_plan = await deps.prompt_assembler.assemble(

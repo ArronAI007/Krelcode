@@ -57,6 +57,57 @@ def history_digest(history: Iterable[Message]) -> str:
 
 
 @dataclass(frozen=True)
+class ContextSourceSnapshot:
+    """Per-source Context Manifest entry without content bodies."""
+
+    layer_id: str
+    source_type: str
+    source_id: str
+    scope: str
+    version: str
+    category: str
+    trust: str
+    permission_basis: str
+    selected_reason: str
+    tokens: int
+    transform: str
+    content_hash: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "layer_id": self.layer_id,
+            "source_type": self.source_type,
+            "source_id": self.source_id,
+            "scope": self.scope,
+            "version": self.version,
+            "category": self.category,
+            "trust": self.trust,
+            "permission_basis": self.permission_basis,
+            "selected_reason": self.selected_reason,
+            "tokens": self.tokens,
+            "transform": self.transform,
+            "content_hash": self.content_hash,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, object]) -> "ContextSourceSnapshot":
+        return cls(
+            layer_id=str(raw.get("layer_id") or ""),
+            source_type=str(raw.get("source_type") or ""),
+            source_id=str(raw.get("source_id") or ""),
+            scope=str(raw.get("scope") or ""),
+            version=str(raw.get("version") or ""),
+            category=str(raw.get("category") or ""),
+            trust=str(raw.get("trust") or ""),
+            permission_basis=str(raw.get("permission_basis") or ""),
+            selected_reason=str(raw.get("selected_reason") or ""),
+            tokens=max(0, int(str(raw.get("tokens") or 0))),
+            transform=str(raw.get("transform") or ""),
+            content_hash=str(raw.get("content_hash") or ""),
+        )
+
+
+@dataclass(frozen=True)
 class ContextPlanSnapshot:
     """The source/shape plan that produced or represents one context state."""
 
@@ -68,6 +119,9 @@ class ContextPlanSnapshot:
     full_hash: str = ""
     layer_ids: tuple[str, ...] = ()
     sources: tuple[str, ...] = ()
+    source_records: tuple[ContextSourceSnapshot, ...] = ()
+    omitted_layer_ids: tuple[str, ...] = ()
+    budget_decisions: tuple[Mapping[str, object], ...] = ()
     categories: tuple[str, ...] = ()
     trust_levels: tuple[str, ...] = ()
     token_count: int = 0
@@ -109,6 +163,30 @@ class ContextPlanSnapshot:
             ),
             layer_ids=tuple(layer.id for layer in layers),
             sources=tuple(sorted({layer.source for layer in layers})),
+            source_records=tuple(
+                ContextSourceSnapshot(
+                    layer_id=layer.id,
+                    source_type=layer.source_type,
+                    source_id=layer.source_id,
+                    scope=layer.scope,
+                    version=layer.version,
+                    category=layer.category,
+                    trust=layer.trust,
+                    permission_basis=layer.permission_basis,
+                    selected_reason=layer.selected_reason,
+                    tokens=layer.tokens,
+                    transform=layer.transform,
+                    content_hash=layer.content_hash,
+                )
+                for layer in layers
+            ),
+            omitted_layer_ids=tuple(
+                getattr(assembly, "omitted_layer_ids", ()) or ()),
+            budget_decisions=tuple(
+                dict(item) for item in (
+                    getattr(assembly, "budget_decisions", ()) or ())
+                if isinstance(item, Mapping)
+            ),
             categories=tuple(layer.category for layer in layers),
             trust_levels=tuple(sorted({
                 str(getattr(layer, "trust", "") or "")
@@ -160,6 +238,13 @@ class ContextPlanSnapshot:
             "full_hash": self.full_hash,
             "layer_ids": list(self.layer_ids),
             "sources": list(self.sources),
+            "source_records": [
+                item.as_dict() for item in self.source_records
+            ],
+            "omitted_layer_ids": list(self.omitted_layer_ids),
+            "budget_decisions": [
+                dict(item) for item in self.budget_decisions
+            ],
             "categories": list(self.categories),
             "trust_levels": list(self.trust_levels),
             "token_count": self.token_count,
@@ -201,6 +286,8 @@ class ContextPlanSnapshot:
         step = numeric_int("step")
         token_count = numeric_int("token_count")
         sequence = numeric_int("working_context_sequence")
+        raw_records = raw.get("source_records")
+        raw_budget = raw.get("budget_decisions")
         return cls(
             turn_id=str(raw.get("turn_id", "") or ""),
             step=step,
@@ -210,6 +297,21 @@ class ContextPlanSnapshot:
             full_hash=str(raw.get("full_hash", "") or ""),
             layer_ids=strings("layer_ids"),
             sources=strings("sources"),
+            source_records=tuple(
+                ContextSourceSnapshot.from_dict(item)
+                for item in (
+                    raw_records if isinstance(raw_records, (list, tuple)) else ()
+                )
+                if isinstance(item, Mapping)
+            ),
+            omitted_layer_ids=strings("omitted_layer_ids"),
+            budget_decisions=tuple(
+                dict(item)
+                for item in (
+                    raw_budget if isinstance(raw_budget, (list, tuple)) else ()
+                )
+                if isinstance(item, Mapping)
+            ),
             categories=strings("categories"),
             trust_levels=strings("trust_levels"),
             token_count=token_count,
@@ -228,4 +330,8 @@ class ContextPlanSnapshot:
         )
 
 
-__all__ = ["ContextPlanSnapshot", "history_digest"]
+__all__ = [
+    "ContextPlanSnapshot",
+    "ContextSourceSnapshot",
+    "history_digest",
+]

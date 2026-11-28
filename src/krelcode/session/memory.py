@@ -20,6 +20,7 @@ from ..agent.context import CONTEXT_ENGINE_V3
 from ..agent.prompt.fragments import PromptFragment, refresh_registry_snapshot
 from ..core.redact import MASK, SecretRedactor, redact_obvious_secrets
 from .memory_context import MemoryStoreContextMixin
+from .memory_lifecycle import MemoryStoreLifecycleMixin
 from .memory_migration import MemoryStoreMigrationMixin
 from .memory_models import (
     FRAGMENT_ID,
@@ -91,6 +92,7 @@ class MemoryStore(
     MemoryStoreStorageMixin,
     MemoryStoreViewMixin,
     MemoryStoreContextMixin,
+    MemoryStoreLifecycleMixin,
     MemoryStoreMigrationMixin,
 ):
     """Manage user/project/session memory with common bounds and redaction."""

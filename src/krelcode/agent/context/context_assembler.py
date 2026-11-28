@@ -19,6 +19,7 @@ from krelcode.agent.context.context_source import (
     ContextSource,
     ContextSourceIssue,
 )
+from krelcode.agent.context.context_policy import ContextBudgetPolicy
 
 
 class ContextAssembler:
@@ -29,11 +30,13 @@ class ContextAssembler:
         sources: Iterable[ContextSource] = (),
         *,
         engine: str = "v3",
+        budget_policy: ContextBudgetPolicy | None = None,
     ) -> None:
         self._sources: List[ContextSource] = []
         self._names: Dict[str, ContextSource] = {}
         normalized = str(engine or "v3").strip().lower()
         self.engine = normalized if normalized in {"v3", "legacy"} else "v3"
+        self.budget_policy = budget_policy or ContextBudgetPolicy()
         for source in sources:
             self.register(source)
 
@@ -104,6 +107,10 @@ class ContextAssembler:
 
         collected.sort(key=lambda item: item[:5])
         ordered_layers = tuple(item[5] for item in collected)
+        ordered_layers, budget_decisions = self.budget_policy.apply(
+            ordered_layers)
+        omitted_layer_ids = tuple(
+            item.layer_id for item in budget_decisions if not item.selected)
         text, stable_prefix = _render_layers(ordered_layers)
         stable_prefix = max(0, min(stable_prefix, len(text)))
         stable_text = text[:stable_prefix]
@@ -137,6 +144,9 @@ class ContextAssembler:
             issues=tuple(issues),
             provider_meta=provider_meta or None,
             prompt_snapshot=request.prompt_snapshot,
+            omitted_layer_ids=omitted_layer_ids,
+            budget_decisions=tuple(
+                item.as_dict() for item in budget_decisions),
         )
 
 

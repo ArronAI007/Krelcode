@@ -124,7 +124,7 @@ def build_agent_services(
         if "memory_retrieval" not in effective_context_assembler.source_names:
             effective_context_assembler.register(RetrievedMemoryContextSource())
         if knowledge is not None and "knowledge" not in effective_context_assembler.source_names:
-            from krelcode.agent.context.context_source import KnowledgeContextSource
+            from krelcode.agent.context.knowledge_context_source import KnowledgeContextSource
             effective_context_assembler.register(KnowledgeContextSource(knowledge))
     effective_prompt_assembler = prompt_assembler or PromptAssembler(
         effective_context_assembler,

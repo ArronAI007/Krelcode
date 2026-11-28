@@ -10,6 +10,15 @@ from .application import (
     TaskShape,
     TriggerType,
 )
+from .asset import (
+    AssetDeletionMode,
+    AssetDeletionPlan,
+    AssetEnvelope,
+    AssetRetention,
+    AssetScope,
+    AssetSensitivity,
+    AssetStatus,
+)
 from .agent import (
     AGENT_CONTRACT_SCHEMA_VERSION,
     AgentContract,
@@ -45,6 +54,7 @@ from .budget import (
     UnfinishedItem,
     UnfinishedManifest,
 )
+from .call import CallContext
 from .change_admission import (
     AdmissionDecision,
     AdmissionGatePort,
@@ -298,6 +308,13 @@ __all__ = [
     "AbilityManifest",
     "ApplicationRequest",
     "ApplicationRequestFactory",
+    "AssetEnvelope",
+    "AssetDeletionMode",
+    "AssetDeletionPlan",
+    "AssetRetention",
+    "AssetScope",
+    "AssetSensitivity",
+    "AssetStatus",
     "ApprovalDecision",
     "ApprovalRule",
     "ArtifactIdentity",
@@ -309,6 +326,7 @@ __all__ = [
     "BudgetLevel",
     "BudgetLimit",
     "BudgetSnapshot",
+    "CallContext",
     "AuditCorrelation",
     "AuthorityDecision",
     "AuthorityEnvelope",

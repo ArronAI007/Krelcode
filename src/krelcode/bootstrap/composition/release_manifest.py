@@ -6,6 +6,7 @@ from dataclasses import asdict
 from typing import Iterable, Mapping
 
 from ...agent.turn.loop import AgentLoop
+from ...agent.context.context_policy import ContextBudgetPolicy
 from ...contracts.runtime import (
     RUNTIME_RELEASE_SCHEMA_VERSION,
     RuntimeReleaseManifest,
@@ -27,6 +28,7 @@ from ...session.memory_models import (
     MAX_INDEX_CHARS,
     MAX_INDEX_ENTRIES,
     MAX_TOPIC_CHARS,
+    MemoryClass,
     MEMORY_SCOPE_ORDER,
     MEMORY_TYPE_ORDER,
     STRUCTURED_MEMORY_TYPES,
@@ -121,6 +123,18 @@ def build_runtime_release_manifest(
             "allowed_tools": list(skill.allowed_tools),
             "user_invocable": skill.user_invocable,
             "disable_model_invocation": skill.disable_model_invocation,
+            "owner": skill.owner,
+            "applicability": skill.applicability,
+            "required_tools": list(skill.required_tools),
+            "required_permissions": list(skill.required_permissions),
+            "required_environment": list(skill.required_environment),
+            "acceptance_contract": list(skill.acceptance_contract),
+            "dependencies": list(skill.dependencies),
+            "tests": list(skill.tests),
+            "supported_models": list(skill.supported_models),
+            "deprecated": skill.deprecated,
+            "release_ready": skill.release_ready,
+            "asset": skill.asset.to_dict() if skill.asset is not None else {},
         })
     skills.sort(key=lambda item: str(item["name"]))
 
@@ -149,6 +163,12 @@ def build_runtime_release_manifest(
         "types": [item.value for item in MEMORY_TYPE_ORDER],
         "structured_types": sorted(
             item.value for item in STRUCTURED_MEMORY_TYPES),
+        "memory_classes": [item.value for item in MemoryClass],
+        "lifecycle_fields": [
+            "last_verified_at", "use_count", "success_count",
+            "failure_count", "last_outcome",
+        ],
+        "asset_envelope": "v1",
         "backend": "jsonl+markdown",
         "store_present": memory_store is not None,
     }
@@ -219,6 +239,12 @@ def build_runtime_release_manifest(
                 asdict(context_options)
                 if context_options is not None else {"engine": "disabled"}
             ),
+            "policy_version": "context-budget-v1",
+            "budget_policy": _context_budget_record(
+                loop.context_assembler.budget_policy
+                if loop.context_assembler is not None
+                else ContextBudgetPolicy()
+            ),
             "enabled": bool(loop.context_enabled),
         },
         code_version={
@@ -227,6 +253,16 @@ def build_runtime_release_manifest(
             "observability_schema": SCHEMA_VERSION,
         },
     )
+
+
+def _context_budget_record(
+    policy: ContextBudgetPolicy,
+) -> dict[str, object]:
+    return {
+        "max_tokens": policy.max_tokens,
+        "category_caps": dict(policy.category_caps),
+        "required_categories": list(policy.required_categories),
+    }
 
 
 __all__ = ["build_runtime_release_manifest"]

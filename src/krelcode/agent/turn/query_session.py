@@ -6,6 +6,7 @@ import asyncio
 from typing import AsyncIterator, Callable, Mapping, Optional, Sequence
 
 from krelcode.contracts.runtime import RuntimeTaskHandle, RuntimeTaskState
+from krelcode.contracts.call import CallContext
 from krelcode.contracts.task_lifecycle import TaskAttachment, TaskEventCursor
 from krelcode.core.session_events import SessionEvent
 
@@ -28,6 +29,7 @@ class QuerySession:
             Callable[[int, int], Sequence[Mapping[str, object]]]
         ] = None,
         attach: Optional[Callable[[str], TaskAttachment]] = None,
+        call_context: Optional[CallContext] = None,
     ) -> None:
         self.runtime_handle = handle
         self.task = task
@@ -35,6 +37,11 @@ class QuerySession:
         self._detach_control = detach_control or DetachControl()
         self._read_events = read_events
         self._attach = attach
+        self.call_context = call_context or CallContext(
+            call_id=f"call-{handle.task_id}",
+            task_id=handle.task_id,
+            session_id="",
+        )
 
     @property
     def task_id(self) -> str:
@@ -43,6 +50,10 @@ class QuerySession:
     @property
     def turn_id(self) -> str:
         return self.runtime_handle.turn_id
+
+    @property
+    def call_id(self) -> str:
+        return self.call_context.call_id
 
     @property
     def state(self) -> RuntimeTaskState:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import html
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import (
     TYPE_CHECKING, Awaitable, Mapping, Optional, Protocol, Sequence, Tuple, cast,
@@ -15,7 +15,6 @@ from krelcode.core.evidence import (
     EvidenceSource,
     evidence_metadata,
     evidence_record_from_memory,
-    render_knowledge_evidence_set,
 )
 from krelcode.agent.prompt.fragments import (
     GROUP_RUNTIME,
@@ -25,24 +24,14 @@ from krelcode.agent.prompt.fragments import (
     PromptSnapshot,
     rule_fragment,
 )
-from krelcode.agent.turn.intent import TurnIntent
 from krelcode.agent.rules import RuleBundle, RuleLayer, RuleLoader, RuleScope, extract_rule_targets
 from krelcode.core.tokens import estimate_text_tokens
-from krelcode.contracts.application import ApplicationRequest
-from krelcode.contracts.agent import (
-    AgentContract,
-    DeliverableKind,
-    InputKind,
-)
+from krelcode.contracts.agent import DeliverableKind, InputKind
 from krelcode.contracts.agent_authority import ApprovalDecision
 from krelcode.contracts.knowledge import (
-    KnowledgeDocument,
-    KnowledgeHit,
-    KnowledgeQuery,
     KnowledgeRetrieverPort,
-    KnowledgeScope,
 )
-from krelcode.agent.turn.tool_pool import TurnToolPool
+from krelcode.agent.context.context_request import ContextRequest as ContextRequest
 from krelcode.agent.context.context_contracts import (
     CATEGORY_KNOWLEDGE,
     CATEGORY_MEMORY,
@@ -59,6 +48,7 @@ from krelcode.agent.context.context_contracts import (
     TRUST_UNTRUSTED,
 )
 from krelcode.agent.context.working_context_source import WorkingContextSource
+from krelcode.agent.context.knowledge_context_source import KnowledgeContextSource
 
 if TYPE_CHECKING:
     from krelcode.agent.turn.workflows import TaskWorkflowSelection
@@ -81,6 +71,13 @@ class _MemoryTopic(Protocol):
 class _MemoryStorePort(Protocol):
     def index_view(
         self,
+        *,
+        principal_id: str = "",
+        tenant_id: str = "",
+        organization_id: str = "",
+        project_id: str = "",
+        session_id: str = "",
+        task_id: str = "",
     ) -> tuple[str, Sequence[_MemoryViewItem], Sequence[_MemoryTopic]]: ...
 
 
@@ -94,27 +91,6 @@ class ContextSourceIssue:
 
     source: str
     error: str
-
-
-@dataclass(frozen=True)
-class ContextRequest:
-    """Everything a context source may inspect for one model request."""
-
-    turn_id: str
-    step: int
-    history: Tuple[Message, ...]
-    workspace_root: Path
-    system_prompt: str = ""
-    system_provider_meta: Optional[Mapping[str, object]] = None
-    prompt_snapshot: Optional[PromptSnapshot] = None
-    tool_pool: Optional[TurnToolPool] = None
-    intent: Optional[TurnIntent] = None
-    task_workflow: Optional["TaskWorkflowSelection"] = None
-    runtime_context: Tuple[str, ...] = ()
-    working_context: Optional["WorkingContextSnapshot"] = None
-    relevant_memory: Tuple[str, ...] = ()
-    application_request: Optional[ApplicationRequest] = None
-    agent_contract: Optional[AgentContract] = None
 
 
 @dataclass(frozen=True)
@@ -134,6 +110,8 @@ class ContextAssembly:
     provider_meta: Optional[Mapping[str, object]] = None
     prompt_snapshot: Optional[PromptSnapshot] = None
     dynamic_hash: str = ""
+    omitted_layer_ids: tuple[str, ...] = ()
+    budget_decisions: tuple[Mapping[str, object], ...] = ()
 
     @property
     def stable_prefix(self) -> str:
@@ -220,6 +198,13 @@ class PromptSnapshotContextSource:
             content=text,
             trust=TRUST_SYSTEM,
             origin="prompt_registry",
+            source_type="prompt_registry",
+            source_id="prompt_registry",
+            scope="mixed",
+            version=str(getattr(snapshot, "generation", "") or ""),
+            permission_basis="managed_prompt_policy",
+            selected_reason="base agent prompt",
+            transform="compiled_prompt",
             priority=0,
             cacheable=stable_chars > 0,
             stable_prefix_chars=stable_chars,
@@ -316,6 +301,13 @@ class V3PromptSnapshotContextSource(PromptSnapshotContextSource):
             content=effective.text,
             trust=TRUST_SYSTEM,
             origin="prompt_registry",
+            source_type="prompt_registry",
+            source_id="prompt_registry",
+            scope="mixed",
+            version=str(getattr(snapshot, "generation", "") or ""),
+            permission_basis="managed_prompt_policy",
+            selected_reason="base agent prompt with trust-scope filtering",
+            transform="compiled_prompt",
             priority=0,
             cacheable=effective.cache.offset > 0,
             stable_prefix_chars=effective.cache.offset,
@@ -550,7 +542,14 @@ class MemoryContextSource:
     def collect(self, request: ContextRequest) -> Sequence[ContextLayer]:
         if self.store is None:
             return ()
-        content, selected, topics = self.store.index_view()
+        content, selected, topics = self.store.index_view(
+            principal_id=request.principal.principal_id,
+            tenant_id=request.principal.tenant_id,
+            organization_id=request.principal.organization_id,
+            project_id=request.project_id,
+            session_id=request.session_id,
+            task_id=request.task_id,
+        )
         if not content:
             return ()
         scope_counts = {
@@ -591,6 +590,12 @@ class MemoryContextSource:
             content=content,
             trust=TRUST_UNTRUSTED,
             origin="scoped_memory",
+            source_type="memory",
+            source_id="memory:scoped",
+            scope="mixed",
+            permission_basis="scoped_memory_identity",
+            selected_reason="bounded always-on memory index",
+            transform="index_projection",
             priority=80,
             cacheable=False,
             compactable=True,
@@ -599,75 +604,6 @@ class MemoryContextSource:
                 "memory:scoped", CATEGORY_MEMORY,
                 estimate_text_tokens(content)),),
         ),)
-
-
-class KnowledgeContextSource:
-    """Expose access-filtered knowledge as non-instruction evidence."""
-
-    name = "knowledge"
-
-    def __init__(self, retriever: KnowledgeRetrieverPort) -> None:
-        self.retriever = retriever
-
-    def collect(self, request: ContextRequest) -> Sequence[ContextLayer]:
-        query_text = _knowledge_query_text(request)
-        if not query_text:
-            return ()
-        result = self.retriever.search(KnowledgeQuery(
-            query=query_text,
-            limit=4,
-            max_tokens=1_400,
-            include_expired=False,
-        ))
-        if not result.hits:
-            return ()
-        records = tuple(
-            _knowledge_evidence_record(hit) for hit in result.hits)
-        metadata = evidence_metadata(
-            records,
-            origin="knowledge_index",
-            extra={
-                "knowledge_hit_ids": tuple(
-                    hit.chunk.chunk_id for hit in result.hits),
-                "knowledge_document_ids": tuple(
-                    hit.document.document_id for hit in result.hits),
-                "knowledge_sources": tuple(sorted({
-                    hit.document.source_id for hit in result.hits})),
-                "knowledge_tokens": estimate_text_tokens(
-                    "\n".join(record.content for record in records)),
-                "knowledge_hits": tuple({
-                    "id": hit.chunk.chunk_id,
-                    "document_id": hit.document.document_id,
-                    "source": hit.document.source_id,
-                    "scope": KnowledgeScope(hit.document.scope).value,
-                    "version": hit.document.version.version,
-                    "freshness": hit.freshness.value,
-                    "score": hit.score,
-                    "tokens": estimate_text_tokens(hit.chunk.content),
-                } for hit in result.hits),
-                "knowledge_issues": result.issues,
-            },
-        )
-        content = render_knowledge_evidence_set(
-            records, origin="knowledge_index")
-        return (ContextLayer(
-            id="knowledge:retrieved",
-            source=self.name,
-            category=CATEGORY_KNOWLEDGE,
-            content=content,
-            trust=TRUST_UNTRUSTED,
-            origin="knowledge_index",
-            priority=70,
-            cacheable=False,
-            compactable=True,
-            metadata=metadata,
-            token_contributions=(ContextTokenContribution(
-                "knowledge:retrieved",
-                CATEGORY_KNOWLEDGE,
-                estimate_text_tokens(content),
-            ),),
-        ),)
-
 
 
 class DirectoryRulesContextSource:
@@ -754,39 +690,3 @@ def _fragment_category(fragment: PromptFragment) -> str:
     if fragment.group == GROUP_RUNTIME:
         return CATEGORY_RUNTIME
     return CATEGORY_SYSTEM
-
-
-def _knowledge_query_text(request: ContextRequest) -> str:
-    if request.application_request is not None:
-        goal = str(request.application_request.goal or "").strip()
-        if goal:
-            return goal
-    for message in reversed(request.history):
-        if message.role == "user":
-            return str(message.content or "").strip()
-    return ""
-
-
-def _knowledge_evidence_record(hit: KnowledgeHit) -> EvidenceRecord:
-    document: KnowledgeDocument = hit.document
-    return EvidenceRecord(
-        id=hit.chunk.chunk_id,
-        source=EvidenceSource.KNOWLEDGE,
-        content=hit.chunk.content,
-        scope=KnowledgeScope(document.scope).value,
-        kind="knowledge",
-        trust="untrusted",
-        confidence=min(0.95, 0.3 + hit.score / 20.0),
-        requires_validation=True,
-        origin=document.source_id,
-        metadata={
-            "document_id": document.document_id,
-            "title": document.title,
-            "uri": document.uri,
-            "version": document.version.version,
-            "digest": document.digest,
-            "freshness": hit.freshness.value,
-            "source_kind": document.metadata.get("source_kind", ""),
-            "tags": list(document.tags),
-        },
-    )

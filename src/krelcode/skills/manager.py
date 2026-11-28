@@ -157,6 +157,32 @@ class SkillManager:
             version=str(metadata.get("version") or ""),
             license=str(metadata.get("license") or ""),
             metadata=metadata,
+            owner=str(metadata.get("owner") or ""),
+            applicability=str(metadata.get("applicability") or ""),
+            required_tools=_metadata_tuple(
+                metadata.get("required-tools")
+                or metadata.get("required_tools")),
+            required_permissions=_metadata_tuple(
+                metadata.get("required-permissions")
+                or metadata.get("required_permissions")),
+            required_environment=_metadata_tuple(
+                metadata.get("required-environment")
+                or metadata.get("required_environment")),
+            input_contract=str(
+                metadata.get("input-contract")
+                or metadata.get("input_contract") or ""),
+            output_contract=str(
+                metadata.get("output-contract")
+                or metadata.get("output_contract") or ""),
+            acceptance_contract=_metadata_tuple(
+                metadata.get("acceptance-contract")
+                or metadata.get("acceptance_contract")),
+            dependencies=_metadata_tuple(metadata.get("dependencies")),
+            tests=_metadata_tuple(metadata.get("tests")),
+            supported_models=_metadata_tuple(
+                metadata.get("supported-models")
+                or metadata.get("supported_models")),
+            deprecated=_as_bool(metadata.get("deprecated"), False),
         )
 
     def list(
@@ -203,6 +229,8 @@ class SkillManager:
             description = html.escape(
                 skill.description[:MAX_DESCRIPTION_CHARS], quote=False)
             line = f"- {skill.name}: {description}"
+            if skill.applicability:
+                line += f" | when: {skill.applicability[:160]}"
             if used + len(line) + 1 > MAX_PROMPT_CHARS:
                 lines.append("- …[更多 skill 请调用 list_skills]")
                 break
@@ -373,6 +401,22 @@ def _as_bool(value: Any, default: bool) -> bool:
     if lowered in {"false", "no", "off", "0"}:
         return False
     return default
+
+
+def _metadata_tuple(value: object) -> Tuple[str, ...]:
+    if value is None:
+        return ()
+    values: Iterable[object]
+    if isinstance(value, str):
+        values = re.split(r"[,;\n]", value)
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        values = value
+    else:
+        values = (value,)
+    return tuple(
+        text for item in values
+        if (text := str(item).strip())
+    )
 
 
 def _render_lines(text: str, offset: int, limit: int) -> str:

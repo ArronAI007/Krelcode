@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from krelcode.agent.context.attachments import ContextAttachmentDiff, ContextAttachmentStore
     from krelcode.agent.context.compression import CompactResult
     from krelcode.agent.context.workspace import WorkspaceContext
+    from krelcode.agent.context.context_policy import ContextBudgetPolicy
     from krelcode.agent.context.context_cache_ledger import ContextCacheLedger
     from krelcode.agent.context.context_plan import ContextPlanSnapshot
     from krelcode.agent.context.context_source import (
@@ -107,6 +108,9 @@ class ContextAssemblerPort(Protocol):
     """Provider-neutral context source registry and assembler."""
 
     engine: str
+
+    @property
+    def budget_policy(self) -> "ContextBudgetPolicy": ...
 
     @property
     def source_names(self) -> Tuple[str, ...]: ...

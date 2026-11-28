@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Mapping, Optional
+
+from ..contracts.asset import (
+    AssetEnvelope,
+    AssetRetention,
+    AssetScope,
+    AssetSensitivity,
+)
 
 MAX_ENTRY_CHARS = 2_000
 MAX_ENTRIES = 200
@@ -65,6 +73,13 @@ class MemoryType(str, Enum):
     FEEDBACK = "feedback"
     PROJECT = "project"
     REFERENCE = "reference"
+
+
+class MemoryClass(str, Enum):
+    WORKING = "working"
+    EPISODIC = "episodic"
+    SEMANTIC = "semantic"
+    PROCEDURAL = "procedural"
 
 
 class MemoryRevisionConflict(RuntimeError):
@@ -212,6 +227,13 @@ class MemoryEntry:
     how_to_apply: str = ""
     revision: int = 1
     writer_id: str = ""
+    memory_class: MemoryClass | str = MemoryClass.SEMANTIC
+    last_verified_at: str = ""
+    use_count: int = 0
+    success_count: int = 0
+    failure_count: int = 0
+    last_outcome: str = ""
+    asset: Optional[AssetEnvelope] = None
 
     def __post_init__(self) -> None:
         if not str(self.id).strip():
@@ -253,6 +275,63 @@ class MemoryEntry:
         object.__setattr__(self, "how_to_apply", how_to_apply)
         object.__setattr__(self, "revision", max(1, int(self.revision)))
         object.__setattr__(self, "writer_id", str(self.writer_id or ""))
+        memory_class = str(
+            self.memory_class or MemoryClass.SEMANTIC.value).strip().lower()
+        aliases = {
+            "note": MemoryClass.SEMANTIC,
+            "fact": MemoryClass.SEMANTIC,
+            "knowledge": MemoryClass.SEMANTIC,
+            "preference": MemoryClass.SEMANTIC,
+            "workflow": MemoryClass.PROCEDURAL,
+        }
+        try:
+            memory_class_value = MemoryClass(
+                aliases.get(memory_class, memory_class))
+        except ValueError:
+            memory_class_value = MemoryClass.SEMANTIC
+        object.__setattr__(self, "memory_class", memory_class_value)
+        object.__setattr__(
+            self, "last_verified_at", str(self.last_verified_at or ""))
+        for name in ("use_count", "success_count", "failure_count"):
+            object.__setattr__(
+                self, name, max(0, int(getattr(self, name) or 0)))
+        object.__setattr__(
+            self, "last_outcome", str(self.last_outcome or ""))
+        if self.asset is None:
+            object.__setattr__(self, "asset", AssetEnvelope(
+                asset_id=self.id,
+                asset_type="memory",
+                scope={
+                    MemoryScope.USER: AssetScope.USER,
+                    MemoryScope.PROJECT: AssetScope.PROJECT,
+                    MemoryScope.SESSION: AssetScope.SESSION,
+                }[scope],
+                owner=str(metadata.get("owner") or ""),
+                tenant_id=str(metadata.get("tenant_id") or ""),
+                organization_id=str(
+                    metadata.get("organization_id") or ""),
+                project_id=str(metadata.get("project_id") or ""),
+                user_id=(
+                    str(metadata.get("user_id") or "")
+                    if scope is MemoryScope.USER else ""),
+                session_id=(
+                    str(metadata.get("session_id") or "")
+                    if scope is MemoryScope.SESSION else ""),
+                version=str(self.revision),
+                sensitivity=str(
+                    metadata.get("sensitivity")
+                    or AssetSensitivity.INTERNAL.value),
+                retention=str(
+                    metadata.get("retention")
+                    or (
+                        AssetRetention.SESSION.value
+                        if scope is MemoryScope.SESSION
+                        else AssetRetention.PROJECT.value
+                    )),
+                expires_at=_optional_float(metadata.get("expires_at")),
+                derived_from=_string_tuple(metadata.get("derived_from")),
+                metadata={"memory_scope": scope.value},
+            ))
 
     @property
     def scope_value(self) -> str:
@@ -293,6 +372,13 @@ class MemoryEntry:
             "how_to_apply": self.how_to_apply,
             "revision": self.revision,
             "writer_id": self.writer_id,
+            "memory_class": MemoryClass(self.memory_class).value,
+            "last_verified_at": self.last_verified_at,
+            "use_count": self.use_count,
+            "success_count": self.success_count,
+            "failure_count": self.failure_count,
+            "last_outcome": self.last_outcome,
+            "asset": self.asset.to_dict() if self.asset is not None else {},
         }
 
 
@@ -350,3 +436,96 @@ class MemoryMigrationReport:
     skipped: int = 0
     changed: bool = False
     backup_path: str = ""
+
+
+def _optional_float(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _string_tuple(value: object) -> tuple[str, ...]:
+    values: tuple[object, ...]
+    if isinstance(value, str):
+        values = (value,)
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        values = tuple(value)
+    else:
+        values = ()
+    return tuple(
+        text for item in values
+        if (text := str(item).strip())
+    )
+
+
+def memory_lifecycle_score(
+    entry: MemoryEntry,
+    *,
+    now: float | None = None,
+) -> float:
+    """Rank verified and repeatedly successful memory above stale notes."""
+    confidence = _optional_float(entry.metadata.get("confidence")) or 0.5
+    attempts = entry.success_count + entry.failure_count
+    success_rate = (
+        entry.success_count / attempts if attempts else 0.5)
+    verification = 0.0
+    if entry.last_verified_at:
+        try:
+            verified = datetime.fromisoformat(entry.last_verified_at)
+            current = (
+                datetime.now(timezone.utc)
+                if now is None
+                else datetime.fromtimestamp(now, timezone.utc)
+            )
+            age_days = max(
+                0.0, (current - verified.astimezone(timezone.utc)).days)
+            verification = max(0.0, 1.0 - min(age_days / 90.0, 1.0))
+        except (TypeError, ValueError):
+            verification = 0.0
+    return (
+        confidence
+        + success_rate
+        + verification
+        - min(entry.failure_count, 5) * 0.1
+    )
+
+
+def memory_asset_active(entry: MemoryEntry, *, now: float | None = None) -> bool:
+    asset = entry.asset
+    status = (
+        getattr(asset.status, "value", asset.status) if asset is not None else ""
+    )
+    if asset is None or status != "active":
+        return False
+    current = now if now is not None else datetime.now(
+        timezone.utc).timestamp()
+    return asset.expires_at is None or asset.expires_at > current
+
+
+def memory_asset_allowed(
+    entry: MemoryEntry,
+    *,
+    principal_id: str = "",
+    tenant_id: str = "",
+    organization_id: str = "",
+    project_id: str = "",
+    session_id: str = "",
+    task_id: str = "",
+) -> bool:
+    if not memory_asset_active(entry):
+        return False
+    asset = entry.asset
+    if asset is None:
+        return True
+    allowed, _reason = asset.allows_identity(
+        principal_id=principal_id,
+        tenant_id=tenant_id,
+        organization_id=organization_id,
+        project_id=project_id,
+        session_id=session_id,
+        task_id=task_id,
+    )
+    return allowed

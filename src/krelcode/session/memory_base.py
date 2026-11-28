@@ -107,6 +107,12 @@ class MemoryStoreBase:
         self,
         *,
         scopes: Optional[Iterable[MemoryScope | str]] = None,
+        principal_id: str = "",
+        tenant_id: str = "",
+        organization_id: str = "",
+        project_id: str = "",
+        session_id: str = "",
+        task_id: str = "",
     ) -> tuple[MemoryTopic, ...]:
         raise NotImplementedError
 
@@ -116,6 +122,12 @@ class MemoryStoreBase:
         scopes: Optional[Iterable[MemoryScope | str]] = None,
         max_entries: int = 20,
         max_chars: int = 9_000,
+        principal_id: str = "",
+        tenant_id: str = "",
+        organization_id: str = "",
+        project_id: str = "",
+        session_id: str = "",
+        task_id: str = "",
     ) -> MemoryIndexSnapshot:
         raise NotImplementedError
 

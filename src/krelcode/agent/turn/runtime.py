@@ -226,6 +226,7 @@ class HarnessRuntimeFacade:
         task_id: str = "",
         parent_task_id: str = "",
         idempotency_key: str = "",
+        call_id: str = "",
         continuation: Optional[TaskContinuation] = None,
         cancel_mode: TaskCancelMode | str = TaskCancelMode.COOPERATIVE,
     ) -> str:
@@ -240,6 +241,7 @@ class HarnessRuntimeFacade:
             task_id=task_id,
             parent_task_id=parent_task_id,
             idempotency_key=idempotency_key,
+            call_id=call_id,
             continuation=continuation,
             cancel_mode=cancel_mode,
         )
@@ -493,6 +495,7 @@ class HarnessRuntimeFacade:
         task_id: str = "",
         parent_task_id: str = "",
         idempotency_key: str = "",
+        call_id: str = "",
         continuation: Optional[TaskContinuation] = None,
         cancel_mode: TaskCancelMode | str = TaskCancelMode.COOPERATIVE,
     ) -> QuerySession:
@@ -509,6 +512,7 @@ class HarnessRuntimeFacade:
             task_id=task_id,
             parent_task_id=parent_task_id,
             idempotency_key=idempotency_key,
+            call_id=call_id,
             continuation=continuation,
             cancel_mode=cancel_mode,
         )

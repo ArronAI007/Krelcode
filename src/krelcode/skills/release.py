@@ -108,6 +108,18 @@ class SkillReleaseStore:
             created_at=created_at,
             skill_markdown=body,
             previous_release_id=existing[0].release_id if existing else "",
+            metadata={
+                "owner": skill.owner,
+                "applicability": skill.applicability,
+                "required_tools": list(skill.required_tools),
+                "required_permissions": list(skill.required_permissions),
+                "required_environment": list(skill.required_environment),
+                "acceptance_contract": list(skill.acceptance_contract),
+                "dependencies": list(skill.dependencies),
+                "tests": list(skill.tests),
+                "supported_models": list(skill.supported_models),
+                "release_ready": skill.release_ready,
+            },
         )
         if not self._append(release):
             raise SkillError(f"无法写入 Skill release ledger: {self.last_error}")

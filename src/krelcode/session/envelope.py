@@ -37,6 +37,7 @@ def event_payload(
         "step", "phase", "turn_id", "request_id", "tool_call_id",
         "tool_name", "is_error", "job_id", "agent_id", "checkpoint_id",
         "memory_id", "candidate_id", "generation", "tokens", "status",
+        "call_id",
     )
     for name in common_fields:
         value = _safe_scalar(getattr(event, name, None))
@@ -94,6 +95,9 @@ class SessionEnvelope:
     event_type: str
     payload: Mapping[str, Any] = field(default_factory=dict)
     event_kind: SessionEventKind = SessionEventKind.RUN
+    task_id: str = ""
+    parent_task_id: str = ""
+    call_id: str = ""
     timestamp: float = field(default_factory=time.time)
 
     @classmethod
@@ -112,6 +116,9 @@ class SessionEnvelope:
             event_type=session_event.event_type,
             payload=event_payload(event, redactor=redactor),
             event_kind=session_event_kind(event),
+            task_id=session_event.task_id,
+            parent_task_id=session_event.parent_task_id,
+            call_id=session_event.call_id,
             timestamp=session_event.timestamp,
         )
 

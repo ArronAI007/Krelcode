@@ -525,6 +525,8 @@ class StreamJsonEncoder:
             envelope["task_id"] = query_event.task_id
         if query_event.parent_task_id:
             envelope["parent_task_id"] = query_event.parent_task_id
+        if query_event.call_id:
+            envelope["call_id"] = query_event.call_id
         payload.update(envelope)
         validate_stream_event(payload)
         return payload

@@ -135,6 +135,14 @@ class LocalKnowledgeSource:
                     ),
                     policy_version=str(metadata.get("policy_version") or ""),
                 ),
+                owner=str(metadata.get("owner") or ""),
+                authority_level=str(
+                    metadata.get("authority_level") or "reference"),
+                effective_from=(
+                    _optional_float(metadata.get("effective_from")) or 0.0
+                ),
+                supersedes=str(metadata.get("supersedes") or ""),
+                conflict_group=str(metadata.get("conflict_group") or ""),
                 metadata={
                     "relative_path": relative,
                     "source_root": str(self.root),
@@ -245,7 +253,20 @@ class LocalKnowledgeBase(KnowledgeServicePort):
             if not allowed:
                 issues.append(f"{document.document_id}:{reason}")
                 continue
+            if document.asset is not None:
+                asset_allowed, asset_reason = document.asset.allows_identity(
+                    principal_id=query.principal,
+                    tenant_id=query.tenant_id,
+                    organization_id=query.organization_id,
+                    project_id=query.project_id,
+                    session_id=query.session_id,
+                    task_id=query.task_id,
+                )
+                if not asset_allowed:
+                    issues.append(f"{document.document_id}:{asset_reason}")
+                    continue
             score = _score(terms, document.title, chunk.content)
+            score *= _authority_weight(document.authority_level)
             if score <= 0:
                 continue
             candidates.append((
@@ -368,6 +389,17 @@ def _score(terms: Sequence[str], title: str, content: str) -> float:
             continue
         score += title_hits * 4.0 + min(8, content_hits)
     return score
+
+
+def _authority_weight(value: str) -> float:
+    return {
+        "authoritative": 1.5,
+        "approved": 1.3,
+        "official": 1.4,
+        "reference": 1.0,
+        "community": 0.8,
+        "draft": 0.6,
+    }.get(str(value or "").strip().lower(), 1.0)
 
 
 def _estimate_tokens(text: str) -> int:

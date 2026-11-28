@@ -19,6 +19,7 @@ from .memory_models import (
     MemoryTopic,
     coerce_memory_scope,
     coerce_memory_type,
+    memory_asset_allowed,
 )
 from .memory_utils import _entry_topic_slug, _one_line, memory_topic_slug
 
@@ -27,10 +28,28 @@ class MemoryStoreViewMixin(MemoryStoreBase):
         self,
         *,
         scopes: Optional[Iterable[MemoryScope | str]] = None,
+        principal_id: str = "",
+        tenant_id: str = "",
+        organization_id: str = "",
+        project_id: str = "",
+        session_id: str = "",
+        task_id: str = "",
     ) -> tuple[MemoryTopic, ...]:
         """Group entries into bounded, generated topic documents."""
         selected_scopes = self._coerce_scopes(scopes)
-        entries = self.list(limit=0, scopes=selected_scopes)
+        raw_entries = self.list(limit=0, scopes=selected_scopes)
+        entries = [
+            entry for entry in raw_entries
+            if memory_asset_allowed(
+                entry,
+                principal_id=principal_id,
+                tenant_id=tenant_id,
+                organization_id=organization_id,
+                project_id=project_id,
+                session_id=session_id,
+                task_id=task_id,
+            )
+        ]
         grouped: dict[tuple[str, str, str], list[MemoryEntry]] = defaultdict(list)
         for entry in entries:
             scope = coerce_memory_scope(entry.scope)
@@ -84,9 +103,23 @@ class MemoryStoreViewMixin(MemoryStoreBase):
         scopes: Optional[Iterable[MemoryScope | str]] = None,
         max_entries: int = MAX_INDEX_ENTRIES,
         max_chars: int = MAX_INDEX_CHARS,
+        principal_id: str = "",
+        tenant_id: str = "",
+        organization_id: str = "",
+        project_id: str = "",
+        session_id: str = "",
+        task_id: str = "",
     ) -> MemoryIndexSnapshot:
         """Render the bounded always-on index without embedding topic bodies."""
-        all_topics = self.memory_topics(scopes=scopes)
+        all_topics = self.memory_topics(
+            scopes=scopes,
+            principal_id=principal_id,
+            tenant_id=tenant_id,
+            organization_id=organization_id,
+            project_id=project_id,
+            session_id=session_id,
+            task_id=task_id,
+        )
         limit = max(0, min(int(max_entries), MAX_INDEX_ENTRIES))
         char_limit = max(0, min(int(max_chars), MAX_INDEX_CHARS))
         header = self._index_header(len(all_topics))

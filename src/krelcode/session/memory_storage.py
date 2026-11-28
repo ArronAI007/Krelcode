@@ -7,7 +7,7 @@ import re
 import shutil
 import threading
 import uuid
-from contextlib import ExitStack, nullcontext
+from contextlib import nullcontext
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +15,7 @@ from typing import ContextManager, Iterable, List, Mapping, Optional
 
 from ..core.redact import MASK, SecretRedactor
 from ..core.file_lock import InterProcessFileLock
+from ..contracts.asset import AssetEnvelope
 from .memory_base import MemoryStoreBase
 from .memory_models import (
     INJECT_ENTRIES,
@@ -27,6 +28,7 @@ from .memory_models import (
     STRUCTURED_MEMORY_TYPES,
     _SAFE_SESSION_ID_RE,
     _SENSITIVE_METADATA_KEY_RE,
+    MemoryClass,
     MemoryEntry,
     MemoryKind,
     MemoryRevisionConflict,
@@ -36,6 +38,7 @@ from .memory_models import (
     coerce_memory_scope,
     coerce_memory_type,
     default_user_memory_path,
+    memory_lifecycle_score,
     validate_memory_structure,
 )
 from .memory_utils import (
@@ -338,6 +341,11 @@ class MemoryStoreStorageMixin(MemoryStoreBase):
                 if isinstance(sanitized_metadata, Mapping)
                 else {}
             )
+            raw_asset = payload.get("asset")
+            asset = (
+                AssetEnvelope.from_dict(raw_asset)
+                if isinstance(raw_asset, Mapping) else None
+            )
             try:
                 kind = coerce_memory_kind(payload.get("kind"))
             except ValueError:
@@ -386,6 +394,17 @@ class MemoryStoreStorageMixin(MemoryStoreBase):
                     how_to_apply=how_to_apply,
                     revision=max(1, int(payload.get("revision") or 1)),
                     writer_id=str(payload.get("writer_id") or ""),
+                    memory_class=str(
+                        payload.get("memory_class") or "semantic"),
+                    last_verified_at=str(
+                        payload.get("last_verified_at") or ""),
+                    use_count=max(0, int(payload.get("use_count") or 0)),
+                    success_count=max(
+                        0, int(payload.get("success_count") or 0)),
+                    failure_count=max(
+                        0, int(payload.get("failure_count") or 0)),
+                    last_outcome=str(payload.get("last_outcome") or ""),
+                    asset=asset,
                 )
             except (TypeError, ValueError):
                 continue
@@ -444,6 +463,7 @@ class MemoryStoreStorageMixin(MemoryStoreBase):
         pinned: bool = False,
         deduplicate: bool = False,
         expected_revision: Optional[int] = None,
+        memory_class: MemoryClass | str = MemoryClass.SEMANTIC,
     ) -> MemoryEntry:
         normalized_scope = coerce_memory_scope(scope)
         normalized_type = coerce_memory_type(memory_type)
@@ -477,6 +497,7 @@ class MemoryStoreStorageMixin(MemoryStoreBase):
             metadata=safe_metadata if isinstance(safe_metadata, dict) else {},
             pinned=pinned,
             writer_id=self.writer_id,
+            memory_class=memory_class,
         )
         with self._lock, self._scope_lock(normalized_scope):
             current_revision = self._assert_revision(
@@ -522,10 +543,16 @@ class MemoryStoreStorageMixin(MemoryStoreBase):
             entries = self._load_scope(scope)
             if not any(item.id == entry.id for item in entries):
                 raise KeyError(entry.id)
+            next_revision = entry.revision + 1
+            asset = (
+                replace(entry.asset, version=str(next_revision))
+                if entry.asset is not None else None
+            )
             entry = replace(
                 entry,
-                revision=entry.revision + 1,
+                revision=next_revision,
                 writer_id=self.writer_id,
+                asset=asset,
             )
             updated = [
                 entry if item.id == entry.id else item for item in entries]
@@ -582,6 +609,13 @@ class MemoryStoreStorageMixin(MemoryStoreBase):
                 how_to_apply=entry.how_to_apply,
                 revision=entry.revision,
                 writer_id=entry.writer_id,
+                memory_class=entry.memory_class,
+                last_verified_at=entry.last_verified_at,
+                use_count=entry.use_count,
+                success_count=entry.success_count,
+                failure_count=entry.failure_count,
+                last_outcome=entry.last_outcome,
+                asset=entry.asset,
             ), expected_revision=expected_revision)
         return None
 
@@ -648,6 +682,7 @@ class MemoryStoreStorageMixin(MemoryStoreBase):
                 score += 0.5
             if coerce_memory_type(entry.memory_type) in STRUCTURED_MEMORY_TYPES:
                 score += 0.25
+            score += memory_lifecycle_score(entry) * 2.0
             ranked.append((
                 entry.pinned, score, entry.updated_at, index, entry))
         ranked.sort(
@@ -658,48 +693,6 @@ class MemoryStoreStorageMixin(MemoryStoreBase):
         if limit > 0:
             limited = limited[:limit]
         return tuple(limited)
-
-    def remove(
-        self,
-        entry_id: str,
-        *,
-        scope: Optional[MemoryScope | str] = None,
-        expected_revision: Optional[int] = None,
-    ) -> Optional[MemoryEntry]:
-        """Remove one entry by id and rewrite the affected scope atomically."""
-        target = str(entry_id).strip()
-        if not target:
-            return None
-        selected = (
-            (coerce_memory_scope(scope),)
-            if scope is not None else MEMORY_SCOPE_ORDER)
-        if expected_revision is not None and len(selected) != 1:
-            raise ValueError("expected_revision 要求显式指定 scope")
-        with self._lock, ExitStack() as stack:
-            for selected_scope in selected:
-                stack.enter_context(self._scope_lock(selected_scope))
-            for current_scope in selected:
-                self._assert_revision(current_scope, expected_revision)
-                entries = self._load_scope(current_scope)
-                removed = next(
-                    (entry for entry in entries if entry.id == target), None)
-                if removed is None:
-                    continue
-                path = self.scope_path(current_scope)
-                if path is None:
-                    self._session_entries = [
-                        entry for entry in entries if entry.id != target]
-                else:
-                    self._write_scope(path, (
-                        entry for entry in entries if entry.id != target))
-                self._set_revision(
-                    current_scope, self.revision(current_scope) + 1)
-                try:
-                    self.refresh_markdown_views()
-                except OSError:
-                    pass
-                return removed
-        return None
 
     def _write_scope(self, path: Path, entries: Iterable[MemoryEntry]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

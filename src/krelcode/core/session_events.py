@@ -230,6 +230,7 @@ class SessionEvent:
     timestamp: float = field(default_factory=time.time)
     task_id: str = ""
     parent_task_id: str = ""
+    call_id: str = ""
 
     def __post_init__(self) -> None:
         if self.sequence < 0:
