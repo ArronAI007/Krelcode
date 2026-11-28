@@ -25,14 +25,17 @@ from ..core.events import (
     LLMResponseReceived,
     LLMStreamDelta,
     LLMThinkingDelta,
+    LoopPhaseChanged,
     MemoryCandidateObserved,
     MemoryLoaded,
     MemoryWritten,
+    ObservationRecorded,
     PermissionDenied,
     PlanUpdated,
     QueryPhaseChanged,
     RunCancelled,
     RunFinished,
+    RunFailed,
     RunStarted,
     SecurityDecisionRecorded,
     ShellJobFinished,
@@ -66,10 +69,8 @@ from .stream_json_schema import (
     validate_stream_event,
 )
 
-
 class StreamJsonProtocolError(ValueError):
     """输入消息不符合 stream-json 协议。"""
-
 
 @dataclass(frozen=True)
 class StreamUserMessage:
@@ -81,7 +82,6 @@ class StreamUserMessage:
     agent_contract: Optional[AgentContract] = field(
         default=None, compare=False)
 
-
 @dataclass(frozen=True)
 class StreamControlMessage:
     subtype: str
@@ -89,7 +89,6 @@ class StreamControlMessage:
     decision: str = ""
     action: str = ""
     content: str = ""
-
 
 @dataclass(frozen=True)
 class StreamJsonMetadata:
@@ -101,7 +100,6 @@ class StreamJsonMetadata:
     mcp_servers: tuple[str, ...] = ()
     permission_mode: str = "default"
     run_mode: str = "json"
-
 
 class StreamJsonEncoder:
     """把内部事件编码为稳定的 JSON-compatible message。"""
@@ -161,6 +159,29 @@ class StreamJsonEncoder:
                 "type": "acceptance",
                 "subtype": "evaluated",
                 "acceptance": dict(event.acceptance),
+            }
+        elif isinstance(event, LoopPhaseChanged):
+            payload = {
+                "type": "loop",
+                "subtype": "phase_changed",
+                "phase": event.phase,
+                "previous_phase": event.previous_phase,
+                "reason": event.reason,
+                "step": event.step,
+                "transition": dict(event.transition),
+            }
+        elif isinstance(event, ObservationRecorded):
+            payload = {
+                "type": "observation",
+                "subtype": "recorded",
+                "observation": dict(event.observation),
+            }
+        elif isinstance(event, RunFailed):
+            payload = {
+                "type": "error",
+                "subtype": "run_failed",
+                "error": event.detail or event.reason,
+                "context": event.termination,
             }
         elif isinstance(event, StepStarted):
             payload = {"type": "step", "subtype": "started", "step": event.step}

@@ -27,6 +27,7 @@ WORKING_CONTEXT_KINDS = (
     "file",
     "command",
     "error",
+    "verification_gap",
     "observation",
     "open_issue",
 )
@@ -45,6 +46,7 @@ _KIND_ALIASES = {
 _KIND_PRIORITY = {
     "open_issue": 0,
     "error": 1,
+    "verification_gap": 1,
     "goal": 2,
     "plan": 3,
     "file": 4,
@@ -61,6 +63,7 @@ _GROUP_TAGS = {
     "file": "files",
     "command": "commands",
     "error": "errors",
+    "verification_gap": "open_issues",
     "observation": "observations",
     "open_issue": "open_issues",
 }
@@ -72,6 +75,7 @@ _METADATA_KEYS = (
     "workdir", "cwd", "line", "column", "pid", "full_output_path",
     "items", "statuses", "active_index", "explanation", "answer", "prompt",
     "options",
+    "criterion", "code", "observation_id",
 )
 _MAX_METADATA_STRING = 400
 _SECRETISH_PATTERN = re.compile(
@@ -79,14 +83,12 @@ _SECRETISH_PATTERN = re.compile(
 
 Redactor = Callable[[str], str]
 
-
 def normalize_kind(kind: str) -> str:
     value = str(kind or "").strip().lower().replace("-", "_")
     value = _KIND_ALIASES.get(value, value)
     if value not in WORKING_CONTEXT_KINDS:
         raise ValueError(f"未知 Working Context 类型: {kind}")
     return value
-
 
 def _bounded_text(text: object, limit: int, redactor: Optional[Redactor] = None) -> str:
     value = str(text or "").strip()
@@ -104,7 +106,6 @@ def _bounded_text(text: object, limit: int, redactor: Optional[Redactor] = None)
         value = value[:max(0, limit - 1)] + "…"
     return value
 
-
 def _safe_metadata_value(value: Any, redactor: Optional[Redactor]) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
@@ -121,7 +122,6 @@ def _safe_metadata_value(value: Any, redactor: Optional[Redactor]) -> Any:
             for key, item in list(value.items())[:24]
         }
     return _bounded_text(value, _MAX_METADATA_STRING, redactor)
-
 
 def compact_tool_metadata(
     tool_name: str,

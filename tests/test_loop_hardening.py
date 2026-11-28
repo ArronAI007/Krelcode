@@ -5,7 +5,10 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
+import pytest
+
 from krelcode.agent.loop import AgentLoop
+from krelcode.agent.turn.loop_state import AgentLoopTerminated
 from krelcode.core.events import EventBus, ToolCallCompleted
 from krelcode.core.messages import Message, ToolCall
 from krelcode.llm.providers.mock import MockProvider
@@ -117,9 +120,11 @@ def test_repeat_failure_aborts_run():
     ]
     tool = FlakyTool(fail_plan=[True, True, True])
     loop, provider = build(script, [tool], max_steps=10)
-    reply = asyncio.run(loop.run("x"))
+    with pytest.raises(AgentLoopTerminated) as caught:
+        asyncio.run(loop.run("x"))
 
-    assert "判定为循环" in reply and "连续失败 3 次" in reply
+    assert caught.value.termination.reason.value == "loop_detected"
+    assert "连续失败 3 次" in str(caught.value)
     assert len(provider.calls) == 3          # 第 4 次 LLM 调用没有发生
     assert tool.calls == 3
     assert loop.history[-1].role == "assistant"
@@ -129,8 +134,10 @@ def test_custom_repeat_limit():
     script = [tc("c1", "flaky", {}), tc("c2", "flaky", {}), "不应消费"]
     tool = FlakyTool(fail_plan=[True, True])
     loop, provider = build(script, [tool], repeat_failure_limit=2)
-    reply = asyncio.run(loop.run("x"))
-    assert "连续失败 2 次" in reply
+    with pytest.raises(AgentLoopTerminated) as caught:
+        asyncio.run(loop.run("x"))
+    assert caught.value.termination.reason.value == "loop_detected"
+    assert "连续失败 2 次" in str(caught.value)
     assert len(provider.calls) == 2
 
 

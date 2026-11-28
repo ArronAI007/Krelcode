@@ -149,6 +149,8 @@ STREAM_JSON_FIELD_TYPES: Mapping[str, Mapping[str, object]] = {
     "agent_contract": _FIELD_OBJECT,
     "security": _FIELD_OBJECT,
     "acceptance": _FIELD_OBJECT,
+    "transition": _FIELD_OBJECT,
+    "observation": _FIELD_OBJECT,
 }
 
 _ENVELOPE = ("turn_id", "sequence", "session_id")
@@ -180,6 +182,11 @@ OUTPUT_EVENT_SCHEMAS: Mapping[tuple[str, str], StreamJsonEventSchema] = {
     ("system", "turn_started"): _event("system", "turn_started", "content"),
     ("acceptance", "evaluated"): _event(
         "acceptance", "evaluated", "acceptance"),
+    ("loop", "phase_changed"): _event(
+        "loop", "phase_changed", "phase", "previous_phase", "reason",
+        "step", "transition"),
+    ("observation", "recorded"): _event(
+        "observation", "recorded", "observation"),
     ("step", "started"): _event("step", "started", "step"),
     ("query", "phase_changed"): _event(
         "query", "phase_changed", "phase", "detail"),
@@ -269,6 +276,8 @@ OUTPUT_EVENT_SCHEMAS: Mapping[tuple[str, str], StreamJsonEventSchema] = {
         envelope=(),
     ),
     ("error", "occurred"): _event("error", "occurred", "error", "context"),
+    ("error", "run_failed"): _event(
+        "error", "run_failed", "error", "context"),
 }
 
 INPUT_EVENT_SCHEMAS: Mapping[tuple[str, str], StreamJsonEventSchema] = {

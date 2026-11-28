@@ -8,7 +8,10 @@ import asyncio
 from pathlib import Path
 from typing import List
 
+import pytest
+
 from krelcode.agent.loop import AgentLoop, max_steps_reached_text
+from krelcode.agent.turn.loop_state import AgentLoopTerminated
 from krelcode.core.events import (
     AgentEvent, LLMResponseReceived, PermissionDenied, RunFinished,
     RunStarted, StepStarted, ToolCallCompleted, ToolCallStarted,
@@ -83,8 +86,9 @@ def test_plain_chat_no_tools():
     assert [m.role for m in loop.history] == ["system", "user", "assistant"]
     assert rec.types() == [
         "RunStarted", "QueryPhaseChanged", "StepStarted",
-        "QueryPhaseChanged", "ContextAssembled", "LLMStreamDelta",
-        "LLMResponseReceived", "RunFinished",
+        "LoopPhaseChanged", "QueryPhaseChanged", "ContextAssembled",
+        "LLMStreamDelta", "LLMResponseReceived", "LoopPhaseChanged",
+        "LoopPhaseChanged", "RunFinished",
     ]
     assert provider.tools_seen == [None]
 
@@ -116,13 +120,16 @@ def test_full_tool_call_cycle():
     # 第一轮 assistant 只有 tool_calls（无文本 delta），第二轮有文本 delta
     assert rec.types() == [
         "RunStarted", "QueryPhaseChanged", "StepStarted",
-            "QueryPhaseChanged", "ContextAssembled", "LLMResponseReceived",
-            "ToolCallStarted", "ToolProgress", "SecurityDecisionRecorded",
-            "ToolProgress",
-            "ToolCallCompleted", "StepStarted", "QueryPhaseChanged",
-            "ContextAssembled", "LLMStreamDelta", "LLMResponseReceived",
-            "RunFinished",
-        ]
+        "LoopPhaseChanged", "QueryPhaseChanged", "ContextAssembled",
+        "LLMResponseReceived", "LoopPhaseChanged", "QueryPhaseChanged",
+        "ToolCallStarted", "ToolProgress", "SecurityDecisionRecorded",
+        "ToolProgress",
+        "ToolCallCompleted", "ObservationRecorded", "LoopPhaseChanged",
+        "QueryPhaseChanged", "LoopPhaseChanged", "QueryPhaseChanged",
+        "StepStarted", "LoopPhaseChanged", "QueryPhaseChanged",
+        "ContextAssembled", "LLMStreamDelta", "LLMResponseReceived",
+        "LoopPhaseChanged", "LoopPhaseChanged", "RunFinished",
+    ]
     completed = [e for e in rec.events if isinstance(e, ToolCallCompleted)][0]
     assert not completed.is_error
 
@@ -171,10 +178,10 @@ def test_max_steps_guard():
     # 脚本让 LLM 永远请求工具 → 应触发 max_steps 中止
     loop, _, _ = make_loop([tool_call_msg(), tool_call_msg(), tool_call_msg()],
                            tools=[EchoTool()], max_steps=2)
-    reply = asyncio.run(loop.run("x"))
-    assert reply == max_steps_reached_text(2)
-    assert "2 个模型步骤" in reply
-    assert "--max-steps 4" in reply
+    with pytest.raises(AgentLoopTerminated) as caught:
+        asyncio.run(loop.run("x"))
+    assert caught.value.termination.reason.value == "max_steps"
+    assert "2 个模型步骤上限" in str(caught.value)
     assert loop.history[-1].role == "assistant"
 
 

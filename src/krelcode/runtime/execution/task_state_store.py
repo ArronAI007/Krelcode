@@ -220,6 +220,10 @@ def state_to_mapping(state: RuntimeTaskState) -> dict[str, object]:
         "paused_at": state.paused_at,
         "resume_from_checkpoint_id": state.resume_from_checkpoint_id,
         "updated_at": state.updated_at,
+        "wait_reason": state.wait_reason,
+        "resume_token": state.resume_token,
+        "waiting_since": state.waiting_since,
+        "resumed_at": state.resumed_at,
     }
 
 
@@ -251,6 +255,10 @@ def state_from_mapping(raw: object) -> RuntimeTaskState:
         resume_from_checkpoint_id=str(
             raw.get("resume_from_checkpoint_id") or ""),
         updated_at=float(str(raw.get("updated_at") or 0.0)),
+        wait_reason=str(raw.get("wait_reason") or ""),
+        resume_token=str(raw.get("resume_token") or ""),
+        waiting_since=_optional_float(raw.get("waiting_since")),
+        resumed_at=_optional_float(raw.get("resumed_at")),
     )
 
 

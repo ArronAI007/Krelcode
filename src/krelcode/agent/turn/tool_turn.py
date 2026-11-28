@@ -54,6 +54,12 @@ from krelcode.contracts.tool import (
     ToolResult,
     ToolSource,
 )
+from krelcode.contracts.loop import WaitCondition, WaitKind
+from krelcode.agent.turn.observation import (
+    tool_observation,
+    tool_wait_kind,
+    user_input_observation,
+)
 from krelcode.contracts.tool_execution import (
     ToolExecutionResult,
     ToolIntent,
@@ -64,7 +70,6 @@ from krelcode.agent.turn.runtime_ports import ToolTurnHostPort
 from krelcode.agent.turn.streaming_tools import StreamingToolExecutor
 from krelcode.agent.turn.tool_pool import TurnToolPool
 from krelcode.agent.context.working_context import compact_tool_metadata
-
 
 class ToolBatchExecutor:
     """Execute and persist model-requested tools without owning the turn loop."""
@@ -134,9 +139,16 @@ class ToolBatchExecutor:
 
     async def run_stream_tool(self, tool_call: ToolCall) -> ToolExecutionResult:
         """Execute one streamed call and publish completion immediately."""
+        await self.host._before_tool_execution(tool_call)
         await self.host._emit(ToolCallStarted(tool_call))
         result = await self.execute_one(tool_call)
-        return await self.publish_tool_result(tool_call, result)
+        published = await self.publish_tool_result(tool_call, result)
+        await self.host._record_observation(tool_observation(
+            turn_id=self.host._current_turn_id,
+            tool_call=tool_call,
+            result=published,
+        ))
+        return published
 
     async def publish_tool_result(
         self, tool_call: ToolCall, result: ToolExecutionResult,
@@ -315,10 +327,24 @@ class ToolBatchExecutor:
                 options=safe_options,
                 allow_free_text=allow_free_text,
             ))
-            answer = await exchange.wait()
+            await host._enter_waiting(WaitCondition(
+                kind=WaitKind.USER_INPUT,
+                request_id=exchange.request_id,
+                reason=safe_prompt,
+            ))
+            try:
+                answer = await exchange.wait()
+            finally:
+                await host._resume_waiting(exchange.request_id)
             await host._emit(UserInputResolved(
                 request_id=exchange.request_id,
                 answered=answer is not None,
+            ))
+            await host._record_observation(user_input_observation(
+                turn_id=turn_id,
+                request_id=exchange.request_id,
+                answered=answer is not None,
+                answer_chars=len(answer or ""),
             ))
             return answer
 
@@ -356,6 +382,8 @@ class ToolBatchExecutor:
             output_emitter=emit_output,
             input_requester=request_user_input,
             plan_emitter=emit_plan,
+            waiting_emitter=host._enter_waiting,
+            resume_emitter=host._resume_waiting,
         )
         intent = ToolIntent(
             call=tool_call,
@@ -603,7 +631,18 @@ class ToolBatchExecutor:
         )
         await _emit_security_decision(host, tool_call, security_decision)
         await execution_ctx.emit_progress("开始执行")
-        result = await deps.execution_runtime.execute(intent)
+        wait_kind = tool_wait_kind(tool_call.name)
+        if wait_kind is not None:
+            await host._enter_waiting(WaitCondition(
+                kind=wait_kind,
+                request_id=tool_call.id,
+                reason=f"{tool_call.name} 等待外部完成",
+            ))
+        try:
+            result = await deps.execution_runtime.execute(intent)
+        finally:
+            if wait_kind is not None:
+                await host._resume_waiting(tool_call.id)
         result = replace(
             result,
             diagnostics={
@@ -628,7 +667,6 @@ class ToolBatchExecutor:
                 content=(result.content + "\n\n" + blocks).strip(),
             )
         return result
-
 
 def _security_decision(
     governance: GovernanceDecision,
@@ -659,7 +697,6 @@ def _security_decision(
         },
     )
 
-
 async def _emit_security_decision(
     host: ToolTurnHostPort,
     tool_call: ToolCall,
@@ -669,7 +706,6 @@ async def _emit_security_decision(
         tool_call_id=tool_call.id,
         security=decision.to_dict(),
     ))
-
 
 def _governance_request(
     host: ToolTurnHostPort,
@@ -732,7 +768,6 @@ def _governance_request(
         tool_source=descriptor.source.value,
     )
 
-
 def _call_signature(tool_call: ToolCall) -> str:
     """Tool name plus stable arguments for repeated-failure detection."""
     try:
@@ -742,7 +777,6 @@ def _call_signature(tool_call: ToolCall) -> str:
     if len(args) > 200:
         args = args[:200] + "…"
     return f"{tool_call.name}({args})"
-
 
 def _redact_json(
     value: object, redact: Callable[[str], str],
@@ -757,7 +791,6 @@ def _redact_json(
             for key, item in value.items()
         }
     return value
-
 
 def _persisted_output_path(content: str) -> str:
     match = re.search(r"全文已存盘:\s*([^\]\n]+)", content or "")

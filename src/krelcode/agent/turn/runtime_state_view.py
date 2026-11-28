@@ -100,6 +100,8 @@ if TYPE_CHECKING:
     )
     from krelcode.contracts.application import ApplicationRequest
     from krelcode.contracts.agent import AgentContract
+    from krelcode.contracts.loop import Observation
+    from .loop_state import AgentLoopStateMachine
     from krelcode.contracts.acceptance import AcceptanceResult
     from krelcode.contracts.tool import RuntimeSnapshot, ToolContext, TurnAbortSignal
     from krelcode.llm.base import LLMProvider
@@ -281,6 +283,26 @@ class RuntimeStateView:
     @acceptance_result.setter
     def acceptance_result(self, value: Optional[AcceptanceResult]) -> None:
         self.runtime_state.turn.acceptance_result = value
+
+    @property
+    def loop_state(self) -> Optional[AgentLoopStateMachine]:
+        return self.runtime_state.turn.loop_state
+
+    @loop_state.setter
+    def loop_state(self, value: Optional[AgentLoopStateMachine]) -> None:
+        self.runtime_state.turn.loop_state = value
+
+    @property
+    def last_observation(self) -> Optional[Observation]:
+        return self.runtime_state.turn.last_observation
+
+    @last_observation.setter
+    def last_observation(self, value: Optional[Observation]) -> None:
+        self.runtime_state.turn.last_observation = value
+
+    @property
+    def observations(self) -> list[Observation]:
+        return self.runtime_state.turn.observations
 
     @property
     def steering_queue(self) -> asyncio.Queue[SteeringInput | str]:

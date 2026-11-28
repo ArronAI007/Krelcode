@@ -21,6 +21,7 @@ from krelcode.contracts.governance import (
     SandboxProfile,
     SandboxResourceLimits,
 )
+from krelcode.contracts.loop import VerificationGap
 from krelcode.contracts.tool import ToolContext
 from krelcode.core.events import (
     AcceptanceEvaluated,
@@ -168,6 +169,49 @@ def enforce_contract_acceptance(
         raise AcceptanceGateError(result)
 
 
+def contract_verification_gaps(
+    result: Optional[AcceptanceResult],
+) -> tuple[VerificationGap, ...]:
+    if result is None:
+        return ()
+    retryable = result.status is AcceptanceStatus.FAILED
+    gaps: list[VerificationGap] = []
+    for check in result.checks:
+        if check.passed:
+            continue
+        code = (
+            "deliverable_missing"
+            if check.criterion.startswith("deliverable:")
+            else "evidence_missing"
+        )
+        observation_ids = tuple(
+            str(item.metadata.get("observation_id") or "")
+            for item in check.evidence
+            if item.metadata.get("observation_id")
+        )
+        gaps.append(VerificationGap(
+            criterion=check.criterion,
+            message=check.reason or f"验收条件未满足: {check.criterion}",
+            retryable=retryable,
+            code=code,
+            observation_ids=observation_ids,
+            suggested_action=(
+                "Repair the missing deliverable and re-run verification."
+                if code == "deliverable_missing"
+                else "Collect the required evidence and retry the task."
+            ),
+        ))
+    if not gaps and retryable:
+        gaps.append(VerificationGap(
+            criterion="acceptance",
+            message=result.reason or "任务验收未通过",
+            retryable=True,
+            code="acceptance_failed",
+            suggested_action="Address the verification failure and retry.",
+        ))
+    return tuple(gaps)
+
+
 def _sandbox_profile(contract: AgentContract) -> SandboxProfile:
     sandbox = contract.sandbox
     return SandboxProfile(
@@ -189,6 +233,7 @@ def _sandbox_profile(contract: AgentContract) -> SandboxProfile:
 __all__ = [
     "AgentContractDenied",
     "admit_agent_contract",
+    "contract_verification_gaps",
     "enforce_contract_acceptance",
     "evaluate_contract_acceptance",
     "preflight_agent_contract",

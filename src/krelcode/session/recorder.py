@@ -30,13 +30,16 @@ from ..core.events import (
     EventBus,
     HookTriggered,
     KnowledgeLoaded,
+    LoopPhaseChanged,
     MemoryCandidateObserved,
     MemoryLoaded,
     MemoryWritten,
+    ObservationRecorded,
     PlanUpdated,
     PermissionDenied,
     RunCancelled,
     RunFinished,
+    RunFailed,
     RunStarted,
     SecurityDecisionRecorded,
     ShellJobFinished,
@@ -98,7 +101,7 @@ class SessionRecorder:
         if record is None:
             return
         self._write(record)
-        if isinstance(event, (RunFinished, RunCancelled)):
+        if isinstance(event, (RunFinished, RunCancelled, RunFailed)):
             # 每轮结束落一份完整历史快照（resume 取最后一条）
             self.flush_history(turn_id=event.turn_id)
 
@@ -168,6 +171,23 @@ class SessionRecorder:
                 "type": "acceptance_evaluated",
                 "ts": ts,
                 "acceptance": dict(event.acceptance),
+            }
+        if isinstance(event, LoopPhaseChanged):
+            return {
+                "type": "loop_phase",
+                "ts": ts,
+                "phase": event.phase,
+                "previous_phase": event.previous_phase,
+                "step": event.step,
+                "reason": event.reason,
+                "transition": dict(event.transition),
+                "turn_id": event.transition.get("turn_id", ""),
+            }
+        if isinstance(event, ObservationRecorded):
+            return {
+                "type": "observation",
+                "ts": ts,
+                "observation": dict(event.observation),
             }
         if isinstance(event, SecurityDecisionRecorded):
             return {
@@ -350,6 +370,17 @@ class SessionRecorder:
                     "request_id": event.request_id, "answered": event.answered}
         if isinstance(event, RunFinished):
             record = {"type": "run_finished", "ts": ts}
+            if event.turn_id:
+                record["turn_id"] = event.turn_id
+            return record
+        if isinstance(event, RunFailed):
+            record = {
+                "type": "run_failed",
+                "ts": ts,
+                "reason": event.reason,
+                "termination": event.termination,
+                "detail": event.detail[:1_000],
+            }
             if event.turn_id:
                 record["turn_id"] = event.turn_id
             return record

@@ -27,10 +27,7 @@ from krelcode.core.events import (
     EventBus,
     HookTriggered,
     QueryPhaseChanged,
-    RunCancelled,
-    RunFinished,
     RunStarted,
-    StepStarted,
     UserSteered,
 )
 from krelcode.core.messages import ImageRef, Message, SteeringInput, ToolCall, ToolResultBlock
@@ -39,6 +36,8 @@ from krelcode.contracts import AcceptanceEvaluatorPort, KnowledgeServicePort
 from krelcode.contracts.artifact import ArtifactStorePort
 from krelcode.contracts.application import ApplicationRequest, ApplicationRequestFactory
 from krelcode.contracts.agent import AgentContract
+from krelcode.contracts.loop import Observation, VerificationGap, WaitCondition
+from krelcode.contracts.acceptance import AcceptanceResult
 from krelcode.agent.context.attachments import ContextAttachment, ContextAttachmentDiff, ContextAttachmentKind
 from krelcode.agent.context.compression import ContextManager
 from krelcode.agent.context.context_assembler import ContextAssembler
@@ -51,7 +50,6 @@ from krelcode.agent.turn.dependencies import AgentDependencies
 from krelcode.agent.context.context_cache_ledger import ContextCacheLedger
 from krelcode.agent.turn.context_turn import ContextTurnCoordinator
 from krelcode.agent.turn.contract_gate import (
-    enforce_contract_acceptance,
     evaluate_contract_acceptance,
     preflight_agent_contract,
     validate_agent_contract_inputs,
@@ -63,8 +61,17 @@ from krelcode.agent.turn.intent import TurnIntent, infer_turn_intent
 from krelcode.agent.turn.model_turn import (
     LLMTurnResult,
     ModelTurnExecutor,
-    finish_reason_failure,
 )
+from krelcode.agent.turn.loop_state import AgentLoopStateMachine
+from krelcode.agent.turn.loop_control import (
+    before_tool_execution,
+    bind_loop_state,
+    enter_waiting,
+    record_observation,
+    record_verification_gaps,
+    resume_waiting,
+)
+from krelcode.agent.turn.observation import steering_observation
 from krelcode.agent.prompt.prompt_assembler import PromptAssembler
 from krelcode.agent.prompt.prompt_surface import PromptSurfaceRegistry, main_prompt_surface
 from krelcode.agent.turn.reminders import (
@@ -79,6 +86,7 @@ from krelcode.agent.turn.runtime_ports import (
     CompactCheckpointStorePort,
     ContextManagerPort,
     ContextTurnHostPort,
+    LoopRunnerHostPort,
     ModelTurnHostPort,
     ToolTurnHostPort,
     effective_turn_limits,
@@ -446,72 +454,13 @@ class AgentLoop(RuntimeStateHost):
             {"prompt": user_input[:12_000]},
         )
 
-        try:
-            for step in range(1, max_steps + 1):
-                if self.step_gate is not None:
-                    await self.step_gate()
-                await self._inject_steering()
-                if token_budget is not None and self._token_total > token_budget:
-                    text = (f"[krelcode] token 预算耗尽（已用 {self._token_total} > "
-                            f"预算 {token_budget}），中止本轮。")
-                    self.services.context.working_context.record_error(
-                        text, source="budget")
-                    self.history.append(Message.assistant(text))
-                    return await self._finish_turn(text)
-                await self._emit(StepStarted(step))
-                await self._emit(QueryPhaseChanged(
-                    "model", f"模型生成中（Step {step}）"))
-                llm_turn = await self._llm_turn(step)
-                assistant = llm_turn.message
-                finish_failure = finish_reason_failure(
-                    llm_turn.finish_reason,
-                    has_tool_calls=bool(assistant.tool_calls),
-                )
-                if finish_failure is not None:
-                    if assistant.tool_calls:
-                        await self._apply_tool_results(
-                            assistant.tool_calls, llm_turn.tool_results)
-                    return await self._finish_protocol_failure(
-                        assistant, finish_failure, llm_turn.finish_reason)
-                if not assistant.tool_calls:
-                    final_text = assistant.content or ""
-                    return await self._finish_turn(final_text)
-                abort_reason = await self._apply_tool_results(
-                    assistant.tool_calls, llm_turn.tool_results)
-                if abort_reason:
-                    text = f"[krelcode] {abort_reason}，判定为循环，已中止本轮。"
-                    self.services.context.working_context.record_error(
-                        text, source="loop_guard")
-                    self.history.append(Message.assistant(text))
-                    return await self._finish_turn(text)
-        except asyncio.CancelledError:
-            self._turn_abort_signal.cancel()
-            self._repair_after_cancel()
-            await self._emit(RunCancelled(
-                turn_id=self._current_turn_id))
-            raise
-
-        text = max_steps_reached_text(max_steps)
-        self.services.context.working_context.record_error(
-            text, source="max_steps")
-        self.history.append(Message.assistant(text))
-        return await self._finish_turn(text)
-
-    async def _finish_turn(self, text: str) -> str:
-        result = await evaluate_contract_acceptance(
-            contract=self.agent_contract,
-            request=self.application_request,
-            evaluator=self.acceptance_evaluator,
-            final_response=text,
-            history=self.history,
-            workspace_root=self.tool_context.workspace_root,
-            artifact_store=self.services.core.artifact_store,
-            emit=self._emit,
-        )
-        self.acceptance_result = result
-        enforce_contract_acceptance(self.agent_contract, result)
-        await self._emit(RunFinished(text, turn_id=self._current_turn_id))
-        return text
+        from krelcode.agent.turn.loop_runner import TurnLoopRunner
+        return await TurnLoopRunner(
+            cast(LoopRunnerHostPort, self),
+            turn_id=self._current_turn_id,
+            max_steps=max_steps,
+            token_budget=token_budget,
+        ).run()
 
     def _begin_turn(
         self,
@@ -549,6 +498,68 @@ class AgentLoop(RuntimeStateHost):
             self.services.core.tool_context,
             runtime=snapshot,
             abort=self._turn_abort_signal,
+        )
+
+    async def _bind_loop_state_machine(
+        self,
+        state: AgentLoopStateMachine,
+    ) -> None:
+        await bind_loop_state(self, state)
+
+    async def _before_tool_execution(self, tool_call: ToolCall) -> None:
+        await before_tool_execution(self, tool_call)
+
+    async def _record_observation(self, observation: Observation) -> None:
+        await record_observation(self, observation)
+
+    async def _enter_waiting(self, condition: WaitCondition) -> None:
+        await enter_waiting(self, condition)
+
+    async def _resume_waiting(self, request_id: str) -> None:
+        await resume_waiting(self, request_id)
+
+    async def _record_verification_gaps(
+        self,
+        gaps: tuple[VerificationGap, ...],
+        attempt: int,
+    ) -> None:
+        await record_verification_gaps(
+            self,
+            gaps,
+            attempt,
+            working_context=self.services.context.working_context,
+        )
+
+    async def _record_turn_error(self, text: str, source: str) -> None:
+        self.services.context.working_context.record_error(
+            text, source=source)
+        if (
+            self.history
+            and self.history[-1].role == "assistant"
+            and not self.history[-1].tool_calls
+        ):
+            partial = (self.history[-1].content or "").strip()
+            self.history[-1].content = (
+                f"{partial}\n\n[krelcode] {text}"
+                if partial else f"[krelcode] {text}"
+            )
+        else:
+            self.history.append(Message.assistant(text))
+        await self._emit(ErrorOccurred(text, source))
+
+    async def _evaluate_acceptance(
+        self,
+        text: str,
+    ) -> Optional[AcceptanceResult]:
+        return await evaluate_contract_acceptance(
+            contract=self.agent_contract,
+            request=self.application_request,
+            evaluator=self.acceptance_evaluator,
+            final_response=text,
+            history=self.history,
+            workspace_root=self.tool_context.workspace_root,
+            artifact_store=self.services.core.artifact_store,
+            emit=self._emit,
         )
 
     def _select_turn_reminders(self) -> ReminderSelection:
@@ -601,6 +612,10 @@ class AgentLoop(RuntimeStateHost):
                 self.history.append(
                     Message.user(STEERING_PREFIX + text, images=images or None))
             await self._emit(UserSteered(text))
+            await self._record_observation(steering_observation(
+                turn_id=self._current_turn_id,
+                text=text,
+            ))
 
     async def microcompact_tools(
         self,
@@ -674,24 +689,6 @@ class AgentLoop(RuntimeStateHost):
 
     async def _llm_turn(self, step: int) -> LLMTurnResult:
         return await self.model_executor.run(step)
-
-    async def _finish_protocol_failure(
-        self,
-        assistant: Message,
-        failure: str,
-        finish_reason: Optional[str],
-    ) -> str:
-        partial = (assistant.content or "").strip()
-        assistant.content = (
-            f"{partial}\n\n[krelcode] {failure}" if partial
-            else f"[krelcode] {failure}"
-        )
-        final_text = assistant.content
-        self.services.context.working_context.record_error(
-            failure, source="provider", metadata={"finish_reason": finish_reason or ""})
-        await self._emit(ErrorOccurred(
-            failure, f"finish_reason={finish_reason or 'unknown'}"))
-        return await self._finish_turn(final_text)
 
     def _current_tool_pool(self) -> TurnToolPool:
         if self._active_tool_pool is None:

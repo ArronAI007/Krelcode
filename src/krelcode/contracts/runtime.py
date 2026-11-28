@@ -32,6 +32,7 @@ from .identity import (
     RuntimeIdentity,
     RuntimeSandboxBinding,
 )
+from .loop import WaitCondition
 
 if TYPE_CHECKING:
     from .agent import AgentContract
@@ -174,6 +175,10 @@ class RuntimeTaskState:
     paused_at: Optional[float] = None
     resume_from_checkpoint_id: str = ""
     updated_at: float = 0.0
+    wait_reason: str = ""
+    resume_token: str = ""
+    waiting_since: Optional[float] = None
+    resumed_at: Optional[float] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", RuntimeTaskStatus(self.status))
@@ -320,6 +325,14 @@ class RuntimeTaskRuntimePort(Protocol):
         task_id: str,
         checkpoint: RuntimeCheckpointRef,
     ) -> RuntimeTaskState: ...
+
+    def record_waiting(
+        self,
+        task_id: str,
+        condition: WaitCondition,
+    ) -> RuntimeTaskState: ...
+
+    def record_resumed(self, task_id: str) -> RuntimeTaskState: ...
 
 
 class RuntimeContinuationPort(Protocol):

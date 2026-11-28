@@ -23,6 +23,7 @@ from ..core.messages import ToolCall
 from ..core.secret_guard import classify_secret_path
 from ..contracts.runtime import PermissionMode
 from ..contracts.governance import SecurityDecisionValue
+from ..contracts.loop import WaitCondition, WaitKind
 from ..contracts.tool import ToolContext
 from .commands import RISK_ALLOW, RISK_DENY, classify_command
 from .contract import local_read_only_tool, restricts_to_local_read_only
@@ -282,30 +283,42 @@ class ToolPermissionPolicy:
         if self.bus is not None:
             await self.bus.emit(ApprovalRequested(
                 tool_call, reason, request_id=approval_id))
-        if self.approver is None:
+        waiting = False
+        if ctx is not None:
+            await ctx.emit_waiting(WaitCondition(
+                kind=WaitKind.APPROVAL,
+                request_id=approval_id,
+                reason=reason,
+            ))
+            waiting = True
+        try:
+            if self.approver is None:
+                return deny(
+                    f"非交互模式且无审批器，已拒绝（{reason}）",
+                    policy_id="interactive-approval",
+                    approval_id=approval_id,
+                )
+            answer = self.approver(tool_call, reason)
+            if inspect.isawaitable(answer):
+                answer = await answer
+            if answer == "always":
+                if command is not None:
+                    self.rules.add(command)
+                return Decision(
+                    True, f"用户批准（always）: {reason}",
+                    "interactive-approval", approval_id)
+            if answer == "yes":
+                return Decision(
+                    True, f"用户批准: {reason}",
+                    "interactive-approval", approval_id)
             return deny(
-                f"非交互模式且无审批器，已拒绝（{reason}）",
+                f"用户拒绝（{reason}）",
                 policy_id="interactive-approval",
                 approval_id=approval_id,
             )
-        answer = self.approver(tool_call, reason)
-        if inspect.isawaitable(answer):
-            answer = await answer
-        if answer == "always":
-            if command is not None:
-                self.rules.add(command)
-            return Decision(
-                True, f"用户批准（always）: {reason}",
-                "interactive-approval", approval_id)
-        if answer == "yes":
-            return Decision(
-                True, f"用户批准: {reason}",
-                "interactive-approval", approval_id)
-        return deny(
-            f"用户拒绝（{reason}）",
-            policy_id="interactive-approval",
-            approval_id=approval_id,
-        )
+        finally:
+            if waiting and ctx is not None:
+                await ctx.emit_resumed(approval_id)
 
 
 class EnterpriseGuardPolicy:

@@ -3,7 +3,10 @@
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from krelcode.agent.loop import AgentLoop
+from krelcode.agent.turn.loop_state import AgentLoopTerminated
 from krelcode.core.events import ErrorOccurred
 from krelcode.core.messages import Message, ToolCall
 from krelcode.llm.base import (
@@ -48,28 +51,34 @@ def test_length_finish_is_visible_failure_not_success():
         TextDelta("半句"),
         StreamFinished(Message.assistant("半句"), FINISH_LENGTH),
     ])
-    reply = asyncio.run(loop.run("long answer"))
+    with pytest.raises(AgentLoopTerminated) as caught:
+        asyncio.run(loop.run("long answer"))
+    reply = str(caught.value)
 
     assert "输出长度上限" in reply
     assert "max_tokens" in reply
-    assert loop.history[-1].content == reply
+    assert reply in (loop.history[-1].content or "")
 
 
 def test_finish_tools_without_calls_is_protocol_failure():
     loop = make_loop([
         StreamFinished(Message.assistant("no call"), FINISH_TOOLS),
     ])
-    reply = asyncio.run(loop.run("tool call"))
+    with pytest.raises(AgentLoopTerminated) as caught:
+        asyncio.run(loop.run("tool call"))
+    reply = str(caught.value)
 
     assert "协议不一致" in reply
-    assert loop.history[-1].content == reply
+    assert reply in (loop.history[-1].content or "")
 
 
 def test_unknown_or_safety_finish_reason_is_not_silent():
     loop = make_loop([
         StreamFinished(Message.assistant("blocked"), "safety"),
     ])
-    reply = asyncio.run(loop.run("unsafe"))
+    with pytest.raises(AgentLoopTerminated) as caught:
+        asyncio.run(loop.run("unsafe"))
+    reply = str(caught.value)
 
     assert "非正常原因" in reply
     assert "safety" in reply
@@ -98,9 +107,11 @@ def test_length_with_tool_call_keeps_history_paired_and_reports_failure():
         ),
     ], tools=[EchoTool()])
 
-    reply = asyncio.run(loop.run("run tool"))
+    with pytest.raises(AgentLoopTerminated) as caught:
+        asyncio.run(loop.run("run tool"))
+    reply = str(caught.value)
     assert "输出长度上限" in reply
     assert [message.role for message in loop.history] == [
-        "system", "user", "assistant", "tool"]
-    assert loop.history[2].content == reply
+        "system", "user", "assistant", "tool", "assistant"]
+    assert reply in (loop.history[-1].content or "")
     assert loop.history[3].content == "ok"

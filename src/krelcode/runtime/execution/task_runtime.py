@@ -27,6 +27,7 @@ from krelcode.contracts.runtime import (
     RuntimeTaskState,
     RuntimeTaskStatus,
 )
+from krelcode.contracts.loop import WaitCondition
 from krelcode.core.redact import SecretRedactor
 from .task_state_store import (
     RUNTIME_TASK_STATE_VERSION,
@@ -335,6 +336,43 @@ class LocalTaskRuntime(RuntimeTaskRuntimePort):
             state,
             checkpoint=checkpoint,
             sequence=state.sequence + 1,
+            updated_at=time.time(),
+        )
+        self._states[task_id] = updated
+        self._persist()
+        return updated
+
+    def record_waiting(
+        self,
+        task_id: str,
+        condition: WaitCondition,
+    ) -> RuntimeTaskState:
+        state = self.inspect(task_id)
+        if state.status.terminal:
+            return state
+        updated = replace(
+            state,
+            status=RuntimeTaskStatus.WAITING,
+            sequence=state.sequence + 1,
+            wait_reason=condition.reason,
+            resume_token=condition.resume_token or condition.request_id,
+            waiting_since=time.time(),
+            resumed_at=None,
+            updated_at=time.time(),
+        )
+        self._states[task_id] = updated
+        self._persist()
+        return updated
+
+    def record_resumed(self, task_id: str) -> RuntimeTaskState:
+        state = self.inspect(task_id)
+        if state.status is not RuntimeTaskStatus.WAITING:
+            return state
+        updated = replace(
+            state,
+            status=RuntimeTaskStatus.RUNNING,
+            sequence=state.sequence + 1,
+            resumed_at=time.time(),
             updated_at=time.time(),
         )
         self._states[task_id] = updated

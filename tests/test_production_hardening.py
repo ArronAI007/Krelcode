@@ -8,6 +8,7 @@ from typing import Any, Dict
 import pytest
 
 from krelcode.agent.loop import AgentLoop
+from krelcode.agent.turn.loop_state import AgentLoopTerminated
 from krelcode.core.events import EventBus
 from krelcode.core.messages import Message, ToolCall
 from krelcode.llm.providers.mock import MockProvider
@@ -42,9 +43,11 @@ def test_token_budget_aborts_before_next_llm_call(tmp_path):
         policy=AllowAllPolicy(), bus=EventBus(), system_prompt="SYS",
         token_budget=15,
     )
-    reply = asyncio.run(loop.run("跑起来"))
+    with pytest.raises(AgentLoopTerminated) as caught:
+        asyncio.run(loop.run("跑起来"))
     # 8 → 16 tokens：第三次 LLM 调用前 16 > 15，中止
-    assert "token 预算耗尽" in reply and "16" in reply
+    assert caught.value.termination.reason.value == "budget_exhausted"
+    assert "token 预算耗尽" in str(caught.value) and "16" in str(caught.value)
     assert len(provider.calls) == 2
     assert loop.history[-1].role == "assistant"
 
@@ -68,8 +71,10 @@ def test_token_budget_falls_back_to_input_plus_output(tmp_path):
         policy=AllowAllPolicy(), bus=EventBus(), system_prompt="SYS",
         token_budget=10,
     )
-    reply = asyncio.run(loop.run("x"))
-    assert "token 预算耗尽" in reply and "17" in reply  # 10+7=17 > 10
+    with pytest.raises(AgentLoopTerminated) as caught:
+        asyncio.run(loop.run("x"))
+    assert "token 预算耗尽" in str(caught.value)
+    assert "17" in str(caught.value)  # 10+7=17 > 10
 
 
 # -- 18b: 敏感文件写保护 ----------------------------------------------------------------------------

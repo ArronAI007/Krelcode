@@ -70,6 +70,24 @@ class QueryPhaseChanged(AgentEvent):
 
 
 @dataclass(frozen=True)
+class LoopPhaseChanged(AgentEvent):
+    """One validated transition in the explicit Agent Loop state machine."""
+
+    phase: str
+    previous_phase: str
+    reason: str = ""
+    step: int = 0
+    transition: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ObservationRecorded(AgentEvent):
+    """Content-light normalized observation from any feedback source."""
+
+    observation: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ToolCallStarted(AgentEvent):
     tool_call: ToolCall
 
@@ -399,6 +417,14 @@ class RunFinished(AgentEvent):
 class RunCancelled(AgentEvent):
     reason: str = "用户中止"
     turn_id: str = ""
+
+
+@dataclass(frozen=True)
+class RunFailed(AgentEvent):
+    reason: str
+    termination: str = "failed"
+    turn_id: str = ""
+    detail: str = ""
 
 
 @dataclass(frozen=True)

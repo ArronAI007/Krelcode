@@ -35,6 +35,7 @@ from .service_ports import (
     PromptReleasePipelinePort,
     ShellJobManagerPort,
 )
+from .loop import WaitCondition
 
 @dataclass
 class ToolResult:
@@ -197,6 +198,12 @@ class ToolContext:
     principal: Optional[PrincipalPort] = field(default=None, repr=False)
     governance_decision: Optional[GovernanceDecision] = field(
         default=None, repr=False)
+    waiting_emitter: Optional[
+        Callable[[WaitCondition], Awaitable[None]]
+    ] = field(default=None, repr=False)
+    resume_emitter: Optional[
+        Callable[[str], Awaitable[None]]
+    ] = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not self.sandbox_enabled:
@@ -244,6 +251,16 @@ class ToolContext:
             tuple(items), tuple(statuses), active_index, explanation)
         if inspect.isawaitable(pending):
             await pending
+
+    async def emit_waiting(self, condition: WaitCondition) -> None:
+        if self.waiting_emitter is None:
+            return
+        await self.waiting_emitter(condition)
+
+    async def emit_resumed(self, request_id: str) -> None:
+        if self.resume_emitter is None:
+            return
+        await self.resume_emitter(request_id)
 
 
 class Tool(Protocol):

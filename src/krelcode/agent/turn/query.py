@@ -37,6 +37,7 @@ from krelcode.contracts.runtime import (
     RuntimeTaskState,
     RuntimeTaskStatus,
 )
+from krelcode.contracts.loop import WaitCondition
 from krelcode.agent.turn.loop import AgentLoop
 from krelcode.agent.turn.runtime_adapter import as_turn_control
 
@@ -258,6 +259,54 @@ class _InlineTaskRuntime:
             checkpoint=checkpoint,
             sequence=current.sequence + 1,
             error=current.error,
+            attempts=current.attempts,
+            deadline_at=current.deadline_at,
+            started_at=current.started_at,
+            paused_at=current.paused_at,
+            resume_from_checkpoint_id=current.resume_from_checkpoint_id,
+            wait_reason=current.wait_reason,
+            resume_token=current.resume_token,
+            waiting_since=current.waiting_since,
+            resumed_at=current.resumed_at,
+            updated_at=time.time(),
+        )
+        self._states[task_id] = updated
+        return updated
+
+    def record_waiting(
+        self,
+        task_id: str,
+        condition: WaitCondition,
+    ) -> RuntimeTaskState:
+        current = self.inspect(task_id)
+        updated = RuntimeTaskState(
+            task_id=current.task_id,
+            turn_id=current.turn_id,
+            status=RuntimeTaskStatus.WAITING,
+            checkpoint=current.checkpoint,
+            sequence=current.sequence + 1,
+            wait_reason=condition.reason,
+            resume_token=condition.resume_token or condition.request_id,
+            waiting_since=time.time(),
+            updated_at=time.time(),
+        )
+        self._states[task_id] = updated
+        return updated
+
+    def record_resumed(self, task_id: str) -> RuntimeTaskState:
+        current = self.inspect(task_id)
+        if current.status is not RuntimeTaskStatus.WAITING:
+            return current
+        updated = RuntimeTaskState(
+            task_id=current.task_id,
+            turn_id=current.turn_id,
+            status=RuntimeTaskStatus.RUNNING,
+            checkpoint=current.checkpoint,
+            sequence=current.sequence + 1,
+            wait_reason=current.wait_reason,
+            resume_token=current.resume_token,
+            waiting_since=current.waiting_since,
+            resumed_at=time.time(),
             updated_at=time.time(),
         )
         self._states[task_id] = updated
@@ -281,6 +330,10 @@ class _InlineTaskRuntime:
                 f"{type(finished.exception()).__name__}: {finished.exception()}"
                 if finished.exception() is not None else ""
             ),
+            wait_reason=current.wait_reason,
+            resume_token=current.resume_token,
+            waiting_since=current.waiting_since,
+            resumed_at=current.resumed_at,
             updated_at=time.time(),
         )
 

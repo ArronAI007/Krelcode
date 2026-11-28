@@ -29,14 +29,17 @@ from .events import (
     LLMResponseReceived,
     LLMStreamDelta,
     LLMThinkingDelta,
+    LoopPhaseChanged,
     MemoryCandidateObserved,
     MemoryLoaded,
     MemoryWritten,
+    ObservationRecorded,
     PermissionDenied,
     PlanUpdated,
     QueryPhaseChanged,
     RunCancelled,
     RunFinished,
+    RunFailed,
     RunStarted,
     SecurityDecisionRecorded,
     ShellJobFinished,
@@ -64,6 +67,8 @@ class SessionEventKind(str, Enum):
     STEP = "step"
     MODEL = "model"
     QUERY = "query"
+    LOOP = "loop"
+    OBSERVATION = "observation"
     TOOL = "tool"
     PERMISSION = "permission"
     CONTEXT = "context"
@@ -87,6 +92,8 @@ SessionEventPayload: TypeAlias = (
     | LLMThinkingDelta
     | LLMResponseReceived
     | QueryPhaseChanged
+    | LoopPhaseChanged
+    | ObservationRecorded
     | ToolCallStarted
     | ToolProgress
     | ToolOutputDelta
@@ -119,6 +126,7 @@ SessionEventPayload: TypeAlias = (
     | SubagentFinished
     | RunFinished
     | RunCancelled
+    | RunFailed
     | ErrorOccurred
 )
 
@@ -130,6 +138,8 @@ SESSION_EVENT_TYPE_TO_KIND: Mapping[type[AgentEvent], SessionEventKind] = {
     LLMThinkingDelta: SessionEventKind.MODEL,
     LLMResponseReceived: SessionEventKind.MODEL,
     QueryPhaseChanged: SessionEventKind.QUERY,
+    LoopPhaseChanged: SessionEventKind.LOOP,
+    ObservationRecorded: SessionEventKind.OBSERVATION,
     ToolCallStarted: SessionEventKind.TOOL,
     ToolProgress: SessionEventKind.TOOL,
     ToolOutputDelta: SessionEventKind.TOOL,
@@ -162,6 +172,7 @@ SESSION_EVENT_TYPE_TO_KIND: Mapping[type[AgentEvent], SessionEventKind] = {
     SubagentFinished: SessionEventKind.SUBAGENT,
     RunFinished: SessionEventKind.RUN,
     RunCancelled: SessionEventKind.RUN,
+    RunFailed: SessionEventKind.RUN,
     ErrorOccurred: SessionEventKind.ERROR,
 }
 
@@ -219,7 +230,7 @@ class SessionEvent:
 
     @property
     def is_terminal(self) -> bool:
-        return isinstance(self.event, (RunFinished, RunCancelled))
+        return isinstance(self.event, (RunFinished, RunCancelled, RunFailed))
 
     def with_session_id(self, session_id: str) -> SessionEvent:
         """Return a copy bound to a concrete session without mutating the event."""

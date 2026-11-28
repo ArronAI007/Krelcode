@@ -8,7 +8,13 @@ import pytest
 from krelcode.agent.loop import AgentLoop
 from krelcode.agent.query import QueryEngine
 from krelcode.core.errors import LLMError
-from krelcode.core.events import RunCancelled, RunFinished, RunStarted
+from krelcode.core.events import (
+    LLMStreamDelta,
+    RunCancelled,
+    RunFailed,
+    RunFinished,
+    RunStarted,
+)
 from krelcode.core.messages import Message
 from krelcode.llm.providers.mock import MockProvider
 from krelcode.llm.base import StreamFinished, TextDelta
@@ -148,4 +154,8 @@ def test_query_engine_drains_events_before_propagating_error(tmp_path):
 
     consumed = asyncio.run(go())
     assert consumed[0] == RunStarted("部分输出", turn_id="turn-1")
-    assert consumed[-1].text == "已输出"
+    assert any(
+        isinstance(event, LLMStreamDelta) and event.text == "已输出"
+        for event in consumed
+    )
+    assert isinstance(consumed[-1], RunFailed)

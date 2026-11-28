@@ -25,7 +25,9 @@ from krelcode.core.events import (
     CompactCheckpointCreated,
     ContextCheckpointCreated,
     EventBus,
+    LoopPhaseChanged,
 )
+from krelcode.contracts.loop import WaitCondition, WaitKind
 from krelcode.core.messages import ImageRef, SteeringInput
 from krelcode.contracts.application import ApplicationRequest
 from krelcode.contracts.agent import AgentContract
@@ -229,6 +231,22 @@ class HarnessRuntimeFacade:
     def _record_checkpoint_event(self, event: AgentEvent) -> None:
         """Project Harness checkpoint events into physical task state."""
         if self.task_runtime is None or self._query is None:
+            return
+        if isinstance(event, LoopPhaseChanged):
+            if event.phase == "waiting":
+                raw_wait = event.transition.get("waiting")
+                wait = raw_wait if isinstance(raw_wait, Mapping) else {}
+                self.task_runtime.record_waiting(
+                    self._query.task_id,
+                    WaitCondition(
+                        kind=str(wait.get("kind") or WaitKind.EXTERNAL_EVENT.value),
+                        request_id=str(wait.get("request_id") or ""),
+                        reason=str(wait.get("reason") or event.reason),
+                        resume_token=str(wait.get("resume_token") or ""),
+                    ),
+                )
+            elif event.previous_phase == "waiting":
+                self.task_runtime.record_resumed(self._query.task_id)
             return
         if isinstance(event, ContextCheckpointCreated):
             checkpoint = RuntimeCheckpointRef(

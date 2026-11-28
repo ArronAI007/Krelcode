@@ -29,8 +29,12 @@ if TYPE_CHECKING:
     from krelcode.core.messages import Message, ToolCall
     from krelcode.core.redact import SecretRedactor
     from krelcode.contracts.application import ApplicationRequest
+    from krelcode.contracts.acceptance import AcceptanceResult
     from krelcode.contracts.agent import AgentContract
-    from krelcode.contracts.tool import ToolContext, ToolResult
+    from krelcode.contracts.loop import Observation, WaitCondition
+    from krelcode.contracts.loop import VerificationGap
+    from krelcode.contracts.tool_execution import ToolExecutionResult
+    from krelcode.contracts.tool import ToolContext, ToolResult, TurnAbortSignal
     from krelcode.safety.contract import ModePermissionContract
     from krelcode.safety.policy import ApprovalPolicy
     from krelcode.agent.context.attachments import ContextAttachmentDiff, ContextAttachmentStore
@@ -398,6 +402,74 @@ class ToolTurnHostPort(_EventHostPort, _ToolPoolHostPort, Protocol):
         result: "ToolResult",
     ) -> "HookResult": ...
 
+    async def _before_tool_execution(
+        self,
+        tool_call: "ToolCall",
+    ) -> None: ...
+
+    async def _record_observation(
+        self,
+        observation: "Observation",
+    ) -> None: ...
+
+    async def _enter_waiting(
+        self,
+        condition: "WaitCondition",
+    ) -> None: ...
+
+    async def _resume_waiting(self, request_id: str) -> None: ...
+
+
+class LoopRunnerHostPort(
+    ContextTurnHostPort,
+    ModelTurnHostPort,
+    ToolTurnHostPort,
+    Protocol,
+):
+    application_request: Optional["ApplicationRequest"]
+    agent_contract: Optional["AgentContract"]
+    acceptance_result: Optional["AcceptanceResult"]
+    step_gate: Optional[Callable[[], Awaitable[None]]]
+    _turn_abort_signal: "TurnAbortSignal"
+    _failure_counts: dict[str, int]
+    _token_total: int
+
+    async def _inject_steering(self) -> None: ...
+
+    async def _llm_turn(self, step: int) -> "LLMTurnResultPort": ...
+
+    async def _apply_tool_results(
+        self,
+        tool_calls: list["ToolCall"],
+        results: Sequence["ToolExecutionResult"],
+    ) -> Optional[str]: ...
+
+    async def _bind_loop_state_machine(
+        self,
+        state: object,
+    ) -> None: ...
+
+    async def _record_verification_gaps(
+        self,
+        gaps: tuple["VerificationGap", ...],
+        attempt: int,
+    ) -> None: ...
+
+    async def _evaluate_acceptance(
+        self,
+        text: str,
+    ) -> Optional["AcceptanceResult"]: ...
+
+    async def _record_turn_error(self, text: str, source: str) -> None: ...
+
+    def _repair_after_cancel(self) -> None: ...
+
+
+class LLMTurnResultPort(Protocol):
+    message: "Message"
+    tool_results: Sequence["ToolExecutionResult"]
+    finish_reason: Optional[str]
+
 
 __all__ = [
     "CompactCheckpointResultPort",
@@ -408,6 +480,7 @@ __all__ = [
     "ContextRestoreResultPort",
     "ContextTurnHostPort",
     "FileIntegrityPort",
+    "LoopRunnerHostPort",
     "ModelTurnHostPort",
     "PromptAssemblerPort",
     "ReminderCatalogPort",
