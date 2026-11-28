@@ -36,6 +36,7 @@ from ..core.events import (
     PermissionDenied,
     PlanUpdated,
     QueryPhaseChanged,
+    RecoveryDecided,
     RunCancelled,
     RunFinished,
     RunFailed,
@@ -62,6 +63,7 @@ from ..agent.turn.query import QueryEvent
 from ..contracts.application import ApplicationRequest, ApplicationRequestFactory
 from ..contracts.agent import AgentContract
 from .stream_json_contracts import parse_contracts
+from .stream_json_runtime import middleware_payload, recovery_payload
 from .stream_json_schema import (
     STREAM_JSON_PROTOCOL_NAME as PROTOCOL_NAME,
     STREAM_JSON_PROTOCOL_VERSION as PROTOCOL_VERSION,
@@ -170,15 +172,9 @@ class StreamJsonEncoder:
                 "transition": dict(event.transition),
             }
         elif isinstance(event, MiddlewareEvaluated):
-            payload = {
-                "type": "middleware",
-                "subtype": "evaluated",
-                "lifecycle_point": event.lifecycle_point,
-                "action": event.action,
-                "reason": event.reason,
-                "evaluations": [dict(item) for item in event.evaluations],
-                "applied_patches": [dict(item) for item in event.applied_patches],
-            }
+            payload = middleware_payload(event)
+        elif isinstance(event, RecoveryDecided):
+            payload = recovery_payload(event)
         elif isinstance(event, ObservationRecorded):
             payload = {
                 "type": "observation",

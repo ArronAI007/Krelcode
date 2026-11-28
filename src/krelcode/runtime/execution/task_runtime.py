@@ -44,11 +44,7 @@ from .task_state_store import (
     persist_runtime_task_payload,
 )
 from .task_events import LocalTaskEventJournal
-from .task_errors import (
-    RuntimeTaskConflict,
-    RuntimeTaskRecoveryBlocked,
-    RuntimeTaskTimeout,
-)
+from .task_errors import RuntimeSideEffectRecoveryRequired, RuntimeTaskConflict, RuntimeTaskRecoveryBlocked, RuntimeTaskTimeout
 from .task_handle import LocalRuntimeTaskHandle
 from .task_state_control import TaskStateControlMixin
 from .task_identity import task_request_digest
@@ -525,6 +521,10 @@ class LocalTaskRuntime(TaskStateControlMixin, RuntimeTaskRuntimePort):
                         attempt < max_attempts
                         and task.retry_policy.retry_on_timeout
                     ):
+                        blocked = self.side_effect_retry_error(task_id)
+                        if blocked is not None:
+                            self._fail_task(task_id, blocked)
+                            return ""
                         self._transition(
                             task_id,
                             RuntimeTaskStatus.RETRYING,
@@ -554,6 +554,10 @@ class LocalTaskRuntime(TaskStateControlMixin, RuntimeTaskRuntimePort):
                         attempt < max_attempts
                         and task.retry_policy.retry_on_failure
                     ):
+                        blocked = self.side_effect_retry_error(task_id)
+                        if blocked is not None:
+                            self._fail_task(task_id, blocked)
+                            return ""
                         self._transition(
                             task_id,
                             RuntimeTaskStatus.RETRYING,
@@ -792,9 +796,4 @@ class LocalTaskRuntime(TaskStateControlMixin, RuntimeTaskRuntimePort):
         return not self.last_persist_error
 
 
-__all__ = [
-    "LocalRuntimeTaskHandle",
-    "LocalTaskRuntime",
-    "RUNTIME_TASK_STATE_VERSION",
-    "RuntimeTaskTimeout",
-]
+__all__ = ["LocalRuntimeTaskHandle", "LocalTaskRuntime", "RUNTIME_TASK_STATE_VERSION", "RuntimeTaskTimeout"]

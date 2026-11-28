@@ -76,6 +76,7 @@ from .delegation import (
     HandoffContract,
     WorkspaceVersion,
 )
+from .degradation import DegradationDecision
 from .evaluation import (
     BehaviorFixture,
     BehaviorFixturePort,
@@ -157,6 +158,12 @@ from .loop import (
     WaitCondition,
     WaitKind,
 )
+from .recovery import (
+    FailureClass,
+    RecoveryDecision,
+    RecoveryStrategy,
+    Repairability,
+)
 from .knowledge import (
     KnowledgeAccessPolicy,
     KnowledgeChunk,
@@ -211,6 +218,8 @@ from .state import (
 )
 from .storage import StoragePorts
 from .task_lifecycle import (
+    SideEffectIdentity,
+    SideEffectReplayDecision,
     SideEffectStatus,
     TaskAttachment,
     TaskCancelMode,
@@ -225,6 +234,7 @@ from .task_lifecycle import (
     TaskResultLocation,
     TaskSideEffectRecord,
     classify_task_error,
+    evaluate_side_effect_replay,
 )
 from .safety import SandboxPort
 from .service_ports import (
@@ -262,6 +272,13 @@ from .tool_execution import (
     ToolExecutionResult,
     ToolIntent,
     ToolResolverPort,
+)
+from .verification import (
+    VerificationLevel,
+    VerificationPolicy,
+    VerificationRequest,
+    VerificationResult,
+    VerifierPort,
 )
 
 __all__ = [
@@ -321,6 +338,7 @@ __all__ = [
     "DelegationRetryPolicy",
     "DelegationScope",
     "DelegationStatus",
+    "DegradationDecision",
     "EventLogAppendResult",
     "EventLogEntry",
     "EventLogPort",
@@ -328,6 +346,7 @@ __all__ = [
     "ExternalEventPort",
     "ExtensionLifecyclePoint",
     "ExecutionRuntimePort",
+    "FailureClass",
     "GovernanceDecision",
     "GovernanceRequest",
     "HandoffContract",
@@ -421,6 +440,9 @@ __all__ = [
     "RuntimeTaskRuntimePort",
     "RuntimeTaskState",
     "RuntimeTaskStatus",
+    "RecoveryDecision",
+    "RecoveryStrategy",
+    "Repairability",
     "RuntimeLifecycleEnvelope",
     "RUNTIME_RELEASE_SCHEMA_VERSION",
     "RiskLevel",
@@ -438,6 +460,8 @@ __all__ = [
     "StateSnapshotStorePort",
     "StateStorePort",
     "StatePatch",
+    "SideEffectIdentity",
+    "SideEffectReplayDecision",
     "SideEffectStatus",
     "TaskAttachment",
     "TaskCancelMode",
@@ -473,11 +497,17 @@ __all__ = [
     "ToolTier",
     "TraceReplayPort",
     "TurnAbortSignal",
+    "evaluate_side_effect_replay",
     "UnfinishedItem",
     "UnfinishedManifest",
     "VersionManifestPort",
     "WorkspaceVersion",
     "VerificationGap",
+    "VerificationLevel",
+    "VerificationPolicy",
+    "VerificationRequest",
+    "VerificationResult",
+    "VerifierPort",
     "WaitCondition",
     "WaitKind",
     "TaskBudget",

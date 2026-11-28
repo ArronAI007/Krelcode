@@ -45,13 +45,7 @@ from krelcode.contracts.governance import (
     SecurityDecision,
     SecurityDecisionValue,
 )
-from krelcode.contracts.tool import (
-    ToolContext,
-    ToolDescriptor,
-    ToolExecutionRuntime,
-    ToolResult,
-    ToolSource,
-)
+from krelcode.contracts.tool import ToolContext, ToolDescriptor, ToolExecutionRuntime, ToolResult, ToolSource
 from krelcode.contracts.loop import WaitCondition, WaitKind
 from krelcode.contracts.plan import PlanControl
 from krelcode.agent.turn.plan_event import build_plan_control_event
@@ -83,7 +77,7 @@ from krelcode.agent.turn.dependencies import AgentDependencies
 from krelcode.agent.turn.runtime_ports import ToolTurnHostPort
 from krelcode.agent.turn.streaming_tools import StreamingToolExecutor
 from krelcode.agent.turn.tool_pool import TurnToolPool
-from krelcode.agent.context.working_context import compact_tool_metadata
+from krelcode.agent.turn.tool_result_metadata import build_tool_result_metadata
 class ToolBatchExecutor:
     """Execute and persist model-requested tools without owning the turn loop."""
 
@@ -108,13 +102,15 @@ class ToolBatchExecutor:
         redactor = self.dependencies.redactor
         for tool_call, execution_result in zip(tool_calls, results):
             result = execution_result.to_tool_result()
-            metadata = compact_tool_metadata(
+            descriptor = host._current_tool_pool().descriptor(tool_call.name)
+            metadata = build_tool_result_metadata(
                 tool_call.name,
                 result.data,
                 is_error=result.is_error,
                 turn_id=host._current_turn_id,
                 arguments=tool_call.arguments,
                 redactor=redactor.redact if redactor else None,
+                descriptor=descriptor,
             )
             persisted_path = persisted_output_path(result.content)
             if persisted_path:
@@ -184,6 +180,7 @@ class ToolBatchExecutor:
                 legacy.is_error,
                 legacy.blocks,
                 dict(legacy.data),
+                dict(result.diagnostics),
             )
         )
         return ToolExecutionResult.from_tool_result(

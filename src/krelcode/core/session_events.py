@@ -40,6 +40,7 @@ from .events import (
     PermissionDenied,
     PlanUpdated,
     QueryPhaseChanged,
+    RecoveryDecided,
     RunCancelled,
     RunFinished,
     RunFailed,
@@ -100,6 +101,7 @@ SessionEventPayload: TypeAlias = (
     | BudgetThresholdReached
     | LoopPhaseChanged
     | MiddlewareEvaluated
+    | RecoveryDecided
     | ObservationRecorded
     | ToolCallStarted
     | ToolProgress
@@ -149,6 +151,7 @@ SESSION_EVENT_TYPE_TO_KIND: Mapping[type[AgentEvent], SessionEventKind] = {
     BudgetThresholdReached: SessionEventKind.BUDGET,
     LoopPhaseChanged: SessionEventKind.LOOP,
     MiddlewareEvaluated: SessionEventKind.LOOP,
+    RecoveryDecided: SessionEventKind.LOOP,
     ObservationRecorded: SessionEventKind.OBSERVATION,
     ToolCallStarted: SessionEventKind.TOOL,
     ToolProgress: SessionEventKind.TOOL,

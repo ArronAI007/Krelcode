@@ -92,6 +92,20 @@ class MiddlewareEvaluated(AgentEvent):
 
 
 @dataclass(frozen=True)
+class RecoveryDecided(AgentEvent):
+    """Structured no-progress or failure recovery decision."""
+
+    failure_class: str
+    strategy: str
+    reason: str
+    retryable: bool = False
+    requires_replan: bool = False
+    requires_user: bool = False
+    attempt: int = 0
+    evidence: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ObservationRecorded(AgentEvent):
     """Content-light normalized observation from any feedback source."""
 
@@ -146,6 +160,7 @@ class ToolCallCompleted(AgentEvent):
     is_error: bool
     blocks: tuple[ToolResultBlock, ...] = ()
     data: Dict[str, object] = field(default_factory=dict)
+    diagnostics: Dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

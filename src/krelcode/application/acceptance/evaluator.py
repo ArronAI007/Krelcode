@@ -57,7 +57,8 @@ class DefaultAcceptanceEvaluator:
             required_checks.append(AcceptanceCheck(
                 criterion=f"evidence:{requirement}",
                 passed=passed,
-                reason="" if passed else f"缺少验收证据: {requirement}",
+                reason="" if passed else _evidence_failure_reason(
+                    requirement, evidence_by_kind),
                 evidence=tuple(evidence_by_kind.values()),
             ))
         criterion_checks = tuple(
@@ -123,11 +124,11 @@ def _required_evidence_passed(
     if requirement in {"model-response", "model_response"}:
         return response
     if requirement in {"tool-result", "tool_result"}:
-        return evidence.get("tool-result", AcceptanceEvidence(
-            "", "", False)).passed
+        item = evidence.get("tool-result")
+        return bool(item is not None and item.passed and item.fresh)
     if requirement in {"test", "tests", "test-result", "test_result"}:
-        return evidence.get("test-result", AcceptanceEvidence(
-            "", "", False)).passed
+        item = evidence.get("test-result")
+        return bool(item is not None and item.passed and item.fresh)
     return False
 
 
@@ -141,11 +142,27 @@ def _criterion_passed(
     if not response:
         return False
     if any(term in normalized for term in ("test", "测试", "验证")):
-        return evidence.get("test-result", AcceptanceEvidence(
-            "", "", False)).passed
+        item = evidence.get("test-result")
+        return bool(item is not None and item.passed and item.fresh)
     if any(term in normalized for term in ("tool", "工具", "证据")):
         return bool(evidence)
     return True
+
+
+def _evidence_failure_reason(
+    requirement: str,
+    evidence: dict[str, AcceptanceEvidence],
+) -> str:
+    normalized = requirement.strip().lower()
+    kind = (
+        "test-result"
+        if normalized in {"test", "tests", "test-result", "test_result"}
+        else "tool-result"
+    )
+    item = evidence.get(kind)
+    if item is not None and item.passed and not item.fresh:
+        return item.freshness_reason or f"验收证据已过期: {requirement}"
+    return f"缺少验收证据: {requirement}"
 
 
 def _deliverable_check(
@@ -167,12 +184,15 @@ def _deliverable_check(
         )
     if kind is DeliverableKind.RESPONSE:
         passed = bool(response.strip()) and any(
-            item.passed for item in matched)
+            item.passed and item.fresh for item in matched)
     else:
-        passed = any(item.passed for item in matched)
+        passed = any(item.passed and item.fresh for item in matched)
         if bool(getattr(requirement, "artifact_required", False)):
             passed = passed and any(
-                item.passed and item.artifact is not None and bool(item.digest)
+                item.passed
+                and item.fresh
+                and item.artifact is not None
+                and bool(item.digest)
                 for item in matched
             )
     return AcceptanceCheck(

@@ -8,9 +8,9 @@ resource (for example the provider after model configuration changes).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Mapping, Optional
 
 from krelcode.core.events import EventBus
 from krelcode.core.hooks import HookPort
@@ -19,6 +19,7 @@ from krelcode.core.redact import SecretRedactor
 from krelcode.contracts.tool import RuntimeSnapshot, ToolContext
 from krelcode.contracts.governance import ControlPlanePort
 from krelcode.contracts.middleware import LoopMiddlewarePort
+from krelcode.contracts.verification import VerificationLevel, VerifierPort
 from krelcode.contracts.tool_execution import ExecutionRuntimePort
 from krelcode.contracts.artifact import ArtifactStorePort
 from krelcode.llm.base import LLMProvider
@@ -65,6 +66,8 @@ class AgentDependencies:
     token_budget: Optional[int] = None
     artifact_store: Optional[ArtifactStorePort] = None
     middleware_pipeline: Optional[LoopMiddlewarePort] = None
+    verification_ports: Mapping[VerificationLevel | str, VerifierPort] = field(
+        default_factory=dict)
 
     @property
     def workspace_root(self) -> Path:

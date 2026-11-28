@@ -139,6 +139,12 @@ STREAM_JSON_FIELD_TYPES: Mapping[str, Mapping[str, object]] = {
     "checkpoint_id": {"type": "string"},
     "summary_digest": {"type": "string"},
     "strategy": {"type": "string"},
+    "failure_class": {"type": "string"},
+    "retryable": {"type": "boolean"},
+    "requires_replan": {"type": "boolean"},
+    "requires_user": {"type": "boolean"},
+    "attempt": {"type": "integer"},
+    "evidence": _FIELD_OBJECT,
     "summary_source": {"type": "string"},
     "source": {"type": "string"},
     "tool": {"type": "string"},
@@ -295,6 +301,9 @@ OUTPUT_EVENT_SCHEMAS: Mapping[tuple[str, str], StreamJsonEventSchema] = {
     ("middleware", "evaluated"): _event(
         "middleware", "evaluated", "lifecycle_point", "action", "reason",
         "evaluations", "applied_patches"),
+    ("recovery", "decided"): _event(
+        "recovery", "decided", "failure_class", "strategy", "reason",
+        "retryable", "requires_replan", "requires_user", "attempt", "evidence"),
     ("input", "requested"): _event(
         "input", "requested", "input_id", "prompt", "options",
         "allow_free_text"),

@@ -35,6 +35,7 @@ from krelcode.contracts.change_admission import (
     EvaluationReport,
     RollbackManifest,
 )
+from krelcode.contracts.degradation import DegradationDecision
 from krelcode.contracts.tool import Tool
 from krelcode.core.errors import ConfigError
 from krelcode.core.messages import Message
@@ -153,6 +154,35 @@ def build_model_switcher(
             RiskLevel.MEDIUM
             if profile_resolution.calibrated else RiskLevel.HIGH
         )
+        before_target = f"{before['provider']}/{before['model']}"
+        after_target = f"{after['provider']}/{after['model']}"
+        degradation = (
+            DegradationDecision(
+                dimension="model_profile",
+                from_artifact=before_target,
+                to_artifact=after_target,
+                reason=(
+                    profile_resolution.calibration_reason
+                    or "explicit model/profile switch"
+                ),
+                capability_diff=tuple(
+                    name for name in (
+                        "provider", "model", "prompt_profile",
+                    )
+                    if before.get(name) != after.get(name)
+                ),
+                quality_risk=risk.value,
+                evidence={
+                    "calibrated": profile_resolution.calibrated,
+                    "calibration_hash": (
+                        profile_resolution.calibration_hash),
+                    "prompt_release_id": profile_resolution.release_id,
+                },
+            )
+            if before_target != after_target
+            or before["prompt_profile"] != after["prompt_profile"]
+            else None
+        )
         candidate = ChangeCandidate(
             change_type=ChangeType.MODEL_PROFILE,
             target=f"{after['provider']}/{after['model']}",
@@ -173,7 +203,14 @@ def build_model_switcher(
                     metadata={"status": profile_resolution.calibration_status},
                 ),
             ),
-            metadata={"entrypoint": "/model", "explicit_user_switch": True},
+            metadata={
+                "entrypoint": "/model",
+                "explicit_user_switch": True,
+                **(
+                    {"degradation": degradation.to_dict()}
+                    if degradation is not None else {}
+                ),
+            },
         )
         evaluation = EvaluationReport.from_checks(
             candidate.candidate_id,

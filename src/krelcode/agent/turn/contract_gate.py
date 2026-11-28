@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from typing import Awaitable, Callable, Optional, Sequence
+from typing import Awaitable, Callable, Mapping, Optional, Sequence
 
 from krelcode.contracts.acceptance import (
     AcceptanceEvaluatorPort,
@@ -22,7 +22,12 @@ from krelcode.contracts.governance import (
     SandboxResourceLimits,
 )
 from krelcode.contracts.loop import VerificationGap
+from krelcode.contracts.plan import PlanControl
 from krelcode.contracts.tool import ToolContext
+from krelcode.contracts.verification import VerificationLevel, VerifierPort
+from krelcode.agent.context.context_checkpoint_workspace import (
+    workspace_fingerprint,
+)
 from krelcode.core.events import (
     AcceptanceEvaluated,
     AgentEvent,
@@ -35,6 +40,8 @@ from .acceptance import (
     acceptance_evidence_from_history,
     deliverable_evidence_from_contract,
 )
+from .verification_chain import apply_verification_policy
+from .plan_verification import apply_plan_completion
 
 EmitEvent = Callable[[AgentEvent], Awaitable[None]]
 
@@ -133,22 +140,40 @@ async def evaluate_contract_acceptance(
     workspace_root: Path,
     artifact_store: Optional[ArtifactStorePort],
     emit: EmitEvent,
+    turn_id: str = "",
+    verification_ports: Optional[
+        Mapping[VerificationLevel | str, VerifierPort]
+    ] = None,
+    plan_control: Optional[PlanControl] = None,
 ) -> Optional[AcceptanceResult]:
     if request is None or evaluator is None:
         return None
-    evidence = list(acceptance_evidence_from_history(history))
+    workspace_version = workspace_fingerprint(workspace_root).as_dict()
+    evidence = list(acceptance_evidence_from_history(
+        history,
+        workspace_version=workspace_version,
+    ))
     if contract is not None:
         evidence.extend(deliverable_evidence_from_contract(
             contract,
             workspace_root,
             final_response,
             artifact_store=artifact_store,
+            workspace_version=workspace_version,
         ))
     result = evaluator.evaluate(
         request,
         final_response,
         tuple(evidence),
         contract=contract,
+    )
+    result = apply_plan_completion(result, plan_control)
+    result = await apply_verification_policy(
+        result=result,
+        request=request,
+        turn_id=turn_id,
+        final_response=final_response,
+        ports=verification_ports,
     )
     await emit(AcceptanceEvaluated(result.as_dict()))
     return result

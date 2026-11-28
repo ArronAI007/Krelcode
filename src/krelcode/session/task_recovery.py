@@ -12,6 +12,7 @@ from ..contracts.task_lifecycle import (
     TaskContinuation,
     TaskRecoveryCheck,
     TaskRecoveryDecision,
+    evaluate_side_effect_replay,
 )
 
 
@@ -126,22 +127,29 @@ class SessionTaskRecoveryVerifier:
                 else "remaining task budget is exhausted"
             ),
         ))
+        replay = evaluate_side_effect_replay(state.side_effects)
         checks.append(TaskRecoveryCheck(
             code="side_effects",
-            passed=True,
+            passed=replay.allowed,
             reason=(
-                f"{len(state.side_effects)} committed side effect(s) retained"
-                if state.side_effects else ""
+                replay.reason
+                if not replay.allowed
+                else (
+                    f"{len(state.side_effects)} side effect attempt(s) retained"
+                    if state.side_effects else ""
+                )
             ),
             evidence={
                 "effect_ids": [
                     item.effect_id for item in state.side_effects
                 ],
+                "replay": replay.to_dict(),
             },
         ))
         failed = [item for item in checks if not item.passed]
         requires_user = any(
-            item.code in {"permission", "workspace"} for item in failed)
+            item.code in {"permission", "workspace", "side_effects"}
+            for item in failed)
         return TaskRecoveryDecision(
             allowed=not failed,
             checks=tuple(checks),

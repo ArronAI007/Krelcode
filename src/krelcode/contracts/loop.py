@@ -32,6 +32,7 @@ class LoopTerminationReason(str, Enum):
     BUDGET_EXHAUSTED = "budget_exhausted"
     MAX_STEPS = "max_steps"
     LOOP_DETECTED = "loop_detected"
+    NO_PROGRESS = "no_progress"
     PROTOCOL_ERROR = "protocol_error"
     ACCEPTANCE_FAILED = "acceptance_failed"
     REVIEW_REQUIRED = "review_required"

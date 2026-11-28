@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from pathlib import Path
-from typing import Awaitable, Callable, Optional, Sequence, cast
+from typing import Awaitable, Callable, Mapping, Optional, Sequence, cast
 
 from krelcode.contracts.acceptance import AcceptanceEvaluatorPort
 from krelcode.contracts.application import ApplicationRequest
@@ -69,6 +69,13 @@ class AgentLoopTurnAdapter(HarnessTurnControlPort):
     ) -> None:
         self._loop.acceptance_evaluator = cast(
             Optional[AcceptanceEvaluatorPort], evaluator)
+
+    def set_verification_ports(
+        self,
+        ports: object | None,
+    ) -> None:
+        self._loop.verification_ports = dict(
+            ports if isinstance(ports, Mapping) else {})
 
     def validate_harness_release(
         self,

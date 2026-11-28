@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Mapping, Optional
 
 from ...contracts.acceptance import AcceptanceEvidence, AcceptanceResult
 from ...contracts.agent import AgentContract, DeliverableKind
@@ -44,24 +45,44 @@ class AcceptanceReviewRequired(AcceptanceGateError):
 
 def acceptance_evidence_from_history(
     history: Iterable[Message],
+    *,
+    workspace_version: Optional[Mapping[str, object]] = None,
 ) -> tuple[AcceptanceEvidence, ...]:
+    messages = list(history)
+    mutation_sequence = _latest_mutation_sequence(messages)
+    version = dict(workspace_version or {})
+    input_revision = _workspace_revision(version)
     evidence: list[AcceptanceEvidence] = []
-    for message in history:
+    for sequence, message in enumerate(messages):
         if message.role != "tool":
             continue
         content = message.content or ""
         name = message.tool_name or "tool"
+        meta = message.tool_meta or {}
+        observed_at = float(meta.get("observed_at") or time.time())
+        fresh = sequence > mutation_sequence
+        freshness_reason = (
+            "" if fresh
+            else "工作区在该证据之后发生了变化，证据已过期"
+        )
         evidence.append(AcceptanceEvidence(
             kind="tool-result",
             source=name,
             passed=not bool(message.tool_is_error),
             summary=f"{len(content)} chars",
+            observed_at=observed_at,
+            sequence=sequence,
+            workspace_version=version,
+            input_revision=input_revision,
+            scope=(str(meta.get("path") or ""),),
+            fresh=fresh,
+            freshness_reason=freshness_reason,
             metadata={
                 "tool_call_id": message.tool_call_id or "",
                 "tool_name": name,
             },
         ))
-        command = str((message.tool_meta or {}).get("command") or "")
+        command = str(meta.get("command") or "")
         if (
             name in {"run_command", "job_output"}
             and not message.tool_is_error
@@ -72,6 +93,13 @@ def acceptance_evidence_from_history(
                 source=name,
                 passed=True,
                 summary=content[:240],
+                observed_at=observed_at,
+                sequence=sequence,
+                workspace_version=version,
+                input_revision=input_revision,
+                scope=(command[:500],),
+                fresh=fresh,
+                freshness_reason=freshness_reason,
                 metadata={
                     "tool_call_id": message.tool_call_id or "",
                     "command": command[:500],
@@ -92,9 +120,38 @@ def acceptance_evidence_from_history(
                     digest=digest,
                 ),
                 digest=digest,
+                observed_at=observed_at,
+                sequence=sequence,
+                workspace_version=version,
+                input_revision=input_revision,
+                fresh=fresh,
+                freshness_reason=freshness_reason,
                 metadata={"tool_call_id": message.tool_call_id or ""},
             ))
     return tuple(evidence)
+
+
+def _latest_mutation_sequence(messages: list[Message]) -> int:
+    latest = -1
+    for sequence, message in enumerate(messages):
+        if message.role != "tool":
+            continue
+        meta = message.tool_meta or {}
+        if str(meta.get("side_effect_kind") or "") in {
+            "file_mutation",
+            "external_state",
+        }:
+            latest = sequence
+    return latest
+
+
+def _workspace_revision(version: Mapping[str, object]) -> str:
+    return str(
+        version.get("tree_digest")
+        or version.get("status_digest")
+        or version.get("head")
+        or ""
+    )
 
 
 def deliverable_evidence_from_contract(
@@ -103,11 +160,14 @@ def deliverable_evidence_from_contract(
     final_response: str,
     *,
     artifact_store: Optional[ArtifactStorePort] = None,
+    workspace_version: Optional[Mapping[str, object]] = None,
 ) -> tuple[AcceptanceEvidence, ...]:
     """Resolve every declared deliverable against real workspace/artifact state."""
     evidence: list[AcceptanceEvidence] = []
     workspace = Path(workspace_root).resolve()
     response = str(final_response or "")
+    version = dict(workspace_version or {})
+    input_revision = _workspace_revision(version)
     for requirement in contract.deliverables.requirements:
         kind = DeliverableKind(requirement.kind)
         if kind is DeliverableKind.RESPONSE:
@@ -119,6 +179,9 @@ def deliverable_evidence_from_contract(
                 deliverable_id=requirement.id,
                 digest=hashlib.sha256(
                     response.encode("utf-8")).hexdigest(),
+                workspace_version=version,
+                input_revision=input_revision,
+                fresh=True,
             ))
             continue
         if requirement.artifact_id:
@@ -147,6 +210,9 @@ def deliverable_evidence_from_contract(
                 ),
                 deliverable_id=requirement.id,
                 digest=ref.digest,
+                workspace_version=version,
+                input_revision=input_revision,
+                fresh=True,
                 metadata={"artifact_id": ref.artifact_id},
             ))
             continue
@@ -184,6 +250,9 @@ def deliverable_evidence_from_contract(
                 artifact=artifact,
                 deliverable_id=requirement.id,
                 digest=hashlib.sha256(data).hexdigest(),
+                workspace_version=version,
+                input_revision=input_revision,
+                fresh=True,
                 metadata={"kind": kind.value, "source": "final_response"},
             ))
             continue
@@ -217,6 +286,10 @@ def deliverable_evidence_from_contract(
                 passed=True,
                 summary=f"directory {requirement.path}",
                 deliverable_id=requirement.id,
+                workspace_version=version,
+                input_revision=input_revision,
+                scope=(requirement.path,),
+                fresh=True,
             ))
             continue
         if not path.is_file():
@@ -274,6 +347,10 @@ def deliverable_evidence_from_contract(
             artifact=artifact,
             deliverable_id=requirement.id,
             digest=digest,
+            workspace_version=version,
+            input_revision=input_revision,
+            scope=(requirement.path,),
+            fresh=True,
             metadata={
                 "path": requirement.path,
                 "kind": kind.value,

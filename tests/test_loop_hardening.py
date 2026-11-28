@@ -111,34 +111,44 @@ def test_parallel_results_backfilled_in_original_order():
 # -- 卡死检测 ------------------------------------------------------------------------
 
 def test_repeat_failure_aborts_run():
-    # 同一签名连续失败 3 次（默认阈值）→ 中止，不再消耗第 4 段脚本
+    # 第一次达到阈值先 replan；同一失败继续出现时终止。
     script = [
         tc("c1", "flaky", {"x": 1}),
         tc("c2", "flaky", {"x": 1}),
         tc("c3", "flaky", {"x": 1}),
+        tc("c4", "flaky", {"x": 1}),
         "这段不应被消费",
     ]
-    tool = FlakyTool(fail_plan=[True, True, True])
+    tool = FlakyTool(fail_plan=[True, True, True, True])
     loop, provider = build(script, [tool], max_steps=10)
     with pytest.raises(AgentLoopTerminated) as caught:
         asyncio.run(loop.run("x"))
 
-    assert caught.value.termination.reason.value == "loop_detected"
-    assert "连续失败 3 次" in str(caught.value)
-    assert len(provider.calls) == 3          # 第 4 次 LLM 调用没有发生
-    assert tool.calls == 3
-    assert loop.history[-1].role == "assistant"
+    assert caught.value.termination.reason.value == "no_progress"
+    assert "连续失败 4 次" in str(caught.value)
+    assert len(provider.calls) == 4
+    assert tool.calls == 4
+    assert any(
+        message.role == "user"
+        and "[Recovery Decision]" in (message.content or "")
+        for message in loop.history
+    )
 
 
 def test_custom_repeat_limit():
-    script = [tc("c1", "flaky", {}), tc("c2", "flaky", {}), "不应消费"]
-    tool = FlakyTool(fail_plan=[True, True])
+    script = [
+        tc("c1", "flaky", {}),
+        tc("c2", "flaky", {}),
+        tc("c3", "flaky", {}),
+        "不应消费",
+    ]
+    tool = FlakyTool(fail_plan=[True, True, True])
     loop, provider = build(script, [tool], repeat_failure_limit=2)
     with pytest.raises(AgentLoopTerminated) as caught:
         asyncio.run(loop.run("x"))
-    assert caught.value.termination.reason.value == "loop_detected"
-    assert "连续失败 2 次" in str(caught.value)
-    assert len(provider.calls) == 2
+    assert caught.value.termination.reason.value == "no_progress"
+    assert "连续失败 3 次" in str(caught.value)
+    assert len(provider.calls) == 3
 
 
 def test_success_resets_failure_counter():

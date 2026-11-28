@@ -40,6 +40,7 @@ from ..core.events import (
     ObservationRecorded,
     PlanUpdated,
     PermissionDenied,
+    RecoveryDecided,
     RunCancelled,
     RunFinished,
     RunFailed,
@@ -199,6 +200,19 @@ class SessionRecorder:
                 "applied_patches": [
                     dict(item) for item in event.applied_patches
                 ],
+            }
+        if isinstance(event, RecoveryDecided):
+            return {
+                "type": "recovery_decided",
+                "ts": ts,
+                "failure_class": event.failure_class,
+                "strategy": event.strategy,
+                "reason": event.reason,
+                "retryable": event.retryable,
+                "requires_replan": event.requires_replan,
+                "requires_user": event.requires_user,
+                "attempt": event.attempt,
+                "evidence": dict(event.evidence),
             }
         if isinstance(event, ObservationRecorded):
             return {

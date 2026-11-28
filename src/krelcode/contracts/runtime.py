@@ -436,6 +436,7 @@ class RuntimeTaskRuntimePort(Protocol):
         *,
         compensation: str = "",
         evidence: Mapping[str, object] | None = None,
+        preflight: Mapping[str, object] | None = None,
     ) -> RuntimeTaskState: ...
 
     def record_continuation(
@@ -517,6 +518,11 @@ class HarnessTurnControlPort(Protocol):
     def set_acceptance_evaluator(
         self,
         evaluator: object | None,
+    ) -> None: ...
+
+    def set_verification_ports(
+        self,
+        ports: object | None,
     ) -> None: ...
 
     def set_control_plane(

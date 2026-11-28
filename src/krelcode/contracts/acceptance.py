@@ -30,6 +30,13 @@ class AcceptanceEvidence:
     metadata: Mapping[str, object] = field(default_factory=dict)
     deliverable_id: str = ""
     digest: str = ""
+    observed_at: float = 0.0
+    sequence: int = 0
+    workspace_version: Mapping[str, object] = field(default_factory=dict)
+    input_revision: str = ""
+    scope: Tuple[str, ...] = ()
+    fresh: bool = True
+    freshness_reason: str = ""
 
     def __post_init__(self) -> None:
         for name in ("kind", "source", "summary"):
@@ -42,6 +49,24 @@ class AcceptanceEvidence:
             self, "deliverable_id",
             str(self.deliverable_id or "").strip())
         object.__setattr__(self, "digest", str(self.digest or "").strip())
+        object.__setattr__(
+            self, "observed_at", max(0.0, float(self.observed_at)))
+        object.__setattr__(self, "sequence", max(0, int(self.sequence)))
+        object.__setattr__(
+            self,
+            "workspace_version",
+            MappingProxyType(dict(self.workspace_version)),
+        )
+        object.__setattr__(
+            self, "input_revision", str(self.input_revision or "").strip())
+        object.__setattr__(self, "scope", tuple(
+            str(item).strip() for item in self.scope if str(item).strip()))
+        object.__setattr__(self, "fresh", bool(self.fresh))
+        object.__setattr__(
+            self,
+            "freshness_reason",
+            str(self.freshness_reason or "").strip(),
+        )
 
 
 @dataclass(frozen=True)
@@ -113,6 +138,12 @@ class AcceptanceResult:
                     "artifact_id": (
                         item.artifact.artifact_id
                         if item.artifact is not None else ""),
+                    "observed_at": item.observed_at,
+                    "sequence": item.sequence,
+                    "input_revision": item.input_revision,
+                    "scope": list(item.scope),
+                    "fresh": item.fresh,
+                    "freshness_reason": item.freshness_reason,
                 }
                 for item in self.evidence
             ],

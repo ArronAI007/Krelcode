@@ -10,10 +10,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from itertools import count
-from typing import (
-    Any, Awaitable, Callable, Dict, Iterable, Iterator, List, Optional,
-    Protocol, Sequence, cast,
-)
+from typing import Any, Awaitable, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Protocol, Sequence, cast
 
 from krelcode.core.hooks import HookPort, HookResult
 from krelcode.core.interactions import UserInputPort
@@ -37,12 +34,13 @@ from krelcode.contracts.application import ApplicationRequest, ApplicationReques
 from krelcode.contracts.agent import AgentContract
 from krelcode.contracts.loop import Observation, VerificationGap, WaitCondition
 from krelcode.contracts.middleware import LoopMiddlewarePort
+from krelcode.contracts.verification import VerificationLevel, VerifierPort
 from krelcode.contracts.acceptance import AcceptanceResult
 from krelcode.agent.context.attachments import ContextAttachment, ContextAttachmentDiff, ContextAttachmentKind
 from krelcode.agent.context.compression import ContextManager
 from krelcode.agent.context.context_assembler import ContextAssembler
 from krelcode.agent.context.workspace import WorkspaceContext
-from krelcode.agent.context.context_source import RetrievedMemoryContextSource, default_context_sources
+from krelcode.agent.context.context_source import ContextAssembly, RetrievedMemoryContextSource, default_context_sources
 from krelcode.agent.turn.dependencies import AgentDependencies
 from krelcode.agent.context.context_cache_ledger import ContextCacheLedger
 from krelcode.agent.turn.context_turn import ContextTurnCoordinator
@@ -53,7 +51,6 @@ from krelcode.agent.turn.contract_gate import (
 )
 from krelcode.agent.turn.direct_tool import execute_direct_tool
 from krelcode.agent.turn.limits import max_steps_reached_text
-from krelcode.agent.context.context_source import ContextAssembly
 from krelcode.agent.turn.intent import TurnIntent, infer_turn_intent
 from krelcode.agent.turn.model_turn import (
     LLMTurnResult,
@@ -62,15 +59,7 @@ from krelcode.agent.turn.model_turn import (
 from krelcode.agent.turn.loop_state import AgentLoopStateMachine
 from krelcode.agent.turn.middleware import LoopMiddlewarePipeline
 from krelcode.agent.turn.middleware_commit import MiddlewareHostMixin
-from krelcode.agent.turn.loop_control import (
-    before_tool_execution,
-    bind_loop_state,
-    enter_waiting,
-    record_observation,
-    record_turn_error,
-    record_verification_gaps,
-    resume_waiting,
-)
+from krelcode.agent.turn.loop_control import before_tool_execution, bind_loop_state, enter_waiting, record_observation, record_turn_error, record_verification_gaps, resume_waiting
 from krelcode.agent.turn.observation import steering_observation
 from krelcode.agent.turn.planning import PlanControlPolicy
 from krelcode.agent.prompt.prompt_assembler import PromptAssembler
@@ -83,6 +72,7 @@ from krelcode.agent.turn.reminders import (
 from krelcode.agent.turn.tool_pool import TurnToolPool
 from krelcode.agent.context.tool_microcompact import MicrocompactReport, ToolMicrocompactor
 from krelcode.agent.turn.tool_turn import ToolBatchExecutor
+from krelcode.agent.turn.tool_interactions import request_tool_user_input
 from krelcode.agent.turn.runtime_ports import (
     CompactCheckpointStorePort,
     ContextManagerPort,
@@ -158,6 +148,7 @@ class AgentLoop(MiddlewareHostMixin, RuntimeStateHost):
         artifact_store: Optional[ArtifactStorePort] = None,
         external_events: Optional[ExternalEventPort] = None,
         middleware_pipeline: Optional[LoopMiddlewarePort] = None,
+        verification_ports: Optional[Mapping[VerificationLevel | str, VerifierPort]] = None,
     ) -> None:
         if external_events is not None:
             tool_context = replace(
@@ -203,6 +194,7 @@ class AgentLoop(MiddlewareHostMixin, RuntimeStateHost):
         self.memory_dream: Optional[object] = None
         self.acceptance_evaluator: Optional[AcceptanceEvaluatorPort] = None
         self.middleware_pipeline: LoopMiddlewarePort = middleware_pipeline or LoopMiddlewarePipeline()
+        self.verification_ports = dict(verification_ports or {})
 
         # Mutable state is initialized by AgentRuntimeState.  Only constructor
         # inputs override the typed defaults here.
@@ -235,6 +227,7 @@ class AgentLoop(MiddlewareHostMixin, RuntimeStateHost):
             step_gate=self.step_gate,
             artifact_store=artifact_store,
             middleware_pipeline=self.middleware_pipeline,
+            verification_ports=self.verification_ports,
             today_provider=today_provider,
             tool_output_inline_limit=self.tool_output_inline_limit,
             repeat_failure_limit=self.repeat_failure_limit,
@@ -512,20 +505,14 @@ class AgentLoop(MiddlewareHostMixin, RuntimeStateHost):
             plan_control_mode=plan_control_mode,
         )
 
-    async def _bind_loop_state_machine(
-        self,
-        state: AgentLoopStateMachine,
-    ) -> None:
+    async def _bind_loop_state_machine(self, state: AgentLoopStateMachine) -> None:
         await bind_loop_state(self, state)
 
-    async def _before_tool_execution(self, tool_call: ToolCall) -> None:
-        await before_tool_execution(self, tool_call)
+    async def _before_tool_execution(self, tool_call: ToolCall) -> None: await before_tool_execution(self, tool_call)
 
-    async def _record_observation(self, observation: Observation) -> None:
-        await record_observation(self, observation)
+    async def _record_observation(self, observation: Observation) -> None: await record_observation(self, observation)
 
-    async def _enter_waiting(self, condition: WaitCondition) -> None:
-        await enter_waiting(self, condition)
+    async def _enter_waiting(self, condition: WaitCondition) -> None: await enter_waiting(self, condition)
 
     async def _resume_waiting(self, request_id: str) -> None:
         await resume_waiting(self, request_id)
@@ -550,6 +537,16 @@ class AgentLoop(MiddlewareHostMixin, RuntimeStateHost):
             working_context=self.services.context.working_context,
         )
 
+    async def request_user_input(
+        self,
+        prompt: str,
+        options: tuple[str, ...] = (),
+        *,
+        allow_free_text: bool = True,
+    ) -> Optional[str]:
+        return await request_tool_user_input(
+            self, self.dependencies, prompt, options, allow_free_text)
+
     async def _evaluate_acceptance(
         self,
         text: str,
@@ -563,6 +560,9 @@ class AgentLoop(MiddlewareHostMixin, RuntimeStateHost):
             workspace_root=self.tool_context.workspace_root,
             artifact_store=self.services.core.artifact_store,
             emit=self._emit,
+            turn_id=self._current_turn_id,
+            verification_ports=self.verification_ports,
+            plan_control=self._turn_tool_context.plan_control,
         )
 
     def _select_turn_reminders(self) -> ReminderSelection:

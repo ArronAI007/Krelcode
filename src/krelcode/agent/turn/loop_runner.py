@@ -14,6 +14,11 @@ from krelcode.contracts.middleware import (
     MiddlewareAction,
     MiddlewareContext,
 )
+from krelcode.contracts.recovery import (
+    FailureClass,
+    RecoveryDecision,
+    RecoveryStrategy,
+)
 from krelcode.contracts.budget import (
     BudgetAction,
     BudgetDimension,
@@ -27,11 +32,13 @@ from krelcode.core.events import (
     RunFinished,
     StepStarted,
     MiddlewareEvaluated,
+    RecoveryDecided,
 )
 from .acceptance import AcceptanceGateError, AcceptanceReviewRequired
 from .contract_gate import contract_verification_gaps
 from .loop_state import AgentLoopStateMachine
 from .model_turn import finish_reason_failure
+from .progress import ProgressMonitor, record_recovery_decision
 from .runtime_ports import LoopRunnerHostPort
 from .budget_control import (
     BudgetControlHost,
@@ -61,6 +68,7 @@ class TurnLoopRunner:
         self.token_budget = token_budget
         self.budget_model = budget_model
         self.state = AgentLoopStateMachine(turn_id, host._emit)
+        self.progress = ProgressMonitor()
 
     async def run(self) -> str:
         host = self.host
@@ -87,6 +95,12 @@ class TurnLoopRunner:
                 ),
             ),
             model=self.budget_model,
+        )
+        self.progress = ProgressMonitor(
+            max_replans=(
+                host.agent_contract.max_recovery_attempts
+                if host.agent_contract is not None else 1
+            )
         )
         try:
             terminal = await self._extension(
@@ -198,12 +212,14 @@ class TurnLoopRunner:
                     await self._phase(LoopPhase.ACT, "tool actions requested")
                 abort_reason = await host._apply_tool_results(
                     assistant.tool_calls, llm_turn.tool_results)
-                if abort_reason:
-                    await self._fail(
-                        LoopTerminationReason.LOOP_DETECTED,
-                        abort_reason,
-                        source="loop_guard",
-                    )
+                recovery = self.progress.inspect(
+                    step=step,
+                    observations=state.observations,
+                    plan_control=host._turn_tool_context.plan_control,
+                    abort_reason=abort_reason or "",
+                )
+                if recovery is not None:
+                    await self._handle_recovery(recovery)
                 terminal = await self._extension(
                     ExtensionLifecyclePoint.STATE_COMMIT,
                     metadata={
@@ -273,6 +289,26 @@ class TurnLoopRunner:
             )
         raise AssertionError("Loop runner exhausted without terminal state")
 
+    async def _handle_recovery(self, decision: RecoveryDecision) -> None:
+        await record_recovery_decision(self.host, decision)
+        await self.host._emit(RecoveryDecided(
+            failure_class=FailureClass(decision.failure_class).value,
+            strategy=RecoveryStrategy(decision.strategy).value,
+            reason=decision.reason,
+            retryable=decision.retryable,
+            requires_replan=decision.requires_replan,
+            requires_user=decision.requires_user,
+            attempt=decision.attempt,
+            evidence=decision.evidence,
+        ))
+        if not decision.retryable:
+            await self._fail(
+                LoopTerminationReason.NO_PROGRESS,
+                decision.reason,
+                source="recovery",
+            )
+        self.progress.reset_after_replan()
+
     async def _verify(self, text: str) -> str | None:
         host = self.host
         state = self.state
@@ -324,6 +360,35 @@ class TurnLoopRunner:
             )
             return None
         if result.status is AcceptanceStatus.NEEDS_REVIEW:
+            answer = await host.request_user_input(
+                "任务已完成但验收需要人工确认。是否批准完成？",
+                ("approve", "reject"),
+                allow_free_text=False,
+            )
+            if answer is not None and answer.casefold() in {
+                "approve", "approved", "yes", "y", "批准", "通过",
+            }:
+                host.acceptance_result = replace(
+                    result,
+                    status=AcceptanceStatus.PASSED,
+                    reason="human review approved",
+                    metadata={
+                        **dict(result.metadata),
+                        "human_review": "approved",
+                    },
+                )
+                terminal = await self._extension(
+                    ExtensionLifecyclePoint.TASK_COMPLETE,
+                    metadata={
+                        "candidate_text": text[:2_000],
+                        "human_review": "approved",
+                    },
+                )
+                if terminal is not None:
+                    return terminal
+                await state.complete(text)
+                await host._emit(RunFinished(text, turn_id=self.turn_id))
+                return text
             await self._fail(
                 LoopTerminationReason.REVIEW_REQUIRED,
                 f"验收需要人工复核: {result.reason}",

@@ -356,9 +356,18 @@ class _InlineTaskRuntime:
         side_effect: TaskSideEffectRecord,
     ) -> RuntimeTaskState:
         current = self.inspect(task_id)
+        effects = tuple(
+            side_effect if item.effect_id == side_effect.effect_id else item
+            for item in current.side_effects
+        )
+        if not any(
+            item.effect_id == side_effect.effect_id
+            for item in current.side_effects
+        ):
+            effects = (*current.side_effects, side_effect)
         updated = replace(
             current,
-            side_effects=(*current.side_effects, side_effect),
+            side_effects=effects,
             sequence=current.sequence + 1,
             updated_at=time.time(),
         )
@@ -373,6 +382,7 @@ class _InlineTaskRuntime:
         *,
         compensation: str = "",
         evidence: Optional[Mapping[str, object]] = None,
+        preflight: Optional[Mapping[str, object]] = None,
     ) -> RuntimeTaskState:
         current = self.inspect(task_id)
         effects = tuple(
@@ -380,6 +390,10 @@ class _InlineTaskRuntime:
                 item,
                 status=SideEffectStatus(status),
                 compensation=compensation or item.compensation,
+                preflight={
+                    **dict(item.preflight),
+                    **dict(preflight or {}),
+                },
                 evidence={
                     **dict(item.evidence),
                     **dict(evidence or {}),

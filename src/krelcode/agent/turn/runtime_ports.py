@@ -474,6 +474,14 @@ class LoopRunnerHostPort(
 
     def _repair_after_cancel(self) -> None: ...
 
+    async def request_user_input(
+        self,
+        prompt: str,
+        options: tuple[str, ...] = (),
+        *,
+        allow_free_text: bool = True,
+    ) -> Optional[str]: ...
+
     async def _apply_middleware_result(
         self,
         result: "MiddlewarePipelineResult",

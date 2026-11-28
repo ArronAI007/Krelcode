@@ -22,8 +22,10 @@ from ...contracts.task_lifecycle import (
     TaskEventCursor,
     TaskResultLocation,
     TaskSideEffectRecord,
+    evaluate_side_effect_replay,
 )
 from .task_events import LocalTaskEventJournal
+from .task_errors import RuntimeSideEffectRecoveryRequired
 
 
 class TaskStateControlMixin:
@@ -38,6 +40,17 @@ class TaskStateControlMixin:
 
     def _persist(self) -> bool:
         raise NotImplementedError
+
+    def side_effect_retry_error(
+        self,
+        task_id: str,
+    ) -> RuntimeSideEffectRecoveryRequired | None:
+        replay = evaluate_side_effect_replay(
+            self.inspect(task_id).side_effects)
+        if replay.allowed:
+            return None
+        return RuntimeSideEffectRecoveryRequired(replay)
+
     def state_ref(self, task_id: str) -> RuntimeStateRef:
         state = self.inspect(task_id)
         return RuntimeStateRef(
@@ -187,9 +200,18 @@ class TaskStateControlMixin:
         side_effect: TaskSideEffectRecord,
     ) -> RuntimeTaskState:
         state = self.inspect(task_id)
+        effects = tuple(
+            side_effect if item.effect_id == side_effect.effect_id else item
+            for item in state.side_effects
+        )
+        if not any(
+            item.effect_id == side_effect.effect_id
+            for item in state.side_effects
+        ):
+            effects = (*state.side_effects, side_effect)
         updated = replace(
             state,
-            side_effects=(*state.side_effects, side_effect),
+            side_effects=effects,
             sequence=state.sequence + 1,
             updated_at=time.time(),
         )
@@ -205,6 +227,7 @@ class TaskStateControlMixin:
         *,
         compensation: str = "",
         evidence: Mapping[str, object] | None = None,
+        preflight: Mapping[str, object] | None = None,
     ) -> RuntimeTaskState:
         state = self.inspect(task_id)
         effects: list[TaskSideEffectRecord] = []
@@ -218,6 +241,10 @@ class TaskStateControlMixin:
                 item,
                 status=SideEffectStatus(status),
                 compensation=compensation or item.compensation,
+                preflight={
+                    **dict(item.preflight),
+                    **dict(preflight or {}),
+                },
                 evidence={
                     **dict(item.evidence),
                     **dict(evidence or {}),

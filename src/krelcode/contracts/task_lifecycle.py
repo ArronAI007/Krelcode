@@ -37,6 +37,8 @@ class TaskCancelMode(str, Enum):
 class SideEffectStatus(str, Enum):
     PENDING = "pending"
     COMMITTED = "committed"
+    NOT_APPLIED = "not_applied"
+    UNKNOWN = "unknown"
     COMPENSATED = "compensated"
     COMPENSATION_FAILED = "compensation_failed"
 
@@ -267,27 +269,52 @@ class TaskSideEffectRecord:
     kind: str
     resource: str
     status: SideEffectStatus | str = SideEffectStatus.COMMITTED
+    idempotency_key: str = ""
+    attempt_id: str = ""
+    request_digest: str = ""
     recorded_at: float = field(default_factory=time.time)
     compensation: str = ""
+    preflight: Mapping[str, object] = field(default_factory=dict)
     evidence: Mapping[str, object] = field(default_factory=dict)
     metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        for name in ("effect_id", "task_id", "kind", "resource", "compensation"):
+        for name in (
+            "effect_id", "task_id", "kind", "resource", "compensation",
+            "idempotency_key", "attempt_id", "request_digest",
+        ):
             object.__setattr__(
                 self, name, str(getattr(self, name) or "").strip())
+        if not self.idempotency_key:
+            object.__setattr__(
+                self,
+                "idempotency_key",
+                "effect-" + hashlib.sha256(
+                    f"{self.task_id}:{self.kind}:{self.resource}:"
+                    f"{self.request_digest}:{time.time_ns()}".encode("utf-8")
+                ).hexdigest()[:24],
+            )
         if not self.effect_id:
             object.__setattr__(
                 self,
                 "effect_id",
                 "effect-" + hashlib.sha256(
-                    f"{self.task_id}:{self.kind}:{self.resource}:"
-                    f"{time.time_ns()}".encode("utf-8")
+                    self.idempotency_key.encode("utf-8")
+                ).hexdigest()[:16],
+            )
+        if not self.attempt_id:
+            object.__setattr__(
+                self,
+                "attempt_id",
+                "attempt-" + hashlib.sha256(
+                    f"{self.effect_id}:{self.status}".encode("utf-8")
                 ).hexdigest()[:16],
             )
         object.__setattr__(self, "status", SideEffectStatus(self.status))
         object.__setattr__(
             self, "recorded_at", max(0.0, float(self.recorded_at)))
+        object.__setattr__(
+            self, "preflight", MappingProxyType(dict(self.preflight)))
         object.__setattr__(
             self, "evidence", MappingProxyType(dict(self.evidence)))
         object.__setattr__(
@@ -300,8 +327,12 @@ class TaskSideEffectRecord:
             "kind": self.kind,
             "resource": self.resource,
             "status": SideEffectStatus(self.status).value,
+            "idempotency_key": self.idempotency_key,
+            "attempt_id": self.attempt_id,
+            "request_digest": self.request_digest,
             "recorded_at": self.recorded_at,
             "compensation": self.compensation,
+            "preflight": dict(self.preflight),
             "evidence": dict(self.evidence),
             "metadata": dict(self.metadata),
         }
@@ -315,11 +346,119 @@ class TaskSideEffectRecord:
             kind=str(value.get("kind") or ""),
             resource=str(value.get("resource") or ""),
             status=str(value.get("status") or "committed"),
+            idempotency_key=str(value.get("idempotency_key") or ""),
+            attempt_id=str(value.get("attempt_id") or ""),
+            request_digest=str(value.get("request_digest") or ""),
             recorded_at=_float(value.get("recorded_at"), time.time()),
             compensation=str(value.get("compensation") or ""),
+            preflight=_mapping(value.get("preflight")),
             evidence=_mapping(value.get("evidence")),
             metadata=_mapping(value.get("metadata")),
         )
+
+
+@dataclass(frozen=True)
+class SideEffectIdentity:
+    """Stable identity for one logical side-effecting invocation."""
+
+    effect_id: str
+    idempotency_key: str
+    attempt_id: str
+    request_digest: str
+
+    @classmethod
+    def derive(
+        cls,
+        *,
+        task_id: str,
+        turn_id: str,
+        tool_name: str,
+        tool_call_id: str,
+        arguments: Mapping[str, object],
+    ) -> "SideEffectIdentity":
+        request_digest = hashlib.sha256(json.dumps(
+            dict(arguments),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")).hexdigest()
+        seed = ":".join((
+            str(task_id or ""),
+            str(turn_id or ""),
+            str(tool_call_id or ""),
+            str(tool_name or ""),
+            request_digest,
+        ))
+        idempotency_key = "action-" + hashlib.sha256(
+            seed.encode("utf-8")).hexdigest()
+        effect_id = "effect-" + hashlib.sha256(
+            idempotency_key.encode("utf-8")).hexdigest()[:16]
+        attempt_id = "attempt-" + hashlib.sha256(
+            f"{effect_id}:request".encode("utf-8")).hexdigest()[:16]
+        return cls(
+            effect_id=effect_id,
+            idempotency_key=idempotency_key,
+            attempt_id=attempt_id,
+            request_digest=request_digest,
+        )
+
+
+@dataclass(frozen=True)
+class SideEffectReplayDecision:
+    """Whether task replay can proceed without duplicating external effects."""
+
+    allowed: bool
+    reason: str = ""
+    blocking_effect_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "allowed", bool(self.allowed))
+        object.__setattr__(self, "reason", str(self.reason or ""))
+        object.__setattr__(
+            self,
+            "blocking_effect_ids",
+            _strings(self.blocking_effect_ids),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "allowed": self.allowed,
+            "reason": self.reason,
+            "blocking_effect_ids": list(self.blocking_effect_ids),
+        }
+
+
+def evaluate_side_effect_replay(
+    side_effects: Sequence[TaskSideEffectRecord],
+) -> SideEffectReplayDecision:
+    """Fail closed unless prior effects are proven safe to replay."""
+    blocking: list[str] = []
+    reasons: list[str] = []
+    for effect in side_effects:
+        status = SideEffectStatus(effect.status)
+        if status in {
+            SideEffectStatus.NOT_APPLIED,
+            SideEffectStatus.COMPENSATED,
+        }:
+            continue
+        if status is SideEffectStatus.COMMITTED:
+            replay_safe = bool(effect.metadata.get("replay_safe"))
+            idempotent = bool(effect.metadata.get("idempotent"))
+            if replay_safe or (idempotent and effect.idempotency_key):
+                continue
+        blocking.append(effect.effect_id)
+        reasons.append(f"{effect.resource or effect.kind}:{status.value}")
+    if blocking:
+        return SideEffectReplayDecision(
+            allowed=False,
+            reason=(
+                "side-effect replay requires preflight confirmation: "
+                + "; ".join(reasons[:8])
+            ),
+            blocking_effect_ids=tuple(blocking),
+        )
+    return SideEffectReplayDecision(allowed=True)
 
 
 @dataclass(frozen=True)
@@ -467,7 +606,13 @@ def classify_task_error(error: BaseException | str) -> TaskErrorInfo:
         category = TaskErrorClass.PROVIDER
     elif "tool" in lowered:
         category = TaskErrorClass.TOOL
-    elif "conflict" in lowered or "idempot" in lowered:
+    elif (
+        "conflict" in lowered
+        or "idempot" in lowered
+        or "side effect" in lowered
+        or "side-effect" in lowered
+        or "replay" in lowered
+    ):
         category = TaskErrorClass.CONFLICT
     elif "transient" in lowered or "retry" in lowered:
         category = TaskErrorClass.TRANSIENT
@@ -520,6 +665,8 @@ def _float(value: object, default: float) -> float:
 
 
 __all__ = [
+    "SideEffectIdentity",
+    "SideEffectReplayDecision",
     "SideEffectStatus",
     "TaskAttachment",
     "TaskCancelMode",
@@ -534,4 +681,5 @@ __all__ = [
     "TaskResultLocation",
     "TaskSideEffectRecord",
     "classify_task_error",
+    "evaluate_side_effect_replay",
 ]

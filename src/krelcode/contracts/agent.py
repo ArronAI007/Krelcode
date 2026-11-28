@@ -35,7 +35,7 @@ from .identity import (
     RuntimeSandboxBinding,
 )
 
-AGENT_CONTRACT_SCHEMA_VERSION = 1
+AGENT_CONTRACT_SCHEMA_VERSION = 2
 
 
 def _string_tuple(value: object) -> tuple[str, ...]:
@@ -363,6 +363,7 @@ class AgentContract:
     authority: AuthorityEnvelope = field(default_factory=AuthorityEnvelope)
     enforce_acceptance: bool = True
     max_verification_attempts: int = 2
+    max_recovery_attempts: int = 1
     schema_version: int = AGENT_CONTRACT_SCHEMA_VERSION
     contract_id: str = ""
     contract_hash: str = ""
@@ -380,6 +381,11 @@ class AgentContract:
             self,
             "max_verification_attempts",
             max(1, int(self.max_verification_attempts)),
+        )
+        object.__setattr__(
+            self,
+            "max_recovery_attempts",
+            max(1, int(self.max_recovery_attempts)),
         )
         object.__setattr__(
             self, "metadata", MappingProxyType(dict(self.metadata)))
@@ -470,6 +476,7 @@ class AgentContract:
             authority=self.authority,
             enforce_acceptance=self.enforce_acceptance,
             max_verification_attempts=self.max_verification_attempts,
+            max_recovery_attempts=self.max_recovery_attempts,
             schema_version=self.schema_version,
             metadata=self.metadata,
         )
@@ -486,6 +493,7 @@ class AgentContract:
             "authority": self.authority.to_dict(),
             "enforce_acceptance": self.enforce_acceptance,
             "max_verification_attempts": self.max_verification_attempts,
+            "max_recovery_attempts": self.max_recovery_attempts,
             "metadata": _contract_metadata(self.metadata),
         }
         return _digest(payload)
@@ -504,6 +512,7 @@ class AgentContract:
             "authority": self.authority.to_dict(),
             "enforce_acceptance": self.enforce_acceptance,
             "max_verification_attempts": self.max_verification_attempts,
+            "max_recovery_attempts": self.max_recovery_attempts,
             "created_at": self.created_at,
             "metadata": _contract_metadata(self.metadata),
         }
@@ -535,6 +544,8 @@ class AgentContract:
                 raw.get("enforce_acceptance", True)),
             max_verification_attempts=_int_value(
                 raw.get("max_verification_attempts"), 2),
+            max_recovery_attempts=_int_value(
+                raw.get("max_recovery_attempts"), 1),
             schema_version=_int_value(
                 raw.get("schema_version"), AGENT_CONTRACT_SCHEMA_VERSION),
             contract_id=str(raw.get("contract_id") or ""),
@@ -560,6 +571,7 @@ class AgentContractFactory:
         authority: Optional[AuthorityEnvelope] = None,
         metadata: Optional[Mapping[str, object]] = None,
         max_verification_attempts: int = 2,
+        max_recovery_attempts: int = 1,
     ) -> AgentContract:
         resolved_sandbox = sandbox or RuntimeSandboxBinding()
         if authority is None:
@@ -596,6 +608,7 @@ class AgentContractFactory:
             deliverables=deliverables or DeliverableContract(),
             authority=authority,
             max_verification_attempts=max_verification_attempts,
+            max_recovery_attempts=max_recovery_attempts,
             metadata=dict(metadata or {}),
         )
 

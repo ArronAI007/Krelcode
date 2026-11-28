@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from ...contracts.task_lifecycle import TaskRecoveryDecision
+from ...contracts.task_lifecycle import (
+    SideEffectReplayDecision,
+    TaskRecoveryDecision,
+)
 
 
 class RuntimeTaskTimeout(TimeoutError):
@@ -23,8 +26,18 @@ class RuntimeTaskRecoveryBlocked(RuntimeError):
         super().__init__(f"task recovery blocked: {failed}")
 
 
+class RuntimeSideEffectRecoveryRequired(RuntimeError):
+    """Automatic replay is unsafe until prior effects are reconciled."""
+
+    def __init__(self, decision: SideEffectReplayDecision) -> None:
+        self.decision = decision
+        super().__init__(
+            decision.reason or "side-effect replay recovery required")
+
+
 __all__ = [
     "RuntimeTaskConflict",
     "RuntimeTaskRecoveryBlocked",
+    "RuntimeSideEffectRecoveryRequired",
     "RuntimeTaskTimeout",
 ]

@@ -28,6 +28,7 @@ from krelcode.core.events import (
     EventBus,
     LoopPhaseChanged,
     ToolCallCompleted,
+    ToolCallStarted,
 )
 from krelcode.contracts.loop import WaitCondition, WaitKind
 from krelcode.core.messages import ImageRef, SteeringInput
@@ -50,6 +51,7 @@ from krelcode.contracts.runtime import (
     RuntimeTaskState,
 )
 from krelcode.contracts.task_lifecycle import (
+    SideEffectIdentity,
     SideEffectStatus,
     TaskAttachment,
     TaskCancelMode,
@@ -57,7 +59,8 @@ from krelcode.contracts.task_lifecycle import (
     TaskEventCursor,
     TaskSideEffectRecord,
 )
-from krelcode.contracts.tool import SideEffectKind
+from krelcode.contracts.tool import SideEffectKind, ToolDescriptor
+from krelcode.contracts.verification import VerificationLevel, VerifierPort
 from krelcode.agent.turn.loop import AgentLoop
 from krelcode.agent.turn.query import QueryEngine, QuerySession
 from krelcode.agent.turn.runtime_adapter import (
@@ -97,6 +100,9 @@ class HarnessRuntimeFacade:
         mcp_reload: Optional[Callable[[], Awaitable[Sequence[str]]]] = None,
         shell_jobs: Optional[_ShellJobsRuntimePort] = None,
         acceptance_evaluator: Optional[AcceptanceEvaluatorPort] = None,
+        verification_ports: Optional[
+            Mapping[VerificationLevel | str, VerifierPort]
+        ] = None,
         control_plane: Optional[ControlPlanePort] = None,
         task_runtime: Optional[RuntimeTaskRuntimePort] = None,
         resource_registry: Optional[RuntimeResourceRegistryPort] = None,
@@ -135,6 +141,7 @@ class HarnessRuntimeFacade:
             continuation=continuation,
         )
         self._turn.set_acceptance_evaluator(acceptance_evaluator)
+        self._turn.set_verification_ports(verification_ports)
         self._turn.set_control_plane(control_plane)
         self._turn.set_runtime_snapshot_provider(self._runtime_snapshot)
         self.resource_registry.register(AsyncCloseResource(
@@ -317,45 +324,155 @@ class HarnessRuntimeFacade:
                 pass
 
     def _record_side_effect_event(self, event: AgentEvent) -> None:
-        if (
-            self.task_runtime is None
-            or self._query is None
-            or not isinstance(event, ToolCallCompleted)
-            or event.is_error
-        ):
+        if self.task_runtime is None or self._query is None:
             return
-        name = event.tool_call.name
+        if isinstance(event, ToolCallStarted):
+            self._begin_side_effect_attempt(event.tool_call)
+            return
+        if isinstance(event, ToolCallCompleted):
+            self._complete_side_effect_attempt(event)
+            return
+
+    def _side_effect_descriptor(
+        self,
+        tool_call: object,
+    ) -> ToolDescriptor | None:
+        name = str(getattr(tool_call, "name", "") or "")
         descriptor = self.loop.services.core.registry.descriptor(name)
+        if descriptor is None:
+            return None
+        if SideEffectKind(descriptor.side_effect.kind) is SideEffectKind.NONE:
+            return None
+        return descriptor
+
+    def _side_effect_identity(
+        self,
+        tool_call: object,
+    ) -> SideEffectIdentity:
+        arguments = getattr(tool_call, "arguments", {})
+        return SideEffectIdentity.derive(
+            task_id=self._query.task_id if self._query is not None else "",
+            turn_id=self._query.turn_id if self._query is not None else "",
+            tool_name=str(getattr(tool_call, "name", "") or ""),
+            tool_call_id=str(getattr(tool_call, "id", "") or ""),
+            arguments=arguments if isinstance(arguments, Mapping) else {},
+        )
+
+    def _record_effect_resource(self, tool_call: object) -> str:
+        arguments = getattr(tool_call, "arguments", {})
+        values = arguments if isinstance(arguments, Mapping) else {}
+        name = str(getattr(tool_call, "name", "") or "")
+        return str(
+            values.get("path")
+            or values.get("file_path")
+            or values.get("command")
+            or name
+        )
+
+    def _begin_side_effect_attempt(self, tool_call: object) -> None:
+        if self.task_runtime is None or self._query is None:
+            return
+        descriptor = self._side_effect_descriptor(tool_call)
         if descriptor is None:
             return
         contract = descriptor.side_effect
-        if SideEffectKind(contract.kind) is SideEffectKind.NONE:
+        identity = self._side_effect_identity(tool_call)
+        state = self.task_runtime.inspect(self._query.task_id)
+        if any(
+            item.effect_id == identity.effect_id
+            for item in state.side_effects
+        ):
             return
-        arguments = event.tool_call.arguments
-        resource = str(
-            arguments.get("path")
-            or arguments.get("file_path")
-            or arguments.get("command")
-            or name
-        )
-        kind = SideEffectKind(contract.kind).value
         self.task_runtime.record_side_effect(
             self._query.task_id,
             TaskSideEffectRecord(
-                effect_id="",
+                effect_id=identity.effect_id,
                 task_id=self._query.task_id,
-                kind=kind,
-                resource=resource,
-                status=SideEffectStatus.COMMITTED,
+                kind=SideEffectKind(contract.kind).value,
+                resource=self._record_effect_resource(tool_call),
+                status=SideEffectStatus.PENDING,
+                idempotency_key=identity.idempotency_key,
+                attempt_id=identity.attempt_id,
+                request_digest=identity.request_digest,
                 compensation=contract.compensation,
-                evidence={
-                    "tool_call_id": event.tool_call.id,
-                    "output_digest": hashlib.sha256(
-                        event.content.encode("utf-8")).hexdigest(),
-                    "is_error": event.is_error,
-                    "idempotent": contract.idempotent,
-                    "replay_safe": contract.replay_safe,
+                preflight={
+                    "check": contract.preflight_check,
+                    "status": "required",
+                    "confirmed": False,
                 },
+                metadata={
+                    "tool_call_id": str(getattr(tool_call, "id", "") or ""),
+                    "preflight_check": contract.preflight_check,
+                    "replay_safe": contract.replay_safe,
+                    "idempotent": contract.idempotent,
+                },
+            ),
+        )
+
+    def _complete_side_effect_attempt(self, event: ToolCallCompleted) -> None:
+        if self.task_runtime is None or self._query is None:
+            return
+        tool_call = event.tool_call
+        descriptor = self._side_effect_descriptor(tool_call)
+        if descriptor is None:
+            return
+        contract = descriptor.side_effect
+        identity = self._side_effect_identity(tool_call)
+        error_kind = str(event.diagnostics.get("error_kind") or "")
+        not_applied = {
+            "tool_unavailable",
+            "unknown_tool",
+            "tool_not_executable",
+            "invalid_arguments_json",
+            "schema_validation",
+            "governance_denied",
+            "hook_blocked",
+            "contract_approval_missing",
+            "permission_denied",
+            "policy_exception",
+        }
+        if not event.is_error:
+            status = SideEffectStatus.COMMITTED
+        elif error_kind in not_applied:
+            status = SideEffectStatus.NOT_APPLIED
+        else:
+            status = SideEffectStatus.UNKNOWN
+        evidence = {
+            "tool_call_id": str(getattr(tool_call, "id", "") or ""),
+            "output_digest": hashlib.sha256(
+                event.content.encode("utf-8")).hexdigest(),
+            "is_error": event.is_error,
+            "error_kind": error_kind,
+            "idempotent": contract.idempotent,
+            "replay_safe": contract.replay_safe,
+        }
+        state = self.task_runtime.inspect(self._query.task_id)
+        if any(item.effect_id == identity.effect_id for item in state.side_effects):
+            self.task_runtime.update_side_effect(
+                self._query.task_id,
+                identity.effect_id,
+                status,
+                evidence=evidence,
+            )
+            return
+        self.task_runtime.record_side_effect(
+            self._query.task_id,
+            TaskSideEffectRecord(
+                effect_id=identity.effect_id,
+                task_id=self._query.task_id,
+                kind=SideEffectKind(contract.kind).value,
+                resource=self._record_effect_resource(tool_call),
+                status=status,
+                idempotency_key=identity.idempotency_key,
+                attempt_id=identity.attempt_id,
+                request_digest=identity.request_digest,
+                compensation=contract.compensation,
+                preflight={
+                    "check": contract.preflight_check,
+                    "status": "not_run",
+                    "confirmed": False,
+                },
+                evidence=evidence,
                 metadata={
                     "preflight_check": contract.preflight_check,
                     "replay_safe": contract.replay_safe,
@@ -584,6 +701,28 @@ class HarnessRuntimeFacade:
                 ),
                 compensation=compensation,
                 evidence=evidence,
+            )
+        except KeyError:
+            return False
+        return True
+
+    def reconcile_side_effect(
+        self,
+        effect_id: str,
+        status: SideEffectStatus | str,
+        *,
+        evidence: Optional[Mapping[str, object]] = None,
+        preflight: Optional[Mapping[str, object]] = None,
+    ) -> bool:
+        if self.task_runtime is None or self._query is None:
+            return False
+        try:
+            self.task_runtime.update_side_effect(
+                self._query.task_id,
+                effect_id,
+                status,
+                evidence=evidence,
+                preflight=preflight,
             )
         except KeyError:
             return False
