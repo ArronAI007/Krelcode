@@ -1,10 +1,8 @@
 """AgentLoop：整个系统的心脏。
 
-只依赖四个端口：LLMProvider / ToolRegistry / ApprovalPolicy / EventBus。
-语义见 DESIGN.md「主循环语义」。Step 5 版本：
+只依赖 LLMProvider / ToolRegistry / ApprovalPolicy / EventBus 四个端口。
 - 同批只读 tool_calls 并行、写操作串行，结果按原序回填
-- 卡死检测：同一签名（工具名+参数）连续失败达阈值 → 中止本轮
-- 最大步数守卫
+- 卡死检测、重复失败守卫与最大步数守卫
 """
 
 from __future__ import annotations
@@ -38,15 +36,13 @@ from krelcode.contracts.external_event import ExternalEventPort
 from krelcode.contracts.application import ApplicationRequest, ApplicationRequestFactory
 from krelcode.contracts.agent import AgentContract
 from krelcode.contracts.loop import Observation, VerificationGap, WaitCondition
+from krelcode.contracts.middleware import LoopMiddlewarePort
 from krelcode.contracts.acceptance import AcceptanceResult
 from krelcode.agent.context.attachments import ContextAttachment, ContextAttachmentDiff, ContextAttachmentKind
 from krelcode.agent.context.compression import ContextManager
 from krelcode.agent.context.context_assembler import ContextAssembler
 from krelcode.agent.context.workspace import WorkspaceContext
-from krelcode.agent.context.context_source import (
-    RetrievedMemoryContextSource,
-    default_context_sources,
-)
+from krelcode.agent.context.context_source import RetrievedMemoryContextSource, default_context_sources
 from krelcode.agent.turn.dependencies import AgentDependencies
 from krelcode.agent.context.context_cache_ledger import ContextCacheLedger
 from krelcode.agent.turn.context_turn import ContextTurnCoordinator
@@ -64,6 +60,8 @@ from krelcode.agent.turn.model_turn import (
     ModelTurnExecutor,
 )
 from krelcode.agent.turn.loop_state import AgentLoopStateMachine
+from krelcode.agent.turn.middleware import LoopMiddlewarePipeline
+from krelcode.agent.turn.middleware_commit import MiddlewareHostMixin
 from krelcode.agent.turn.loop_control import (
     before_tool_execution,
     bind_loop_state,
@@ -111,7 +109,7 @@ STEERING_PREFIX = "[用户插话] "
 class _AsyncClosePort(Protocol):
     async def close(self) -> None: ...
 
-class AgentLoop(RuntimeStateHost):
+class AgentLoop(MiddlewareHostMixin, RuntimeStateHost):
     """Turn orchestration facade.
 
     Model streaming, context assembly and tool batch execution live in
@@ -159,6 +157,7 @@ class AgentLoop(RuntimeStateHost):
         execution_runtime: Optional[ExecutionRuntimePort] = None,
         artifact_store: Optional[ArtifactStorePort] = None,
         external_events: Optional[ExternalEventPort] = None,
+        middleware_pipeline: Optional[LoopMiddlewarePort] = None,
     ) -> None:
         if external_events is not None:
             tool_context = replace(
@@ -203,6 +202,7 @@ class AgentLoop(RuntimeStateHost):
         self.memory_dream_scheduler: Optional[_AsyncClosePort] = None
         self.memory_dream: Optional[object] = None
         self.acceptance_evaluator: Optional[AcceptanceEvaluatorPort] = None
+        self.middleware_pipeline: LoopMiddlewarePort = middleware_pipeline or LoopMiddlewarePipeline()
 
         # Mutable state is initialized by AgentRuntimeState.  Only constructor
         # inputs override the typed defaults here.
@@ -234,6 +234,7 @@ class AgentLoop(RuntimeStateHost):
             user_input_port=self.services.core.user_input_port,
             step_gate=self.step_gate,
             artifact_store=artifact_store,
+            middleware_pipeline=self.middleware_pipeline,
             today_provider=today_provider,
             tool_output_inline_limit=self.tool_output_inline_limit,
             repeat_failure_limit=self.repeat_failure_limit,

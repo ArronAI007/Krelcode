@@ -172,6 +172,9 @@ class TurnRuntimeState:
     loop_state: Optional["AgentLoopStateMachine"] = None
     last_observation: Optional["Observation"] = None
     observations: list["Observation"] = field(default_factory=list)
+    extension_metadata: dict[str, object] = field(default_factory=dict)
+    middleware_evaluations: list[dict[str, object]] = field(
+        default_factory=list)
     budget_ledger: Optional["BudgetLedger"] = None
     steering_queue: asyncio.Queue[SteeringInput | str] = field(
         default_factory=lambda: asyncio.Queue()

@@ -33,6 +33,7 @@ from ..core.events import (
     HookTriggered,
     KnowledgeLoaded,
     LoopPhaseChanged,
+    MiddlewareEvaluated,
     MemoryCandidateObserved,
     MemoryLoaded,
     MemoryWritten,
@@ -184,6 +185,20 @@ class SessionRecorder:
                 "reason": event.reason,
                 "transition": dict(event.transition),
                 "turn_id": event.transition.get("turn_id", ""),
+            }
+        if isinstance(event, MiddlewareEvaluated):
+            return {
+                "type": "middleware_evaluated",
+                "ts": ts,
+                "lifecycle_point": event.lifecycle_point,
+                "action": event.action,
+                "reason": event.reason,
+                "evaluations": [
+                    dict(item) for item in event.evaluations
+                ],
+                "applied_patches": [
+                    dict(item) for item in event.applied_patches
+                ],
             }
         if isinstance(event, ObservationRecorded):
             return {

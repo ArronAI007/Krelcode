@@ -32,6 +32,7 @@ from .events import (
     LLMStreamDelta,
     LLMThinkingDelta,
     LoopPhaseChanged,
+    MiddlewareEvaluated,
     MemoryCandidateObserved,
     MemoryLoaded,
     MemoryWritten,
@@ -98,6 +99,7 @@ SessionEventPayload: TypeAlias = (
     | BudgetUpdated
     | BudgetThresholdReached
     | LoopPhaseChanged
+    | MiddlewareEvaluated
     | ObservationRecorded
     | ToolCallStarted
     | ToolProgress
@@ -146,6 +148,7 @@ SESSION_EVENT_TYPE_TO_KIND: Mapping[type[AgentEvent], SessionEventKind] = {
     BudgetUpdated: SessionEventKind.BUDGET,
     BudgetThresholdReached: SessionEventKind.BUDGET,
     LoopPhaseChanged: SessionEventKind.LOOP,
+    MiddlewareEvaluated: SessionEventKind.LOOP,
     ObservationRecorded: SessionEventKind.OBSERVATION,
     ToolCallStarted: SessionEventKind.TOOL,
     ToolProgress: SessionEventKind.TOOL,

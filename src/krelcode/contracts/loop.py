@@ -35,6 +35,7 @@ class LoopTerminationReason(str, Enum):
     PROTOCOL_ERROR = "protocol_error"
     ACCEPTANCE_FAILED = "acceptance_failed"
     REVIEW_REQUIRED = "review_required"
+    POLICY_DENIED = "policy_denied"
     PARTIAL_DELIVERY = "partial_delivery"
 
 

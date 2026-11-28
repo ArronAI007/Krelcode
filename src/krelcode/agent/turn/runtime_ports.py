@@ -33,6 +33,11 @@ if TYPE_CHECKING:
     from krelcode.contracts.agent import AgentContract
     from krelcode.contracts.loop import Observation, WaitCondition
     from krelcode.contracts.loop import VerificationGap
+    from krelcode.contracts.middleware import (
+        LoopMiddlewarePort,
+        MiddlewarePipelineResult,
+        StatePatch,
+    )
     from krelcode.contracts.tool_execution import ToolExecutionResult
     from krelcode.contracts.tool import ToolContext, ToolResult, TurnAbortSignal
     from krelcode.safety.contract import ModePermissionContract
@@ -437,6 +442,7 @@ class LoopRunnerHostPort(
     _turn_abort_signal: "TurnAbortSignal"
     _failure_counts: dict[str, int]
     _token_total: int
+    middleware_pipeline: Optional["LoopMiddlewarePort"]
 
     async def _inject_steering(self) -> None: ...
 
@@ -467,6 +473,11 @@ class LoopRunnerHostPort(
     async def _record_turn_error(self, text: str, source: str) -> None: ...
 
     def _repair_after_cancel(self) -> None: ...
+
+    async def _apply_middleware_result(
+        self,
+        result: "MiddlewarePipelineResult",
+    ) -> tuple["StatePatch", ...]: ...
 
 
 class LLMTurnResultPort(Protocol):

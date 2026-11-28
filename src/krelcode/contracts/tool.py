@@ -7,6 +7,7 @@ import inspect
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 from typing import (
     Awaitable, Callable, Dict, FrozenSet, Mapping, Optional, Protocol, Sequence,
     Tuple,
@@ -311,6 +312,37 @@ class ToolExecutionRuntime(str, Enum):
     REMOTE = "remote"
 
 
+class SideEffectKind(str, Enum):
+    NONE = "none"
+    FILE_MUTATION = "file_mutation"
+    PROCESS = "process"
+    NETWORK = "network"
+    EXTERNAL_STATE = "external_state"
+
+
+@dataclass(frozen=True)
+class ToolSideEffectContract:
+    """Replay and compensation semantics for one tool invocation."""
+
+    kind: SideEffectKind | str = SideEffectKind.NONE
+    replay_safe: bool = True
+    idempotent: bool = True
+    preflight_check: str = ""
+    compensation: str = ""
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kind", SideEffectKind(self.kind))
+        object.__setattr__(self, "replay_safe", bool(self.replay_safe))
+        object.__setattr__(self, "idempotent", bool(self.idempotent))
+        object.__setattr__(
+            self, "preflight_check", str(self.preflight_check or ""))
+        object.__setattr__(
+            self, "compensation", str(self.compensation or ""))
+        object.__setattr__(
+            self, "metadata", MappingProxyType(dict(self.metadata)))
+
+
 @dataclass(frozen=True)
 class ToolDescriptor:
     source: ToolSource = ToolSource.BUILTIN
@@ -322,6 +354,8 @@ class ToolDescriptor:
     tier: Optional[ToolTier] = None
     search_terms: Tuple[str, ...] = ()
     execution_runtime: Optional[ToolExecutionRuntime] = None
+    side_effect: ToolSideEffectContract = field(
+        default_factory=ToolSideEffectContract)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "source", ToolSource(self.source))
@@ -377,17 +411,60 @@ class ToolDescriptor:
         mcp_server: Optional[str] = None,
     ) -> "ToolDescriptor":
         source = ToolSource(source)
+        read_only = bool(getattr(tool, "read_only", False))
+        side_effect = getattr(tool, "side_effect_contract", None)
+        if not isinstance(side_effect, ToolSideEffectContract):
+            side_effect = _default_side_effect_contract(
+                tool.name, read_only=read_only)
         return cls(
             source=source,
             mcp_server=mcp_server,
-            read_only=bool(getattr(tool, "read_only", False)),
+            read_only=read_only,
             required_feature=getattr(tool, "required_feature", None),
             run_modes=getattr(tool, "run_modes", None),
             plugin_name=getattr(tool, "plugin_name", None),
             tier=getattr(tool, "tool_tier", None),
             search_terms=getattr(tool, "search_terms", ()),
             execution_runtime=getattr(tool, "execution_runtime", None),
+            side_effect=side_effect,
         )
+
+
+def _default_side_effect_contract(
+    tool_name: str,
+    *,
+    read_only: bool,
+) -> ToolSideEffectContract:
+    if read_only:
+        return ToolSideEffectContract()
+    if tool_name in {
+        "write_file", "edit_file", "replace_all", "apply_patch",
+        "notebook_edit", "database_migration_apply",
+    }:
+        return ToolSideEffectContract(
+            kind=SideEffectKind.FILE_MUTATION,
+            replay_safe=False,
+            idempotent=False,
+            preflight_check="inspect current file content",
+            compensation="restore checkpoint or version-control content",
+        )
+    if tool_name in {
+        "run_command", "run_skill_script", "job_start", "job_kill",
+    }:
+        return ToolSideEffectContract(
+            kind=SideEffectKind.PROCESS,
+            replay_safe=False,
+            idempotent=False,
+            preflight_check="inspect prior process/job result",
+            compensation="stop or reverse the process-side effect if possible",
+        )
+    return ToolSideEffectContract(
+        kind=SideEffectKind.EXTERNAL_STATE,
+        replay_safe=False,
+        idempotent=False,
+        preflight_check="query authoritative external state before replay",
+        compensation="apply domain-specific compensating action",
+    )
 
 
 __all__ = [

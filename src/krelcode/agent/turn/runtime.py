@@ -57,6 +57,7 @@ from krelcode.contracts.task_lifecycle import (
     TaskEventCursor,
     TaskSideEffectRecord,
 )
+from krelcode.contracts.tool import SideEffectKind
 from krelcode.agent.turn.loop import AgentLoop
 from krelcode.agent.turn.query import QueryEngine, QuerySession
 from krelcode.agent.turn.runtime_adapter import (
@@ -324,12 +325,11 @@ class HarnessRuntimeFacade:
         ):
             return
         name = event.tool_call.name
-        mutation_tools = {
-            "write_file", "edit_file", "replace_all", "apply_patch",
-            "notebook_edit", "run_command", "run_skill_script",
-            "job_start", "database_migration_apply",
-        }
-        if name not in mutation_tools:
+        descriptor = self.loop.services.core.registry.descriptor(name)
+        if descriptor is None:
+            return
+        contract = descriptor.side_effect
+        if SideEffectKind(contract.kind) is SideEffectKind.NONE:
             return
         arguments = event.tool_call.arguments
         resource = str(
@@ -338,9 +338,7 @@ class HarnessRuntimeFacade:
             or arguments.get("command")
             or name
         )
-        kind = "process" if name in {
-            "run_command", "run_skill_script", "job_start",
-        } else "file_mutation"
+        kind = SideEffectKind(contract.kind).value
         self.task_runtime.record_side_effect(
             self._query.task_id,
             TaskSideEffectRecord(
@@ -349,16 +347,19 @@ class HarnessRuntimeFacade:
                 kind=kind,
                 resource=resource,
                 status=SideEffectStatus.COMMITTED,
-                compensation=(
-                    "inspect process outcome and compensate if necessary"
-                    if kind == "process" else
-                    "restore prior content from checkpoint or VCS"
-                ),
+                compensation=contract.compensation,
                 evidence={
                     "tool_call_id": event.tool_call.id,
                     "output_digest": hashlib.sha256(
                         event.content.encode("utf-8")).hexdigest(),
                     "is_error": event.is_error,
+                    "idempotent": contract.idempotent,
+                    "replay_safe": contract.replay_safe,
+                },
+                metadata={
+                    "preflight_check": contract.preflight_check,
+                    "replay_safe": contract.replay_safe,
+                    "idempotent": contract.idempotent,
                 },
             ),
         )

@@ -152,6 +152,9 @@ STREAM_JSON_FIELD_TYPES: Mapping[str, Mapping[str, object]] = {
     "relation_kind": {"type": "string"},
     "responsibility_owner": {"type": "string"},
     "contract_hash": {"type": "string"},
+    "lifecycle_point": {"type": "string"},
+    "evaluations": _FIELD_ARRAY,
+    "applied_patches": _FIELD_ARRAY,
     "task": {"type": "string"},
     "definition": {"type": "string"},
     "preview": {"type": "string"},
@@ -289,6 +292,9 @@ OUTPUT_EVENT_SCHEMAS: Mapping[tuple[str, str], StreamJsonEventSchema] = {
     ("plan", "updated"): _event(
         "plan", "updated", "items", "active_index", "statuses", "explanation",
         optional=("plan_control",)),
+    ("middleware", "evaluated"): _event(
+        "middleware", "evaluated", "lifecycle_point", "action", "reason",
+        "evaluations", "applied_patches"),
     ("input", "requested"): _event(
         "input", "requested", "input_id", "prompt", "options",
         "allow_free_text"),

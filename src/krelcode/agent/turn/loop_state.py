@@ -21,17 +21,20 @@ EmitEvent = Callable[[AgentEvent], Awaitable[None]]
 
 _ALLOWED: dict[LoopPhase, frozenset[LoopPhase]] = {
     LoopPhase.PREPARE: frozenset({
-        LoopPhase.MODEL, LoopPhase.WAITING, LoopPhase.FAILED,
+        LoopPhase.MODEL, LoopPhase.VERIFY, LoopPhase.WAITING,
+        LoopPhase.FAILED,
     }),
     LoopPhase.MODEL: frozenset({
         LoopPhase.ACT, LoopPhase.VERIFY, LoopPhase.WAITING,
         LoopPhase.FAILED,
     }),
     LoopPhase.ACT: frozenset({
-        LoopPhase.OBSERVE, LoopPhase.WAITING, LoopPhase.FAILED,
+        LoopPhase.OBSERVE, LoopPhase.VERIFY, LoopPhase.WAITING,
+        LoopPhase.FAILED,
     }),
     LoopPhase.OBSERVE: frozenset({
-        LoopPhase.PREPARE, LoopPhase.ACT, LoopPhase.FAILED,
+        LoopPhase.PREPARE, LoopPhase.ACT, LoopPhase.VERIFY,
+        LoopPhase.FAILED,
     }),
     LoopPhase.VERIFY: frozenset({
         LoopPhase.COMPLETED, LoopPhase.PREPARE, LoopPhase.WAITING,

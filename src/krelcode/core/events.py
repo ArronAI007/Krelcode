@@ -81,6 +81,17 @@ class LoopPhaseChanged(AgentEvent):
 
 
 @dataclass(frozen=True)
+class MiddlewareEvaluated(AgentEvent):
+    """One deterministic extension-pipeline evaluation."""
+
+    lifecycle_point: str
+    action: str
+    reason: str = ""
+    evaluations: Tuple[Mapping[str, object], ...] = ()
+    applied_patches: Tuple[Mapping[str, object], ...] = ()
+
+
+@dataclass(frozen=True)
 class ObservationRecorded(AgentEvent):
     """Content-light normalized observation from any feedback source."""
 

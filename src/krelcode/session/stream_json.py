@@ -28,6 +28,7 @@ from ..core.events import (
     LLMStreamDelta,
     LLMThinkingDelta,
     LoopPhaseChanged,
+    MiddlewareEvaluated,
     MemoryCandidateObserved,
     MemoryLoaded,
     MemoryWritten,
@@ -58,10 +59,7 @@ from ..core.events import (
 )
 from ..core.messages import ImageRef, Message, ToolCall
 from ..agent.turn.query import QueryEvent
-from ..contracts.application import (
-    ApplicationRequest,
-    ApplicationRequestFactory,
-)
+from ..contracts.application import ApplicationRequest, ApplicationRequestFactory
 from ..contracts.agent import AgentContract
 from .stream_json_contracts import parse_contracts
 from .stream_json_schema import (
@@ -80,10 +78,8 @@ class StreamUserMessage:
     content: str
     request_id: str = ""
     images: tuple[ImageRef, ...] = ()
-    application: Optional[ApplicationRequest] = field(
-        default=None, compare=False)
-    agent_contract: Optional[AgentContract] = field(
-        default=None, compare=False)
+    application: Optional[ApplicationRequest] = field(default=None, compare=False)
+    agent_contract: Optional[AgentContract] = field(default=None, compare=False)
 
 @dataclass(frozen=True)
 class StreamControlMessage:
@@ -172,6 +168,16 @@ class StreamJsonEncoder:
                 "reason": event.reason,
                 "step": event.step,
                 "transition": dict(event.transition),
+            }
+        elif isinstance(event, MiddlewareEvaluated):
+            payload = {
+                "type": "middleware",
+                "subtype": "evaluated",
+                "lifecycle_point": event.lifecycle_point,
+                "action": event.action,
+                "reason": event.reason,
+                "evaluations": [dict(item) for item in event.evaluations],
+                "applied_patches": [dict(item) for item in event.applied_patches],
             }
         elif isinstance(event, ObservationRecorded):
             payload = {

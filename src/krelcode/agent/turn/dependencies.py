@@ -18,6 +18,7 @@ from krelcode.core.interactions import UserInputPort
 from krelcode.core.redact import SecretRedactor
 from krelcode.contracts.tool import RuntimeSnapshot, ToolContext
 from krelcode.contracts.governance import ControlPlanePort
+from krelcode.contracts.middleware import LoopMiddlewarePort
 from krelcode.contracts.tool_execution import ExecutionRuntimePort
 from krelcode.contracts.artifact import ArtifactStorePort
 from krelcode.llm.base import LLMProvider
@@ -63,6 +64,7 @@ class AgentDependencies:
     max_steps: int = 64
     token_budget: Optional[int] = None
     artifact_store: Optional[ArtifactStorePort] = None
+    middleware_pipeline: Optional[LoopMiddlewarePort] = None
 
     @property
     def workspace_root(self) -> Path:

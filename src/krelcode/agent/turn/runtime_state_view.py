@@ -139,6 +139,14 @@ class RuntimeStateView:
         self.runtime_state.turn.runtime_context = value
 
     @property
+    def extension_metadata(self) -> dict[str, object]:
+        return self.runtime_state.turn.extension_metadata
+
+    @property
+    def middleware_evaluations(self) -> list[dict[str, object]]:
+        return self.runtime_state.turn.middleware_evaluations
+
+    @property
     def _token_total(self) -> int:
         return self.runtime_state.turn.token_total
 

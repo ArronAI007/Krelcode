@@ -9,6 +9,11 @@ from typing import cast
 from krelcode.contracts.acceptance import AcceptanceStatus
 from krelcode.contracts.application import TaskBudget
 from krelcode.contracts.loop import LoopPhase, LoopTerminationReason
+from krelcode.contracts.middleware import (
+    ExtensionLifecyclePoint,
+    MiddlewareAction,
+    MiddlewareContext,
+)
 from krelcode.contracts.budget import (
     BudgetAction,
     BudgetDimension,
@@ -21,6 +26,7 @@ from krelcode.core.events import (
     RunFailed,
     RunFinished,
     StepStarted,
+    MiddlewareEvaluated,
 )
 from .acceptance import AcceptanceGateError, AcceptanceReviewRequired
 from .contract_gate import contract_verification_gaps
@@ -83,6 +89,14 @@ class TurnLoopRunner:
             model=self.budget_model,
         )
         try:
+            terminal = await self._extension(
+                ExtensionLifecyclePoint.TASK_START)
+            if terminal is not None:
+                return terminal
+            terminal = await self._extension(
+                ExtensionLifecyclePoint.PREPARE_BEFORE)
+            if terminal is not None:
+                return terminal
             for step in range(1, self.max_steps + 1):
                 await state.set_step(step)
                 await host._emit(StepStarted(step))
@@ -125,6 +139,12 @@ class TurnLoopRunner:
                             else LoopTerminationReason.PARTIAL_DELIVERY
                         ),
                     )
+                terminal = await self._extension(
+                    ExtensionLifecyclePoint.MODEL_BEFORE,
+                    metadata={"step": step},
+                )
+                if terminal is not None:
+                    return terminal
                 await self._phase(
                     LoopPhase.MODEL,
                     f"模型判断下一步（Step {step}）",
@@ -138,6 +158,16 @@ class TurnLoopRunner:
                     total_tokens=host._token_total,
                 )
                 assistant = llm_turn.message
+                terminal = await self._extension(
+                    ExtensionLifecyclePoint.MODEL_AFTER,
+                    metadata={
+                        "step": step,
+                        "finish_reason": llm_turn.finish_reason or "",
+                        "tool_call_count": len(assistant.tool_calls or ()),
+                    },
+                )
+                if terminal is not None:
+                    return terminal
                 finish_failure = finish_reason_failure(
                     llm_turn.finish_reason,
                     has_tool_calls=bool(assistant.tool_calls),
@@ -158,6 +188,12 @@ class TurnLoopRunner:
                     if terminal is not None:
                         return terminal
                     continue
+                terminal = await self._extension(
+                    ExtensionLifecyclePoint.ACTION_BEFORE,
+                    metadata={"tool_call_count": len(assistant.tool_calls)},
+                )
+                if terminal is not None:
+                    return terminal
                 if state.phase is LoopPhase.MODEL:
                     await self._phase(LoopPhase.ACT, "tool actions requested")
                 abort_reason = await host._apply_tool_results(
@@ -168,15 +204,42 @@ class TurnLoopRunner:
                         abort_reason,
                         source="loop_guard",
                     )
+                terminal = await self._extension(
+                    ExtensionLifecyclePoint.STATE_COMMIT,
+                    metadata={
+                        "tool_call_count": len(assistant.tool_calls),
+                        "result_count": len(llm_turn.tool_results),
+                    },
+                )
+                if terminal is not None:
+                    return terminal
+                terminal = await self._extension(
+                    ExtensionLifecyclePoint.ACTION_AFTER,
+                    metadata={"abort_reason": abort_reason or ""},
+                )
+                if terminal is not None:
+                    return terminal
                 if state.phase is LoopPhase.ACT:
+                    terminal = await self._extension(
+                        ExtensionLifecyclePoint.OBSERVE_BEFORE)
+                    if terminal is not None:
+                        return terminal
                     await self._phase(
                         LoopPhase.OBSERVE,
                         "tool observations collected",
                     )
+                    terminal = await self._extension(
+                        ExtensionLifecyclePoint.OBSERVE_AFTER)
+                    if terminal is not None:
+                        return terminal
                 await self._phase(
                     LoopPhase.PREPARE,
                     "observations applied; rebuilding task view",
                 )
+                terminal = await self._extension(
+                    ExtensionLifecyclePoint.PREPARE_AFTER)
+                if terminal is not None:
+                    return terminal
             ledger = host.budget_ledger
             if ledger is not None:
                 await self._budget_partial(
@@ -213,12 +276,35 @@ class TurnLoopRunner:
     async def _verify(self, text: str) -> str | None:
         host = self.host
         state = self.state
+        terminal = await self._extension(
+            ExtensionLifecyclePoint.VERIFY_BEFORE,
+            metadata={"candidate_text": text[:2_000]},
+        )
+        if terminal is not None:
+            return terminal
         attempt = await state.begin_verification(
             "model requested completion; running acceptance")
         result = await host._evaluate_acceptance(text)
         host.acceptance_result = result
+        terminal = await self._extension(
+            ExtensionLifecyclePoint.VERIFY_AFTER,
+            metadata={
+                "attempt": attempt,
+                "acceptance_passed": bool(result is not None and result.passed),
+                "acceptance_status": (
+                    result.status.value if result is not None else ""),
+            },
+        )
+        if terminal is not None:
+            return terminal
         contract = host.agent_contract
         if result is None or result.passed or contract is None:
+            terminal = await self._extension(
+                ExtensionLifecyclePoint.TASK_COMPLETE,
+                metadata={"candidate_text": text[:2_000]},
+            )
+            if terminal is not None:
+                return terminal
             await state.complete(text)
             await host._emit(RunFinished(text, turn_id=self.turn_id))
             return text
@@ -264,6 +350,70 @@ class TurnLoopRunner:
         ))
         _ = transition
 
+    async def _extension(
+        self,
+        point: ExtensionLifecyclePoint,
+        *,
+        metadata: dict[str, object] | None = None,
+        enforce: bool = True,
+    ) -> str | None:
+        host = self.host
+        pipeline = host.middleware_pipeline
+        if pipeline is None:
+            return None
+        application = host.application_request
+        plan_control = host._turn_tool_context.plan_control
+        budget = host.budget_ledger
+        context = MiddlewareContext(
+            turn_id=self.turn_id,
+            phase=self.state.phase.value,
+            step=self.state.step,
+            lifecycle_point=point,
+            goal=application.goal if application is not None else "",
+            permission_mode=(
+                host._turn_tool_context.runtime.permission_mode.value),
+            plan=(
+                plan_control.as_dict()
+                if plan_control is not None else {}),
+            budget=(
+                budget.snapshot().as_record()
+                if budget is not None else {}),
+            observation_ids=tuple(
+                item.observation_id for item in self.state.observations),
+            metadata=metadata or {},
+        )
+        result = await pipeline.evaluate(point, context)
+        applied = await host._apply_middleware_result(result)
+        if result.evaluations or applied:
+            await host._emit(MiddlewareEvaluated(
+                lifecycle_point=point.value,
+                action=result.action.value,
+                reason=result.reason,
+                evaluations=tuple(
+                    item.to_dict() for item in result.evaluations),
+                applied_patches=tuple(
+                    patch.to_dict() for patch in applied),
+            ))
+        if not enforce:
+            return None
+        if result.action is MiddlewareAction.DENY:
+            await self._fail(
+                LoopTerminationReason.POLICY_DENIED,
+                result.reason or f"middleware denied at {point.value}",
+                source="middleware",
+            )
+        if result.action is MiddlewareAction.SHORT_CIRCUIT:
+            text = result.short_circuit_text
+            if self.state.phase is not LoopPhase.VERIFY:
+                await self._phase(
+                    LoopPhase.VERIFY,
+                    f"middleware short-circuit at {point.value}",
+                )
+            await self.state.complete(text)
+            await host._emit(RunFinished(text, turn_id=self.turn_id))
+            return text
+        return None
+
     async def _fail(
         self,
         reason: LoopTerminationReason,
@@ -273,6 +423,11 @@ class TurnLoopRunner:
         exception: BaseException | None = None,
         unfinished: UnfinishedManifest | None = None,
     ) -> None:
+        await self._extension(
+            ExtensionLifecyclePoint.TASK_FAIL,
+            metadata={"source": source, "error": error[:2_000]},
+            enforce=False,
+        )
         await self.host._record_turn_error(error, source)
         terminated = await self.state.fail(
             reason,
