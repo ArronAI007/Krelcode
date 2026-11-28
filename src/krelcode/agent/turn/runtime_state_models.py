@@ -64,6 +64,7 @@ if TYPE_CHECKING:
         WorkspaceFingerprint,
     )
     from krelcode.agent.context.context_plan import ContextPlanSnapshot
+    from krelcode.agent.context.rehydration import CompactionRehydrationReport
     from krelcode.agent.context.compression import ContextManager
     from krelcode.agent.context.context_checkpoint import (
         ContextCheckpointCoordinator,
@@ -192,6 +193,8 @@ class ContextRuntimeState:
     context_enabled: bool = True
     context_integrity: Optional["FileIntegrity"] = None
     last_compact_checkpoint: Optional[CompactCheckpointResultPort] = None
+    last_compaction_rehydration: Optional[
+        "CompactionRehydrationReport"] = None
     last_context_restore: Optional["ContextRestoreResult"] = None
     last_context_plan: Optional["ContextPlanSnapshot"] = None
     last_context_snapshot: Optional["ContextUsageSnapshot"] = None

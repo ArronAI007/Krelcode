@@ -20,6 +20,7 @@ from .events import (
     BudgetThresholdReached,
     BudgetUpdated,
     CompactCheckpointCreated,
+    CompactionRehydrated,
     ContextAssembled,
     ContextCheckpointCreated,
     ContextCompressed,
@@ -122,6 +123,7 @@ SessionEventPayload: TypeAlias = (
     | MemoryCandidateObserved
     | MemoryWritten
     | CompactCheckpointCreated
+    | CompactionRehydrated
     | UserSteered
     | PlanUpdated
     | UserInputRequested
@@ -172,6 +174,7 @@ SESSION_EVENT_TYPE_TO_KIND: Mapping[type[AgentEvent], SessionEventKind] = {
     MemoryCandidateObserved: SessionEventKind.MEMORY,
     MemoryWritten: SessionEventKind.MEMORY,
     CompactCheckpointCreated: SessionEventKind.COMPACT,
+    CompactionRehydrated: SessionEventKind.COMPACT,
     UserSteered: SessionEventKind.USER,
     PlanUpdated: SessionEventKind.PLAN,
     UserInputRequested: SessionEventKind.INPUT,

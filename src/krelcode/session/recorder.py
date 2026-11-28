@@ -24,6 +24,7 @@ from ..core.events import (
     BudgetUpdated,
     AgentEvent,
     CompactCheckpointCreated,
+    CompactionRehydrated,
     ContextAssembled,
     ContextCheckpointCreated,
     ContextCompressed,
@@ -381,6 +382,25 @@ class SessionRecorder:
                 "low_watermark_tokens": event.low_watermark_tokens,
                 "source_savings": dict(event.source_savings),
                 "checkpoint_id": event.checkpoint_id,
+            }
+        if isinstance(event, CompactionRehydrated):
+            return {
+                "type": "compaction_rehydrated",
+                "ts": ts,
+                "trigger": event.trigger,
+                "generation": event.generation,
+                "report_digest": event.report_digest,
+                "files": list(event.files),
+                "skills": list(event.skills),
+                "omitted_files": [
+                    dict(item) for item in event.omitted_files
+                ],
+                "omitted_skills": [
+                    dict(item) for item in event.omitted_skills
+                ],
+                "file_tokens": event.file_tokens,
+                "skill_tokens": event.skill_tokens,
+                "total_tokens": event.total_tokens,
             }
         if isinstance(event, CompactCheckpointCreated):
             return {

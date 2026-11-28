@@ -7,6 +7,7 @@ from typing import Iterable, Mapping
 
 from ...agent.turn.loop import AgentLoop
 from ...agent.context.context_policy import ContextBudgetPolicy
+from ...agent.context.rehydration import CompactionRehydrationPolicy
 from ...contracts.runtime import (
     RUNTIME_RELEASE_SCHEMA_VERSION,
     RuntimeReleaseManifest,
@@ -245,6 +246,8 @@ def build_runtime_release_manifest(
                 if loop.context_assembler is not None
                 else ContextBudgetPolicy()
             ),
+            "rehydration_policy": _rehydration_policy_record(
+                loop.dependencies.compaction_rehydration_policy),
             "enabled": bool(loop.context_enabled),
         },
         code_version={
@@ -262,6 +265,21 @@ def _context_budget_record(
         "max_tokens": policy.max_tokens,
         "category_caps": dict(policy.category_caps),
         "required_categories": list(policy.required_categories),
+    }
+
+
+def _rehydration_policy_record(
+    policy: CompactionRehydrationPolicy,
+) -> dict[str, object]:
+    return {
+        "max_files": policy.max_files,
+        "max_file_tokens": policy.max_file_tokens,
+        "max_total_file_tokens": policy.max_total_file_tokens,
+        "max_skills": policy.max_skills,
+        "max_skill_tokens": policy.max_skill_tokens,
+        "max_total_skill_tokens": policy.max_total_skill_tokens,
+        "max_total_tokens": policy.max_total_tokens,
+        "prefer_modified_files": policy.prefer_modified_files,
     }
 
 

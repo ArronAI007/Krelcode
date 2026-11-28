@@ -20,6 +20,7 @@ from krelcode.contracts.tool import RuntimeSnapshot, ToolContext
 from krelcode.contracts.governance import ControlPlanePort
 from krelcode.contracts.middleware import LoopMiddlewarePort
 from krelcode.contracts.verification import VerificationLevel, VerifierPort
+from krelcode.agent.context.rehydration import CompactionRehydrationPolicy
 from krelcode.contracts.tool_execution import ExecutionRuntimePort
 from krelcode.contracts.artifact import ArtifactStorePort
 from krelcode.llm.base import LLMProvider
@@ -68,6 +69,8 @@ class AgentDependencies:
     middleware_pipeline: Optional[LoopMiddlewarePort] = None
     verification_ports: Mapping[VerificationLevel | str, VerifierPort] = field(
         default_factory=dict)
+    compaction_rehydration_policy: CompactionRehydrationPolicy = field(
+        default_factory=CompactionRehydrationPolicy)
 
     @property
     def workspace_root(self) -> Path:

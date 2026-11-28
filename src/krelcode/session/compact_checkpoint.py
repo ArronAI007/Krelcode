@@ -65,6 +65,7 @@ class CompactCheckpoint:
     boundary: Dict[str, object] = field(default_factory=dict)
     source_savings: Dict[str, int] = field(default_factory=dict)
     working_context: Dict[str, object] = field(default_factory=dict)
+    rehydration: Dict[str, object] = field(default_factory=dict)
     file_hashes: Tuple[FileHash, ...] = ()
     pre_compact_history: Tuple[Message, ...] = ()
 
@@ -82,6 +83,7 @@ class CompactCheckpoint:
             "source_savings": dict(self.source_savings),
             "file_count": len(self.file_hashes),
             "summary": self.summary.record(),
+            "rehydration": dict(self.rehydration),
         }
 
     def matches_history(self, history: Sequence[Message]) -> bool:
@@ -119,6 +121,7 @@ class CompactCheckpointStore:
         boundary: Optional[Mapping[str, object]] = None,
         source_savings: Optional[Mapping[str, int]] = None,
         working_context: Optional[Mapping[str, object]] = None,
+        rehydration: Optional[Mapping[str, object]] = None,
         file_hashes: Optional[Sequence[FileHash]] = None,
         created_at: Optional[float] = None,
     ) -> Optional[CompactCheckpoint]:
@@ -152,6 +155,7 @@ class CompactCheckpointStore:
                 for key, value in (source_savings or {}).items()
             },
             working_context=working_record,
+            rehydration=dict(rehydration or {}),
             file_hashes=captured_hashes,
             pre_compact_history=tuple(pre_compact_history),
         )
@@ -297,6 +301,7 @@ class CompactCheckpointStore:
                 for key, value in dict(raw.get("source_savings") or {}).items()
             },
             working_context=dict(raw.get("working_context") or {}),
+            rehydration=dict(raw.get("rehydration") or {}),
             file_hashes=file_hashes,
             pre_compact_history=messages,
         )

@@ -241,6 +241,22 @@ class ContextCompressed(AgentEvent):
 
 
 @dataclass(frozen=True)
+class CompactionRehydrated(AgentEvent):
+    """Content-light report for post-compaction context restoration."""
+
+    trigger: str = "auto"
+    generation: int = 0
+    report_digest: str = ""
+    files: Tuple[str, ...] = ()
+    skills: Tuple[str, ...] = ()
+    omitted_files: Tuple[Mapping[str, object], ...] = ()
+    omitted_skills: Tuple[Mapping[str, object], ...] = ()
+    file_tokens: int = 0
+    skill_tokens: int = 0
+    total_tokens: int = 0
+
+
+@dataclass(frozen=True)
 class ContextCheckpointCreated(AgentEvent):
     """A full resume/fork context checkpoint was persisted.
 

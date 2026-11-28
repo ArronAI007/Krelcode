@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from ..core.events import MiddlewareEvaluated, RecoveryDecided
+from ..core.events import (
+    CompactionRehydrated,
+    MiddlewareEvaluated,
+    RecoveryDecided,
+)
 
 
 def middleware_payload(event: MiddlewareEvaluated) -> Dict[str, Any]:
@@ -34,4 +38,27 @@ def recovery_payload(event: RecoveryDecided) -> Dict[str, Any]:
     }
 
 
-__all__ = ["middleware_payload", "recovery_payload"]
+def compaction_rehydrated_payload(
+    event: CompactionRehydrated,
+) -> Dict[str, Any]:
+    return {
+        "type": "compact",
+        "subtype": "rehydrated",
+        "trigger": event.trigger,
+        "generation": event.generation,
+        "report_digest": event.report_digest,
+        "files": list(event.files),
+        "skills": list(event.skills),
+        "omitted_files": [dict(item) for item in event.omitted_files],
+        "omitted_skills": [dict(item) for item in event.omitted_skills],
+        "file_tokens": event.file_tokens,
+        "skill_tokens": event.skill_tokens,
+        "total_tokens": event.total_tokens,
+    }
+
+
+__all__ = [
+    "compaction_rehydrated_payload",
+    "middleware_payload",
+    "recovery_payload",
+]

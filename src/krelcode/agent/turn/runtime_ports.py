@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from krelcode.agent.context.compression import CompactResult
     from krelcode.agent.context.workspace import WorkspaceContext
     from krelcode.agent.context.context_policy import ContextBudgetPolicy
+    from krelcode.agent.context.rehydration import CompactionRehydrationReport
     from krelcode.agent.context.context_cache_ledger import ContextCacheLedger
     from krelcode.agent.context.context_plan import ContextPlanSnapshot
     from krelcode.agent.context.context_source import (
@@ -308,6 +309,7 @@ class CompactCheckpointStorePort(Protocol):
         boundary: Optional[Mapping[str, object]] = None,
         source_savings: Optional[Mapping[str, int]] = None,
         working_context: Optional[Mapping[str, object]] = None,
+        rehydration: Optional[Mapping[str, object]] = None,
         file_hashes: Optional[Sequence[Any]] = None,
         created_at: Optional[float] = None,
     ) -> Optional["CompactCheckpointResultPort"]: ...
@@ -374,6 +376,7 @@ class ContextTurnHostPort(_EventHostPort, _ToolPoolHostPort, Protocol):
     last_mode_permission_contract: Optional["ModePermissionContract"]
     last_microcompact_report: Optional["MicrocompactReport"]
     last_compact_checkpoint: Optional["CompactCheckpointResultPort"]
+    last_compaction_rehydration: Optional["CompactionRehydrationReport"]
     workspace_context: Optional["WorkspaceContext"]
 
     async def run_lifecycle_hook(

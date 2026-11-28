@@ -49,6 +49,7 @@ from krelcode.agent.context.context_turn_observability import (
     memory_selection,
 )
 from krelcode.agent.context.context_usage import build_context_usage_snapshot
+from krelcode.agent.context.rehydration import apply_compaction_rehydration, emit_compaction_rehydration
 from krelcode.agent.context.compression import CompactResult
 from krelcode.agent.turn.dependencies import AgentDependencies
 from krelcode.agent.prompt.fragments import (
@@ -372,12 +373,15 @@ class ContextTurnCoordinator:
             ))
         if not changed:
             return False
-        after = estimate_history_tokens(host.history) + extra_tokens
+        working_snapshot = self.dependencies.working_context_store.snapshot()
         result = cast(Optional[CompactResult], manager.last_compact_result)
+        d = self.dependencies
+        rehydration = await apply_compaction_rehydration(host, workspace_root=d.workspace_root, history=pre_compact_history, working_context=working_snapshot, trigger=result.trigger, generation=result.generation, policy=d.compaction_rehydration_policy, redactor=d.redactor.redact if d.redactor is not None else None) if result is not None else None
+        after = estimate_history_tokens(host.history) + extra_tokens
         checkpoint = None
         store = self.dependencies.compact_checkpoint_store
         if result is not None and store is not None:
-            working = self.dependencies.working_context_store.snapshot().as_checkpoint_record()
+            working = working_snapshot.as_checkpoint_record()
             checkpoint = store.record(
                 pre_compact_history=pre_compact_history,
                 summary=result.summary,
@@ -397,6 +401,7 @@ class ContextTurnCoordinator:
                 },
                 source_savings=result.savings_dict(),
                 working_context=working,
+                rehydration=rehydration.as_dict() if rehydration is not None else {},
             )
             host.last_compact_checkpoint = checkpoint
             if checkpoint is not None:
@@ -430,6 +435,8 @@ class ContextTurnCoordinator:
                 result.source_savings if result is not None else ()),
             checkpoint_id=checkpoint.id if checkpoint is not None else "",
         ))
+        if rehydration is not None:
+            await emit_compaction_rehydration(host, rehydration)
         return True
 
     def repair_after_cancel(self) -> None:

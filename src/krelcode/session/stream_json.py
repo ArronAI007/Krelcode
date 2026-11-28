@@ -17,6 +17,7 @@ from ..core.events import (
     BudgetThresholdReached,
     BudgetUpdated,
     CompactCheckpointCreated,
+    CompactionRehydrated,
     ContextAssembled,
     ContextCompressed,
     ContextDropped,
@@ -63,7 +64,7 @@ from ..agent.turn.query import QueryEvent
 from ..contracts.application import ApplicationRequest, ApplicationRequestFactory
 from ..contracts.agent import AgentContract
 from .stream_json_contracts import parse_contracts
-from .stream_json_runtime import middleware_payload, recovery_payload
+from .stream_json_runtime import compaction_rehydrated_payload, middleware_payload, recovery_payload
 from .stream_json_schema import (
     STREAM_JSON_PROTOCOL_NAME as PROTOCOL_NAME,
     STREAM_JSON_PROTOCOL_VERSION as PROTOCOL_VERSION,
@@ -71,7 +72,6 @@ from .stream_json_schema import (
     validate_input_message,
     validate_stream_event,
 )
-
 class StreamJsonProtocolError(ValueError):
     """输入消息不符合 stream-json 协议。"""
 
@@ -389,6 +389,8 @@ class StreamJsonEncoder:
                 "source_savings": dict(event.source_savings),
                 "checkpoint_id": event.checkpoint_id,
             }
+        elif isinstance(event, CompactionRehydrated):
+            payload = compaction_rehydrated_payload(event)
         elif isinstance(event, HookTriggered):
             payload = {
                 "type": "hook",
