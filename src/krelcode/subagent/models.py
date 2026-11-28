@@ -80,6 +80,7 @@ class AgentHandle:
     cache_ledger_hash: str = ""
     application_request: Optional[ApplicationRequest] = None
     agent_contract: Optional[AgentContract] = None
+    global_slot_acquired: bool = False
 
     def preview(self) -> str:
         text = self.result or self.error or ""

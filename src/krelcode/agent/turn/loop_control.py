@@ -13,6 +13,7 @@ from krelcode.contracts.loop import (
 )
 from krelcode.core.events import (
     AgentEvent,
+    ErrorOccurred,
     QueryPhaseChanged,
 )
 from krelcode.core.messages import Message, ToolCall
@@ -159,12 +160,38 @@ async def record_verification_gaps(
     host.history.append(Message.user("\n".join(lines)))
 
 
+async def record_turn_error(
+    host: LoopControlHost,
+    text: str,
+    source: str,
+    *,
+    working_context: object,
+) -> None:
+    record_error = getattr(working_context, "record_error", None)
+    if callable(record_error):
+        record_error(text, source=source)
+    if (
+        host.history
+        and host.history[-1].role == "assistant"
+        and not host.history[-1].tool_calls
+    ):
+        partial = (host.history[-1].content or "").strip()
+        host.history[-1].content = (
+            f"{partial}\n\n[krelcode] {text}"
+            if partial else f"[krelcode] {text}"
+        )
+    else:
+        host.history.append(Message.assistant(text))
+    await host._emit(ErrorOccurred(text, source))
+
+
 __all__ = [
     "LoopControlHost",
     "before_tool_execution",
     "bind_loop_state",
     "enter_waiting",
     "record_observation",
+    "record_turn_error",
     "record_verification_gaps",
     "resume_waiting",
 ]

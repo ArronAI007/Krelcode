@@ -27,7 +27,7 @@ from krelcode.contracts.runtime import (
     RuntimeTaskState,
     RuntimeTaskStatus,
 )
-from krelcode.contracts.loop import WaitCondition
+from krelcode.contracts.loop import WaitCondition, WaitKind
 from krelcode.core.redact import SecretRedactor
 from .task_state_store import (
     RUNTIME_TASK_STATE_VERSION,
@@ -355,6 +355,7 @@ class LocalTaskRuntime(RuntimeTaskRuntimePort):
             status=RuntimeTaskStatus.WAITING,
             sequence=state.sequence + 1,
             wait_reason=condition.reason,
+            wait_kind=WaitKind(condition.kind).value,
             resume_token=condition.resume_token or condition.request_id,
             waiting_since=time.time(),
             resumed_at=None,

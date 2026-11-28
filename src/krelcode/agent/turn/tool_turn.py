@@ -7,8 +7,6 @@ large-output persistence, result events and history/working-context writes.
 
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import replace
 from typing import Any, Callable, Dict, List, Optional, cast
 
@@ -58,7 +56,18 @@ from krelcode.contracts.loop import WaitCondition, WaitKind
 from krelcode.agent.turn.observation import (
     tool_observation,
     tool_wait_kind,
-    user_input_observation,
+)
+from krelcode.agent.turn.tool_interactions import request_tool_user_input
+from krelcode.agent.turn.tool_support import (
+    call_signature,
+    persisted_output_path,
+    redact_json,
+)
+from krelcode.agent.turn.budget_control import (
+    BudgetControlHost,
+    budget_denial_result,
+    reserve_high_risk_action,
+    reserve_tool_call,
 )
 from krelcode.contracts.tool_execution import (
     ToolExecutionResult,
@@ -103,7 +112,7 @@ class ToolBatchExecutor:
                 arguments=tool_call.arguments,
                 redactor=redactor.redact if redactor else None,
             )
-            persisted_path = _persisted_output_path(result.content)
+            persisted_path = persisted_output_path(result.content)
             if persisted_path:
                 metadata["full_output_path"] = persisted_path
             host.history.append(
@@ -121,7 +130,7 @@ class ToolBatchExecutor:
                 result,
                 turn_id=host._current_turn_id,
             )
-            signature = _call_signature(tool_call)
+            signature = call_signature(tool_call)
             if result.is_error:
                 host._failure_counts[signature] = (
                     host._failure_counts.get(signature, 0) + 1)
@@ -163,7 +172,7 @@ class ToolBatchExecutor:
             legacy.blocks = tuple(
                 self._redact_tool_block(block) for block in legacy.blocks)
             legacy.data = cast(
-                Dict[str, Any], _redact_json(legacy.data, redactor.redact))
+                Dict[str, Any], redact_json(legacy.data, redactor.redact))
         await self.host._emit(
             ToolCallCompleted(
                 tool_call,
@@ -198,7 +207,7 @@ class ToolBatchExecutor:
             )
         if isinstance(block, StructuredBlock):
             return StructuredBlock(cast(
-                Dict[str, Any], _redact_json(block.data, redact)))
+                Dict[str, Any], redact_json(block.data, redact)))
         return block
 
     def persist_large_output(self, tool_call: ToolCall, content: str) -> str:
@@ -285,7 +294,7 @@ class ToolBatchExecutor:
             redactor = deps.redactor
             safe_message = redactor.redact(message) if redactor else message
             safe_data = (
-                cast(Dict[str, object], _redact_json(data, redactor.redact))
+                cast(Dict[str, object], redact_json(data, redactor.redact))
                 if redactor is not None else data)
             await host._emit(ToolProgress(
                 tool_call.id, tool_call.name, safe_message, safe_data))
@@ -304,49 +313,13 @@ class ToolBatchExecutor:
             options: tuple[str, ...],
             allow_free_text: bool,
         ) -> Optional[str]:
-            port = deps.user_input_port
-            if port is None:
-                return None
-            redactor = deps.redactor
-            safe_prompt = redactor.redact(prompt) if redactor else prompt
-            safe_options = tuple(
-                redactor.redact(option) if redactor else option
-                for option in options
+            return await request_tool_user_input(
+                host,
+                deps,
+                prompt,
+                options,
+                allow_free_text,
             )
-            turn_id = host._turn_tool_context.runtime.turn_id or "turn"
-            request_id = f"{turn_id}:input:{next(host._input_counter)}"
-            exchange = port.submit(
-                safe_prompt,
-                safe_options,
-                allow_free_text=allow_free_text,
-                request_id=request_id,
-            )
-            await host._emit(UserInputRequested(
-                request_id=exchange.request_id,
-                prompt=safe_prompt,
-                options=safe_options,
-                allow_free_text=allow_free_text,
-            ))
-            await host._enter_waiting(WaitCondition(
-                kind=WaitKind.USER_INPUT,
-                request_id=exchange.request_id,
-                reason=safe_prompt,
-            ))
-            try:
-                answer = await exchange.wait()
-            finally:
-                await host._resume_waiting(exchange.request_id)
-            await host._emit(UserInputResolved(
-                request_id=exchange.request_id,
-                answered=answer is not None,
-            ))
-            await host._record_observation(user_input_observation(
-                turn_id=turn_id,
-                request_id=exchange.request_id,
-                answered=answer is not None,
-                answer_chars=len(answer or ""),
-            ))
-            return answer
 
         async def emit_plan(
             items: tuple[str, ...],
@@ -425,6 +398,18 @@ class ToolBatchExecutor:
                     "error_kind": "schema_validation",
                 },
             )
+        budget_error = await reserve_tool_call(
+            cast(BudgetControlHost, host), tool_call)
+        if budget_error:
+            return ToolExecutionResult.from_tool_result(
+                budget_denial_result(
+                    runtime,
+                    descriptor.source.value,
+                    budget_error,
+                    "tool_budget_exceeded",
+                ),
+                runtime=runtime,
+            )
         governance_request = _governance_request(
             host, execution_ctx, descriptor, tool_call)
         governance_decision = (
@@ -492,6 +477,7 @@ class ToolBatchExecutor:
         policy_id = "governance"
         approval_id = ""
         policy_reason = ""
+        high_risk_action = False
         if deps.policy is not None:
             await execution_ctx.emit_progress("安全策略检查中")
             try:
@@ -527,6 +513,8 @@ class ToolBatchExecutor:
                 governance_decision.security_decision.decision
                 is SecurityDecisionValue.REQUIRE_APPROVAL
             )
+            high_risk_action = (
+                requires_contract_approval or bool(approval_id))
             if (
                 policy_decision.allowed
                 and requires_contract_approval
@@ -580,6 +568,12 @@ class ToolBatchExecutor:
                 )
 
         if (
+            not high_risk_action
+            and governance_decision.security_decision.decision
+            is SecurityDecisionValue.REQUIRE_APPROVAL
+        ):
+            high_risk_action = True
+        if (
             governance_decision.security_decision.decision
             is SecurityDecisionValue.REQUIRE_APPROVAL
             and not approval_id
@@ -606,6 +600,20 @@ class ToolBatchExecutor:
                         security_decision.decision_hash),
                 },
             )
+
+        if high_risk_action:
+            high_risk_error = await reserve_high_risk_action(
+                cast(BudgetControlHost, host))
+            if high_risk_error:
+                return ToolExecutionResult.from_tool_result(
+                    budget_denial_result(
+                        runtime,
+                        descriptor.source.value,
+                        high_risk_error,
+                        "high_risk_budget_exceeded",
+                    ),
+                    runtime=runtime,
+                )
 
         security_decision = _security_decision(
             governance_decision,
@@ -767,34 +775,5 @@ def _governance_request(
         mcp_server=descriptor.mcp_server or "",
         tool_source=descriptor.source.value,
     )
-
-def _call_signature(tool_call: ToolCall) -> str:
-    """Tool name plus stable arguments for repeated-failure detection."""
-    try:
-        args = json.dumps(tool_call.arguments, sort_keys=True, ensure_ascii=False)
-    except (TypeError, ValueError):
-        args = repr(tool_call.arguments)
-    if len(args) > 200:
-        args = args[:200] + "…"
-    return f"{tool_call.name}({args})"
-
-def _redact_json(
-    value: object, redact: Callable[[str], str],
-) -> object:
-    if isinstance(value, str):
-        return redact(value)
-    if isinstance(value, list):
-        return [_redact_json(item, redact) for item in value]
-    if isinstance(value, dict):
-        return {
-            str(redact(str(key))): _redact_json(item, redact)
-            for key, item in value.items()
-        }
-    return value
-
-def _persisted_output_path(content: str) -> str:
-    match = re.search(r"全文已存盘:\s*([^\]\n]+)", content or "")
-    return match.group(1).strip()[:1_000] if match else ""
-
 
 __all__ = ["ToolBatchExecutor"]

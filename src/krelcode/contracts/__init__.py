@@ -35,6 +35,16 @@ from .acceptance import (
     AcceptanceStatus,
 )
 from .artifact import ArtifactRef, ArtifactStorePort
+from .budget import (
+    BudgetAction,
+    BudgetDimension,
+    BudgetDimensionState,
+    BudgetLevel,
+    BudgetLimit,
+    BudgetSnapshot,
+    UnfinishedItem,
+    UnfinishedManifest,
+)
 from .change_admission import (
     AdmissionDecision,
     AdmissionGatePort,
@@ -56,6 +66,7 @@ from .evaluation import (
     VersionManifestPort,
 )
 from .event_log import EventLogAppendResult, EventLogEntry, EventLogPort
+from .external_event import ExternalEvent, ExternalEventPort
 from .gateway import (
     AgentGatewayPort,
     AgentGatewayRequest,
@@ -210,6 +221,12 @@ __all__ = [
     "ArtifactIdentity",
     "ArtifactRef",
     "ArtifactStorePort",
+    "BudgetAction",
+    "BudgetDimension",
+    "BudgetDimensionState",
+    "BudgetLevel",
+    "BudgetLimit",
+    "BudgetSnapshot",
     "AuditCorrelation",
     "AuthorityDecision",
     "AuthorityEnvelope",
@@ -228,6 +245,8 @@ __all__ = [
     "EventLogAppendResult",
     "EventLogEntry",
     "EventLogPort",
+    "ExternalEvent",
+    "ExternalEventPort",
     "ExecutionRuntimePort",
     "GovernanceDecision",
     "GovernanceRequest",
@@ -336,6 +355,8 @@ __all__ = [
     "ToolTier",
     "TraceReplayPort",
     "TurnAbortSignal",
+    "UnfinishedItem",
+    "UnfinishedManifest",
     "VersionManifestPort",
     "VerificationGap",
     "WaitCondition",

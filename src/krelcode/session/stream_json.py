@@ -14,6 +14,8 @@ from typing import Any, Dict, Mapping, Optional
 from ..core.events import (
     AcceptanceEvaluated,
     ApprovalRequested,
+    BudgetThresholdReached,
+    BudgetUpdated,
     CompactCheckpointCreated,
     ContextAssembled,
     ContextCompressed,
@@ -61,6 +63,7 @@ from ..contracts.application import (
     ApplicationRequestFactory,
 )
 from ..contracts.agent import AgentContract
+from .stream_json_contracts import parse_contracts
 from .stream_json_schema import (
     STREAM_JSON_PROTOCOL_NAME as PROTOCOL_NAME,
     STREAM_JSON_PROTOCOL_VERSION as PROTOCOL_VERSION,
@@ -176,12 +179,27 @@ class StreamJsonEncoder:
                 "subtype": "recorded",
                 "observation": dict(event.observation),
             }
+        elif isinstance(event, BudgetUpdated):
+            payload = {
+                "type": "budget",
+                "subtype": "updated",
+                "budget": dict(event.budget),
+            }
+        elif isinstance(event, BudgetThresholdReached):
+            payload = {
+                "type": "budget",
+                "subtype": "threshold",
+                "level": event.level,
+                "dimensions": list(event.dimensions),
+                "budget": dict(event.budget),
+            }
         elif isinstance(event, RunFailed):
             payload = {
                 "type": "error",
                 "subtype": "run_failed",
                 "error": event.detail or event.reason,
                 "context": event.termination,
+                "unfinished": dict(event.unfinished),
             }
         elif isinstance(event, StepStarted):
             payload = {"type": "step", "subtype": "started", "step": event.step}
@@ -657,27 +675,15 @@ def parse_input_line(line: str) -> StreamUserMessage | StreamControlMessage:
     content, images = _parse_content(raw_content)
     if not content.strip() and not images:
         raise StreamJsonProtocolError("user.content 不能为空")
-    application = _parse_application(
-        raw_application,
-        content=content,
-        request_id=request_id,
-    )
-    agent_contract = _parse_agent_contract(raw_contract)
-    if (
-        agent_contract is not None
-        and application is not None
-        and agent_contract.intent != application
-    ):
-        raise StreamJsonProtocolError(
-            "application 与 agent_contract.intent 不一致")
-    if agent_contract is not None:
-        application = agent_contract.intent
-    elif application is None:
-        application = ApplicationRequestFactory.from_input_source(
-            "stream-json",
-            goal=content or "[image attachment]",
-            metadata={"request_id": request_id} if request_id else None,
+    try:
+        application, agent_contract = parse_contracts(
+            raw_application,
+            raw_contract,
+            content=content,
+            request_id=request_id,
         )
+    except ValueError as exc:
+        raise StreamJsonProtocolError(str(exc)) from exc
     _validate_input_envelope(value)
     return StreamUserMessage(
         content=content,
@@ -745,37 +751,6 @@ def _parse_content(raw_content: Any) -> tuple[str, list[ImageRef]]:
             continue
         raise StreamJsonProtocolError(f"不支持的 content block: {block_type!r}")
     return "\n".join(text_parts), images
-
-
-def _parse_application(
-    raw: object,
-    *,
-    content: str,
-    request_id: str,
-) -> Optional[ApplicationRequest]:
-    if raw is not None:
-        if not isinstance(raw, Mapping):
-            raise StreamJsonProtocolError("application 必须是对象")
-        try:
-            return ApplicationRequest.from_mapping(raw)
-        except (TypeError, ValueError) as exc:
-            raise StreamJsonProtocolError(
-                f"application 无效: {exc}") from exc
-    return None
-
-
-def _parse_agent_contract(raw: object) -> Optional[AgentContract]:
-    if raw is None:
-        return None
-    if not isinstance(raw, Mapping):
-        raise StreamJsonProtocolError("agent_contract 必须是对象")
-    if not raw:
-        return None
-    try:
-        return AgentContract.from_dict(raw)
-    except (TypeError, ValueError) as exc:
-        raise StreamJsonProtocolError(
-            f"agent_contract 无效: {exc}") from exc
 
 
 def _tool_call_payload(tool_call: ToolCall) -> Dict[str, Any]:

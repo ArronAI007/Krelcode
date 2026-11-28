@@ -14,6 +14,7 @@ from krelcode.contracts.loop import (
     WaitCondition,
     WaitKind,
 )
+from krelcode.contracts.budget import UnfinishedManifest
 from krelcode.core.events import AgentEvent, LoopPhaseChanged, ObservationRecorded
 
 EmitEvent = Callable[[AgentEvent], Awaitable[None]]
@@ -187,6 +188,7 @@ class AgentLoopStateMachine:
         error: str,
         *,
         metadata: Optional[dict[str, object]] = None,
+        unfinished: Optional[UnfinishedManifest] = None,
     ) -> AgentLoopTerminated:
         termination = LoopTermination(
             reason=reason,
@@ -194,6 +196,7 @@ class AgentLoopStateMachine:
             turn_id=self.turn_id,
             phase=LoopPhase.FAILED,
             metadata=dict(metadata or {}),
+            unfinished=unfinished,
         )
         self.termination = termination
         if self.phase is not LoopPhase.FAILED:

@@ -10,6 +10,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Mapping, Optional
 
+from .budget import UnfinishedManifest
+
 
 class LoopPhase(str, Enum):
     PREPARE = "prepare"
@@ -33,6 +35,7 @@ class LoopTerminationReason(str, Enum):
     PROTOCOL_ERROR = "protocol_error"
     ACCEPTANCE_FAILED = "acceptance_failed"
     REVIEW_REQUIRED = "review_required"
+    PARTIAL_DELIVERY = "partial_delivery"
 
 
 class ObservationSource(str, Enum):
@@ -59,6 +62,7 @@ class WaitKind(str, Enum):
     JOB = "job"
     EXTERNAL_EVENT = "external_event"
     REVIEW = "review"
+    BUDGET_DECISION = "budget_decision"
 
 
 @dataclass(frozen=True)
@@ -256,6 +260,7 @@ class LoopTermination:
     turn_id: str = ""
     phase: LoopPhase | str = LoopPhase.FAILED
     metadata: Mapping[str, object] = field(default_factory=dict)
+    unfinished: Optional[UnfinishedManifest] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "reason", LoopTerminationReason(self.reason))
@@ -280,6 +285,9 @@ class LoopTermination:
             "turn_id": self.turn_id,
             "phase": LoopPhase(self.phase).value,
             "metadata": dict(self.metadata),
+            "unfinished": (
+                self.unfinished.as_record()
+                if self.unfinished is not None else None),
         }
 
 

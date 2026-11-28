@@ -23,6 +23,7 @@ from krelcode.contracts.application import (
     RiskProfile,
 )
 from krelcode.contracts.loop import LoopPhase
+from krelcode.contracts.application import TaskBudget
 from krelcode.contracts.runtime import RuntimeTaskStatus
 from krelcode.core.events import (
     AcceptanceEvaluated,
@@ -231,6 +232,7 @@ def test_waiting_is_a_first_class_runtime_state(tmp_path: Path) -> None:
         waiting_state = runtime.inspect_task(query.task_id)
         assert waiting_state is not None
         assert waiting_state.status is RuntimeTaskStatus.WAITING
+        assert waiting_state.wait_kind == "approval"
         assert waiting_state.wait_reason
         release.set()
         await consumer
@@ -282,6 +284,181 @@ def test_acceptance_events_include_contract_verification(
     assert acceptance[-1].acceptance["status"] == "passed"
     assert acceptance[-1].acceptance["metadata"]["contract_id"] == (
         contract.contract_id)
+
+
+def test_tool_call_budget_denies_second_action_and_allows_final_answer(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    class CountingWriteTool(WriteTool):
+        async def execute(self, args, ctx):
+            nonlocal calls
+            calls += 1
+            return await super().execute(args, ctx)
+
+    loop = AgentLoop(
+        llm=MockProvider(scripted=[
+            Message.assistant(tool_calls=[
+                ToolCall("w1", "write_file", {
+                    "path": "one.txt", "content": "1",
+                }),
+            ]),
+            Message.assistant(tool_calls=[
+                ToolCall("w2", "write_file", {
+                    "path": "two.txt", "content": "2",
+                }),
+            ]),
+            "unused",
+        ]),
+        registry=ToolRegistry([CountingWriteTool()]),
+        tool_context=ToolContext(
+            workspace_root=tmp_path, sandbox_enabled=False),
+        policy=ToolPermissionPolicy(
+            workspace_root=tmp_path,
+            auto_approve=True,
+        ),
+        system_prompt="SYS",
+    )
+    application = ApplicationRequestFactory.from_input_source(
+        "sdk",
+        goal="one write only",
+        budget=TaskBudget(
+            max_tool_calls=1,
+            allow_budget_extension=False,
+        ),
+    )
+    contract = AgentContractFactory.from_application(application)
+    runtime = AgentRuntime(
+        loop,
+        acceptance_evaluator=DefaultAcceptanceEvaluator(),
+        control_plane=DefaultControlPlane(),
+        task_runtime=LocalTaskRuntime(),
+        strict_application_request=True,
+    )
+
+    reply = asyncio.run(runtime.run_once(
+        "one write only", agent_contract=contract))
+
+    assert reply == "unused"
+    assert calls == 1
+    assert not (tmp_path / "two.txt").exists()
+    assert any(
+        message.role == "tool"
+        and "工具预算拒绝执行" in (message.content or "")
+        for message in loop.history
+    )
+
+
+def test_hard_budget_termination_carries_unfinished_manifest(
+    tmp_path: Path,
+) -> None:
+    loop = AgentLoop(
+        llm=MockProvider(
+            scripted=[
+                Message.assistant(tool_calls=[
+                    ToolCall("w1", "write_file", {
+                        "path": "partial.txt", "content": "partial",
+                    }),
+                ]),
+                "unused",
+            ],
+            usage={"input_tokens": 2, "output_tokens": 0},
+        ),
+        registry=ToolRegistry([WriteTool()]),
+        tool_context=ToolContext(
+            workspace_root=tmp_path, sandbox_enabled=False),
+        policy=ToolPermissionPolicy(
+            workspace_root=tmp_path,
+            auto_approve=True,
+        ),
+        system_prompt="SYS",
+    )
+    application = ApplicationRequestFactory.from_input_source(
+        "sdk",
+        goal="hard budget",
+        budget=TaskBudget(
+            max_tokens=1,
+            soft_limit_ratio=0.8,
+            allow_budget_extension=False,
+        ),
+    )
+    contract = AgentContractFactory.from_application(application)
+    runtime = AgentRuntime(
+        loop,
+        acceptance_evaluator=DefaultAcceptanceEvaluator(),
+        control_plane=DefaultControlPlane(),
+        task_runtime=LocalTaskRuntime(),
+        strict_application_request=True,
+    )
+
+    with pytest.raises(Exception) as caught:
+        asyncio.run(runtime.run_once(
+            "hard budget", agent_contract=contract))
+
+    termination = getattr(caught.value, "termination", None)
+    assert termination is not None
+    assert termination.reason.value == "budget_exhausted"
+    assert termination.unfinished is not None
+    assert termination.unfinished.items
+
+
+def test_high_risk_action_budget_denies_second_approved_action(
+    tmp_path: Path,
+) -> None:
+    async def approver(_call, _reason):
+        return "yes"
+
+    loop = AgentLoop(
+        llm=MockProvider(scripted=[
+            Message.assistant(tool_calls=[
+                ToolCall("w1", "write_file", {
+                    "path": "one.txt", "content": "1",
+                }),
+            ]),
+            Message.assistant(tool_calls=[
+                ToolCall("w2", "write_file", {
+                    "path": "two.txt", "content": "2",
+                }),
+            ]),
+            "finished",
+        ]),
+        registry=ToolRegistry([WriteTool()]),
+        tool_context=ToolContext(
+            workspace_root=tmp_path, sandbox_enabled=False),
+        policy=ToolPermissionPolicy(
+            approver=approver,
+            workspace_root=tmp_path,
+        ),
+        system_prompt="SYS",
+    )
+    application = ApplicationRequestFactory.from_input_source(
+        "sdk",
+        goal="one risky action",
+        risk=RiskProfile(level=RiskLevel.HIGH),
+        budget=TaskBudget(
+            max_high_risk_actions=1,
+            allow_budget_extension=False,
+        ),
+    )
+    contract = AgentContractFactory.from_application(application)
+    runtime = AgentRuntime(
+        loop,
+        acceptance_evaluator=DefaultAcceptanceEvaluator(),
+        control_plane=DefaultControlPlane(),
+        task_runtime=LocalTaskRuntime(),
+        strict_application_request=True,
+    )
+
+    assert asyncio.run(runtime.run_once(
+        "one risky action", agent_contract=contract)) == "finished"
+    assert (tmp_path / "one.txt").is_file()
+    assert not (tmp_path / "two.txt").exists()
+    assert any(
+        message.role == "tool"
+        and "高风险动作预算拒绝执行" in (message.content or "")
+        for message in loop.history
+    )
 
 
 async def _noop_emit(_event) -> None:

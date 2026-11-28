@@ -20,6 +20,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ..core.events import (
     AcceptanceEvaluated,
+    BudgetThresholdReached,
+    BudgetUpdated,
     AgentEvent,
     CompactCheckpointCreated,
     ContextAssembled,
@@ -188,6 +190,20 @@ class SessionRecorder:
                 "type": "observation",
                 "ts": ts,
                 "observation": dict(event.observation),
+            }
+        if isinstance(event, BudgetUpdated):
+            return {
+                "type": "budget_updated",
+                "ts": ts,
+                "budget": dict(event.budget),
+            }
+        if isinstance(event, BudgetThresholdReached):
+            return {
+                "type": "budget_threshold",
+                "ts": ts,
+                "level": event.level,
+                "dimensions": list(event.dimensions),
+                "budget": dict(event.budget),
             }
         if isinstance(event, SecurityDecisionRecorded):
             return {
@@ -380,6 +396,7 @@ class SessionRecorder:
                 "reason": event.reason,
                 "termination": event.termination,
                 "detail": event.detail[:1_000],
+                "unfinished": dict(event.unfinished),
             }
             if event.turn_id:
                 record["turn_id"] = event.turn_id

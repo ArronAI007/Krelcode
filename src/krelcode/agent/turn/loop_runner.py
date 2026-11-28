@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
+from typing import cast
 
 from krelcode.contracts.acceptance import AcceptanceStatus
+from krelcode.contracts.application import TaskBudget
 from krelcode.contracts.loop import LoopPhase, LoopTerminationReason
+from krelcode.contracts.budget import (
+    BudgetAction,
+    BudgetDimension,
+    BudgetSnapshot,
+    UnfinishedManifest,
+)
 from krelcode.core.events import (
     QueryPhaseChanged,
     RunCancelled,
@@ -18,6 +27,14 @@ from .contract_gate import contract_verification_gaps
 from .loop_state import AgentLoopStateMachine
 from .model_turn import finish_reason_failure
 from .runtime_ports import LoopRunnerHostPort
+from .budget_control import (
+    BudgetControlHost,
+    build_unfinished_manifest,
+    handle_budget_gate,
+    initialize_budget,
+    partial_delivery_text,
+    record_llm_budget,
+)
 
 
 class TurnLoopRunner:
@@ -30,11 +47,13 @@ class TurnLoopRunner:
         turn_id: str,
         max_steps: int,
         token_budget: int | None,
+        budget_model: str = "",
     ) -> None:
         self.host = host
         self.turn_id = turn_id
         self.max_steps = max_steps
         self.token_budget = token_budget
+        self.budget_model = budget_model
         self.state = AgentLoopStateMachine(turn_id, host._emit)
 
     async def run(self) -> str:
@@ -43,28 +62,81 @@ class TurnLoopRunner:
         await host._bind_loop_state_machine(state)
         host._failure_counts = {}
         host._token_total = 0
+        budget_host = cast(BudgetControlHost, host)
+        initialize_budget(
+            budget_host,
+            replace(
+                (
+                    host.application_request.budget
+                    if host.application_request is not None else TaskBudget()
+                ),
+                max_steps=self.max_steps,
+                max_tokens=(
+                    self.token_budget
+                    if self.token_budget is not None
+                    else (
+                        host.application_request.budget.max_tokens
+                        if host.application_request is not None else None
+                    )
+                ),
+            ),
+            model=self.budget_model,
+        )
         try:
             for step in range(1, self.max_steps + 1):
                 await state.set_step(step)
+                await host._emit(StepStarted(step))
                 if host.step_gate is not None:
                     await host.step_gate()
                 await host._inject_steering()
-                if (
-                    self.token_budget is not None
-                    and host._token_total > self.token_budget
-                ):
-                    await self._fail(
-                        LoopTerminationReason.BUDGET_EXHAUSTED,
-                        f"token 预算耗尽（已用 {host._token_total} > "
-                        f"预算 {self.token_budget}）",
-                        source="budget",
+                budget_snapshot = await handle_budget_gate(
+                    budget_host)
+                if budget_snapshot.action in {
+                    BudgetAction.PARTIAL_DELIVERY,
+                    BudgetAction.STOP,
+                }:
+                    hard_detail = "; ".join(
+                        f"{BudgetDimension(item.dimension).value} "
+                        f"{item.used:g}/{item.hard_limit:g}"
+                        for item in budget_snapshot.dimensions
+                        if BudgetDimension(item.dimension).value
+                        in budget_snapshot.hard_dimensions
+                        and item.hard_limit is not None
                     )
-                await host._emit(StepStarted(step))
+                    await self._budget_partial(
+                        budget_snapshot,
+                        reason=(
+                            (
+                                "user cancelled at budget threshold"
+                                if budget_host.user_input_port is not None
+                                else "hard budget exhausted"
+                            )
+                            if budget_snapshot.action is BudgetAction.STOP
+                            else (
+                                "hard budget threshold reached"
+                                if budget_snapshot.hard_dimensions
+                                else "user selected partial delivery at soft limit"
+                            )
+                        ),
+                        detail=hard_detail,
+                        termination_reason=(
+                            LoopTerminationReason.BUDGET_EXHAUSTED
+                            if budget_snapshot.action is BudgetAction.STOP
+                            else LoopTerminationReason.PARTIAL_DELIVERY
+                        ),
+                    )
                 await self._phase(
                     LoopPhase.MODEL,
                     f"模型判断下一步（Step {step}）",
                 )
                 llm_turn = await host._llm_turn(step)
+                if host.budget_ledger is not None:
+                    host.budget_ledger.record_step()
+                record_llm_budget(
+                    budget_host,
+                    dict(llm_turn.usage),
+                    total_tokens=host._token_total,
+                )
                 assistant = llm_turn.message
                 finish_failure = finish_reason_failure(
                     llm_turn.finish_reason,
@@ -104,6 +176,14 @@ class TurnLoopRunner:
                 await self._phase(
                     LoopPhase.PREPARE,
                     "observations applied; rebuilding task view",
+                )
+            ledger = host.budget_ledger
+            if ledger is not None:
+                await self._budget_partial(
+                    ledger.snapshot(),
+                    reason=f"单轮达到 {self.max_steps} 个模型步骤上限",
+                    detail=f"steps {self.max_steps}/{self.max_steps}",
+                    termination_reason=LoopTerminationReason.MAX_STEPS,
                 )
             await self._fail(
                 LoopTerminationReason.MAX_STEPS,
@@ -191,20 +271,45 @@ class TurnLoopRunner:
         *,
         source: str,
         exception: BaseException | None = None,
+        unfinished: UnfinishedManifest | None = None,
     ) -> None:
         await self.host._record_turn_error(error, source)
         terminated = await self.state.fail(
             reason,
             error,
             metadata={"source": source},
+            unfinished=unfinished,
         )
         await self.host._emit(RunFailed(
             reason=reason.value,
             termination=reason.value,
             turn_id=self.turn_id,
             detail=error,
+            unfinished=(
+                unfinished.as_record() if unfinished is not None else {}),
         ))
         raise (exception or terminated)
+
+    async def _budget_partial(
+        self,
+        snapshot: BudgetSnapshot,
+        *,
+        reason: str,
+        detail: str,
+        termination_reason: LoopTerminationReason,
+    ) -> None:
+        host = self.host
+        manifest = build_unfinished_manifest(
+            cast(BudgetControlHost, host),
+            snapshot,
+            reason=reason + (f": {detail}" if detail else ""),
+        )
+        await self._fail(
+            termination_reason,
+            partial_delivery_text(manifest),
+            source="budget",
+            unfinished=manifest,
+        )
 
 
 __all__ = ["TurnLoopRunner"]

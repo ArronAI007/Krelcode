@@ -36,6 +36,7 @@ from .service_ports import (
     ShellJobManagerPort,
 )
 from .loop import WaitCondition
+from .external_event import ExternalEventPort
 
 @dataclass
 class ToolResult:
@@ -121,6 +122,7 @@ class CommandDescriptor:
 class ToolServices:
     commands: Tuple[CommandDescriptor, ...] = ()
     mcp_servers: Tuple[str, ...] = ()
+    external_events: Optional[ExternalEventPort] = None
 
     def has_command(self, name: str) -> bool:
         normalized = name if name.startswith("/") else f"/{name}"

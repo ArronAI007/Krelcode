@@ -119,10 +119,12 @@ def user_input_observation(
 
 
 def tool_wait_kind(tool_name: str) -> WaitKind | None:
-    if tool_name in {"wait_agent", "send_input"}:
+    if tool_name in {"spawn_agent", "wait_agent", "send_input"}:
         return WaitKind.SUBAGENT
     if tool_name in {"job_output", "job_wait"}:
         return WaitKind.JOB
+    if tool_name == "wait_external_event":
+        return WaitKind.EXTERNAL_EVENT
     return None
 
 

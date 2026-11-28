@@ -175,6 +175,10 @@ class AgentLoopTurnAdapter(HarnessTurnControlPort):
         if lsp is not None:
             self._loop.services.extensions.lsp = None
             await lsp.close()
+        external_events = (
+            self._loop.services.core.tool_context.services.external_events)
+        if external_events is not None:
+            external_events.close()
 
 
 class InlineRuntimeResourceRegistry(RuntimeResourceRegistryPort):

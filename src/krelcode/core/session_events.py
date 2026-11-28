@@ -17,6 +17,8 @@ from .events import (
     AgentEvent,
     ApprovalRequested,
     AcceptanceEvaluated,
+    BudgetThresholdReached,
+    BudgetUpdated,
     CompactCheckpointCreated,
     ContextAssembled,
     ContextCheckpointCreated,
@@ -67,6 +69,7 @@ class SessionEventKind(str, Enum):
     STEP = "step"
     MODEL = "model"
     QUERY = "query"
+    BUDGET = "budget"
     LOOP = "loop"
     OBSERVATION = "observation"
     TOOL = "tool"
@@ -92,6 +95,8 @@ SessionEventPayload: TypeAlias = (
     | LLMThinkingDelta
     | LLMResponseReceived
     | QueryPhaseChanged
+    | BudgetUpdated
+    | BudgetThresholdReached
     | LoopPhaseChanged
     | ObservationRecorded
     | ToolCallStarted
@@ -138,6 +143,8 @@ SESSION_EVENT_TYPE_TO_KIND: Mapping[type[AgentEvent], SessionEventKind] = {
     LLMThinkingDelta: SessionEventKind.MODEL,
     LLMResponseReceived: SessionEventKind.MODEL,
     QueryPhaseChanged: SessionEventKind.QUERY,
+    BudgetUpdated: SessionEventKind.BUDGET,
+    BudgetThresholdReached: SessionEventKind.BUDGET,
     LoopPhaseChanged: SessionEventKind.LOOP,
     ObservationRecorded: SessionEventKind.OBSERVATION,
     ToolCallStarted: SessionEventKind.TOOL,

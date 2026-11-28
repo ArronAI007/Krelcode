@@ -176,6 +176,7 @@ class RuntimeTaskState:
     resume_from_checkpoint_id: str = ""
     updated_at: float = 0.0
     wait_reason: str = ""
+    wait_kind: str = ""
     resume_token: str = ""
     waiting_since: Optional[float] = None
     resumed_at: Optional[float] = None

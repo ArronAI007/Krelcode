@@ -7,7 +7,7 @@ soon as their arguments are complete, and returns a completed turn result.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, cast
 
 from krelcode.core.events import (
@@ -40,6 +40,7 @@ class LLMTurnResult:
     message: Message
     tool_results: List[ToolExecutionResult]
     finish_reason: Optional[str] = None
+    usage: dict[str, int] = field(default_factory=dict)
 
 
 def finish_reason_failure(
@@ -144,6 +145,7 @@ class ModelTurnExecutor:
                 message=finished.message,
                 tool_results=results,
                 finish_reason=finished.finish_reason,
+                usage=usage,
             )
         except BaseException:
             await executor.abort()

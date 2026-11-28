@@ -38,6 +38,7 @@ from krelcode.contracts.runtime import (
     RuntimeTaskStatus,
 )
 from krelcode.contracts.loop import WaitCondition
+from krelcode.contracts.loop import WaitKind
 from krelcode.agent.turn.loop import AgentLoop
 from krelcode.agent.turn.runtime_adapter import as_turn_control
 
@@ -265,6 +266,7 @@ class _InlineTaskRuntime:
             paused_at=current.paused_at,
             resume_from_checkpoint_id=current.resume_from_checkpoint_id,
             wait_reason=current.wait_reason,
+            wait_kind=current.wait_kind,
             resume_token=current.resume_token,
             waiting_since=current.waiting_since,
             resumed_at=current.resumed_at,
@@ -286,6 +288,7 @@ class _InlineTaskRuntime:
             checkpoint=current.checkpoint,
             sequence=current.sequence + 1,
             wait_reason=condition.reason,
+            wait_kind=WaitKind(condition.kind).value,
             resume_token=condition.resume_token or condition.request_id,
             waiting_since=time.time(),
             updated_at=time.time(),
@@ -304,6 +307,7 @@ class _InlineTaskRuntime:
             checkpoint=current.checkpoint,
             sequence=current.sequence + 1,
             wait_reason=current.wait_reason,
+            wait_kind=current.wait_kind,
             resume_token=current.resume_token,
             waiting_since=current.waiting_since,
             resumed_at=time.time(),
@@ -331,6 +335,7 @@ class _InlineTaskRuntime:
                 if finished.exception() is not None else ""
             ),
             wait_reason=current.wait_reason,
+            wait_kind=current.wait_kind,
             resume_token=current.resume_token,
             waiting_since=current.waiting_since,
             resumed_at=current.resumed_at,

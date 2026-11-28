@@ -47,7 +47,8 @@ def test_token_budget_aborts_before_next_llm_call(tmp_path):
         asyncio.run(loop.run("跑起来"))
     # 8 → 16 tokens：第三次 LLM 调用前 16 > 15，中止
     assert caught.value.termination.reason.value == "budget_exhausted"
-    assert "token 预算耗尽" in str(caught.value) and "16" in str(caught.value)
+    assert "hard budget" in str(caught.value)
+    assert "tokens 16/15" in str(caught.value)
     assert len(provider.calls) == 2
     assert loop.history[-1].role == "assistant"
 
@@ -73,8 +74,8 @@ def test_token_budget_falls_back_to_input_plus_output(tmp_path):
     )
     with pytest.raises(AgentLoopTerminated) as caught:
         asyncio.run(loop.run("x"))
-    assert "token 预算耗尽" in str(caught.value)
-    assert "17" in str(caught.value)  # 10+7=17 > 10
+    assert "hard budget" in str(caught.value)
+    assert "tokens 17/10" in str(caught.value)  # 10+7=17 > 10
 
 
 # -- 18b: 敏感文件写保护 ----------------------------------------------------------------------------

@@ -102,6 +102,7 @@ if TYPE_CHECKING:
     from krelcode.contracts.agent import AgentContract
     from krelcode.contracts.loop import Observation
     from .loop_state import AgentLoopStateMachine
+    from .budget import BudgetLedger
     from krelcode.contracts.acceptance import AcceptanceResult
     from krelcode.contracts.tool import RuntimeSnapshot, ToolContext, TurnAbortSignal
     from krelcode.llm.base import LLMProvider
@@ -171,6 +172,7 @@ class TurnRuntimeState:
     loop_state: Optional["AgentLoopStateMachine"] = None
     last_observation: Optional["Observation"] = None
     observations: list["Observation"] = field(default_factory=list)
+    budget_ledger: Optional["BudgetLedger"] = None
     steering_queue: asyncio.Queue[SteeringInput | str] = field(
         default_factory=lambda: asyncio.Queue()
     )

@@ -115,7 +115,6 @@ from .contracts import (
 )
 from .worktrees import SubagentWorktreeManager
 
-
 class SubagentManager(SubagentReadMixin):
     def __init__(
         self,
@@ -146,6 +145,7 @@ class SubagentManager(SubagentReadMixin):
         ] = None,
         cache_ledger_provider: Optional[Callable[[], object | None]] = None,
         artifact_store: Optional[ArtifactStorePort] = None,
+        max_concurrent: int = 8,
     ) -> None:
         self.llm = llm
         self.tool_factory = tool_factory
@@ -175,6 +175,8 @@ class SubagentManager(SubagentReadMixin):
         self.llm_resolver = llm_resolver
         self.mcp_servers_provider = mcp_servers_provider
         self.artifact_store = artifact_store
+        self.max_concurrent = max(1, int(max_concurrent))
+        self._spawn_slots = asyncio.Semaphore(self.max_concurrent)
         self._handles: Dict[str, AgentHandle] = {}
         self._counter = 0
         self.worktrees = SubagentWorktreeManager(tool_context.workspace_root)
@@ -558,7 +560,15 @@ class SubagentManager(SubagentReadMixin):
         child_bus.subscribe(partial(self._on_child_event, handle))
         sidechain.append_message("user", effective_task, source="initial_task")
         sidechain.append_state(STATUS_RUNNING, reason="spawn")
-        handle.task_obj = asyncio.create_task(self._run(handle, effective_task))
+        await self._spawn_slots.acquire()
+        handle.global_slot_acquired = True
+        try:
+            handle.task_obj = asyncio.create_task(
+                self._run(handle, effective_task))
+        except Exception:
+            self._spawn_slots.release()
+            handle.global_slot_acquired = False
+            raise
         await self.bus.emit(SubagentSpawned(
             agent_id, task, definition=handle.definition))
         return handle
@@ -635,13 +645,16 @@ class SubagentManager(SubagentReadMixin):
             handle.sidechain.append_history(handle.loop.history, turn=handle.turns)
         await self.bus.emit(SubagentFinished(
             handle.id, handle.status, handle.preview()))
-
     async def _finalize_worktree(self, handle: AgentHandle) -> None:
         await self.worktrees.finalize(handle)
-
     async def _run(self, handle: AgentHandle, message: str) -> None:
         """执行一条消息；队列非空时在同一 Task 内继续排空。"""
-        await run_handle(self, handle, message)
+        try:
+            await run_handle(self, handle, message)
+        finally:
+            if handle.global_slot_acquired:
+                self._spawn_slots.release()
+                handle.global_slot_acquired = False
 
     def get(self, agent_id: str) -> Optional[AgentHandle]:
         return self._handles.get(agent_id)

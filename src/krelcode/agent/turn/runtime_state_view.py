@@ -102,6 +102,7 @@ if TYPE_CHECKING:
     from krelcode.contracts.agent import AgentContract
     from krelcode.contracts.loop import Observation
     from .loop_state import AgentLoopStateMachine
+    from .budget import BudgetLedger
     from krelcode.contracts.acceptance import AcceptanceResult
     from krelcode.contracts.tool import RuntimeSnapshot, ToolContext, TurnAbortSignal
     from krelcode.llm.base import LLMProvider
@@ -303,6 +304,14 @@ class RuntimeStateView:
     @property
     def observations(self) -> list[Observation]:
         return self.runtime_state.turn.observations
+
+    @property
+    def budget_ledger(self) -> Optional[BudgetLedger]:
+        return self.runtime_state.turn.budget_ledger
+
+    @budget_ledger.setter
+    def budget_ledger(self, value: Optional[BudgetLedger]) -> None:
+        self.runtime_state.turn.budget_ledger = value
 
     @property
     def steering_queue(self) -> asyncio.Queue[SteeringInput | str]:

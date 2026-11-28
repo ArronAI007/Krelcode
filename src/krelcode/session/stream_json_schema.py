@@ -151,6 +151,8 @@ STREAM_JSON_FIELD_TYPES: Mapping[str, Mapping[str, object]] = {
     "acceptance": _FIELD_OBJECT,
     "transition": _FIELD_OBJECT,
     "observation": _FIELD_OBJECT,
+    "budget": _FIELD_OBJECT,
+    "unfinished": _FIELD_OBJECT,
 }
 
 _ENVELOPE = ("turn_id", "sequence", "session_id")
@@ -187,6 +189,10 @@ OUTPUT_EVENT_SCHEMAS: Mapping[tuple[str, str], StreamJsonEventSchema] = {
         "step", "transition"),
     ("observation", "recorded"): _event(
         "observation", "recorded", "observation"),
+    ("budget", "updated"): _event(
+        "budget", "updated", "budget"),
+    ("budget", "threshold"): _event(
+        "budget", "threshold", "level", "dimensions", "budget"),
     ("step", "started"): _event("step", "started", "step"),
     ("query", "phase_changed"): _event(
         "query", "phase_changed", "phase", "detail"),
@@ -277,7 +283,7 @@ OUTPUT_EVENT_SCHEMAS: Mapping[tuple[str, str], StreamJsonEventSchema] = {
     ),
     ("error", "occurred"): _event("error", "occurred", "error", "context"),
     ("error", "run_failed"): _event(
-        "error", "run_failed", "error", "context"),
+        "error", "run_failed", "error", "context", "unfinished"),
 }
 
 INPUT_EVENT_SCHEMAS: Mapping[tuple[str, str], StreamJsonEventSchema] = {

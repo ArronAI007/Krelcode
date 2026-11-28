@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from krelcode.agent.prompt.fragments import PromptFragmentRegistry
     from krelcode.agent.prompts import PromptProfileResolution
     from krelcode.agent.turn.intent import TurnIntent
+    from krelcode.agent.turn.budget import BudgetLedger
     from krelcode.agent.prompt.prompt_models import PromptPlan, ProviderMessages as PromptProviderMessages
     from krelcode.agent.prompt.prompt_assembler import PromptAssemblyRequest
     from krelcode.agent.prompt.prompt_plan import PromptPlanSnapshot
@@ -429,6 +430,7 @@ class LoopRunnerHostPort(
     application_request: Optional["ApplicationRequest"]
     agent_contract: Optional["AgentContract"]
     acceptance_result: Optional["AcceptanceResult"]
+    budget_ledger: Optional["BudgetLedger"]
     step_gate: Optional[Callable[[], Awaitable[None]]]
     _turn_abort_signal: "TurnAbortSignal"
     _failure_counts: dict[str, int]
@@ -469,6 +471,7 @@ class LLMTurnResultPort(Protocol):
     message: "Message"
     tool_results: Sequence["ToolExecutionResult"]
     finish_reason: Optional[str]
+    usage: Mapping[str, int]
 
 
 __all__ = [

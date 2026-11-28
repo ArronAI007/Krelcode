@@ -88,6 +88,22 @@ class ObservationRecorded(AgentEvent):
 
 
 @dataclass(frozen=True)
+class BudgetUpdated(AgentEvent):
+    """Content-light snapshot of the unified task budget ledger."""
+
+    budget: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class BudgetThresholdReached(AgentEvent):
+    """A soft or hard budget threshold was crossed."""
+
+    level: str
+    dimensions: Tuple[str, ...] = ()
+    budget: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ToolCallStarted(AgentEvent):
     tool_call: ToolCall
 
@@ -425,6 +441,7 @@ class RunFailed(AgentEvent):
     termination: str = "failed"
     turn_id: str = ""
     detail: str = ""
+    unfinished: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

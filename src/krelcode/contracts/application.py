@@ -118,6 +118,13 @@ class TaskBudget:
     max_tokens: Optional[int] = None
     timeout_seconds: Optional[float] = None
     max_cost_usd: Optional[float] = None
+    max_tool_calls: Optional[int] = None
+    max_subagents: Optional[int] = None
+    max_high_risk_actions: Optional[int] = None
+    soft_limit_ratio: float = 0.8
+    ask_user_at_soft_limit: bool = True
+    allow_budget_extension: bool = True
+    budget_extension_ratio: float = 0.5
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -129,6 +136,41 @@ class TaskBudget:
                 self.timeout_seconds))
         object.__setattr__(
             self, "max_cost_usd", _optional_positive_float(self.max_cost_usd))
+        object.__setattr__(
+            self,
+            "max_tool_calls",
+            _optional_positive_int(self.max_tool_calls),
+        )
+        object.__setattr__(
+            self,
+            "max_subagents",
+            _optional_positive_int(self.max_subagents),
+        )
+        object.__setattr__(
+            self,
+            "max_high_risk_actions",
+            _optional_positive_int(self.max_high_risk_actions),
+        )
+        object.__setattr__(
+            self,
+            "soft_limit_ratio",
+            min(1.0, max(0.1, float(self.soft_limit_ratio))),
+        )
+        object.__setattr__(
+            self,
+            "ask_user_at_soft_limit",
+            bool(self.ask_user_at_soft_limit),
+        )
+        object.__setattr__(
+            self,
+            "allow_budget_extension",
+            bool(self.allow_budget_extension),
+        )
+        object.__setattr__(
+            self,
+            "budget_extension_ratio",
+            min(10.0, max(0.1, float(self.budget_extension_ratio))),
+        )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -136,6 +178,13 @@ class TaskBudget:
             "max_tokens": self.max_tokens,
             "timeout_seconds": self.timeout_seconds,
             "max_cost_usd": self.max_cost_usd,
+            "max_tool_calls": self.max_tool_calls,
+            "max_subagents": self.max_subagents,
+            "max_high_risk_actions": self.max_high_risk_actions,
+            "soft_limit_ratio": self.soft_limit_ratio,
+            "ask_user_at_soft_limit": self.ask_user_at_soft_limit,
+            "allow_budget_extension": self.allow_budget_extension,
+            "budget_extension_ratio": self.budget_extension_ratio,
         }
 
     @classmethod
@@ -145,6 +194,18 @@ class TaskBudget:
             max_tokens=_coerce_optional_int(raw.get("max_tokens")),
             timeout_seconds=_coerce_optional_float(raw.get("timeout_seconds")),
             max_cost_usd=_coerce_optional_float(raw.get("max_cost_usd")),
+            max_tool_calls=_coerce_optional_int(raw.get("max_tool_calls")),
+            max_subagents=_coerce_optional_int(raw.get("max_subagents")),
+            max_high_risk_actions=_coerce_optional_int(
+                raw.get("max_high_risk_actions")),
+            soft_limit_ratio=_coerce_optional_float(
+                raw.get("soft_limit_ratio")) or 0.8,
+            ask_user_at_soft_limit=bool(
+                raw.get("ask_user_at_soft_limit", True)),
+            allow_budget_extension=bool(
+                raw.get("allow_budget_extension", True)),
+            budget_extension_ratio=_coerce_optional_float(
+                raw.get("budget_extension_ratio")) or 0.5,
         )
 
 

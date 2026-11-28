@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
@@ -66,6 +67,8 @@ from krelcode.subagent.definition import AgentDefinitionManager
 from krelcode.subagent.manager import SubagentManager
 from krelcode.subagent.models import build_subagent_system_prompt
 from krelcode.tools.registry import ToolRegistry
+from krelcode.tools.builtin.external_event import ExternalEventWaitTool
+from krelcode.agent.turn.external_events import LocalExternalEventBroker
 from krelcode.ui.status_line import StatusLineOptions, StatusLineRenderer
 
 from ...agent.prompt.fragments import PromptFragment
@@ -170,6 +173,24 @@ async def build_loop(
     browser_runtime = foundation.browser_runtime
     notebook_options = foundation.notebook_options
     migration_options = foundation.migration_options
+    runtime_section = config.get("runtime")
+    runtime_options: Dict[str, Any] = (
+        dict(runtime_section)
+        if isinstance(runtime_section, dict) else {}
+    )
+    external_event_broker = (
+        LocalExternalEventBroker()
+        if bool(runtime_options.get("external_events", False))
+        else None
+    )
+    if external_event_broker is not None:
+        tool_context = replace(
+            tool_context,
+            services=replace(
+                tool_context.services,
+                external_events=external_event_broker,
+            ),
+        )
     builtin_tools = default_tools(
         memory_store,
         lsp_manager=lsp_manager,
@@ -183,6 +204,8 @@ async def build_loop(
         builtin_tools.append(KnowledgeSearchTool(knowledge_base))
     if prompt_authoring_enabled:
         builtin_tools.append(PromptLabTool())
+    if external_event_broker is not None:
+        builtin_tools.append(ExternalEventWaitTool())
 
     def child_tool_factory() -> List[Tool]:
         tools = (
@@ -306,6 +329,8 @@ async def build_loop(
                     compose_mcp_config(config, dict(plugin_manager.mcp_servers))
                 ),
                 artifact_store=artifact_store,
+                max_concurrent=max(
+                    1, int(runtime_options.get("max_subagents", 8) or 8)),
             ),
         )
     for tool in manager.build_tools():
@@ -412,6 +437,7 @@ async def build_loop(
         compact_checkpoint_store=compact_checkpoint_store,
         knowledge=knowledge_base,
         artifact_store=artifact_store,
+        external_events=external_event_broker,
     )
     if context_manager is not None:
         context_manager.prompt_surface_registry = loop.prompt_surface_registry

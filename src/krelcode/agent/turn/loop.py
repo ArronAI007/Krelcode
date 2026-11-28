@@ -34,6 +34,7 @@ from krelcode.core.messages import ImageRef, Message, SteeringInput, ToolCall, T
 from krelcode.llm.base import LLMProvider, PreparedLLMRequest, ToolSpec
 from krelcode.contracts import AcceptanceEvaluatorPort, KnowledgeServicePort
 from krelcode.contracts.artifact import ArtifactStorePort
+from krelcode.contracts.external_event import ExternalEventPort
 from krelcode.contracts.application import ApplicationRequest, ApplicationRequestFactory
 from krelcode.contracts.agent import AgentContract
 from krelcode.contracts.loop import Observation, VerificationGap, WaitCondition
@@ -68,6 +69,7 @@ from krelcode.agent.turn.loop_control import (
     bind_loop_state,
     enter_waiting,
     record_observation,
+    record_turn_error,
     record_verification_gaps,
     resume_waiting,
 )
@@ -102,7 +104,6 @@ from krelcode.contracts.tool_execution import ExecutionRuntimePort, ToolExecutio
 from krelcode.tools.registry import ToolRegistry
 
 DEFAULT_MAX_STEPS = 64
-
 INTERRUPTED_NOTE = "[已被用户中止]"
 STEERING_PREFIX = "[用户插话] "
 
@@ -156,7 +157,16 @@ class AgentLoop(RuntimeStateHost):
         reminder_catalog: Optional[ReminderCatalog] = None,
         execution_runtime: Optional[ExecutionRuntimePort] = None,
         artifact_store: Optional[ArtifactStorePort] = None,
+        external_events: Optional[ExternalEventPort] = None,
     ) -> None:
+        if external_events is not None:
+            tool_context = replace(
+                tool_context,
+                services=replace(
+                    tool_context.services,
+                    external_events=external_events,
+                ),
+            )
         self._runtime_state = AgentRuntimeState()
         self.services = build_agent_services(
             llm=llm,
@@ -460,6 +470,8 @@ class AgentLoop(RuntimeStateHost):
             turn_id=self._current_turn_id,
             max_steps=max_steps,
             token_budget=token_budget,
+            budget_model=str(
+                getattr(self.services.core.llm, "model", "") or ""),
         ).run()
 
     def _begin_turn(
@@ -531,21 +543,12 @@ class AgentLoop(RuntimeStateHost):
         )
 
     async def _record_turn_error(self, text: str, source: str) -> None:
-        self.services.context.working_context.record_error(
-            text, source=source)
-        if (
-            self.history
-            and self.history[-1].role == "assistant"
-            and not self.history[-1].tool_calls
-        ):
-            partial = (self.history[-1].content or "").strip()
-            self.history[-1].content = (
-                f"{partial}\n\n[krelcode] {text}"
-                if partial else f"[krelcode] {text}"
-            )
-        else:
-            self.history.append(Message.assistant(text))
-        await self._emit(ErrorOccurred(text, source))
+        await record_turn_error(
+            self,
+            text,
+            source,
+            working_context=self.services.context.working_context,
+        )
 
     async def _evaluate_acceptance(
         self,
