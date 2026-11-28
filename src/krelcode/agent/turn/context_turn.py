@@ -50,6 +50,7 @@ from krelcode.agent.context.context_turn_observability import (
 )
 from krelcode.agent.context.context_usage import build_context_usage_snapshot
 from krelcode.agent.context.rehydration import apply_compaction_rehydration, emit_compaction_rehydration
+from krelcode.agent.context.context_manifest import emit_context_manifest
 from krelcode.agent.context.compression import CompactResult
 from krelcode.agent.turn.dependencies import AgentDependencies
 from krelcode.agent.prompt.fragments import (
@@ -72,7 +73,6 @@ from krelcode.agent.turn.reminders import (
 from krelcode.core.tokens import estimate_history_tokens
 from krelcode.agent.context.tool_microcompact import MicrocompactReport
 from krelcode.safety.contract import build_mode_permission_contract
-
 
 INTERRUPTED_NOTE = "[已被用户中止]"
 
@@ -375,8 +375,7 @@ class ContextTurnCoordinator:
             return False
         working_snapshot = self.dependencies.working_context_store.snapshot()
         result = cast(Optional[CompactResult], manager.last_compact_result)
-        d = self.dependencies
-        rehydration = await apply_compaction_rehydration(host, workspace_root=d.workspace_root, history=pre_compact_history, working_context=working_snapshot, trigger=result.trigger, generation=result.generation, policy=d.compaction_rehydration_policy, redactor=d.redactor.redact if d.redactor is not None else None) if result is not None else None
+        rehydration = await apply_compaction_rehydration(host, workspace_root=self.dependencies.workspace_root, history=pre_compact_history, working_context=working_snapshot, trigger=result.trigger, generation=result.generation, policy=self.dependencies.compaction_rehydration_policy, redactor=self.dependencies.redactor.redact if self.dependencies.redactor is not None else None) if result is not None else None
         after = estimate_history_tokens(host.history) + extra_tokens
         checkpoint = None
         store = self.dependencies.compact_checkpoint_store
@@ -760,6 +759,7 @@ class ContextTurnCoordinator:
         host.last_context_assembly = context_assembly
         host.last_context_snapshot = context_snapshot
         ledger = self.finalize_context_cache_ledger(context_snapshot)
+        await emit_context_manifest(host, plan=host.last_context_plan, usage=context_snapshot, policy=self.dependencies.context_policy)
         await host._emit(ContextAssembled(
             context_snapshot,
             ledger=ledger.as_dict() if ledger is not None else None,

@@ -287,6 +287,13 @@ class ContextAssembled(AgentEvent):
 
 
 @dataclass(frozen=True)
+class ContextManifestCreated(AgentEvent):
+    """One content-light manifest for one final model call."""
+
+    manifest: Mapping[str, object]
+
+
+@dataclass(frozen=True)
 class ContextDropped(AgentEvent):
     """Budget or scope filtering omitted one or more context sources.
 

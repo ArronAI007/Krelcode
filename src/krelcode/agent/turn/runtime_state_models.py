@@ -65,6 +65,7 @@ if TYPE_CHECKING:
     )
     from krelcode.agent.context.context_plan import ContextPlanSnapshot
     from krelcode.agent.context.rehydration import CompactionRehydrationReport
+    from krelcode.contracts.context_manifest import ContextManifest
     from krelcode.agent.context.compression import ContextManager
     from krelcode.agent.context.context_checkpoint import (
         ContextCheckpointCoordinator,
@@ -197,6 +198,7 @@ class ContextRuntimeState:
         "CompactionRehydrationReport"] = None
     last_context_restore: Optional["ContextRestoreResult"] = None
     last_context_plan: Optional["ContextPlanSnapshot"] = None
+    last_context_manifest: Optional["ContextManifest"] = None
     last_context_snapshot: Optional["ContextUsageSnapshot"] = None
     last_context_assembly: Optional["ContextAssembly"] = None
     last_context_cache_ledger: Optional["ContextCacheLedger"] = None

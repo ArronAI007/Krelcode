@@ -86,7 +86,8 @@ def test_plain_chat_no_tools():
     assert [m.role for m in loop.history] == ["system", "user", "assistant"]
     assert rec.types() == [
         "RunStarted", "QueryPhaseChanged", "StepStarted",
-        "BudgetUpdated", "LoopPhaseChanged", "QueryPhaseChanged", "ContextAssembled",
+        "BudgetUpdated", "LoopPhaseChanged", "QueryPhaseChanged",
+        "ContextManifestCreated", "ContextAssembled",
         "LLMStreamDelta", "LLMResponseReceived", "LoopPhaseChanged",
         "LoopPhaseChanged", "RunFinished",
     ]
@@ -119,15 +120,17 @@ def test_full_tool_call_cycle():
     # 事件序列完整
     # 第一轮 assistant 只有 tool_calls（无文本 delta），第二轮有文本 delta
     assert rec.types() == [
-        "RunStarted", "QueryPhaseChanged", "StepStarted",
-        "BudgetUpdated", "LoopPhaseChanged", "QueryPhaseChanged", "ContextAssembled",
+            "RunStarted", "QueryPhaseChanged", "StepStarted",
+            "BudgetUpdated", "LoopPhaseChanged", "QueryPhaseChanged",
+            "ContextManifestCreated", "ContextAssembled",
         "LLMResponseReceived", "LoopPhaseChanged", "QueryPhaseChanged",
         "ToolCallStarted", "BudgetUpdated", "ToolProgress",
         "SecurityDecisionRecorded", "ToolProgress",
         "ToolCallCompleted", "ObservationRecorded", "LoopPhaseChanged",
         "QueryPhaseChanged", "LoopPhaseChanged", "QueryPhaseChanged",
         "StepStarted", "BudgetUpdated", "LoopPhaseChanged", "QueryPhaseChanged",
-        "ContextAssembled", "LLMStreamDelta", "LLMResponseReceived",
+            "ContextManifestCreated", "ContextAssembled",
+            "LLMStreamDelta", "LLMResponseReceived",
         "LoopPhaseChanged", "LoopPhaseChanged", "RunFinished",
     ]
     completed = [e for e in rec.events if isinstance(e, ToolCallCompleted)][0]

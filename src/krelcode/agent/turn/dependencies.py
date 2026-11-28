@@ -21,6 +21,7 @@ from krelcode.contracts.governance import ControlPlanePort
 from krelcode.contracts.middleware import LoopMiddlewarePort
 from krelcode.contracts.verification import VerificationLevel, VerifierPort
 from krelcode.agent.context.rehydration import CompactionRehydrationPolicy
+from krelcode.agent.context.context_policy import ContextPolicy
 from krelcode.contracts.tool_execution import ExecutionRuntimePort
 from krelcode.contracts.artifact import ArtifactStorePort
 from krelcode.llm.base import LLMProvider
@@ -71,6 +72,7 @@ class AgentDependencies:
         default_factory=dict)
     compaction_rehydration_policy: CompactionRehydrationPolicy = field(
         default_factory=CompactionRehydrationPolicy)
+    context_policy: ContextPolicy = field(default_factory=ContextPolicy)
 
     @property
     def workspace_root(self) -> Path:

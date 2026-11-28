@@ -65,6 +65,7 @@ if TYPE_CHECKING:
     )
     from krelcode.agent.context.context_plan import ContextPlanSnapshot
     from krelcode.agent.context.rehydration import CompactionRehydrationReport
+    from krelcode.contracts.context_manifest import ContextManifest
     from krelcode.agent.context.compression import ContextManager
     from krelcode.agent.context.context_checkpoint import (
         ContextCheckpointCoordinator,
@@ -416,6 +417,17 @@ class RuntimeStateView:
     @last_context_plan.setter
     def last_context_plan(self, value: Optional[ContextPlanSnapshot]) -> None:
         self.runtime_state.context.last_context_plan = value
+
+    @property
+    def last_context_manifest(self) -> Optional["ContextManifest"]:
+        return self.runtime_state.context.last_context_manifest
+
+    @last_context_manifest.setter
+    def last_context_manifest(
+        self,
+        value: Optional["ContextManifest"],
+    ) -> None:
+        self.runtime_state.context.last_context_manifest = value
 
     @property
     def last_context_snapshot(self) -> Optional[ContextUsageSnapshot]:

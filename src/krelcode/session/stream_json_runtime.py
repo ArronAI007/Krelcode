@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 from ..core.events import (
     CompactionRehydrated,
+    ContextManifestCreated,
     MiddlewareEvaluated,
     RecoveryDecided,
 )
@@ -57,8 +58,17 @@ def compaction_rehydrated_payload(
     }
 
 
+def context_manifest_payload(event: ContextManifestCreated) -> Dict[str, Any]:
+    return {
+        "type": "context",
+        "subtype": "manifest",
+        "manifest": dict(event.manifest),
+    }
+
+
 __all__ = [
     "compaction_rehydrated_payload",
+    "context_manifest_payload",
     "middleware_payload",
     "recovery_payload",
 ]

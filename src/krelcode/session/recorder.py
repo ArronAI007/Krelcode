@@ -26,6 +26,7 @@ from ..core.events import (
     CompactCheckpointCreated,
     CompactionRehydrated,
     ContextAssembled,
+    ContextManifestCreated,
     ContextCheckpointCreated,
     ContextCompressed,
     ContextDropped,
@@ -309,6 +310,12 @@ class SessionRecorder:
             if event.ledger is not None:
                 record["cache_ledger"] = dict(event.ledger)
             return record
+        if isinstance(event, ContextManifestCreated):
+            return {
+                "type": "context_manifest",
+                "ts": ts,
+                "manifest": dict(event.manifest),
+            }
         if isinstance(event, ContextDropped):
             return {
                 "type": "context_dropped",

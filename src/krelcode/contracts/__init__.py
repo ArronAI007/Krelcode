@@ -55,6 +55,12 @@ from .budget import (
     UnfinishedManifest,
 )
 from .call import CallContext
+from .context_manifest import (
+    ContextManifest,
+    ContextOmissionManifest,
+    ContextPolicyIdentity,
+    ContextSourceManifest,
+)
 from .change_admission import (
     AdmissionDecision,
     AdmissionGatePort,
@@ -327,6 +333,10 @@ __all__ = [
     "BudgetLimit",
     "BudgetSnapshot",
     "CallContext",
+    "ContextManifest",
+    "ContextOmissionManifest",
+    "ContextPolicyIdentity",
+    "ContextSourceManifest",
     "AuditCorrelation",
     "AuthorityDecision",
     "AuthorityEnvelope",

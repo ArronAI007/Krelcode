@@ -153,6 +153,8 @@ STREAM_JSON_FIELD_TYPES: Mapping[str, Mapping[str, object]] = {
     "task_id": {"type": "string"},
     "call_id": {"type": "string"},
     "report_digest": {"type": "string"},
+    "model_call_id": {"type": "string"},
+    "manifest": _FIELD_OBJECT,
     "files": _FIELD_ARRAY,
     "skills": _FIELD_ARRAY,
     "omitted_files": _FIELD_ARRAY,
@@ -252,6 +254,8 @@ OUTPUT_EVENT_SCHEMAS: Mapping[tuple[str, str], StreamJsonEventSchema] = {
         "permission", "security_decision", "tool_call_id", "security"),
     ("context", "assembled"): _event(
         "context", "assembled", "event", "snapshot"),
+    ("context", "manifest"): _event(
+        "context", "manifest", "manifest"),
     ("context", "dropped"): _event(
         "context", "dropped", "event", "items", "reason"),
     ("context", "microcompacted"): _event(

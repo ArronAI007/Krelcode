@@ -22,6 +22,7 @@ from .events import (
     CompactCheckpointCreated,
     CompactionRehydrated,
     ContextAssembled,
+    ContextManifestCreated,
     ContextCheckpointCreated,
     ContextCompressed,
     ContextDropped,
@@ -117,6 +118,7 @@ SessionEventPayload: TypeAlias = (
     | ContextCompressed
     | ContextCheckpointCreated
     | ContextAssembled
+    | ContextManifestCreated
     | ContextDropped
     | MemoryLoaded
     | KnowledgeLoaded
@@ -168,6 +170,7 @@ SESSION_EVENT_TYPE_TO_KIND: Mapping[type[AgentEvent], SessionEventKind] = {
     ContextCompressed: SessionEventKind.CONTEXT,
     ContextCheckpointCreated: SessionEventKind.CONTEXT,
     ContextAssembled: SessionEventKind.CONTEXT,
+    ContextManifestCreated: SessionEventKind.CONTEXT,
     ContextDropped: SessionEventKind.CONTEXT,
     MemoryLoaded: SessionEventKind.MEMORY,
     KnowledgeLoaded: SessionEventKind.KNOWLEDGE,

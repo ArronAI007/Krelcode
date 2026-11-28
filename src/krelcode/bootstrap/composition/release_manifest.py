@@ -240,7 +240,11 @@ def build_runtime_release_manifest(
                 asdict(context_options)
                 if context_options is not None else {"engine": "disabled"}
             ),
-            "policy_version": "context-budget-v1",
+            "policy_version": (
+                f"{loop.dependencies.context_policy.policy_id}@"
+                f"{loop.dependencies.context_policy.version}"
+            ),
+            "context_policy": loop.dependencies.context_policy.identity().as_dict(),
             "budget_policy": _context_budget_record(
                 loop.context_assembler.budget_policy
                 if loop.context_assembler is not None

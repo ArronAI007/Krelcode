@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from krelcode.agent.context.workspace import WorkspaceContext
     from krelcode.agent.context.context_policy import ContextBudgetPolicy
     from krelcode.agent.context.rehydration import CompactionRehydrationReport
+    from krelcode.contracts.context_manifest import ContextManifest
     from krelcode.agent.context.context_cache_ledger import ContextCacheLedger
     from krelcode.agent.context.context_plan import ContextPlanSnapshot
     from krelcode.agent.context.context_source import (
@@ -356,6 +357,7 @@ class ContextTurnHostPort(_EventHostPort, _ToolPoolHostPort, Protocol):
     last_context_snapshot: Optional["ContextUsageSnapshot"]
     previous_context_snapshot: Optional["ContextUsageSnapshot"]
     last_context_plan: Optional["ContextPlanSnapshot"]
+    last_context_manifest: Optional["ContextManifest"]
     last_context_cache_ledger: Optional["ContextCacheLedger"]
     previous_context_cache_ledger: Optional["ContextCacheLedger"]
     cache_ledger_owner: str

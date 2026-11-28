@@ -19,6 +19,7 @@ from ..core.events import (
     CompactCheckpointCreated,
     CompactionRehydrated,
     ContextAssembled,
+    ContextManifestCreated,
     ContextCompressed,
     ContextDropped,
     ContextMicrocompacted,
@@ -64,7 +65,7 @@ from ..agent.turn.query import QueryEvent
 from ..contracts.application import ApplicationRequest, ApplicationRequestFactory
 from ..contracts.agent import AgentContract
 from .stream_json_contracts import parse_contracts
-from .stream_json_runtime import compaction_rehydrated_payload, middleware_payload, recovery_payload
+from .stream_json_runtime import compaction_rehydrated_payload, context_manifest_payload, middleware_payload, recovery_payload
 from .stream_json_schema import (
     STREAM_JSON_PROTOCOL_NAME as PROTOCOL_NAME,
     STREAM_JSON_PROTOCOL_VERSION as PROTOCOL_VERSION,
@@ -90,7 +91,6 @@ class StreamControlMessage:
     decision: str = ""
     action: str = ""
     content: str = ""
-
 @dataclass(frozen=True)
 class StreamJsonMetadata:
     session_id: Optional[str]
@@ -101,7 +101,6 @@ class StreamJsonMetadata:
     mcp_servers: tuple[str, ...] = ()
     permission_mode: str = "default"
     run_mode: str = "json"
-
 class StreamJsonEncoder:
     """把内部事件编码为稳定的 JSON-compatible message。"""
 
@@ -292,9 +291,10 @@ class StreamJsonEncoder:
                 "subtype": "assembled",
                 "event": "context_assembled",
                 "snapshot": event.snapshot.as_record(),
+                **({"ledger": dict(event.ledger)} if event.ledger is not None else {}),
             }
-            if event.ledger is not None:
-                payload["ledger"] = dict(event.ledger)
+        elif isinstance(event, ContextManifestCreated):
+            payload = context_manifest_payload(event)
         elif isinstance(event, ContextDropped):
             payload = {
                 "type": "context",
