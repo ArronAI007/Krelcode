@@ -449,6 +449,8 @@ class StreamJsonEncoder:
                 "statuses": list(event.statuses),
                 "explanation": event.explanation,
             }
+            if event.plan_control:
+                payload["plan_control"] = dict(event.plan_control)
         elif isinstance(event, UserInputRequested):
             payload = {
                 "type": "input",

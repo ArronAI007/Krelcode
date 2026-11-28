@@ -9,11 +9,23 @@ REPL 只负责把控制键/命令转发给这两个组件并渲染返回值。
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from enum import Enum
+from dataclasses import dataclass, field, replace
 from html import escape
 from typing import Optional, Protocol, Sequence
 
+from ..contracts.plan import (
+    PlanApprovalStatus,
+    PlanControl,
+    PlanControlMode,
+    PlanNodeStatus,
+    PlanRole,
+)
+from ..contracts.plan_ops import (
+    legacy_plan_control,
+    parse_plan_nodes,
+    plan_snapshot_views,
+    update_plan_control,
+)
 from ..contracts.runtime import PermissionMode
 from ..contracts.tool import ToolContext
 
@@ -149,13 +161,6 @@ class RuntimePermissionManager:
         ]
 
 
-class PlanApprovalStatus(str, Enum):
-    NONE = "none"
-    PENDING = "pending"
-    APPROVED = "approved"
-    CANCELLED = "cancelled"
-
-
 @dataclass(frozen=True)
 class PlanSnapshot:
     items: tuple[str, ...] = ()
@@ -172,6 +177,7 @@ class PlanCheckpoint:
     status: PlanApprovalStatus
     permission_mode: PermissionMode
     previous_permission_mode: PermissionMode
+    control: PlanControl = field(default_factory=PlanControl.empty)
 
 
 class PlanApprovalCoordinator:
@@ -181,6 +187,7 @@ class PlanApprovalCoordinator:
         self.permissions = permissions
         self.snapshot = PlanSnapshot()
         self.status = PlanApprovalStatus.NONE
+        self.control = PlanControl.empty()
 
     @property
     def pending(self) -> bool:
@@ -192,6 +199,7 @@ class PlanApprovalCoordinator:
             status=self.status,
             permission_mode=self.permissions.mode,
             previous_permission_mode=self.permissions.previous_mode,
+            control=self.control,
         )
 
     def restore(self, checkpoint: PlanCheckpoint) -> None:
@@ -202,6 +210,28 @@ class PlanApprovalCoordinator:
         )
         self.snapshot = checkpoint.snapshot
         self.status = checkpoint.status
+        self.control = checkpoint.control
+        if not self.control.nodes and self.snapshot.items:
+            self.control = legacy_plan_control(
+                self.snapshot.items,
+                self.snapshot.statuses,
+                active_index=self.snapshot.active_index,
+                explanation=self.snapshot.explanation,
+                approval=self.status,
+            )
+        else:
+            self.control = self.control.with_approval(self.status)
+        self._sync_context()
+
+    def begin_request(
+        self,
+        mode: PlanControlMode | str = PlanControlMode.TODO,
+    ) -> None:
+        """Start a fresh task plan while retaining the selected control mode."""
+        self.control = PlanControl.empty(mode)
+        self.snapshot = PlanSnapshot()
+        self.status = PlanApprovalStatus.NONE
+        self._sync_context()
 
     def start_request(self, request: str) -> str:
         text = str(request or "").strip()
@@ -209,8 +239,7 @@ class PlanApprovalCoordinator:
             raise ValueError("Plan 请求不能为空")
         if self.permissions.mode is not PermissionMode.PLAN:
             self.permissions.set_mode(PermissionMode.PLAN)
-        self.snapshot = PlanSnapshot()
-        self.status = PlanApprovalStatus.NONE
+        self.begin_request(PlanControlMode.PLAN_MODE)
         return self.wrap_request(text)
 
     def wrap_request(self, request: str) -> str:
@@ -245,33 +274,78 @@ class PlanApprovalCoordinator:
                 "in_progress" if index == active_index else "pending"
                 for index in range(len(normalized_items))
             )
-        self.snapshot = PlanSnapshot(
-            items=normalized_items,
-            statuses=normalized_statuses,
-            active_index=active_index,
-            explanation=str(explanation or ""),
+        raw_nodes = [
+            {"step": item, "status": status}
+            for item, status in zip(normalized_items, normalized_statuses)
+        ]
+        mode = (
+            self.control.mode
+            if self.control.nodes
+            else (
+                PlanControlMode.PLAN_MODE
+                if self.permissions.mode is PermissionMode.PLAN
+                else PlanControlMode.TODO
+            )
         )
-        if self.permissions.mode is PermissionMode.PLAN:
-            self.status = PlanApprovalStatus.PENDING
-        elif self.status is PlanApprovalStatus.PENDING:
-            # 离开 Plan 模式后收到的进度更新只是执行计划进度，不应重新要求审批。
-            self.status = PlanApprovalStatus.APPROVED
+        nodes = parse_plan_nodes(raw_nodes, previous=self.control)
+        control = update_plan_control(
+            self.control if self.control.nodes else None,
+            nodes,
+            mode=mode,
+            trigger_fact=str(explanation or "event-derived plan update"),
+        )
+        self.record_control(control)
+
+    def record_control(self, control: PlanControl) -> None:
+        """Persist the authoritative structured plan control."""
+        status = PlanApprovalStatus(control.approval)
+        if control.nodes and self.permissions.mode is PermissionMode.PLAN:
+            status = PlanApprovalStatus.PENDING
+        elif (
+            self.status is PlanApprovalStatus.PENDING
+            and self.permissions.mode is not PermissionMode.PLAN
+        ):
+            status = PlanApprovalStatus.APPROVED
+        self.control = control.with_approval(status)
+        self.status = status
+        self._sync_snapshot_from_control()
+        self._sync_context()
+
+    def edit_nodes(
+        self,
+        raw_items: Sequence[object],
+        *,
+        trigger_fact: str = "",
+        trigger_observation_id: str = "",
+    ) -> PlanControl:
+        """Apply a human-authored structured edit while approval is pending."""
+        if self.status is not PlanApprovalStatus.PENDING:
+            raise ValueError("只有待确认计划可以结构化编辑")
+        nodes = parse_plan_nodes(raw_items, previous=self.control)
+        control = self.control.revise(
+            nodes,
+            mode=self.control.mode,
+            approval=PlanApprovalStatus.PENDING,
+            trigger_observation_id=trigger_observation_id,
+            trigger_fact=trigger_fact or "user edited plan",
+        )
+        self.record_control(control)
+        return self.control
 
     def approve(self) -> tuple[bool, str, Optional[str]]:
-        if not self.snapshot.items:
+        if not self.control.nodes and not self.snapshot.items:
             return False, "当前没有可批准的执行计划", None
         if self.status is not PlanApprovalStatus.PENDING:
             return False, "当前计划不处于待确认状态", None
         self.status = PlanApprovalStatus.APPROVED
+        self.control = self.control.with_approval(self.status)
         restored = self.permissions.restore_previous_mode()
-        rendered = "\n".join(
-            f"{index}. {escape(item, quote=False)}"
-            for index, item in enumerate(self.snapshot.items, 1)
-        )
+        rendered = self._render_approval_nodes()
         prompt = (
             "<approved_plan>\n"
             "用户已批准以下执行计划：\n"
             f"{rendered}\n"
+            f"计划修订: {self.control.revision.revision_id}\n"
         )
         if self.snapshot.explanation:
             prompt += (
@@ -280,9 +354,11 @@ class PlanApprovalCoordinator:
             )
         prompt += (
             "\n请按计划开始执行。持续调用 update_plan 更新步骤状态；"
-            "如实际调查发现计划必须变更，先说明原因并提交新计划。\n"
+            "保留稳定 node id 与已完成项；如实际调查发现计划必须变更，"
+            "先说明 trigger fact、影响项和证据缺口，再提交新修订。\n"
             "</approved_plan>"
         )
+        self._sync_context()
         return True, f"计划已批准，恢复权限模式: {restored.value}", prompt
 
     def cancel(self) -> tuple[bool, str]:
@@ -291,7 +367,9 @@ class PlanApprovalCoordinator:
         if self.status is not PlanApprovalStatus.PENDING:
             return False, "当前计划不处于待确认状态"
         self.status = PlanApprovalStatus.CANCELLED
+        self.control = self.control.with_approval(self.status)
         restored = self.permissions.restore_previous_mode()
+        self._sync_context()
         return True, f"计划已取消，恢复权限模式: {restored.value}"
 
     def on_mode_change(
@@ -306,23 +384,115 @@ class PlanApprovalCoordinator:
             and self.status is PlanApprovalStatus.PENDING
         ):
             self.status = PlanApprovalStatus.CANCELLED
+            self.control = self.control.with_approval(self.status)
+            self._sync_context()
 
     def render_lines(self) -> list[str]:
-        if not self.snapshot.items:
+        if not self.control.nodes:
             return ["当前没有执行计划", "使用 /plan <任务描述> 生成计划"]
-        marks = {"pending": "[ ]", "in_progress": "[>]", "completed": "[x]"}
-        statuses = list(self.snapshot.statuses)
+        marks = {
+            "pending": "[ ]",
+            "in_progress": "[>]",
+            "completed": "[x]",
+            "blocked": "[!]",
+            "failed": "[✗]",
+            "cancelled": "[-]",
+        }
+        statuses = [
+            PlanNodeStatus(node.status).value for node in self.control.nodes
+        ]
         completed = sum(status == "completed" for status in statuses)
-        lines = [f"当前执行计划（{completed}/{len(statuses)} 完成）:"]
-        for index, (item, status) in enumerate(
-                zip(self.snapshot.items, statuses), 1):
-            lines.append(f"  {marks.get(status, '[?]')} {index}. {item}")
+        lines = [
+            f"当前执行计划（{completed}/{len(statuses)} 完成）"
+            f" · mode={PlanControlMode(self.control.mode).value}"
+            f" · revision={self.control.revision.revision_id}"
+        ]
+        for index, node in enumerate(self.control.nodes, 1):
+            status = PlanNodeStatus(node.status).value
+            owner = f" · owner={node.owner}" if node.owner else ""
+            depends = (
+                f" · depends={','.join(node.depends_on)}"
+                if node.depends_on else ""
+            )
+            group = (
+                f" · group={node.parallel_group}"
+                if node.parallel_group else ""
+            )
+            lines.append(
+                f"  {marks.get(status, '[?]')} {index}. [{node.id}] "
+                f"{node.objective}{owner}{depends}{group}"
+            )
+            if node.acceptance_checks:
+                lines.append(
+                    "     acceptance: " + "; ".join(node.acceptance_checks))
+            if node.evidence_refs:
+                lines.append(
+                    "     evidence: " + "; ".join(node.evidence_refs))
         if self.snapshot.explanation:
             lines.append(f"  说明: {self.snapshot.explanation}")
         if self.status is PlanApprovalStatus.PENDING:
-            lines.append("  状态: 待确认 · /plan approve 执行 · /plan cancel 取消")
+            lines.append(
+                "  状态: 待确认 · /plan edit <JSON> 修改 · "
+                "/plan approve 执行 · /plan cancel 取消")
         elif self.status is PlanApprovalStatus.APPROVED:
             lines.append("  状态: 已批准")
         elif self.status is PlanApprovalStatus.CANCELLED:
             lines.append("  状态: 已取消")
         return lines
+
+    def _sync_snapshot_from_control(self) -> None:
+        items, statuses, active_index, explanation = plan_snapshot_views(
+            self.control)
+        self.snapshot = PlanSnapshot(
+            items=items,
+            statuses=statuses,
+            active_index=active_index,
+            explanation=explanation,
+        )
+
+    def _sync_context(self) -> None:
+        loop = self.permissions.loop
+        loop.tool_context = replace(
+            loop.tool_context,
+            plan_control=self.control,
+            plan_control_mode=self.control.mode,
+        )
+        loop._turn_tool_context = replace(
+            loop._turn_tool_context,
+            plan_control=self.control,
+            plan_control_mode=self.control.mode,
+        )
+
+    def _render_approval_nodes(self) -> str:
+        lines: list[str] = []
+        for index, node in enumerate(self.control.nodes, 1):
+            details = [f"owner={node.owner}"]
+            if node.depends_on:
+                details.append("depends_on=" + ",".join(node.depends_on))
+            if node.parallel_group:
+                details.append("parallel_group=" + node.parallel_group)
+            lines.append(
+                f"{index}. {escape(node.objective, quote=False)} "
+                f"[id={node.id}] ({'; '.join(details)})"
+            )
+            if node.acceptance_checks:
+                lines.append(
+                    "   acceptance: "
+                    + "; ".join(
+                        escape(item, quote=False)
+                        for item in node.acceptance_checks))
+            if node.evidence_refs:
+                lines.append(
+                    "   evidence: "
+                    + "; ".join(
+                        escape(item, quote=False)
+                        for item in node.evidence_refs))
+        roles = {
+            role.value: len(self.control.nodes_for_role(role))
+            for role in PlanRole
+        }
+        present = ", ".join(
+            f"{role}={count}" for role, count in roles.items() if count)
+        if present:
+            lines.append("roles: " + present)
+        return "\n".join(lines)

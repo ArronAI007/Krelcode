@@ -329,9 +329,9 @@ class UserSteered(AgentEvent):
 class PlanUpdated(AgentEvent):
     """执行计划快照；items 与 statuses 一一对应。
 
-    status 取值为 pending / in_progress / completed；active_index 指向唯一的
-    in_progress，未开始或已全部完成时为 -1。turn_id 供会话时间线把计划
-    更新归入正确边界；旁路消费者可继续忽略该可选字段。
+    status 为稳定机器值；active_index 指向执行中的节点，未开始或已全部
+    完成时为 -1。``plan_control`` 保留节点依赖、角色、验收证据、修订和
+    审批状态；旧消费者可继续只读取 items/statuses。
     """
 
     items: Tuple[str, ...] = ()
@@ -339,6 +339,8 @@ class PlanUpdated(AgentEvent):
     statuses: Tuple[str, ...] = ()
     explanation: str = ""
     turn_id: str = ""
+    plan_control: Mapping[str, object] = field(
+        default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)

@@ -373,6 +373,8 @@ class SessionRecorder:
                       "items": list(event.items), "statuses": list(event.statuses),
                       "active_index": event.active_index,
                       "explanation": event.explanation}
+            if event.plan_control:
+                record["plan_control"] = dict(event.plan_control)
             if event.turn_id:
                 record["turn_id"] = event.turn_id
             return record

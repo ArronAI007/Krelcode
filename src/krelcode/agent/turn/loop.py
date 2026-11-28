@@ -74,6 +74,7 @@ from krelcode.agent.turn.loop_control import (
     resume_waiting,
 )
 from krelcode.agent.turn.observation import steering_observation
+from krelcode.agent.turn.planning import PlanControlPolicy
 from krelcode.agent.prompt.prompt_assembler import PromptAssembler
 from krelcode.agent.prompt.prompt_surface import PromptSurfaceRegistry, main_prompt_surface
 from krelcode.agent.turn.reminders import (
@@ -499,17 +500,15 @@ class AgentLoop(RuntimeStateHost):
         if self.runtime_snapshot_provider is not None:
             snapshot = self.runtime_snapshot_provider(snapshot)
         snapshot = replace(
-            snapshot,
-            turn_id=resolved_turn_id,
-            tool_allowlist=(
-                frozenset(tool_allowlist)
-                if tool_allowlist is not None else snapshot.tool_allowlist
-            ),
-        )
+            snapshot, turn_id=resolved_turn_id,
+            tool_allowlist=frozenset(tool_allowlist)
+            if tool_allowlist is not None else snapshot.tool_allowlist)
+        plan_control_mode = PlanControlPolicy().select_mode(application_request, permission_mode=snapshot.permission_mode)
         self._turn_tool_context = replace(
             self.services.core.tool_context,
             runtime=snapshot,
             abort=self._turn_abort_signal,
+            plan_control_mode=plan_control_mode,
         )
 
     async def _bind_loop_state_machine(

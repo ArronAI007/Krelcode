@@ -74,6 +74,7 @@ class SessionViewState:
     plan_statuses: tuple[str, ...] = ()
     plan_active_index: int = -1
     plan_explanation: str = ""
+    plan_control: Mapping[str, object] = field(default_factory=dict)
     plan_approval_status: str = "none"
     context_snapshot: Optional[ContextUsageSnapshot] = None
     context_memory_hits: int = 0
@@ -141,6 +142,7 @@ class SessionViewState:
         self.plan_statuses = ()
         self.plan_active_index = -1
         self.plan_explanation = ""
+        self.plan_control = {}
         self.plan_approval_status = "none"
         self.context_snapshot = None
         self.context_cache_ledger = None
@@ -342,6 +344,10 @@ class SessionEventReducer:
                 )
             state.plan_active_index = event.active_index
             state.plan_explanation = event.explanation
+            state.plan_control = (
+                dict(event.plan_control)
+                if event.plan_control else {}
+            )
             if 0 <= event.active_index < len(state.plan_items):
                 state.progress = f"计划：{state.plan_items[event.active_index]}"
         elif isinstance(event, UserInputRequested):

@@ -30,9 +30,16 @@ from ..core.events import (
     RunStarted,
 )
 from ..core.messages import Message
+from ..contracts.plan import (
+    PlanApprovalStatus,
+    PlanControl,
+    PlanControlMode,
+)
+from ..contracts.plan_ops import (
+    legacy_plan_control,
+)
 from ..safety.runtime import (
     PlanApprovalCoordinator,
-    PlanApprovalStatus,
     PlanCheckpoint,
     PlanSnapshot,
 )
@@ -166,6 +173,25 @@ class TurnTimeline:
             status = PlanApprovalStatus.PENDING
         elif status is PlanApprovalStatus.PENDING:
             status = PlanApprovalStatus.APPROVED
+        if event.plan_control:
+            control = PlanControl.from_mapping(event.plan_control)
+        else:
+            control = legacy_plan_control(
+                event.items,
+                event.statuses,
+                active_index=event.active_index,
+                explanation=event.explanation,
+                mode=(
+                    self.plan_manager.control.mode
+                    if self.plan_manager.control.nodes
+                    else (
+                        PlanControlMode.PLAN_MODE
+                        if mode is PermissionMode.PLAN
+                        else PlanControlMode.TODO
+                    )
+                ),
+                approval=status,
+            )
         entry.plan_after = PlanCheckpoint(
             snapshot=PlanSnapshot(
                 items=tuple(event.items),
@@ -176,6 +202,7 @@ class TurnTimeline:
             status=status,
             permission_mode=mode,
             previous_permission_mode=current.previous_permission_mode,
+            control=control.with_approval(status),
         )
 
     def _finish(self, turn_id: str, *, cancelled: bool) -> None:

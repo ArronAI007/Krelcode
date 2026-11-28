@@ -99,6 +99,19 @@ from .governance import (
     SecurityDecisionValue,
 )
 from .lifecycle import RuntimeLifecycleEnvelope
+from .plan import (
+    PlanApprovalStatus,
+    PlanControl,
+    PlanControlMode,
+    PlanModeControl,
+    PlanNode,
+    PlanNodeStatus,
+    PlanRevision,
+    PlanRole,
+    PlanScheduler,
+    PlannerExecutorControl,
+    TodoControl,
+)
 from .loop import (
     LoopPhase,
     LoopTermination,
@@ -291,6 +304,17 @@ __all__ = [
     "ObservationSource",
     "ObservationStatus",
     "PermissionMode",
+    "PlanApprovalStatus",
+    "PlanControl",
+    "PlanControlMode",
+    "PlanModeControl",
+    "PlanNode",
+    "PlanNodeStatus",
+    "PlanRevision",
+    "PlanRole",
+    "PlanScheduler",
+    "PlannerExecutorControl",
+    "TodoControl",
     "PrincipalPort",
     "PromptBenchmarkServicesPort",
     "PromptFragmentPort",

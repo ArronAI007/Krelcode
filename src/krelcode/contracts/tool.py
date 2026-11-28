@@ -37,6 +37,7 @@ from .service_ports import (
 )
 from .loop import WaitCondition
 from .external_event import ExternalEventPort
+from .plan import PlanControl, PlanControlMode
 
 @dataclass
 class ToolResult:
@@ -186,6 +187,11 @@ class ToolContext:
     output_emitter: Optional[OutputEmitter] = field(default=None, repr=False)
     input_requester: Optional[InputRequester] = field(default=None, repr=False)
     plan_emitter: Optional[PlanEmitter] = field(default=None, repr=False)
+    plan_control: Optional[PlanControl] = field(default=None, repr=False)
+    plan_control_mode: PlanControlMode | str = PlanControlMode.TODO
+    plan_control_emitter: Optional[
+        Callable[[PlanControl], Awaitable[None]]
+    ] = field(default=None, repr=False)
     shell_jobs: Optional[ShellJobManagerPort] = field(
         default=None, repr=False)
     tool_catalog: Optional[ToolCatalog] = field(default=None, repr=False)
@@ -253,6 +259,11 @@ class ToolContext:
             tuple(items), tuple(statuses), active_index, explanation)
         if inspect.isawaitable(pending):
             await pending
+
+    async def emit_plan_control(self, control: PlanControl) -> None:
+        if self.plan_control_emitter is None:
+            return
+        await self.plan_control_emitter(control)
 
     async def emit_waiting(self, condition: WaitCondition) -> None:
         if self.waiting_emitter is None:

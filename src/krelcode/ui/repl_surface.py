@@ -6,14 +6,20 @@ process host.  ``ui.repl`` re-exports them for compatibility.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from .. import __version__
 from ..agent.turn.loop import AgentLoop
 from ..core.events import ShellJobFinished
+from ..contracts.plan import (
+    PlanControl,
+    PlanControlMode,
+)
+from ..contracts.plan_ops import plan_snapshot_views
 from ..safety.runtime import PlanApprovalCoordinator
 from ..session.commands import CommandRegistry, CommandResult, builtin_command_registry
 from ..session.prompt_queue import PromptQueue
@@ -174,6 +180,12 @@ def format_plan_lines(state: SessionViewState) -> list[str]:
     """把 reducer 中的计划快照渲染为纯文本行，供 /plan 与测试复用。"""
     if not state.plan_items:
         return ["当前没有执行计划"]
+    structured: PlanControl | None = None
+    if state.plan_control:
+        try:
+            structured = PlanControl.from_mapping(state.plan_control)
+        except (TypeError, ValueError):
+            structured = None
     statuses = list(state.plan_statuses)
     if len(statuses) != len(state.plan_items):
         statuses = [
@@ -182,10 +194,40 @@ def format_plan_lines(state: SessionViewState) -> list[str]:
         ]
     marks = {"pending": "[ ]", "in_progress": "[>]", "completed": "[x]"}
     completed = sum(status == "completed" for status in statuses)
-    lines = [f"当前执行计划（{completed}/{len(statuses)} 完成）:"]
+    header = f"当前执行计划（{completed}/{len(statuses)} 完成）"
+    if structured is not None:
+        header += (
+            f" · mode={PlanControlMode(structured.mode).value}"
+            f" · revision={structured.revision.revision_id}"
+        )
+    lines = [header + ":"]
+    by_index = structured.nodes if structured is not None else ()
     for index, (item, status) in enumerate(
             zip(state.plan_items, statuses), 1):
-        lines.append(f"  {marks.get(status, '[?]')} {index}. {item}")
+        detail = ""
+        if index <= len(by_index):
+            node = by_index[index - 1]
+            suffix: list[str] = []
+            if node.owner:
+                suffix.append(f"owner={node.owner}")
+            if node.depends_on:
+                suffix.append("depends=" + ",".join(node.depends_on))
+            if node.parallel_group:
+                suffix.append(f"group={node.parallel_group}")
+            detail = f" [id={node.id}]"
+            if suffix:
+                detail += " · " + " · ".join(suffix)
+        lines.append(
+            f"  {marks.get(status, '[?]')} {index}. {item}{detail}"
+        )
+        if index <= len(by_index):
+            node = by_index[index - 1]
+            if node.acceptance_checks:
+                lines.append(
+                    "     acceptance: " + "; ".join(node.acceptance_checks))
+            if node.evidence_refs:
+                lines.append(
+                    "     evidence: " + "; ".join(node.evidence_refs))
     if state.plan_explanation:
         lines.append(f"  说明: {state.plan_explanation}")
     approval = {
@@ -196,6 +238,18 @@ def format_plan_lines(state: SessionViewState) -> list[str]:
     if approval:
         lines.append(f"  状态: {approval}")
     return lines
+
+
+def _sync_plan_state(
+    state: SessionViewState,
+    control: PlanControl,
+) -> None:
+    items, statuses, active_index, explanation = plan_snapshot_views(control)
+    state.plan_items = items
+    state.plan_statuses = statuses
+    state.plan_active_index = active_index
+    state.plan_explanation = explanation
+    state.plan_control = control.as_dict()
 
 
 def handle_plan_command(
@@ -216,6 +270,7 @@ def handle_plan_command(
             )
         ok, message, prompt = plan_manager.approve()
         state.plan_approval_status = plan_manager.status.value
+        _sync_plan_state(state, plan_manager.control)
         return CommandResult(
             handled=True,
             output=(f"  [plan] {message}",),
@@ -229,7 +284,51 @@ def handle_plan_command(
             )
         ok, message = plan_manager.cancel()
         state.plan_approval_status = plan_manager.status.value
+        _sync_plan_state(state, plan_manager.control)
         return CommandResult(handled=True, output=(f"  [plan] {message}",))
+    if operation == "edit" or operation.startswith("edit "):
+        if not allow_actions:
+            return CommandResult(
+                handled=True,
+                output=("  计划编辑需等待当前任务结束后操作",),
+            )
+        payload = text[4:].strip()
+        if not payload:
+            return CommandResult(
+                handled=True,
+                output=(
+                    "  [plan] 用法: /plan edit "
+                    '{"trigger_fact":"...","items":[...]}',
+                ),
+            )
+        try:
+            document = json.loads(payload)
+            if isinstance(document, Mapping):
+                raw_items = document.get("items") or document.get("nodes")
+                trigger_fact = str(document.get("trigger_fact") or "")
+                trigger_observation_id = str(
+                    document.get("trigger_observation_id") or "")
+            else:
+                raw_items = document
+                trigger_fact = ""
+                trigger_observation_id = ""
+            if not isinstance(raw_items, list):
+                raise ValueError("结构化计划必须是 JSON object.items 或数组")
+            control = plan_manager.edit_nodes(
+                raw_items,
+                trigger_fact=trigger_fact,
+                trigger_observation_id=trigger_observation_id,
+            )
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            return CommandResult(
+                handled=True,
+                output=(f"  [plan] 编辑失败: {exc}",),
+            )
+        _sync_plan_state(state, control)
+        return CommandResult(
+            handled=True,
+            output=tuple(f"  {line}" for line in plan_manager.render_lines()),
+        )
     if text:
         if not allow_actions:
             return CommandResult(
@@ -242,6 +341,7 @@ def handle_plan_command(
             return CommandResult(
                 handled=True, output=(f"  [plan] {exc}",))
         state.plan_approval_status = plan_manager.status.value
+        _sync_plan_state(state, plan_manager.control)
         return CommandResult(
             handled=True,
             output=("  [plan] 已进入 Plan 模式，开始只读调查并生成计划",),

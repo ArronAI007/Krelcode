@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Any, cast, Optional, Sequence
 
 from ..agent.turn.loop import AgentLoop
+from ..agent.turn.planning import PlanControlPolicy
 from ..agent.turn.runtime import AgentRuntime
 from ..agent.turn.query import QuerySession
 from ..contracts.application import ApplicationRequest
+from ..contracts.plan import PlanControl
 from ..contracts.runtime import PermissionMode
 from ..safety.runtime import PlanApprovalCoordinator, RuntimePermissionManager
 from ..contracts.tool import CommandDescriptor, ToolResult, ToolServices
@@ -148,6 +150,7 @@ class SessionController:
             permission_manager or RuntimePermissionManager(self.loop))
         self.plan_manager = (
             plan_manager or PlanApprovalCoordinator(self.permission_manager))
+        self.plan_control_policy = PlanControlPolicy()
         self.rewind = (
             rewind
             or RewindCoordinator(
@@ -196,6 +199,12 @@ class SessionController:
         """启动一轮查询并返回可消费事件的 QuerySession。"""
         if self.permission_manager.mode.value == "plan":
             message = self.plan_manager.wrap_request(message)
+        if not message.startswith("<approved_plan>"):
+            mode = self.plan_control_policy.select_mode(
+                application_request,
+                permission_mode=self.permission_manager.mode,
+            )
+            self.plan_manager.begin_request(mode)
         return self.runtime.start_query(
             message,
             images=images,
@@ -329,6 +338,10 @@ class SessionController:
             items, statuses, active_index=active_index,
             explanation=explanation,
         )
+
+    def record_plan_control(self, control: PlanControl) -> None:
+        """Store a structured plan event for later tools and turns."""
+        self.plan_manager.record_control(control)
 
     def refresh_tool_services(self) -> None:
         """把命令/MCP 目录刷新为 ToolUseContext 中的只读窄快照。"""

@@ -24,6 +24,7 @@ from ..contracts.application import (
     ApplicationRequest,
     ApplicationRequestFactory,
 )
+from ..contracts.plan import PlanControl
 from .controller import SessionController
 from .envelope import SessionEnvelope
 from .event_router import EnvelopeSink, SessionEventRouter
@@ -290,12 +291,17 @@ class ReplSessionRunner:
     def _handle_query_event(self, query_event: QueryEvent) -> None:
         event = query_event.event
         if isinstance(event, PlanUpdated):
-            self.controller.record_plan(
-                event.items,
-                event.statuses,
-                active_index=event.active_index,
-                explanation=event.explanation,
-            )
+            record_control = getattr(
+                self.controller, "record_plan_control", None)
+            if event.plan_control and callable(record_control):
+                record_control(PlanControl.from_mapping(event.plan_control))
+            else:
+                self.controller.record_plan(
+                    event.items,
+                    event.statuses,
+                    active_index=event.active_index,
+                    explanation=event.explanation,
+                )
             self.state.plan_approval_status = (
                 self.controller.plan_manager.status.value)
         self._on_event(event)

@@ -53,6 +53,8 @@ from krelcode.contracts.tool import (
     ToolSource,
 )
 from krelcode.contracts.loop import WaitCondition, WaitKind
+from krelcode.contracts.plan import PlanControl
+from krelcode.agent.turn.plan_event import build_plan_control_event
 from krelcode.agent.turn.observation import (
     tool_observation,
     tool_wait_kind,
@@ -347,6 +349,21 @@ class ToolBatchExecutor:
                 turn_id=host._current_turn_id,
             ))
 
+        async def emit_plan_control(control: PlanControl) -> None:
+            event, items, statuses, active_index, explanation = (
+                build_plan_control_event(control, turn_id=host._current_turn_id, redactor=deps.redactor))
+            deps.working_context_store.record_plan(
+                items,
+                statuses,
+                active_index=active_index,
+                explanation=explanation,
+                turn_id=host._current_turn_id,
+            )
+            host._turn_tool_context = replace(
+                host._turn_tool_context, plan_control=control,
+                plan_control_mode=control.mode)
+            await host._emit(event)
+
         execution_ctx = replace(
             host._turn_tool_context,
             tool_descriptor=descriptor,
@@ -355,6 +372,7 @@ class ToolBatchExecutor:
             output_emitter=emit_output,
             input_requester=request_user_input,
             plan_emitter=emit_plan,
+            plan_control_emitter=emit_plan_control,
             waiting_emitter=host._enter_waiting,
             resume_emitter=host._resume_waiting,
         )

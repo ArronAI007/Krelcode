@@ -26,7 +26,10 @@ def builtin_command_specs() -> tuple[CommandSpec, ...]:
         CommandSpec(
             "plan", "查看当前执行计划", kind=ui,
             available_during_run=True,
-            help="显示模型最近一次 update_plan 提交的结构化计划"),
+            argument_hint="[approve|cancel|edit <JSON>]",
+            help=("显示模型最近一次 update_plan 提交的结构化计划；"
+                  "待确认时可用 /plan edit <JSON> 修改节点、依赖与验收条件，"
+                  "再 /plan approve 执行")),
         CommandSpec(
             "tool-output", "查看或展开工具输出", kind=ui,
             argument_hint="[编号|last]", available_during_run=True,

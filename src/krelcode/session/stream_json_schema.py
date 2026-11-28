@@ -27,6 +27,7 @@ class StreamJsonEventSchema:
     subtype: str
     required_fields: tuple[str, ...]
     envelope: tuple[str, ...] = ()
+    optional_fields: tuple[str, ...] = ()
 
     def as_json_schema(self) -> dict[str, object]:
         required = tuple(dict.fromkeys(
@@ -40,6 +41,10 @@ class StreamJsonEventSchema:
             if field_type is None:
                 continue
             properties[field] = field_type
+        for field in self.optional_fields:
+            field_type = STREAM_JSON_FIELD_TYPES.get(field)
+            if field_type is not None:
+                properties[field] = field_type
         return {
             "type": "object",
             "required": list(required),
@@ -148,6 +153,7 @@ STREAM_JSON_FIELD_TYPES: Mapping[str, Mapping[str, object]] = {
     "application": _FIELD_OBJECT,
     "agent_contract": _FIELD_OBJECT,
     "security": _FIELD_OBJECT,
+    "plan_control": _FIELD_OBJECT,
     "acceptance": _FIELD_OBJECT,
     "transition": _FIELD_OBJECT,
     "observation": _FIELD_OBJECT,
@@ -164,12 +170,14 @@ def _event(
     subtype: str,
     *required: str,
     envelope: Sequence[str] = _ENVELOPE,
+    optional: Sequence[str] = (),
 ) -> StreamJsonEventSchema:
     return StreamJsonEventSchema(
         event_type=event_type,
         subtype=subtype,
         required_fields=tuple(required),
         envelope=tuple(envelope),
+        optional_fields=tuple(optional),
     )
 
 
@@ -263,7 +271,8 @@ OUTPUT_EVENT_SCHEMAS: Mapping[tuple[str, str], StreamJsonEventSchema] = {
         "subagent", "finished", "agent_id", "status", "preview"),
     ("user", "steered"): _event("user", "steered", "content"),
     ("plan", "updated"): _event(
-        "plan", "updated", "items", "active_index", "statuses", "explanation"),
+        "plan", "updated", "items", "active_index", "statuses", "explanation",
+        optional=("plan_control",)),
     ("input", "requested"): _event(
         "input", "requested", "input_id", "prompt", "options",
         "allow_free_text"),
