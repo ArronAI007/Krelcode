@@ -19,6 +19,7 @@ from typing import Mapping, Optional, Protocol, Tuple
 
 from .runtime import ArtifactIdentity, PermissionMode, RuntimeSnapshot
 from .service_ports import EnterprisePolicyPort, PrincipalPort
+from .agent_authority import AuthorityEnvelope
 
 
 @dataclass(frozen=True)
@@ -251,6 +252,9 @@ class GovernanceRequest:
     artifacts: Tuple[ArtifactIdentity, ...] = ()
     audit: AuditCorrelation = field(default_factory=AuditCorrelation)
     metadata: Mapping[str, object] = field(default_factory=dict)
+    authority: Optional[AuthorityEnvelope] = None
+    mcp_server: str = ""
+    tool_source: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "action", str(self.action or "").strip())
@@ -263,6 +267,10 @@ class GovernanceRequest:
         object.__setattr__(self, "artifacts", tuple(self.artifacts))
         object.__setattr__(
             self, "metadata", MappingProxyType(dict(self.metadata)))
+        object.__setattr__(
+            self, "mcp_server", str(self.mcp_server or "").strip())
+        object.__setattr__(
+            self, "tool_source", str(self.tool_source or "").strip())
 
     @property
     def request_id(self) -> str:

@@ -457,7 +457,7 @@ PACKAGE_ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
         "enterprise", "extensions", "hooks", "jobs", "llm", "lsp", "mcp",
         "governance", "observability", "output_styles", "plugins", "review",
         "knowledge", "runtime", "safety", "security_review", "session", "skills",
-        "subagent", "telemetry", "tools", "ui", "web", "webui",
+        "storage", "subagent", "telemetry", "tools", "ui", "web", "webui",
     }),
     "application": frozenset({"contracts"}),
     "contracts": frozenset({"core"}),

@@ -61,6 +61,7 @@ from krelcode.session.memory_dream import (
     MemoryDreamStore,
 )
 from krelcode.session.restore import refresh_skill_system_prompt
+from krelcode.storage import LocalArtifactStore
 from krelcode.subagent.definition import AgentDefinitionManager
 from krelcode.subagent.manager import SubagentManager
 from krelcode.subagent.models import build_subagent_system_prompt
@@ -113,6 +114,8 @@ async def build_loop(
         enterprise_policy=enterprise_policy,
     )
     workspace_root = foundation.workspace_root
+    artifact_store = LocalArtifactStore(
+        workspace_root / ".krelcode" / "artifacts")
     policy = foundation.enterprise_policy
     bus = foundation.bus
     llm = foundation.llm
@@ -302,6 +305,7 @@ async def build_loop(
                 mcp_servers_provider=lambda: tuple(
                     compose_mcp_config(config, dict(plugin_manager.mcp_servers))
                 ),
+                artifact_store=artifact_store,
             ),
         )
     for tool in manager.build_tools():
@@ -407,6 +411,7 @@ async def build_loop(
         working_context_store=working_context_store,
         compact_checkpoint_store=compact_checkpoint_store,
         knowledge=knowledge_base,
+        artifact_store=artifact_store,
     )
     if context_manager is not None:
         context_manager.prompt_surface_registry = loop.prompt_surface_registry

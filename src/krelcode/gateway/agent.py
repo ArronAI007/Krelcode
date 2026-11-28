@@ -10,9 +10,9 @@ from collections.abc import Set
 from typing import Mapping, Optional, Sequence
 
 from krelcode.contracts.application import (
-    ApplicationRequestFactory,
     TaskBudget,
 )
+from krelcode.contracts.agent import AgentContractFactory
 from krelcode.contracts.gateway import (
     AgentGatewayPort,
     AgentGatewayRequest,
@@ -28,6 +28,7 @@ from krelcode.contracts.runtime import (
     RuntimeTaskExecutorPort,
     RuntimeTaskRuntimePort,
     RuntimeTaskState,
+    RuntimeSandboxBinding,
 )
 from .audit import NullGatewayAudit
 from .quota import normalize_quota_decision
@@ -162,17 +163,91 @@ class AgentGateway(AgentGatewayPort):
                 reason=policy_reason,
                 decision=decision,
             )
-        application = request.application or (
-            ApplicationRequestFactory.from_input_source(
-                "sdk",
-                goal=request.message,
-                budget=request.context.budget,
-                metadata={
-                    "gateway_request_id": request.context.request_id,
-                    **dict(request.metadata),
-                },
+        application = request.application
+        contract = request.agent_contract
+        if (
+            contract is not None
+            and application is not None
+            and contract.intent != application
+        ):
+            decision = GatewayDecision(
+                layer=GatewayLayer.AGENT,
+                allowed=False,
+                reason="application 与 agent_contract.intent 不一致",
+                route=route.name,
             )
+            self._audit(request, "agent.deny", decision, {})
+            return AgentGatewayResult(
+                accepted=False,
+                route=route.name,
+                reason=decision.reason,
+                decision=decision,
+            )
+        if contract is not None:
+            application = contract.intent
+            if (
+                contract.principal.principal_id
+                != request.context.principal_id
+                or contract.principal.tenant_id != request.context.tenant_id
+            ):
+                decision = GatewayDecision(
+                    layer=GatewayLayer.AGENT,
+                    allowed=False,
+                    reason="AgentContract 身份与 GatewayContext 不一致",
+                    route=route.name,
+                )
+                self._audit(request, "agent.deny", decision, {})
+                return AgentGatewayResult(
+                    accepted=False,
+                    route=route.name,
+                    reason=decision.reason,
+                    decision=decision,
+                )
+        if application is None:
+            decision = GatewayDecision(
+                layer=GatewayLayer.AGENT,
+                allowed=False,
+                reason="AgentGateway 必须提交显式 ApplicationRequest",
+                route=route.name,
+            )
+            self._audit(request, "agent.deny", decision, {
+                "reason": "missing_application_request",
+            })
+            return AgentGatewayResult(
+                accepted=False,
+                route=route.name,
+                reason=decision.reason,
+                decision=decision,
+            )
+        contract = contract or AgentContractFactory.from_application(
+            application,
+            principal=RuntimeIdentity(
+                principal_id=request.context.principal_id,
+                tenant_id=request.context.tenant_id,
+            ),
+            sandbox=RuntimeSandboxBinding(),
+            tool_allowlist=request.tool_allowlist,
+            metadata={
+                "gateway_request_id": request.context.request_id,
+                **dict(request.metadata),
+            },
         )
+        input_errors = contract.validate_inputs(
+            request.message, request.images)
+        if input_errors:
+            decision = GatewayDecision(
+                layer=GatewayLayer.AGENT,
+                allowed=False,
+                reason="AgentContract 输入无效: " + "; ".join(input_errors),
+                route=route.name,
+            )
+            self._audit(request, "agent.deny", decision, {})
+            return AgentGatewayResult(
+                accepted=False,
+                route=route.name,
+                reason=decision.reason,
+                decision=decision,
+            )
         route_decision = GatewayDecision(
             layer=GatewayLayer.AGENT,
             allowed=True,
@@ -194,6 +269,11 @@ class AgentGateway(AgentGatewayPort):
                 decision=reserved,
             )
         turn_id = f"turn-{uuid.uuid4().hex}"
+        resolved_tool_allowlist = (
+            request.tool_allowlist
+            if request.tool_allowlist is not None
+            else contract.authority.allowed_tools
+        )
         deadline_at = _deadline(
             application.budget.timeout_seconds,
             request.context.budget.timeout_seconds,
@@ -203,13 +283,13 @@ class AgentGateway(AgentGatewayPort):
             message=request.message,
             application=application,
             images=request.images,
-            tool_allowlist=request.tool_allowlist,
+            tool_allowlist=resolved_tool_allowlist,
             reminder_ids=request.reminder_ids,
-            identity=RuntimeIdentity(
-                principal_id=request.context.principal_id,
-                tenant_id=request.context.tenant_id,
-            ),
+            identity=contract.principal,
+            harness_release=contract.harness_release,
+            sandbox=contract.sandbox,
             deadline_at=deadline_at,
+            agent_contract=contract,
             metadata={
                 "gateway_request_id": request.context.request_id,
                 "gateway_trace_id": request.context.trace_id,
@@ -218,6 +298,7 @@ class AgentGateway(AgentGatewayPort):
                 "gateway_route": route.name,
                 **dict(route.metadata),
                 **dict(request.metadata),
+                "agent_contract_id": contract.contract_id,
             },
         )
         executor = _QuotaReleasingExecutor(

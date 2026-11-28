@@ -10,6 +10,7 @@ from krelcode.contracts.application import (
     ApplicationRequest,
     ApplicationRequestFactory,
 )
+from krelcode.contracts.agent import AgentContract
 from krelcode.contracts.runtime import RuntimeReleaseManifest
 from krelcode.observability.models import (
     EventEnvelope,
@@ -58,11 +59,29 @@ class DashboardStore:
         run_id = safe_run_id(run_id)
         manifest = self._manifest(run_id)
         metrics = self.metrics(run_id)
+        contract = self.agent_contract(run_id)
         return {
             "manifest": manifest.to_dict(),
             "metrics": metrics,
             "application": self.application(run_id).to_dict(),
+            "agent_contract": (
+                contract.to_dict() if contract is not None else {}),
         }
+
+    def agent_contract(self, run_id: str) -> Optional[AgentContract]:
+        """Read the frozen task contract from a run's start event."""
+        run_id = safe_run_id(run_id)
+        for event in self.events_after(run_id, 0, limit=1_000):
+            if event.name != "run_started":
+                continue
+            raw = event.payload.get("agent_contract")
+            if not isinstance(raw, Mapping) or not raw:
+                return None
+            try:
+                return AgentContract.from_dict(raw)
+            except (TypeError, ValueError):
+                return None
+        return None
 
     def application(self, run_id: str) -> ApplicationRequest:
         """Read a run's application contract or build a legacy WebUI view."""

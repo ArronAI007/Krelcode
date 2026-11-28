@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     )
     from krelcode.agent.context.context_plan import ContextPlanSnapshot
     from krelcode.agent.turn.runtime_ports import CompactCheckpointResultPort
+    from krelcode.contracts.agent import AgentContract
 
 class ContextPlanPort(Protocol):
     @property
@@ -203,6 +204,7 @@ class CheckpointLoopPort(Protocol):
     restored_workspace_fingerprint: Optional["WorkspaceFingerprint"]
     bus: EventBus
     prompt_profile_config: str
+    agent_contract: Optional["AgentContract"]
 
     def rebuild_working_context(self) -> "WorkingContextSnapshot": ...
     def sync_context_attachments(

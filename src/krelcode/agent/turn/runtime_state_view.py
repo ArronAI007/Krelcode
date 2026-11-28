@@ -99,6 +99,7 @@ if TYPE_CHECKING:
         PrincipalPort,
     )
     from krelcode.contracts.application import ApplicationRequest
+    from krelcode.contracts.agent import AgentContract
     from krelcode.contracts.acceptance import AcceptanceResult
     from krelcode.contracts.tool import RuntimeSnapshot, ToolContext, TurnAbortSignal
     from krelcode.llm.base import LLMProvider
@@ -264,6 +265,14 @@ class RuntimeStateView:
         value: Optional[ApplicationRequest],
     ) -> None:
         self.runtime_state.turn.application_request = value
+
+    @property
+    def agent_contract(self) -> Optional[AgentContract]:
+        return self.runtime_state.turn.agent_contract
+
+    @agent_contract.setter
+    def agent_contract(self, value: Optional[AgentContract]) -> None:
+        self.runtime_state.turn.agent_contract = value
 
     @property
     def acceptance_result(self) -> Optional[AcceptanceResult]:

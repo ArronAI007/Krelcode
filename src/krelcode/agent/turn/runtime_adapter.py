@@ -9,6 +9,7 @@ from typing import Awaitable, Callable, Optional, Sequence, cast
 
 from krelcode.contracts.acceptance import AcceptanceEvaluatorPort
 from krelcode.contracts.application import ApplicationRequest
+from krelcode.contracts.agent import AgentContract
 from krelcode.contracts.governance import ControlPlanePort
 from krelcode.contracts.runtime import (
     HarnessTurnControlPort,
@@ -134,6 +135,7 @@ class AgentLoopTurnAdapter(HarnessTurnControlPort):
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[Sequence[str]] = None,
         application_request: Optional[ApplicationRequest] = None,
+        agent_contract: Optional[AgentContract] = None,
     ) -> str:
         return await self._loop.run_turn(
             user_input,
@@ -142,6 +144,7 @@ class AgentLoopTurnAdapter(HarnessTurnControlPort):
             tool_allowlist=tool_allowlist,
             reminder_ids=reminder_ids,
             application_request=application_request,
+            agent_contract=agent_contract,
         )
 
     def submit_steering(self, item: SteeringInput | str) -> None:

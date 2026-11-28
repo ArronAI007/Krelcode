@@ -22,6 +22,7 @@ from ..core.events import ApprovalRequested, EventBus
 from ..core.messages import ToolCall
 from ..core.secret_guard import classify_secret_path
 from ..contracts.runtime import PermissionMode
+from ..contracts.governance import SecurityDecisionValue
 from ..contracts.tool import ToolContext
 from .commands import RISK_ALLOW, RISK_DENY, classify_command
 from .contract import local_read_only_tool, restricts_to_local_read_only
@@ -121,6 +122,19 @@ class ToolPermissionPolicy:
                 tool_call, ctx.workspace_root)
             if reason:
                 return deny(reason)
+        governance = ctx.governance_decision
+        if (
+            governance is not None
+            and governance.security_decision.decision
+            is SecurityDecisionValue.REQUIRE_APPROVAL
+        ):
+            return await self._ask(
+                tool_call,
+                governance.security_decision.reason
+                or "AgentContract 要求人工审批",
+                ctx=ctx,
+                force_approval=True,
+            )
         descriptor = ctx.tool_descriptor
         local_read_only = bool(
             descriptor is not None

@@ -288,6 +288,7 @@ async def _run_turn(
             tool_allowlist=tool_allowlist,
             reminder_ids=reminder_ids,
             application_request=application_request,
+            agent_contract=message.agent_contract,
         )
     except Exception as exc:
         writer.emit(encoder.result_message(

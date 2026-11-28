@@ -99,6 +99,7 @@ if TYPE_CHECKING:
         PrincipalPort,
     )
     from krelcode.contracts.application import ApplicationRequest
+    from krelcode.contracts.agent import AgentContract
     from krelcode.contracts.acceptance import AcceptanceResult
     from krelcode.contracts.tool import RuntimeSnapshot, ToolContext, TurnAbortSignal
     from krelcode.llm.base import LLMProvider
@@ -163,6 +164,7 @@ class TurnRuntimeState:
     turn_requested_reminder_ids: tuple[str, ...] = ()
     last_reminder_selection: Optional["ReminderSelection"] = None
     application_request: Optional["ApplicationRequest"] = None
+    agent_contract: Optional["AgentContract"] = None
     acceptance_result: Optional["AcceptanceResult"] = None
     steering_queue: asyncio.Queue[SteeringInput | str] = field(
         default_factory=lambda: asyncio.Queue()

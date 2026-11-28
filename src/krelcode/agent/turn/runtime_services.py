@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from krelcode.contracts.service_ports import EnterprisePolicyPort, PrincipalPort
     from krelcode.contracts.knowledge import KnowledgeServicePort
     from krelcode.contracts.tool import RuntimeSnapshot, ToolContext
+    from krelcode.contracts.artifact import ArtifactStorePort
     from krelcode.contracts.governance import ControlPlanePort
     from krelcode.contracts.tool_execution import ExecutionRuntimePort
     from krelcode.llm.base import LLMProvider
@@ -308,6 +309,7 @@ class CoreRuntimeServices:
     runtime_snapshot_provider: Optional[
         Callable[["RuntimeSnapshot"], "RuntimeSnapshot"]
     ] = None
+    artifact_store: Optional["ArtifactStorePort"] = None
 
 
 @dataclass(slots=True)

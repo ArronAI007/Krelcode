@@ -20,6 +20,7 @@ from krelcode.contracts.application import (
     ApplicationRequest,
     ApplicationRequestFactory,
 )
+from krelcode.contracts.agent import AgentContract, AgentContractFactory
 from krelcode.contracts.runtime import (
     HarnessReleaseIdentity,
     RuntimeCheckpointRef,
@@ -125,6 +126,7 @@ class _LoopTurnExecutor(RuntimeTaskExecutorPort):
             ),
             reminder_ids=list(task.reminder_ids) or None,
             application_request=task.application,
+            agent_contract=task.agent_contract,
         )
 
 
@@ -320,30 +322,60 @@ class QueryEngine:
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[list[str]] = None,
         application_request: Optional[ApplicationRequest] = None,
+        agent_contract: Optional[AgentContract] = None,
     ) -> QuerySession:
         turn_id = f"turn-{next(self._counter)}"
-        if application_request is None and self.require_application_request:
-            raise ValueError("生产 QueryEngine 必须显式提供 ApplicationRequest")
-        resolved_application = application_request or (
-            ApplicationRequestFactory.from_input_source(
-                "headless",
-                goal=user_input or "[image attachment]",
-            )
+        if (
+            application_request is None
+            and agent_contract is None
+            and self.require_application_request
+        ):
+            raise ValueError(
+                "生产 QueryEngine 必须显式提供 ApplicationRequest "
+                "或 AgentContract")
+        if (
+            agent_contract is not None
+            and application_request is not None
+            and agent_contract.intent != application_request
+        ):
+            raise ValueError(
+                "ApplicationRequest 与 AgentContract.intent 不一致")
+        resolved_application = (
+            agent_contract.intent if agent_contract is not None
+            else application_request
+        ) or ApplicationRequestFactory.from_input_source(
+            "headless",
+            goal=user_input or "[image attachment]",
+        )
+        resolved_contract = agent_contract or AgentContractFactory.from_application(
+            resolved_application,
+            principal=self.runtime_identity,
+            harness_release=self.harness_release,
+            sandbox=self.sandbox_binding,
+            tool_allowlist=tool_allowlist,
+        )
+        input_errors = resolved_contract.validate_inputs(
+            user_input, tuple(images or ()))
+        if input_errors:
+            raise ValueError("AgentContract 输入校验失败: " + "; ".join(input_errors))
+        resolved_tool_allowlist = (
+            tuple(tool_allowlist)
+            if tool_allowlist is not None
+            else resolved_contract.authority.allowed_tools
         )
         runtime_task = RuntimeTask(
             turn_id=turn_id,
             message=user_input,
             application=resolved_application,
             images=tuple(images or ()),
-            tool_allowlist=(
-                tuple(tool_allowlist)
-                if tool_allowlist is not None else None
-            ),
+            tool_allowlist=resolved_tool_allowlist,
             reminder_ids=tuple(reminder_ids or ()),
-            identity=self.runtime_identity,
-            harness_release=self.harness_release,
+            identity=resolved_contract.principal,
+            harness_release=resolved_contract.harness_release,
             retry_policy=self.retry_policy,
-            sandbox=self.sandbox_binding,
+            sandbox=resolved_contract.sandbox,
+            metadata={"agent_contract_id": resolved_contract.contract_id},
+            agent_contract=resolved_contract,
         )
         queue: asyncio.Queue[QueryEvent | _QueryEnd] = asyncio.Queue(
             maxsize=self.queue_size)

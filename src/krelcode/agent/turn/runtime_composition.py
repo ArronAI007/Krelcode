@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from krelcode.contracts.tool import ToolContext
     from krelcode.contracts.governance import ControlPlanePort
     from krelcode.contracts.tool_execution import ExecutionRuntimePort
+    from krelcode.contracts.artifact import ArtifactStorePort
     from krelcode.llm.base import LLMProvider
     from krelcode.safety.policy import ApprovalPolicy
     from krelcode.tools.registry import ToolRegistry
@@ -64,6 +65,7 @@ def build_agent_services(
     execution_runtime: Optional["ExecutionRuntimePort"] = None,
     control_plane: Optional["ControlPlanePort"] = None,
     knowledge: Optional["KnowledgeServicePort"] = None,
+    artifact_store: Optional["ArtifactStorePort"] = None,
 ) -> AgentServices:
     """Build the stable service graph shared by all turn executors."""
     # Import concrete agent-layer implementations lazily to keep this helper out
@@ -147,6 +149,7 @@ def build_agent_services(
             redactor=redactor,
             hook_port=hook_port,
             user_input_port=user_input_port,
+            artifact_store=artifact_store,
         ),
         context=ContextRuntimeServices(
             manager=context_manager,

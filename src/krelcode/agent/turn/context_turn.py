@@ -567,6 +567,7 @@ class ContextTurnCoordinator:
             working_context=deps.working_context_store.snapshot(),
             relevant_memory=tuple(host.restored_memory_context),
             application_request=host.application_request,
+            agent_contract=host.agent_contract,
         )
         reminder_selection = self.select_turn_reminders()
         prompt_plan = await deps.prompt_assembler.assemble(

@@ -263,6 +263,11 @@ class SessionContinuationAdapter(RuntimeContinuationPort):
                         if state_ref is not None else None
                     ),
                 },
+                "agent_contract": (
+                    self.loop.agent_contract.to_dict()
+                    if self.loop.agent_contract is not None
+                    else {}
+                ),
             },
         )
         commit = getattr(self.state_checkpoints, "commit", None)

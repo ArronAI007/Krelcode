@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from ..core.events import (
+    AcceptanceEvaluated,
     AgentEvent,
     CompactCheckpointCreated,
     ContextAssembled,
@@ -37,6 +38,7 @@ from ..core.events import (
     RunCancelled,
     RunFinished,
     RunStarted,
+    SecurityDecisionRecorded,
     ShellJobFinished,
     ShellJobStarted,
     SubagentFeedUpdated,
@@ -158,7 +160,22 @@ class SessionRecorder:
                 record["turn_id"] = event.turn_id
             if event.session_id:
                 record["session_id"] = event.session_id
+            if event.agent_contract:
+                record["agent_contract"] = dict(event.agent_contract)
             return record
+        if isinstance(event, AcceptanceEvaluated):
+            return {
+                "type": "acceptance_evaluated",
+                "ts": ts,
+                "acceptance": dict(event.acceptance),
+            }
+        if isinstance(event, SecurityDecisionRecorded):
+            return {
+                "type": "security_decision",
+                "ts": ts,
+                "tool_call_id": event.tool_call_id,
+                "security": dict(event.security),
+            }
         if isinstance(event, ToolCallStarted):
             return {"type": "tool_call", "ts": ts, "id": event.tool_call.id,
                     "name": event.tool_call.name, "arguments": event.tool_call.arguments}

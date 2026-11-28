@@ -19,6 +19,7 @@ from krelcode.core.redact import SecretRedactor
 from krelcode.contracts.tool import RuntimeSnapshot, ToolContext
 from krelcode.contracts.governance import ControlPlanePort
 from krelcode.contracts.tool_execution import ExecutionRuntimePort
+from krelcode.contracts.artifact import ArtifactStorePort
 from krelcode.llm.base import LLMProvider
 from krelcode.safety.policy import ApprovalPolicy
 from krelcode.agent.turn.runtime_ports import (
@@ -61,6 +62,7 @@ class AgentDependencies:
     repeat_failure_limit: int = 3
     max_steps: int = 64
     token_budget: Optional[int] = None
+    artifact_store: Optional[ArtifactStorePort] = None
 
     @property
     def workspace_root(self) -> Path:

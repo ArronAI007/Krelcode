@@ -28,6 +28,7 @@ from krelcode.core.events import (
 )
 from krelcode.core.messages import ImageRef, SteeringInput
 from krelcode.contracts.application import ApplicationRequest
+from krelcode.contracts.agent import AgentContract
 from krelcode.contracts.acceptance import AcceptanceEvaluatorPort
 from krelcode.contracts.governance import ControlPlanePort
 from krelcode.contracts.runtime import (
@@ -199,6 +200,7 @@ class HarnessRuntimeFacade:
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[list[str]] = None,
         application_request: Optional[ApplicationRequest] = None,
+        agent_contract: Optional[AgentContract] = None,
     ) -> str:
         """执行一次完整 turn；供 headless/API 复用。"""
         query = self.start_query(
@@ -207,6 +209,7 @@ class HarnessRuntimeFacade:
             tool_allowlist=tool_allowlist,
             reminder_ids=reminder_ids,
             application_request=application_request,
+            agent_contract=agent_contract,
         )
         async for _ in query.events:
             pass
@@ -258,6 +261,7 @@ class HarnessRuntimeFacade:
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[list[str]] = None,
         application_request: Optional[ApplicationRequest] = None,
+        agent_contract: Optional[AgentContract] = None,
     ) -> QuerySession:
         """启动一条可消费 QueryEvent 流；同一 Runtime 不允许并发两轮。"""
         if self.is_running:
@@ -268,6 +272,7 @@ class HarnessRuntimeFacade:
             tool_allowlist=tool_allowlist,
             reminder_ids=reminder_ids,
             application_request=application_request,
+            agent_contract=agent_contract,
         )
         self._task = self._query.task
         return self._query

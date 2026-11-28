@@ -495,6 +495,37 @@ class ToolBatchExecutor:
             policy_id = policy_decision.policy_id
             approval_id = policy_decision.approval_id
             policy_reason = policy_decision.reason
+            requires_contract_approval = (
+                governance_decision.security_decision.decision
+                is SecurityDecisionValue.REQUIRE_APPROVAL
+            )
+            if (
+                policy_decision.allowed
+                and requires_contract_approval
+                and not approval_id
+            ):
+                reason = "AgentContract 要求人工审批，但审批策略未产生批准记录"
+                security_decision = _security_decision(
+                    governance_decision,
+                    tool_call,
+                    decision=SecurityDecisionValue.DENY,
+                    policy_id="contract-approval",
+                    reason=reason,
+                )
+                await _emit_security_decision(
+                    host, tool_call, security_decision)
+                return ToolExecutionResult(
+                    content=f"操作被安全策略拒绝: {reason}",
+                    is_error=True,
+                    runtime=runtime,
+                    diagnostics={
+                        "source": descriptor.source.value,
+                        "runtime": runtime.value,
+                        "error_kind": "contract_approval_missing",
+                        "security_decision": (
+                            security_decision.decision_hash),
+                    },
+                )
             if not policy_decision.allowed:
                 await host._emit(PermissionDenied(
                     tool_call, policy_decision.reason))
@@ -519,6 +550,34 @@ class ToolBatchExecutor:
                         "security_decision": security_decision.decision_hash,
                     },
                 )
+
+        if (
+            governance_decision.security_decision.decision
+            is SecurityDecisionValue.REQUIRE_APPROVAL
+            and not approval_id
+        ):
+            reason = "AgentContract 要求人工审批，但没有可用审批器"
+            security_decision = _security_decision(
+                governance_decision,
+                tool_call,
+                decision=SecurityDecisionValue.DENY,
+                policy_id="contract-approval",
+                reason=reason,
+            )
+            await _emit_security_decision(
+                host, tool_call, security_decision)
+            return ToolExecutionResult(
+                content=f"操作被安全策略拒绝: {reason}",
+                is_error=True,
+                runtime=runtime,
+                diagnostics={
+                    "source": descriptor.source.value,
+                    "runtime": runtime.value,
+                    "error_kind": "contract_approval_missing",
+                    "security_decision": (
+                        security_decision.decision_hash),
+                },
+            )
 
         security_decision = _security_decision(
             governance_decision,
@@ -625,6 +684,7 @@ def _governance_request(
     resolution = host.prompt_profile_resolution
     release_id = str(getattr(resolution, "release_id", "") or "")
     release_hash = str(getattr(resolution, "release_hash", "") or "")
+    contract = getattr(host, "agent_contract", None)
     permission_profile = str(
         tool_call.arguments.get("sandbox_permission") or "auto")
     sandbox_limits = getattr(sandbox, "resource_limits", None)
@@ -667,6 +727,9 @@ def _governance_request(
             turn_id=host._current_turn_id,
             request_id=tool_call.id,
         ),
+        authority=contract.authority if contract is not None else None,
+        mcp_server=descriptor.mcp_server or "",
+        tool_source=descriptor.source.value,
     )
 
 

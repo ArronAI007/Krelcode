@@ -75,6 +75,13 @@ from ..contracts.application import (
     ApplicationRequestFactory,
     TaskShape,
 )
+from ..contracts.agent import AgentContractFactory
+from ..contracts.artifact import ArtifactStorePort
+from ..contracts.runtime import (
+    HarnessReleaseIdentity,
+    RuntimeIdentity,
+    RuntimeSandboxBinding,
+)
 from ..contracts.service_ports import PromptFragmentRegistryPort
 from ..tools.registry import ToolRegistry
 from .builtin_agents import DEFAULT_BUILTIN_SUBAGENT_NAME
@@ -90,6 +97,7 @@ from .models import (
     AgentHandle,
     build_subagent_system_prompt,
 )
+from .execution import run_handle
 from .manager_reads import MemoryStorePort, SubagentReadMixin
 from .sidechain import SidechainStore
 from .tool_scope import (
@@ -137,6 +145,7 @@ class SubagentManager(SubagentReadMixin):
             Callable[[], Iterable[PromptFragment]]
         ] = None,
         cache_ledger_provider: Optional[Callable[[], object | None]] = None,
+        artifact_store: Optional[ArtifactStorePort] = None,
     ) -> None:
         self.llm = llm
         self.tool_factory = tool_factory
@@ -165,6 +174,7 @@ class SubagentManager(SubagentReadMixin):
         self.memory_store = memory_store
         self.llm_resolver = llm_resolver
         self.mcp_servers_provider = mcp_servers_provider
+        self.artifact_store = artifact_store
         self._handles: Dict[str, AgentHandle] = {}
         self._counter = 0
         self.worktrees = SubagentWorktreeManager(tool_context.workspace_root)
@@ -332,6 +342,31 @@ class SubagentManager(SubagentReadMixin):
                 services=self.tool_context.services,
                 shell_jobs=getattr(self.tool_context, "shell_jobs", None),
             )
+        parent_sandbox = getattr(self.tool_context, "sandbox", None)
+        sandbox_binding = RuntimeSandboxBinding(
+            profile="subagent",
+            backend=str(getattr(parent_sandbox, "backend", "static")),
+            enabled=self.tool_context.sandbox_enabled,
+            network=bool(getattr(parent_sandbox, "network", False)),
+            permission_profile=permission_mode.value,
+        )
+        principal = self.tool_context.principal
+        agent_contract = AgentContractFactory.from_application(
+            application_request,
+            principal=RuntimeIdentity(
+                principal_id=str(
+                    getattr(principal, "subject", "") or "local"),
+                auth_method=str(
+                    getattr(principal, "auth_method", "") or "local"),
+            ),
+            harness_release=HarnessReleaseIdentity(
+                agent_definition_id=(
+                    definition_obj.name if definition_obj is not None else "")),
+            sandbox=sandbox_binding,
+            tool_allowlist=tuple(tool.name for tool in tools),
+            mcp_allowlist=mcp_servers,
+            metadata={"subagent_id": agent_id},
+        )
 
         control = AgentControl()
         child_bus = EventBus()
@@ -412,6 +447,7 @@ class SubagentManager(SubagentReadMixin):
             hook_port=child_hook_port,
             step_gate=control.wait_if_paused,
             working_context_store=own_working_context,
+            artifact_store=self.artifact_store,
         )
         loop.prompt_registry = prompt_registry
         loop.prompt_profile = prompt_resolution.profile
@@ -516,6 +552,7 @@ class SubagentManager(SubagentReadMixin):
             permission_mode=permission_mode.value,
             mcp_servers=mcp_servers,
             application_request=application_request,
+            agent_contract=agent_contract,
         )
         self._handles[agent_id] = handle
         child_bus.subscribe(partial(self._on_child_event, handle))
@@ -599,54 +636,12 @@ class SubagentManager(SubagentReadMixin):
         await self.bus.emit(SubagentFinished(
             handle.id, handle.status, handle.preview()))
 
+    async def _finalize_worktree(self, handle: AgentHandle) -> None:
+        await self.worktrees.finalize(handle)
+
     async def _run(self, handle: AgentHandle, message: str) -> None:
         """执行一条消息；队列非空时在同一 Task 内继续排空。"""
-        while True:
-            handle.result = None
-            handle.error = None
-            await self._set_state(handle, STATUS_RUNNING, "执行任务")
-            try:
-                result = await handle.loop.run(
-                    message,
-                    application_request=handle.application_request,
-                )
-                handle.result = result
-                handle.turns += 1
-                await self._set_state(handle, STATUS_COMPLETED, "本轮完成")
-            except asyncio.CancelledError:
-                killed = handle.kill_requested
-                handle.status = STATUS_KILLED if killed else STATUS_CANCELLED
-                handle.error = "用户终止子代理" if killed else "任务被打断/取消"
-                if handle.sidechain is not None:
-                    handle.sidechain.append_state(
-                        handle.status, reason=handle.error, turns=handle.turns,
-                        error=handle.error)
-                    handle.sidechain.append_history(
-                        handle.loop.history, turn=handle.turns)
-                await self.bus.emit(SubagentStateChanged(
-                    handle.id, handle.status, handle.error))
-                await self.bus.emit(SubagentFinished(
-                    handle.id, handle.status, handle.preview()))
-                raise
-            except Exception as exc:
-                handle.error = f"{type(exc).__name__}: {exc}"
-                handle.turns += 1
-                await self._set_state(handle, STATUS_FAILED, handle.error)
-            await self._emit_finished(handle)
-
-            if handle.queue:
-                message = handle.queue.pop(0)
-                handle.application_request = (
-                    handle.queued_application_requests.pop(0)
-                    if handle.queued_application_requests else None
-                )
-                if handle.sidechain is not None:
-                    handle.sidechain.append_message(
-                        "user", message, source="queue")
-                continue
-            if handle.worktree is not None:
-                await self.worktrees.finalize(handle)
-            return
+        await run_handle(self, handle, message)
 
     def get(self, agent_id: str) -> Optional[AgentHandle]:
         return self._handles.get(agent_id)

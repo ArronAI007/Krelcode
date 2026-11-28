@@ -31,6 +31,8 @@ class RunStarted(AgentEvent):
     turn_id: str = ""
     session_id: str = ""
     application: Mapping[str, object] = field(default_factory=dict, compare=False)
+    agent_contract: Mapping[str, object] = field(
+        default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)

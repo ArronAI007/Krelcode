@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Mapping, Optional
 
 from krelcode.contracts.application import ApplicationRequest
+from krelcode.contracts.agent import AgentContract
 from krelcode.contracts.runtime import (
     HarnessReleaseIdentity,
     RuntimeCheckpointRef,
@@ -138,6 +139,9 @@ def task_to_mapping(task: RuntimeTask) -> dict[str, object]:
             checkpoint_to_mapping(task.resume_from)
             if task.resume_from is not None else None),
         "metadata": dict(task.metadata),
+        "agent_contract": (
+            task.agent_contract.to_dict()
+            if task.agent_contract is not None else None),
     }
 
 
@@ -181,6 +185,12 @@ def task_from_mapping(raw: object) -> RuntimeTask:
         metadata=(
             dict(metadata_raw)
             if isinstance(metadata_raw, Mapping) else {}),
+        agent_contract=(
+            AgentContract.from_dict(contract_raw)
+            if isinstance(
+                (contract_raw := raw.get("agent_contract")), Mapping
+            ) else None
+        ),
     )
 
 

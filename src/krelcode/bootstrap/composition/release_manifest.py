@@ -10,6 +10,7 @@ from ...contracts.runtime import (
     RUNTIME_RELEASE_SCHEMA_VERSION,
     RuntimeReleaseManifest,
 )
+from ...contracts.agent import AGENT_CONTRACT_SCHEMA_VERSION
 from ...enterprise.policy import EnterprisePolicy
 from ...mcp.supervisor import MCPSupervisor
 from ...observability.models import (
@@ -160,6 +161,7 @@ def build_runtime_release_manifest(
                 prompt_resolution, "name", loop.prompt_profile_name),
             "definitions": agent_definitions,
             "definitions_hash": stable_hash(agent_definitions),
+            "contract_schema_version": AGENT_CONTRACT_SCHEMA_VERSION,
         },
         prompt_release={
             "release_id": getattr(prompt_resolution, "release_id", ""),

@@ -26,6 +26,7 @@ from ...contracts.governance import (
     SecurityDecisionValue,
 )
 from ...contracts.runtime import PermissionMode
+from ...contracts.agent_authority import ApprovalDecision
 
 
 class DefaultControlPlane:
@@ -47,7 +48,9 @@ class DefaultControlPlane:
             "plugin_trust",
             "prompt_release",
             "artifact_version",
+            "agent_authority",
         ]
+        approval_required = False
 
         identity = request.identity
         subject = str(getattr(identity, "subject", "") or "")
@@ -138,6 +141,25 @@ class DefaultControlPlane:
         for artifact in request.artifacts:
             _evaluate_artifact(artifact, denials)
 
+        authority_decision = None
+        if request.authority is not None and request.tool_name:
+            authority_decision = request.authority.evaluate_tool(
+                request.tool_name,
+                request.tool_arguments,
+                mcp_server=request.mcp_server,
+                tool_source=request.tool_source,
+            )
+            if authority_decision.decision is ApprovalDecision.DENY:
+                denials.append(authority_decision.reason)
+            elif (
+                authority_decision.decision
+                is ApprovalDecision.REQUIRE_APPROVAL
+            ):
+                approval_required = True
+                constraints.append(
+                    authority_decision.reason
+                    or "AgentContract 要求人工审批")
+
         audit = _normalized_audit(request.audit)
         policy_version = _policy_version(policy, request.policy_version)
         denied_reason = "; ".join(dict.fromkeys(denials))
@@ -148,14 +170,26 @@ class DefaultControlPlane:
             action=request.action,
             decision=(
                 SecurityDecisionValue.DENY
-                if denials else SecurityDecisionValue.ALLOW
+                if denials else (
+                    SecurityDecisionValue.REQUIRE_APPROVAL
+                    if approval_required
+                    else SecurityDecisionValue.ALLOW
+                )
             ),
-            reason=denied_reason,
+            reason=denied_reason or (
+                authority_decision.reason
+                if approval_required and authority_decision is not None
+                else ""
+            ),
             sandbox_profile=sandbox,
             trace_id=audit.trace_id or audit.correlation_id,
             evidence={
                 "checked": tuple(checked),
                 "policy_digest": policy_version.digest,
+                "approval_required": approval_required,
+                "authority_rule": (
+                    authority_decision.rule_id
+                    if authority_decision is not None else ""),
             },
         )
         return GovernanceDecision(

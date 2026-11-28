@@ -29,6 +29,12 @@ from krelcode.agent.turn.intent import TurnIntent
 from krelcode.agent.rules import RuleBundle, RuleLayer, RuleLoader, RuleScope, extract_rule_targets
 from krelcode.core.tokens import estimate_text_tokens
 from krelcode.contracts.application import ApplicationRequest
+from krelcode.contracts.agent import (
+    AgentContract,
+    DeliverableKind,
+    InputKind,
+)
+from krelcode.contracts.agent_authority import ApprovalDecision
 from krelcode.contracts.knowledge import (
     KnowledgeDocument,
     KnowledgeHit,
@@ -108,6 +114,7 @@ class ContextRequest:
     working_context: Optional["WorkingContextSnapshot"] = None
     relevant_memory: Tuple[str, ...] = ()
     application_request: Optional[ApplicationRequest] = None
+    agent_contract: Optional[AgentContract] = None
 
 
 @dataclass(frozen=True)
@@ -367,6 +374,74 @@ class TurnIntentContextSource:
             token_contributions=(ContextTokenContribution(
                 "runtime:intent", CATEGORY_RUNTIME,
                 estimate_text_tokens(content)),),
+        ),)
+
+
+class AgentContractContextSource:
+    """Expose the frozen task contract as a non-compactable runtime layer."""
+
+    name = "agent_contract"
+
+    def collect(self, request: ContextRequest) -> Sequence[ContextLayer]:
+        contract = request.agent_contract
+        if contract is None:
+            return ()
+        input_lines = [
+            f"- {item.id}: {InputKind(item.kind).value}"
+            f"{' (required)' if item.required else ''}"
+            for item in contract.inputs.requirements
+        ]
+        deliverable_lines = [
+            f"- {item.id}: {DeliverableKind(item.kind).value}"
+            f"{' [artifact]' if item.artifact_required else ''}"
+            + (f" path={item.path}" if item.path else "")
+            + (f" artifact={item.artifact_id}" if item.artifact_id else "")
+            for item in contract.deliverables.requirements
+        ]
+        approval_lines = [
+            f"- {rule.id}: {ApprovalDecision(rule.decision).value}"
+            for rule in contract.authority.approval_rules
+        ] or ["- none"]
+        content = "\n".join((
+            f'<agent_contract id="{contract.contract_id}" '
+            f'hash="{contract.contract_hash}">',
+            f"goal: {contract.goal}",
+            "inputs:",
+            *input_lines,
+            "deliverables:",
+            *deliverable_lines,
+            "authority:",
+            f"- systems: {', '.join(contract.authority.allowed_systems)}",
+            "- tools: " + (
+                ", ".join(contract.authority.allowed_tools)
+                if contract.authority.allowed_tools is not None else "*"),
+            "- network: " + (
+                "allowed" if contract.authority.network_allowed else "denied"),
+            f"- write_scope: {contract.authority.write_scope}",
+            "approval_rules:",
+            *approval_lines,
+            "acceptance:",
+            *[f"- {item}" for item in contract.acceptance.criteria],
+            "</agent_contract>",
+        ))
+        return (ContextLayer(
+            id="source:agent-contract",
+            source=self.name,
+            category=CATEGORY_RUNTIME,
+            content=content,
+            trust=TRUST_TRUSTED,
+            origin=contract.contract_id,
+            priority=180,
+            compactable=False,
+            metadata={
+                "contract_id": contract.contract_id,
+                "contract_hash": contract.contract_hash,
+            },
+            token_contributions=(ContextTokenContribution(
+                "runtime:agent-contract",
+                CATEGORY_RUNTIME,
+                estimate_text_tokens(content),
+            ),),
         ),)
 
 
@@ -663,6 +738,7 @@ def default_context_sources(
         RetrievedMemoryContextSource(),
         ToolDirectoryContextSource(),
         TurnIntentContextSource(),
+        AgentContractContextSource(),
         RuntimeHookContextSource(),
     ))
     if working_context_store is not None:

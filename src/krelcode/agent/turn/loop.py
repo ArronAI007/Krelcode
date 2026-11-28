@@ -22,7 +22,6 @@ from krelcode.core.interactions import UserInputPort
 from krelcode.core.redact import SecretRedactor
 from krelcode.core.context_usage import ContextUsageSnapshot
 from krelcode.core.events import (
-    AcceptanceEvaluated,
     AgentEvent,
     ErrorOccurred,
     EventBus,
@@ -37,7 +36,9 @@ from krelcode.core.events import (
 from krelcode.core.messages import ImageRef, Message, SteeringInput, ToolCall, ToolResultBlock
 from krelcode.llm.base import LLMProvider, PreparedLLMRequest, ToolSpec
 from krelcode.contracts import AcceptanceEvaluatorPort, KnowledgeServicePort
+from krelcode.contracts.artifact import ArtifactStorePort
 from krelcode.contracts.application import ApplicationRequest, ApplicationRequestFactory
+from krelcode.contracts.agent import AgentContract
 from krelcode.agent.context.attachments import ContextAttachment, ContextAttachmentDiff, ContextAttachmentKind
 from krelcode.agent.context.compression import ContextManager
 from krelcode.agent.context.context_assembler import ContextAssembler
@@ -49,7 +50,14 @@ from krelcode.agent.context.context_source import (
 from krelcode.agent.turn.dependencies import AgentDependencies
 from krelcode.agent.context.context_cache_ledger import ContextCacheLedger
 from krelcode.agent.turn.context_turn import ContextTurnCoordinator
-from krelcode.agent.turn.acceptance import acceptance_evidence_from_history
+from krelcode.agent.turn.contract_gate import (
+    enforce_contract_acceptance,
+    evaluate_contract_acceptance,
+    preflight_agent_contract,
+    validate_agent_contract_inputs,
+)
+from krelcode.agent.turn.direct_tool import execute_direct_tool
+from krelcode.agent.turn.limits import max_steps_reached_text
 from krelcode.agent.context.context_source import ContextAssembly
 from krelcode.agent.turn.intent import TurnIntent, infer_turn_intent
 from krelcode.agent.turn.model_turn import (
@@ -87,21 +95,11 @@ from krelcode.tools.registry import ToolRegistry
 
 DEFAULT_MAX_STEPS = 64
 
-
-def max_steps_reached_text(max_steps: int) -> str:
-    """步数守卫中止说明：同时给出原因和可操作的调整方式。"""
-    return (
-        f"[krelcode] 工具循环已达到单轮 {max_steps} 个模型步骤的安全上限，"
-        f"本轮已中止。可用 --max-steps {max_steps * 2} 提高上限后重试。"
-    )
-
-
 INTERRUPTED_NOTE = "[已被用户中止]"
 STEERING_PREFIX = "[用户插话] "
 
 class _AsyncClosePort(Protocol):
     async def close(self) -> None: ...
-
 
 class AgentLoop(RuntimeStateHost):
     """Turn orchestration facade.
@@ -149,6 +147,7 @@ class AgentLoop(RuntimeStateHost):
         today_provider: Optional[Callable[[], str]] = None,
         reminder_catalog: Optional[ReminderCatalog] = None,
         execution_runtime: Optional[ExecutionRuntimePort] = None,
+        artifact_store: Optional[ArtifactStorePort] = None,
     ) -> None:
         self._runtime_state = AgentRuntimeState()
         self.services = build_agent_services(
@@ -171,6 +170,7 @@ class AgentLoop(RuntimeStateHost):
             knowledge=knowledge,
             registry_provider=lambda: self.services.prompt.registry,
             execution_runtime=execution_runtime,
+            artifact_store=artifact_store,
         )
 
         # Non-service executor dependencies remain explicit attributes.
@@ -214,6 +214,7 @@ class AgentLoop(RuntimeStateHost):
             hook_port=self.services.core.hook_port,
             user_input_port=self.services.core.user_input_port,
             step_gate=self.step_gate,
+            artifact_store=artifact_store,
             today_provider=today_provider,
             tool_output_inline_limit=self.tool_output_inline_limit,
             repeat_failure_limit=self.repeat_failure_limit,
@@ -319,8 +320,15 @@ class AgentLoop(RuntimeStateHost):
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[Iterable[str]] = None,
         application_request: Optional[ApplicationRequest] = None,
+        agent_contract: Optional[AgentContract] = None,
     ) -> str:
         """QueryEngine 的窄入口；允许 runner 替换 ``run`` 时仍传入 turn id。"""
+        if agent_contract is not None:
+            validate_agent_contract_inputs(
+                agent_contract,
+                user_input,
+                tuple(images or ()),
+            )
         self._begin_turn(
             turn_id,
             tool_allowlist=tool_allowlist,
@@ -331,6 +339,7 @@ class AgentLoop(RuntimeStateHost):
                     goal=user_input or "[image attachment]",
                 )
             ),
+            agent_contract=agent_contract,
         )
         self._turn_prepared = True
         try:
@@ -352,43 +361,8 @@ class AgentLoop(RuntimeStateHost):
         approval policy and Sandbox context as normal tool calls, but never
         appends either the invocation or its result to model history.
         """
-        if self._turn_prepared:
-            raise RuntimeError("Agent 正在执行查询，不能并发启动直接工具")
-        saved_context = self._turn_tool_context
-        saved_intent = self._turn_intent
-        saved_workflow = self._turn_workflow
-        saved_pool = self._active_tool_pool
-        saved_abort = self._turn_abort_signal
-        saved_turn_id = self._current_turn_id
-        saved_application_request = self.application_request
-        direct_turn = turn_id or f"direct-{next(self._direct_counter)}"
-        call = ToolCall(
-            id=f"{direct_turn}-call",
-            name=name,
-            arguments=dict(arguments),
-        )
-        self._begin_turn(direct_turn)
-        self._turn_intent = TurnIntent()
-        self._turn_workflow = None
-        self._active_tool_pool = TurnToolPool(
-            self.services.core.registry,
-            intent=self._turn_intent,
-            runtime=self._turn_tool_context.runtime,
-        )
-        self._active_tool_pool.authorize_direct(name)
-        try:
-            return (await self._run_stream_tool(call)).to_tool_result()
-        except asyncio.CancelledError:
-            self._turn_abort_signal.cancel("直接工具被用户中止")
-            raise
-        finally:
-            self._turn_tool_context = saved_context
-            self._turn_intent = saved_intent
-            self._turn_workflow = saved_workflow
-            self._active_tool_pool = saved_pool
-            self._turn_abort_signal = saved_abort
-            self._current_turn_id = saved_turn_id
-            self.application_request = saved_application_request
+        return await execute_direct_tool(
+            self, name, arguments, turn_id=turn_id)
 
     async def run(
         self,
@@ -399,6 +373,7 @@ class AgentLoop(RuntimeStateHost):
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[Iterable[str]] = None,
         application_request: Optional[ApplicationRequest] = None,
+        agent_contract: Optional[AgentContract] = None,
     ) -> str:
         """处理一轮用户输入：内部可能经历多次 LLM 调用与工具执行。
 
@@ -408,6 +383,12 @@ class AgentLoop(RuntimeStateHost):
         若结尾是未答完的 user 消息则补一条中止说明（保角色交替），再重抛。
         """
         if not self._turn_prepared:
+            if agent_contract is not None:
+                validate_agent_contract_inputs(
+                    agent_contract,
+                    user_input,
+                    tuple(images or ()),
+                )
             self._begin_turn(
                 turn_id,
                 tool_allowlist=tool_allowlist,
@@ -418,6 +399,7 @@ class AgentLoop(RuntimeStateHost):
                         goal=user_input or "[image attachment]",
                     )
                 ),
+                agent_contract=agent_contract,
             )
         if self.pending_context_refresh:
             await self.refresh_workspace_context()
@@ -446,7 +428,17 @@ class AgentLoop(RuntimeStateHost):
             turn_id=self._current_turn_id,
             session_id=self._turn_tool_context.runtime.session_id or "",
             application=(self.application_request.to_dict() if self.application_request is not None else {}),
+            agent_contract=(
+                self.agent_contract.to_dict()
+                if self.agent_contract is not None else {}),
         ))
+        if self.agent_contract is not None:
+            await preflight_agent_contract(
+                self.tool_context,
+                self.agent_contract,
+                self.dependencies.control_plane,
+                self._emit,
+            )
         await self._emit(QueryPhaseChanged(
             "awaiting_model", "等待模型响应"))
         await self.run_lifecycle_hook(
@@ -506,12 +498,18 @@ class AgentLoop(RuntimeStateHost):
         return await self._finish_turn(text)
 
     async def _finish_turn(self, text: str) -> str:
-        request = self.application_request
-        if request is not None and self.acceptance_evaluator is not None:
-            result = self.acceptance_evaluator.evaluate(
-                request, text, acceptance_evidence_from_history(self.history))
-            self.acceptance_result = result
-            await self._emit(AcceptanceEvaluated(result.as_dict()))
+        result = await evaluate_contract_acceptance(
+            contract=self.agent_contract,
+            request=self.application_request,
+            evaluator=self.acceptance_evaluator,
+            final_response=text,
+            history=self.history,
+            workspace_root=self.tool_context.workspace_root,
+            artifact_store=self.services.core.artifact_store,
+            emit=self._emit,
+        )
+        self.acceptance_result = result
+        enforce_contract_acceptance(self.agent_contract, result)
         await self._emit(RunFinished(text, turn_id=self._current_turn_id))
         return text
 
@@ -522,6 +520,7 @@ class AgentLoop(RuntimeStateHost):
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[Iterable[str]] = None,
         application_request: Optional[ApplicationRequest] = None,
+        agent_contract: Optional[AgentContract] = None,
     ) -> None:
         resolved_turn_id = turn_id or f"turn-{next(self._turn_counter)}"
         self._current_turn_id = resolved_turn_id
@@ -533,6 +532,7 @@ class AgentLoop(RuntimeStateHost):
             if str(item).strip()
         ))
         self.application_request = application_request
+        self.agent_contract = agent_contract
         self._turn_abort_signal = TurnAbortSignal()
         snapshot = self.services.core.tool_context.runtime
         if self.runtime_snapshot_provider is not None:

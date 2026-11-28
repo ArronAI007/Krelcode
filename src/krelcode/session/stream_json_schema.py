@@ -146,6 +146,7 @@ STREAM_JSON_FIELD_TYPES: Mapping[str, Mapping[str, object]] = {
     "command": {"type": "string"},
     "job_id": {"type": "string"},
     "application": _FIELD_OBJECT,
+    "agent_contract": _FIELD_OBJECT,
     "security": _FIELD_OBJECT,
     "acceptance": _FIELD_OBJECT,
 }
@@ -417,6 +418,7 @@ def _input_event_json_schema(schema: StreamJsonEventSchema) -> dict[str, object]
                 "request_id": {"type": "string"},
                 "content": _FIELD_STRING_OR_ARRAY,
                 "message": {"type": "object"},
+                "agent_contract": {"type": "object"},
             },
             "anyOf": [
                 {"required": ["content"]},

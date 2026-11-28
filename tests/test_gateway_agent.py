@@ -10,6 +10,7 @@ from krelcode.contracts.gateway import (
     GatewayLayer,
     TenantQuota,
 )
+from krelcode.contracts.application import ApplicationRequestFactory
 from krelcode.contracts.runtime import (
     RuntimeTask,
     RuntimeTaskExecutorPort,
@@ -123,6 +124,8 @@ def test_agent_gateway_submits_task_and_releases_tenant_slot() -> None:
             ),
             message="implement",
             session_id="session-1",
+            application=ApplicationRequestFactory.from_input_source(
+                "sdk", goal="implement"),
         ))
         assert result.accepted
         assert result.task_id == "task-1"

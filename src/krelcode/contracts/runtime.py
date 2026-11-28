@@ -15,6 +15,7 @@ from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
 from typing import (
+    TYPE_CHECKING,
     Callable,
     FrozenSet,
     Mapping,
@@ -26,6 +27,14 @@ from typing import (
 from ..core.events import EventBus
 from ..core.messages import ImageRef, SteeringInput
 from .application import ApplicationRequest, TaskBudget
+from .identity import (
+    HarnessReleaseIdentity,
+    RuntimeIdentity,
+    RuntimeSandboxBinding,
+)
+
+if TYPE_CHECKING:
+    from .agent import AgentContract
 
 RUNTIME_RELEASE_SCHEMA_VERSION = 1
 
@@ -89,53 +98,6 @@ class RuntimeTaskStatus(str, Enum):
 
 
 @dataclass(frozen=True)
-class RuntimeIdentity:
-    """Task-scoped identity and tenant binding."""
-
-    principal_id: str = "local"
-    tenant_id: str = "local"
-    organization_id: str = ""
-    auth_method: str = "local"
-    scopes: tuple[str, ...] = ()
-    metadata: Mapping[str, object] = dataclass_field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        for name in (
-            "principal_id", "tenant_id", "organization_id", "auth_method"):
-            object.__setattr__(
-                self, name, str(getattr(self, name) or "").strip())
-        object.__setattr__(
-            self,
-            "scopes",
-            tuple(dict.fromkeys(str(item) for item in self.scopes if str(item))),
-        )
-        object.__setattr__(
-            self, "metadata", MappingProxyType(dict(self.metadata)))
-
-@dataclass(frozen=True)
-class HarnessReleaseIdentity:
-    """Harness/policy artifacts pinned for one task."""
-
-    release_id: str = ""
-    release_hash: str = ""
-    prompt_release_id: str = ""
-    prompt_release_hash: str = ""
-    agent_definition_id: str = ""
-    policy_version: str = ""
-    metadata: Mapping[str, object] = dataclass_field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        for name in (
-            "release_id", "release_hash", "prompt_release_id",
-            "prompt_release_hash", "agent_definition_id", "policy_version",
-        ):
-            object.__setattr__(
-                self, name, str(getattr(self, name) or "").strip())
-        object.__setattr__(
-            self, "metadata", MappingProxyType(dict(self.metadata)))
-
-
-@dataclass(frozen=True)
 class RuntimeRetryPolicy:
     """Bounded retry behavior for one task."""
 
@@ -162,41 +124,6 @@ class RuntimeRetryPolicy:
             self.max_backoff_seconds,
             self.backoff_seconds * (2 ** max(0, attempt - 1)),
         ))
-
-
-@dataclass(frozen=True)
-class RuntimeSandboxBinding:
-    """Immutable Sandbox/resource envelope selected for one task."""
-
-    profile: str = "workspace"
-    backend: str = "auto"
-    enabled: bool = True
-    network: bool = False
-    permission_profile: str = "workspace"
-    write_scope: str = "workspace"
-    isolation_level: str = "os"
-    cpu_seconds: Optional[int] = None
-    memory_mb: Optional[int] = None
-    storage_mb: Optional[int] = None
-    process_limit: Optional[int] = None
-    metadata: Mapping[str, object] = dataclass_field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        for name in (
-            "profile", "backend", "permission_profile", "write_scope",
-            "isolation_level",
-        ):
-            object.__setattr__(
-                self, name, str(getattr(self, name) or "").strip())
-        for name in (
-            "cpu_seconds", "memory_mb", "storage_mb", "process_limit"):
-            value = getattr(self, name)
-            object.__setattr__(
-                self, name, max(1, int(value)) if value is not None else None)
-        object.__setattr__(self, "enabled", bool(self.enabled))
-        object.__setattr__(self, "network", bool(self.network))
-        object.__setattr__(
-            self, "metadata", MappingProxyType(dict(self.metadata)))
 
 
 @dataclass(frozen=True)
@@ -284,6 +211,7 @@ class RuntimeTask:
     deadline_at: Optional[float] = None
     resume_from: Optional[RuntimeCheckpointRef] = None
     metadata: Mapping[str, object] = dataclass_field(default_factory=dict)
+    agent_contract: Optional["AgentContract"] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "turn_id", str(self.turn_id or ""))
@@ -301,10 +229,39 @@ class RuntimeTask:
         )
         object.__setattr__(
             self, "metadata", MappingProxyType(dict(self.metadata)))
+        if self.agent_contract is not None:
+            if self.agent_contract.intent != self.application:
+                raise ValueError(
+                    "RuntimeTask.application 与 AgentContract.intent 不一致")
+            if self.agent_contract.principal != self.identity:
+                raise ValueError(
+                    "RuntimeTask.identity 与 AgentContract.principal 不一致")
+            if self.agent_contract.sandbox != self.sandbox:
+                raise ValueError(
+                    "RuntimeTask.sandbox 与 AgentContract.sandbox 不一致")
+            if self.agent_contract.harness_release != self.harness_release:
+                raise ValueError(
+                    "RuntimeTask.harness_release 与 "
+                    "AgentContract.harness_release 不一致")
+            contract_tools = self.agent_contract.authority.allowed_tools
+            if (
+                contract_tools is not None
+                and frozenset(self.tool_allowlist or ())
+                != frozenset(contract_tools)
+            ):
+                raise ValueError(
+                    "RuntimeTask.tool_allowlist 与 "
+                    "AgentContract.authority.allowed_tools 不一致")
 
     @property
     def budget(self) -> TaskBudget:
         return self.application.budget
+
+    @property
+    def contract(self) -> "AgentContract":
+        if self.agent_contract is None:
+            raise RuntimeError("RuntimeTask 未绑定 AgentContract")
+        return self.agent_contract
 
 
 class RuntimeTaskHandle(Protocol):
@@ -461,6 +418,7 @@ class HarnessTurnControlPort(Protocol):
         tool_allowlist: Optional[list[str]] = None,
         reminder_ids: Optional[Sequence[str]] = None,
         application_request: Optional[ApplicationRequest] = None,
+        agent_contract: Optional["AgentContract"] = None,
     ) -> str: ...
 
     def submit_steering(self, item: SteeringInput | str) -> None: ...

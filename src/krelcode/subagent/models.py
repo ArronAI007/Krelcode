@@ -11,6 +11,7 @@ from typing import List, Optional, Tuple
 from ..agent.turn.loop import AgentLoop
 from ..agent.prompts import PROMPT_PROFILE_AUTO, build_system_prompt
 from ..contracts.application import ApplicationRequest
+from ..contracts.agent import AgentContract
 from .control import AgentControl
 from .contracts import STATUS_RUNNING
 from .feed import AgentFeed
@@ -78,6 +79,7 @@ class AgentHandle:
     kill_requested: bool = field(default=False, repr=False)
     cache_ledger_hash: str = ""
     application_request: Optional[ApplicationRequest] = None
+    agent_contract: Optional[AgentContract] = None
 
     def preview(self) -> str:
         text = self.result or self.error or ""

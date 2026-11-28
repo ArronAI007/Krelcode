@@ -5,10 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import Mapping, Protocol, Tuple
+from typing import TYPE_CHECKING, Mapping, Optional, Protocol, Tuple
 
 from .application import AcceptanceContract, ApplicationRequest
 from .runtime import ArtifactIdentity
+
+if TYPE_CHECKING:
+    from .agent import AgentContract
 
 
 class AcceptanceStatus(str, Enum):
@@ -25,6 +28,8 @@ class AcceptanceEvidence:
     summary: str = ""
     artifact: ArtifactIdentity | None = None
     metadata: Mapping[str, object] = field(default_factory=dict)
+    deliverable_id: str = ""
+    digest: str = ""
 
     def __post_init__(self) -> None:
         for name in ("kind", "source", "summary"):
@@ -33,6 +38,10 @@ class AcceptanceEvidence:
         object.__setattr__(self, "passed", bool(self.passed))
         object.__setattr__(
             self, "metadata", MappingProxyType(dict(self.metadata)))
+        object.__setattr__(
+            self, "deliverable_id",
+            str(self.deliverable_id or "").strip())
+        object.__setattr__(self, "digest", str(self.digest or "").strip())
 
 
 @dataclass(frozen=True)
@@ -99,6 +108,11 @@ class AcceptanceResult:
                     "source": item.source,
                     "passed": item.passed,
                     "summary": item.summary,
+                    "deliverable_id": item.deliverable_id,
+                    "digest": item.digest,
+                    "artifact_id": (
+                        item.artifact.artifact_id
+                        if item.artifact is not None else ""),
                 }
                 for item in self.evidence
             ],
@@ -114,6 +128,7 @@ class AcceptanceEvaluatorPort(Protocol):
         request: ApplicationRequest,
         final_response: str,
         evidence: Tuple[AcceptanceEvidence, ...],
+        contract: Optional["AgentContract"] = None,
     ) -> AcceptanceResult: ...
 
 

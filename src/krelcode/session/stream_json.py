@@ -57,6 +57,7 @@ from ..contracts.application import (
     ApplicationRequest,
     ApplicationRequestFactory,
 )
+from ..contracts.agent import AgentContract
 from .stream_json_schema import (
     STREAM_JSON_PROTOCOL_NAME as PROTOCOL_NAME,
     STREAM_JSON_PROTOCOL_VERSION as PROTOCOL_VERSION,
@@ -76,6 +77,8 @@ class StreamUserMessage:
     request_id: str = ""
     images: tuple[ImageRef, ...] = ()
     application: Optional[ApplicationRequest] = field(
+        default=None, compare=False)
+    agent_contract: Optional[AgentContract] = field(
         default=None, compare=False)
 
 
@@ -151,6 +154,7 @@ class StreamJsonEncoder:
                 "subtype": "turn_started",
                 "content": event.user_input,
                 "application": dict(event.application),
+                "agent_contract": dict(event.agent_contract),
             }
         elif isinstance(event, AcceptanceEvaluated):
             payload = {
@@ -621,10 +625,13 @@ def parse_input_line(line: str) -> StreamUserMessage | StreamControlMessage:
             value.get("request_id", envelope.get("request_id", ""))).strip()
         raw_application = value.get(
             "application", envelope.get("application"))
+        raw_contract = value.get(
+            "agent_contract", envelope.get("agent_contract"))
     else:
         raw_content = value.get("content")
         request_id = str(value.get("request_id", "")).strip()
         raw_application = value.get("application")
+        raw_contract = value.get("agent_contract")
 
     content, images = _parse_content(raw_content)
     if not content.strip() and not images:
@@ -634,12 +641,29 @@ def parse_input_line(line: str) -> StreamUserMessage | StreamControlMessage:
         content=content,
         request_id=request_id,
     )
+    agent_contract = _parse_agent_contract(raw_contract)
+    if (
+        agent_contract is not None
+        and application is not None
+        and agent_contract.intent != application
+    ):
+        raise StreamJsonProtocolError(
+            "application 与 agent_contract.intent 不一致")
+    if agent_contract is not None:
+        application = agent_contract.intent
+    elif application is None:
+        application = ApplicationRequestFactory.from_input_source(
+            "stream-json",
+            goal=content or "[image attachment]",
+            metadata={"request_id": request_id} if request_id else None,
+        )
     _validate_input_envelope(value)
     return StreamUserMessage(
         content=content,
         request_id=request_id,
         images=tuple(images),
         application=application,
+        agent_contract=agent_contract,
     )
 
 
@@ -716,11 +740,21 @@ def _parse_application(
         except (TypeError, ValueError) as exc:
             raise StreamJsonProtocolError(
                 f"application 无效: {exc}") from exc
-    return ApplicationRequestFactory.from_input_source(
-        "stream-json",
-        goal=content or "[image attachment]",
-        metadata={"request_id": request_id} if request_id else None,
-    )
+    return None
+
+
+def _parse_agent_contract(raw: object) -> Optional[AgentContract]:
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise StreamJsonProtocolError("agent_contract 必须是对象")
+    if not raw:
+        return None
+    try:
+        return AgentContract.from_dict(raw)
+    except (TypeError, ValueError) as exc:
+        raise StreamJsonProtocolError(
+            f"agent_contract 无效: {exc}") from exc
 
 
 def _tool_call_payload(tool_call: ToolCall) -> Dict[str, Any]:

@@ -12,6 +12,7 @@ from ...contracts.acceptance import (
     AcceptanceStatus,
 )
 from ...contracts.application import ApplicationRequest
+from ...contracts.agent import AgentContract, DeliverableKind
 
 
 class DefaultAcceptanceEvaluator:
@@ -22,6 +23,7 @@ class DefaultAcceptanceEvaluator:
         request: ApplicationRequest,
         final_response: str,
         evidence: Sequence[AcceptanceEvidence],
+        contract: AgentContract | None = None,
     ) -> AcceptanceResult:
         response = str(final_response or "").strip()
         evidence_items = tuple(evidence)
@@ -72,6 +74,12 @@ class DefaultAcceptanceEvaluator:
             for criterion in request.acceptance.criteria
         )
         checks = (response_check, *required_checks, *criterion_checks)
+        if contract is not None:
+            deliverable_checks = tuple(
+                _deliverable_check(requirement, response, evidence_items)
+                for requirement in contract.deliverables.requirements
+            )
+            checks = (*checks, *deliverable_checks)
         passed = all(check.passed for check in checks)
         if passed:
             status = AcceptanceStatus.PASSED
@@ -96,6 +104,10 @@ class DefaultAcceptanceEvaluator:
             metadata={
                 "trigger": request.trigger.value,
                 "task_shape": request.task_shape.value,
+                "contract_id": (
+                    contract.contract_id if contract is not None else ""),
+                "contract_hash": (
+                    contract.contract_hash if contract is not None else ""),
             },
         )
 
@@ -134,6 +146,41 @@ def _criterion_passed(
     if any(term in normalized for term in ("tool", "工具", "证据")):
         return bool(evidence)
     return True
+
+
+def _deliverable_check(
+    requirement: object,
+    response: str,
+    evidence: Sequence[AcceptanceEvidence],
+) -> AcceptanceCheck:
+    deliverable_id = str(getattr(requirement, "id", "") or "")
+    kind = DeliverableKind(getattr(requirement, "kind", "response"))
+    matched = tuple(
+        item for item in evidence
+        if item.deliverable_id == deliverable_id
+    )
+    if not matched and not bool(getattr(requirement, "required", True)):
+        return AcceptanceCheck(
+            criterion=f"deliverable:{deliverable_id}",
+            passed=True,
+            reason="可选交付物未提供",
+        )
+    if kind is DeliverableKind.RESPONSE:
+        passed = bool(response.strip()) and any(
+            item.passed for item in matched)
+    else:
+        passed = any(item.passed for item in matched)
+        if bool(getattr(requirement, "artifact_required", False)):
+            passed = passed and any(
+                item.passed and item.artifact is not None and bool(item.digest)
+                for item in matched
+            )
+    return AcceptanceCheck(
+        criterion=f"deliverable:{deliverable_id}",
+        passed=passed,
+        reason="" if passed else f"交付物未完成: {deliverable_id}",
+        evidence=matched,
+    )
 
 
 __all__ = [

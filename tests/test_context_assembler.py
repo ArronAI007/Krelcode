@@ -217,7 +217,7 @@ def test_agent_loop_uses_registered_source_and_exposes_source_diagnostics(tmp_pa
         workspace_root=tmp_path,
     )
     output = "\n".join(asyncio.run(handle_context(ctx)).output)
-    assert "已注册 6 个 ContextSource" in output
+    assert "已注册 7 个 ContextSource" in output
     assert "tenant_policy" in output
     assert "tenant:policy" in output
     assert "最近装配:" in output

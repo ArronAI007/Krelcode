@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from krelcode.core.messages import Message, ToolCall
     from krelcode.core.redact import SecretRedactor
     from krelcode.contracts.application import ApplicationRequest
+    from krelcode.contracts.agent import AgentContract
     from krelcode.contracts.tool import ToolContext, ToolResult
     from krelcode.safety.contract import ModePermissionContract
     from krelcode.safety.policy import ApprovalPolicy
@@ -331,6 +332,7 @@ class ContextTurnHostPort(_EventHostPort, _ToolPoolHostPort, Protocol):
     _turn_tool_context: "ToolContext"
     _active_tool_pool: Optional["TurnToolPool"]
     application_request: Optional["ApplicationRequest"]
+    agent_contract: Optional["AgentContract"]
     last_reminder_selection: Optional["ReminderSelection"]
     last_prompt_plan: Optional["PromptPlan"]
     last_provider_messages: Optional["PromptProviderMessages"]
@@ -385,6 +387,7 @@ class ToolTurnHostPort(_EventHostPort, _ToolPoolHostPort, Protocol):
     _input_counter: Iterator[int]
     _turn_tool_context: "ToolContext"
     prompt_profile_resolution: Optional["PromptProfileResolution"]
+    agent_contract: Optional["AgentContract"]
 
     async def _before_tool_hook(
         self, tool_call: "ToolCall") -> "HookResult": ...

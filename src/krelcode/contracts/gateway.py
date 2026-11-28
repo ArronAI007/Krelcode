@@ -20,6 +20,7 @@ from typing import Mapping, Optional, Protocol
 
 from ..core.messages import ImageRef
 from .application import ApplicationRequest, TaskBudget
+from .agent import AgentContract
 
 
 class GatewayLayer(str, Enum):
@@ -189,6 +190,7 @@ class AgentGatewayRequest:
     agent_definition: str = ""
     route_key: str = ""
     application: Optional[ApplicationRequest] = None
+    agent_contract: Optional[AgentContract] = None
     images: tuple[ImageRef, ...] = ()
     tool_allowlist: Optional[tuple[str, ...]] = None
     reminder_ids: tuple[str, ...] = ()

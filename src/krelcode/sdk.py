@@ -30,6 +30,7 @@ from .contracts.application import (
     ApplicationRequestFactory,
     TaskBudget,
 )
+from .contracts.agent import AgentContract
 
 PROTOCOL_NAME = "krelcode.stream-json"
 PROTOCOL_VERSION = "1"
@@ -392,6 +393,7 @@ class KrelcodeClient:
         request_id: Optional[str] = None,
         images: Sequence[ImageInput] = (),
         application: Optional[ApplicationRequest] = None,
+        agent_contract: Optional[AgentContract] = None,
     ) -> AsyncIterator[KrelcodeMessage]:
         """发送一条 user 消息并流式产出该请求的事件，直到终态 ``result``。"""
         await self.start()
@@ -405,7 +407,16 @@ class KrelcodeClient:
             raise ValueError("request_id 不能为空")
         if rid in self._request_queues:
             raise ValueError(f"request_id 正在使用: {rid}")
-        application_request = application or (
+        if (
+            application is not None
+            and agent_contract is not None
+            and application != agent_contract.intent
+        ):
+            raise ValueError("application 与 agent_contract.intent 不一致")
+        application_request = (
+            agent_contract.intent if agent_contract is not None
+            else application
+        ) or (
             ApplicationRequestFactory.from_input_source(
                 "sdk",
                 goal=prompt or "[image attachment]",
@@ -433,12 +444,15 @@ class KrelcodeClient:
         queue: asyncio.Queue[Any] = asyncio.Queue()
         self._request_queues[rid] = queue
         try:
-            await self._write_json({
+            payload = {
                 "type": "user",
                 "content": content,
                 "request_id": rid,
                 "application": application_request.to_dict(),
-            })
+            }
+            if agent_contract is not None:
+                payload["agent_contract"] = agent_contract.to_dict()
+            await self._write_json(payload)
             while True:
                 item = await self._next_message(queue)
                 if not isinstance(item, KrelcodeMessage):
