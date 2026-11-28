@@ -41,6 +41,7 @@ from ...mcp.supervisor import MCPSupervisor
 from ...plugins import PluginManager
 from ...runtime.execution import LocalRuntimeResourceRegistry, LocalTaskRuntime
 from ...session.memory import MemoryStore
+from ...session.task_recovery import SessionTaskRecoveryVerifier
 from ...skills import SkillManager
 from ...agent.turn.runtime_services import MCPServicePort, RuntimeServiceBinderPort
 from ...safety.sandbox import SandboxError
@@ -304,6 +305,7 @@ async def build_core_services(
                 if runtime_config.get("default_timeout_seconds") is not None
                 else None
             ),
+            recovery_verifier=SessionTaskRecoveryVerifier(loop),
         ),
         resource_registry=LocalRuntimeResourceRegistry(),
         strict_application_request=True,

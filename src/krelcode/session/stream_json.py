@@ -514,11 +514,16 @@ class StreamJsonEncoder:
             # result 的语义字段不能由 request_id 或其他扩展元数据覆盖。
             payload.update(terminal_fields)
         # Envelope 字段最后写入，扩展字段不能伪造顺序或 turn 身份。
-        payload.update({
+        envelope = {
             "turn_id": query_event.turn_id,
             "sequence": query_event.sequence,
             "session_id": self.metadata.session_id,
-        })
+        }
+        if query_event.task_id:
+            envelope["task_id"] = query_event.task_id
+        if query_event.parent_task_id:
+            envelope["parent_task_id"] = query_event.parent_task_id
+        payload.update(envelope)
         validate_stream_event(payload)
         return payload
 

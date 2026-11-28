@@ -33,6 +33,19 @@ from .identity import (
     RuntimeSandboxBinding,
 )
 from .loop import WaitCondition
+from .task_lifecycle import (
+    SideEffectStatus,
+    TaskAttachment,
+    TaskCancelMode,
+    TaskContinuation,
+    TaskErrorClass,
+    TaskErrorInfo,
+    TaskEventCursor,
+    TaskRecoveryDecision,
+    TaskRecoveryVerifierPort,
+    TaskResultLocation,
+    TaskSideEffectRecord,
+)
 
 if TYPE_CHECKING:
     from .agent import AgentContract
@@ -180,9 +193,33 @@ class RuntimeTaskState:
     resume_token: str = ""
     waiting_since: Optional[float] = None
     resumed_at: Optional[float] = None
+    parent_task_id: str = ""
+    root_task_id: str = ""
+    creator: str = ""
+    executor: str = ""
+    event_cursor: TaskEventCursor = dataclass_field(
+        default_factory=TaskEventCursor)
+    result: Optional[TaskResultLocation] = None
+    error_info: Optional[TaskErrorInfo] = None
+    continuation: Optional[TaskContinuation] = None
+    side_effects: tuple[TaskSideEffectRecord, ...] = ()
+    cancel_mode: TaskCancelMode | str = TaskCancelMode.COOPERATIVE
+    cancel_requested: bool = False
+    recovery_decision: Optional[TaskRecoveryDecision] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", RuntimeTaskStatus(self.status))
+        object.__setattr__(self, "cancel_mode", TaskCancelMode(self.cancel_mode))
+        object.__setattr__(
+            self,
+            "side_effects",
+            tuple(self.side_effects or ()),
+        )
+        for name in (
+            "parent_task_id", "root_task_id", "creator", "executor",
+        ):
+            object.__setattr__(
+                self, name, str(getattr(self, name) or "").strip())
 
 
 @dataclass(frozen=True)
@@ -218,8 +255,23 @@ class RuntimeTask:
     resume_from: Optional[RuntimeCheckpointRef] = None
     metadata: Mapping[str, object] = dataclass_field(default_factory=dict)
     agent_contract: Optional["AgentContract"] = None
+    task_id: str = ""
+    parent_task_id: str = ""
+    root_task_id: str = ""
+    idempotency_key: str = ""
+    creator: str = ""
+    executor: str = ""
+    input_refs: tuple[RuntimeCheckpointRef, ...] = ()
+    continuation: Optional[TaskContinuation] = None
+    cancel_mode: TaskCancelMode | str = TaskCancelMode.COOPERATIVE
 
     def __post_init__(self) -> None:
+        for name in (
+            "task_id", "parent_task_id", "root_task_id", "idempotency_key",
+            "creator", "executor",
+        ):
+            object.__setattr__(
+                self, name, str(getattr(self, name) or "").strip())
         object.__setattr__(self, "turn_id", str(self.turn_id or ""))
         object.__setattr__(self, "message", str(self.message or ""))
         object.__setattr__(self, "images", tuple(self.images or ()))
@@ -235,6 +287,11 @@ class RuntimeTask:
         )
         object.__setattr__(
             self, "metadata", MappingProxyType(dict(self.metadata)))
+        object.__setattr__(
+            self, "input_refs", tuple(self.input_refs or ()))
+        object.__setattr__(self, "cancel_mode", TaskCancelMode(self.cancel_mode))
+        if self.root_task_id and self.parent_task_id and not self.task_id:
+            raise ValueError("有父子关系的 RuntimeTask 必须提供 task_id")
         if self.agent_contract is not None:
             if self.agent_contract.intent != self.application:
                 raise ValueError(
@@ -315,6 +372,12 @@ class RuntimeTaskRuntimePort(Protocol):
 
     async def resume(self, task_id: str) -> bool: ...
 
+    async def recover(
+        self,
+        task_id: str,
+        executor: RuntimeTaskExecutorPort,
+    ) -> RuntimeTaskHandle: ...
+
     def inspect(self, task_id: str) -> RuntimeTaskState: ...
 
     def state_ref(self, task_id: str) -> RuntimeStateRef: ...
@@ -334,6 +397,52 @@ class RuntimeTaskRuntimePort(Protocol):
     ) -> RuntimeTaskState: ...
 
     def record_resumed(self, task_id: str) -> RuntimeTaskState: ...
+
+    def record_event(
+        self,
+        task_id: str,
+        payload: Mapping[str, object],
+        *,
+        event_type: str = "",
+    ) -> TaskEventCursor: ...
+
+    def read_events(
+        self,
+        task_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 1_000,
+    ) -> Sequence[Mapping[str, object]]: ...
+
+    def attach(self, task_id: str) -> TaskAttachment: ...
+
+    def record_result(
+        self,
+        task_id: str,
+        result: TaskResultLocation,
+    ) -> RuntimeTaskState: ...
+
+    def record_side_effect(
+        self,
+        task_id: str,
+        side_effect: TaskSideEffectRecord,
+    ) -> RuntimeTaskState: ...
+
+    def update_side_effect(
+        self,
+        task_id: str,
+        effect_id: str,
+        status: SideEffectStatus | str,
+        *,
+        compensation: str = "",
+        evidence: Mapping[str, object] | None = None,
+    ) -> RuntimeTaskState: ...
+
+    def record_continuation(
+        self,
+        task_id: str,
+        continuation: TaskContinuation,
+    ) -> RuntimeTaskState: ...
 
 
 class RuntimeContinuationPort(Protocol):
@@ -360,6 +469,8 @@ class RuntimeContinuationResult:
     workspace_refresh_pending: bool = True
     state: Optional[RuntimeTaskState] = None
     state_bundle_id: str = ""
+    continuation: Optional[TaskContinuation] = None
+    recovery_decision: Optional[TaskRecoveryDecision] = None
 
 
 class RuntimeResourcePort(Protocol):

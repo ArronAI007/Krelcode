@@ -195,6 +195,22 @@ from .state import (
     component_digest,
 )
 from .storage import StoragePorts
+from .task_lifecycle import (
+    SideEffectStatus,
+    TaskAttachment,
+    TaskCancelMode,
+    TaskContinuation,
+    TaskErrorClass,
+    TaskErrorInfo,
+    TaskEventCursor,
+    TaskEventJournalPort,
+    TaskRecoveryCheck,
+    TaskRecoveryDecision,
+    TaskRecoveryVerifierPort,
+    TaskResultLocation,
+    TaskSideEffectRecord,
+    classify_task_error,
+)
 from .safety import SandboxPort
 from .service_ports import (
     EnterprisePolicyPort,
@@ -392,6 +408,19 @@ __all__ = [
     "StateSnapshot",
     "StateSnapshotStorePort",
     "StateStorePort",
+    "SideEffectStatus",
+    "TaskAttachment",
+    "TaskCancelMode",
+    "TaskContinuation",
+    "TaskErrorClass",
+    "TaskErrorInfo",
+    "TaskEventCursor",
+    "TaskEventJournalPort",
+    "TaskRecoveryCheck",
+    "TaskRecoveryDecision",
+    "TaskRecoveryVerifierPort",
+    "TaskResultLocation",
+    "TaskSideEffectRecord",
     "StoragePorts",
     "ShellJobManagerPort",
     "ShellJobPagePort",
@@ -429,5 +458,6 @@ __all__ = [
     "TenantQuota",
     "TenantQuotaPort",
     "canonical_digest",
+    "classify_task_error",
     "component_digest",
 ]

@@ -8,12 +8,18 @@ stable query event protocol consumed by REPL/headless/SDK.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass, replace
 from itertools import count
 import time
-from typing import AsyncIterator, Callable, Optional
+import uuid
+from typing import AsyncIterator, Callable, Mapping, Optional, Sequence
 
-from krelcode.core.events import AgentEvent
+from krelcode.core.events import (
+    AgentEvent,
+    LLMStreamDelta,
+    LLMThinkingDelta,
+    ToolOutputDelta,
+)
 from krelcode.core.messages import ImageRef
 from krelcode.core.session_events import SessionEvent, as_session_event_payload
 from krelcode.contracts.application import (
@@ -37,10 +43,20 @@ from krelcode.contracts.runtime import (
     RuntimeTaskState,
     RuntimeTaskStatus,
 )
+from krelcode.contracts.task_lifecycle import (
+    SideEffectStatus,
+    TaskAttachment,
+    TaskCancelMode,
+    TaskContinuation,
+    TaskEventCursor,
+    TaskResultLocation,
+    TaskSideEffectRecord,
+)
 from krelcode.contracts.loop import WaitCondition
 from krelcode.contracts.loop import WaitKind
 from krelcode.agent.turn.loop import AgentLoop
 from krelcode.agent.turn.runtime_adapter import as_turn_control
+from krelcode.agent.turn.query_session import DetachControl, QuerySession
 
 
 QueryEvent = SessionEvent
@@ -50,52 +66,6 @@ QueryEvent = SessionEvent
 class _QueryEnd:
     cancelled: bool = False
     error: Optional[BaseException] = None
-
-
-class QuerySession:
-    """一次正在执行的查询；拥有 task 与它的事件流。"""
-
-    def __init__(
-        self,
-        handle: RuntimeTaskHandle,
-        task: asyncio.Task[str],
-        events: AsyncIterator[QueryEvent],
-    ) -> None:
-        self.runtime_handle = handle
-        self.task = task
-        self.events = events
-
-    @property
-    def task_id(self) -> str:
-        return self.runtime_handle.task_id
-
-    @property
-    def turn_id(self) -> str:
-        return self.runtime_handle.turn_id
-
-    @property
-    def state(self) -> RuntimeTaskState:
-        return self.runtime_handle.state
-
-    @property
-    def done(self) -> bool:
-        return self.task.done()
-
-    async def wait(self) -> str:
-        """等待查询结束并返回最终文本；不负责消费事件。"""
-        return await self.task
-
-    async def cancel(self) -> None:
-        await self.runtime_handle.cancel()
-        if not self.task.done():
-            self.task.cancel()
-        await asyncio.gather(self.task, return_exceptions=True)
-
-    async def pause(self) -> bool:
-        return await self.runtime_handle.pause()
-
-    async def resume(self) -> bool:
-        return await self.runtime_handle.resume()
 
 
 class _LoopTurnExecutor(RuntimeTaskExecutorPort):
@@ -188,13 +158,14 @@ class _InlineTaskRuntime:
         self._counter = count(1)
         self._states: dict[str, RuntimeTaskState] = {}
         self._tasks: dict[str, asyncio.Task[str]] = {}
+        self._events: dict[str, list[Mapping[str, object]]] = {}
 
     def submit(
         self,
         task: RuntimeTask,
         executor: RuntimeTaskExecutorPort,
     ) -> RuntimeTaskHandle:
-        task_id = f"inline-{next(self._counter)}"
+        task_id = task.task_id or f"inline-{next(self._counter)}"
         asyncio_task = asyncio.get_running_loop().create_task(
             executor.execute(task),
             name=f"krelcode-inline-{task_id}",
@@ -205,8 +176,15 @@ class _InlineTaskRuntime:
             turn_id=task.turn_id,
             status=RuntimeTaskStatus.RUNNING,
             sequence=1,
+            parent_task_id=task.parent_task_id,
+            root_task_id=task.root_task_id or task_id,
+            creator=task.creator or task.identity.principal_id,
+            executor=task.executor or "inline",
+            continuation=task.continuation,
+            cancel_mode=task.cancel_mode,
             updated_at=time.time(),
         )
+        self._events[task_id] = []
         asyncio_task.add_done_callback(
             lambda finished: self._finish(task_id, finished))
         return _InlineRuntimeHandle(
@@ -253,23 +231,10 @@ class _InlineTaskRuntime:
         checkpoint: RuntimeCheckpointRef,
     ) -> RuntimeTaskState:
         current = self.inspect(task_id)
-        updated = RuntimeTaskState(
-            task_id=current.task_id,
-            turn_id=current.turn_id,
-            status=current.status,
+        updated = replace(
+            current,
             checkpoint=checkpoint,
             sequence=current.sequence + 1,
-            error=current.error,
-            attempts=current.attempts,
-            deadline_at=current.deadline_at,
-            started_at=current.started_at,
-            paused_at=current.paused_at,
-            resume_from_checkpoint_id=current.resume_from_checkpoint_id,
-            wait_reason=current.wait_reason,
-            wait_kind=current.wait_kind,
-            resume_token=current.resume_token,
-            waiting_since=current.waiting_since,
-            resumed_at=current.resumed_at,
             updated_at=time.time(),
         )
         self._states[task_id] = updated
@@ -281,11 +246,9 @@ class _InlineTaskRuntime:
         condition: WaitCondition,
     ) -> RuntimeTaskState:
         current = self.inspect(task_id)
-        updated = RuntimeTaskState(
-            task_id=current.task_id,
-            turn_id=current.turn_id,
+        updated = replace(
+            current,
             status=RuntimeTaskStatus.WAITING,
-            checkpoint=current.checkpoint,
             sequence=current.sequence + 1,
             wait_reason=condition.reason,
             wait_kind=WaitKind(condition.kind).value,
@@ -300,17 +263,152 @@ class _InlineTaskRuntime:
         current = self.inspect(task_id)
         if current.status is not RuntimeTaskStatus.WAITING:
             return current
-        updated = RuntimeTaskState(
-            task_id=current.task_id,
-            turn_id=current.turn_id,
+        updated = replace(
+            current,
             status=RuntimeTaskStatus.RUNNING,
-            checkpoint=current.checkpoint,
             sequence=current.sequence + 1,
-            wait_reason=current.wait_reason,
-            wait_kind=current.wait_kind,
-            resume_token=current.resume_token,
-            waiting_since=current.waiting_since,
             resumed_at=time.time(),
+            updated_at=time.time(),
+        )
+        self._states[task_id] = updated
+        return updated
+
+    async def recover(
+        self,
+        task_id: str,
+        executor: RuntimeTaskExecutorPort,
+    ) -> RuntimeTaskHandle:
+        raise RuntimeError("inline runtime 不支持 durable recovery")
+
+    def record_event(
+        self,
+        task_id: str,
+        payload: Mapping[str, object],
+        *,
+        event_type: str = "",
+    ) -> TaskEventCursor:
+        current = self.inspect(task_id)
+        sequence = current.event_cursor.sequence + 1
+        cursor = TaskEventCursor(
+            sequence=sequence,
+            event_id=f"inline-{task_id}-{sequence}",
+            updated_at=time.time(),
+        )
+        self._events.setdefault(task_id, []).append({
+            "task_id": task_id,
+            "sequence": sequence,
+            "event_id": cursor.event_id,
+            "event_type": event_type,
+            "payload": dict(payload),
+            "timestamp": cursor.updated_at,
+        })
+        self._states[task_id] = replace(
+            current,
+            event_cursor=cursor,
+            sequence=current.sequence + 1,
+            updated_at=time.time(),
+        )
+        return cursor
+
+    def read_events(
+        self,
+        task_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 1_000,
+    ) -> tuple[Mapping[str, object], ...]:
+        return tuple(
+            item for item in self._events.get(task_id, ())
+            if int(str(item.get("sequence") or 0)) > after_sequence
+        )[:limit]
+
+    def attach(self, task_id: str) -> TaskAttachment:
+        state = self.inspect(task_id)
+        return TaskAttachment(
+            task_id=task_id,
+            cursor=state.event_cursor,
+            status=state.status.value,
+            result=state.result,
+            error=state.error_info,
+            continuation=state.continuation,
+            side_effects=state.side_effects,
+            recovery_decision=state.recovery_decision,
+        )
+
+    def record_result(
+        self,
+        task_id: str,
+        result: TaskResultLocation,
+    ) -> RuntimeTaskState:
+        current = self.inspect(task_id)
+        updated = replace(
+            current,
+            result=result,
+            sequence=current.sequence + 1,
+            updated_at=time.time(),
+        )
+        self._states[task_id] = updated
+        return updated
+
+    def record_side_effect(
+        self,
+        task_id: str,
+        side_effect: TaskSideEffectRecord,
+    ) -> RuntimeTaskState:
+        current = self.inspect(task_id)
+        updated = replace(
+            current,
+            side_effects=(*current.side_effects, side_effect),
+            sequence=current.sequence + 1,
+            updated_at=time.time(),
+        )
+        self._states[task_id] = updated
+        return updated
+
+    def update_side_effect(
+        self,
+        task_id: str,
+        effect_id: str,
+        status: SideEffectStatus | str,
+        *,
+        compensation: str = "",
+        evidence: Optional[Mapping[str, object]] = None,
+    ) -> RuntimeTaskState:
+        current = self.inspect(task_id)
+        effects = tuple(
+            replace(
+                item,
+                status=SideEffectStatus(status),
+                compensation=compensation or item.compensation,
+                evidence={
+                    **dict(item.evidence),
+                    **dict(evidence or {}),
+                },
+            )
+            if item.effect_id == effect_id else item
+            for item in current.side_effects
+        )
+        if not any(item.effect_id == effect_id for item in effects):
+            raise KeyError(f"未知 side effect: {effect_id}")
+        updated = replace(
+            current,
+            side_effects=effects,
+            sequence=current.sequence + 1,
+            updated_at=time.time(),
+        )
+        self._states[task_id] = updated
+        return updated
+
+    def record_continuation(
+        self,
+        task_id: str,
+        continuation: TaskContinuation,
+    ) -> RuntimeTaskState:
+        current = self.inspect(task_id)
+        updated = replace(
+            current,
+            continuation=continuation,
+            sequence=current.sequence + 1,
             updated_at=time.time(),
         )
         self._states[task_id] = updated
@@ -324,21 +422,14 @@ class _InlineTaskRuntime:
             status = RuntimeTaskStatus.FAILED
         else:
             status = RuntimeTaskStatus.COMPLETED
-        self._states[task_id] = RuntimeTaskState(
-            task_id=current.task_id,
-            turn_id=current.turn_id,
+        self._states[task_id] = replace(
+            current,
             status=status,
-            checkpoint=current.checkpoint,
             sequence=current.sequence + 1,
             error=(
                 f"{type(finished.exception()).__name__}: {finished.exception()}"
                 if finished.exception() is not None else ""
             ),
-            wait_reason=current.wait_reason,
-            wait_kind=current.wait_kind,
-            resume_token=current.resume_token,
-            waiting_since=current.waiting_since,
-            resumed_at=current.resumed_at,
             updated_at=time.time(),
         )
 
@@ -381,6 +472,11 @@ class QueryEngine:
         reminder_ids: Optional[list[str]] = None,
         application_request: Optional[ApplicationRequest] = None,
         agent_contract: Optional[AgentContract] = None,
+        task_id: str = "",
+        parent_task_id: str = "",
+        idempotency_key: str = "",
+        continuation: Optional[TaskContinuation] = None,
+        cancel_mode: TaskCancelMode | str = TaskCancelMode.COOPERATIVE,
     ) -> QuerySession:
         turn_id = f"turn-{next(self._counter)}"
         if (
@@ -421,6 +517,10 @@ class QueryEngine:
             if tool_allowlist is not None
             else resolved_contract.authority.allowed_tools
         )
+        resolved_task_id = (
+            str(task_id or "").strip()
+            or f"task-{uuid.uuid4().hex[:16]}"
+        )
         runtime_task = RuntimeTask(
             turn_id=turn_id,
             message=user_input,
@@ -434,20 +534,56 @@ class QueryEngine:
             sandbox=resolved_contract.sandbox,
             metadata={"agent_contract_id": resolved_contract.contract_id},
             agent_contract=resolved_contract,
+            task_id=resolved_task_id,
+            parent_task_id=parent_task_id,
+            idempotency_key=idempotency_key,
+            creator=resolved_contract.principal.principal_id,
+            continuation=continuation,
+            cancel_mode=cancel_mode,
         )
         queue: asyncio.Queue[QueryEvent | _QueryEnd] = asyncio.Queue(
             maxsize=self.queue_size)
         sequence = count()
         marker_tasks: list[asyncio.Task[None]] = []
+        detach_control = DetachControl()
+        task_id_ref: list[str] = [resolved_task_id]
+        parent_task_id_ref: list[str] = [parent_task_id]
+        pending_journal: list[tuple[int, QueryEvent]] = []
+
+        def journal_event(task_id: str, item: QueryEvent) -> None:
+            if isinstance(item.event, (
+                LLMStreamDelta, LLMThinkingDelta, ToolOutputDelta,
+            )):
+                return
+            self._task_runtime.record_event(
+                task_id,
+                {
+                    "session_event": _jsonable(item.event),
+                    "session_id": item.session_id,
+                    "timestamp": item.timestamp,
+                },
+                event_type=item.event_type,
+            )
 
         async def on_event(event: AgentEvent) -> None:
             # 有界队列形成对 AgentLoop 的真实背压：renderer/消费者跟不上时，
             # 查询推进层不会继续无限产生事件并吞掉内存。
-            await queue.put(QueryEvent(
+            item = QueryEvent(
                 turn_id=turn_id,
                 sequence=next(sequence),
                 event=as_session_event_payload(event),
-            ))
+                task_id=(
+                    task_id_ref[0] if task_id_ref else ""),
+                parent_task_id=(
+                    parent_task_id_ref[0]
+                    if parent_task_id_ref else ""),
+            )
+            if task_id_ref:
+                journal_event(task_id_ref[0], item)
+            else:
+                pending_journal.append((item.sequence, item))
+            if not detach_control.detached:
+                await queue.put(item)
 
         # 先订阅再启动 task，确保 RunStarted 不会丢失。
         unsubscribe: Callable[[], None] = self.turn.bus.subscribe(on_event)
@@ -455,6 +591,11 @@ class QueryEngine:
             runtime_task,
             _LoopTurnExecutor(self.turn, self.continuation),
         )
+        task_id_ref[0] = handle.task_id
+        parent_task_id_ref[0] = handle.state.parent_task_id
+        for _sequence, pending in pending_journal:
+            journal_event(handle.task_id, pending)
+        pending_journal.clear()
         task = asyncio.create_task(handle.wait())
 
         def on_done(finished: asyncio.Task[str]) -> None:
@@ -474,9 +615,95 @@ class QueryEngine:
                 pass  # 事件循环已关闭
 
         task.add_done_callback(on_done)
-        events = self._iter_events(queue, handle, task, marker_tasks)
-        session = QuerySession(handle=handle, task=task, events=events)
+        events = self._iter_events(
+            queue, handle, task, marker_tasks, detach_control)
+        session = QuerySession(
+            handle=handle,
+            task=task,
+            events=events,
+            detach_control=detach_control,
+            read_events=lambda after, limit: self._task_runtime.read_events(
+                handle.task_id,
+                after_sequence=after,
+                limit=limit,
+            ),
+            attach=self._task_runtime.attach,
+        )
         return session
+
+    async def recover(
+        self,
+        task_id: str,
+        *,
+        detach: bool = True,
+    ) -> QuerySession:
+        """Recover one interrupted/paused task and journal its new events."""
+        handle = await self._task_runtime.recover(
+            task_id,
+            _LoopTurnExecutor(self.turn, self.continuation),
+        )
+        queue: asyncio.Queue[QueryEvent | _QueryEnd] = asyncio.Queue(
+            maxsize=self.queue_size)
+        detach_control = DetachControl()
+        detach_control.detached = bool(detach)
+        sequence = count()
+        marker_tasks: list[asyncio.Task[None]] = []
+
+        async def on_event(event: AgentEvent) -> None:
+            item = QueryEvent(
+                turn_id=handle.turn_id,
+                sequence=next(sequence),
+                event=as_session_event_payload(event),
+                task_id=handle.task_id,
+                parent_task_id=handle.state.parent_task_id,
+            )
+            if not isinstance(item.event, (
+                LLMStreamDelta, LLMThinkingDelta, ToolOutputDelta,
+            )):
+                self._task_runtime.record_event(
+                    handle.task_id,
+                    {
+                        "session_event": _jsonable(item.event),
+                        "session_id": item.session_id,
+                        "timestamp": item.timestamp,
+                    },
+                    event_type=item.event_type,
+                )
+            if not detach_control.detached:
+                await queue.put(item)
+
+        unsubscribe = self.turn.bus.subscribe(on_event)
+        task = asyncio.create_task(handle.wait())
+
+        def on_done(finished: asyncio.Task[str]) -> None:
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+            end = (
+                _QueryEnd(cancelled=True) if finished.cancelled()
+                else _QueryEnd(error=finished.exception())
+            )
+            try:
+                marker_tasks.append(asyncio.create_task(queue.put(end)))
+            except RuntimeError:
+                pass
+
+        task.add_done_callback(on_done)
+        events = self._iter_events(
+            queue, handle, task, marker_tasks, detach_control)
+        return QuerySession(
+            handle=handle,
+            task=task,
+            events=events,
+            detach_control=detach_control,
+            read_events=lambda after, limit: self._task_runtime.read_events(
+                handle.task_id,
+                after_sequence=after,
+                limit=limit,
+            ),
+            attach=self._task_runtime.attach,
+        )
 
     async def _iter_events(
         self,
@@ -484,6 +711,7 @@ class QueryEngine:
         handle: RuntimeTaskHandle,
         task: asyncio.Task[str],
         marker_tasks: list[asyncio.Task[None]],
+        detach_control: DetachControl,
     ) -> AsyncIterator[QueryEvent]:
         try:
             while True:
@@ -494,7 +722,7 @@ class QueryEngine:
                     return
                 yield item
         finally:
-            if not task.done():
+            if not task.done() and not detach_control.detached:
                 await handle.cancel()
                 await asyncio.gather(task, return_exceptions=True)
             for marker in marker_tasks:
@@ -502,3 +730,24 @@ class QueryEngine:
                     marker.cancel()
             if marker_tasks:
                 await asyncio.gather(*marker_tasks, return_exceptions=True)
+
+
+def _jsonable(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _jsonable(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_jsonable(item) for item in value]
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            field.name: _jsonable(getattr(value, field.name))
+            for field in fields(value)
+        }
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+__all__ = ["QueryEngine", "QueryEvent", "QuerySession"]

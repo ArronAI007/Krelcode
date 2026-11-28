@@ -62,6 +62,9 @@ class LocalEventLog(EventLogPort):
         event_type: str = "",
         session_id: str = "",
         turn_id: str = "",
+        task_id: str = "",
+        parent_task_id: str = "",
+        root_task_id: str = "",
     ) -> EventLogAppendResult:
         with self._lock:
             self._refresh_if_changed()
@@ -82,6 +85,9 @@ class LocalEventLog(EventLogPort):
                 event_type=resolved_type,
                 session_id=str(session_id or ""),
                 turn_id=str(turn_id or ""),
+                task_id=str(task_id or ""),
+                parent_task_id=str(parent_task_id or ""),
+                root_task_id=str(root_task_id or ""),
                 timestamp=timestamp,
                 payload=normalized,
                 previous_hash=self._latest_digest,
@@ -95,6 +101,9 @@ class LocalEventLog(EventLogPort):
                     "event_type": resolved_type,
                     "session_id": str(session_id or ""),
                     "turn_id": str(turn_id or ""),
+                    "task_id": str(task_id or ""),
+                    "parent_task_id": str(parent_task_id or ""),
+                    "root_task_id": str(root_task_id or ""),
                     "timestamp": timestamp,
                     "previous_hash": self._latest_digest,
                     "digest": digest,
@@ -205,6 +214,9 @@ class LocalEventLog(EventLogPort):
             )
             session_id = str(metadata.get("session_id") or "")
             turn_id = str(metadata.get("turn_id") or "")
+            task_id = str(metadata.get("task_id") or "")
+            parent_task_id = str(metadata.get("parent_task_id") or "")
+            root_task_id = str(metadata.get("root_task_id") or "")
             timestamp = _float_or_default(
                 metadata.get("timestamp", payload.get("ts")),
                 time.time(),
@@ -219,6 +231,9 @@ class LocalEventLog(EventLogPort):
                     event_type=event_type,
                     session_id=session_id,
                     turn_id=turn_id,
+                    task_id=task_id,
+                    parent_task_id=parent_task_id,
+                    root_task_id=root_task_id,
                     timestamp=timestamp,
                     payload=payload,
                     previous_hash=previous,
@@ -229,6 +244,9 @@ class LocalEventLog(EventLogPort):
                 event_type=event_type,
                 session_id=session_id,
                 turn_id=turn_id,
+                task_id=task_id,
+                parent_task_id=parent_task_id,
+                root_task_id=root_task_id,
                 timestamp=timestamp,
                 payload=payload,
                 previous_hash=previous,
@@ -264,6 +282,9 @@ def _entry_digest(
     event_type: str,
     session_id: str,
     turn_id: str,
+    task_id: str,
+    parent_task_id: str,
+    root_task_id: str,
     timestamp: float,
     payload: Mapping[str, object],
     previous_hash: str,
@@ -274,6 +295,9 @@ def _entry_digest(
         "event_type": event_type,
         "session_id": session_id,
         "turn_id": turn_id,
+        "task_id": task_id,
+        "parent_task_id": parent_task_id,
+        "root_task_id": root_task_id,
         "timestamp": timestamp,
         "payload": payload,
         "previous_hash": previous_hash,

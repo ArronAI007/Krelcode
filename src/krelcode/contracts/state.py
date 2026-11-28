@@ -24,6 +24,16 @@ from .runtime import (
     RuntimeTaskState,
     RuntimeTaskStatus,
 )
+from .task_lifecycle import (
+    TaskCancelMode,
+    TaskContinuation,
+    TaskErrorInfo,
+    TaskEventCursor,
+    TaskRecoveryCheck,
+    TaskRecoveryDecision,
+    TaskResultLocation,
+    TaskSideEffectRecord,
+)
 
 
 class StateSnapshotStatus(str, Enum):
@@ -374,6 +384,24 @@ def _task_state_to_dict(state: RuntimeTaskState) -> dict[str, object]:
         "resume_token": state.resume_token,
         "waiting_since": state.waiting_since,
         "resumed_at": state.resumed_at,
+        "parent_task_id": state.parent_task_id,
+        "root_task_id": state.root_task_id,
+        "creator": state.creator,
+        "executor": state.executor,
+        "event_cursor": state.event_cursor.to_dict(),
+        "result": state.result.to_dict() if state.result is not None else None,
+        "error_info": (
+            state.error_info.to_dict()
+            if state.error_info is not None else None),
+        "continuation": (
+            state.continuation.to_dict()
+            if state.continuation is not None else None),
+        "side_effects": [item.to_dict() for item in state.side_effects],
+        "cancel_mode": TaskCancelMode(state.cancel_mode).value,
+        "cancel_requested": state.cancel_requested,
+        "recovery_decision": (
+            state.recovery_decision.to_dict()
+            if state.recovery_decision is not None else None),
     }
 
 
@@ -421,6 +449,7 @@ def _float_value(value: object, default: float) -> float:
 def _task_state_from_mapping(raw: object) -> Optional[RuntimeTaskState]:
     if not isinstance(raw, Mapping):
         return None
+    side_effects_raw = raw.get("side_effects")
     lease = None
     lease_raw = raw.get("lease")
     if isinstance(lease_raw, Mapping):
@@ -451,6 +480,35 @@ def _task_state_from_mapping(raw: object) -> Optional[RuntimeTaskState]:
         resume_token=str(raw.get("resume_token") or ""),
         waiting_since=_optional_float(raw.get("waiting_since")),
         resumed_at=_optional_float(raw.get("resumed_at")),
+        parent_task_id=str(raw.get("parent_task_id") or ""),
+        root_task_id=str(raw.get("root_task_id") or ""),
+        creator=str(raw.get("creator") or ""),
+        executor=str(raw.get("executor") or ""),
+        event_cursor=TaskEventCursor.from_mapping(raw.get("event_cursor")),
+        result=(
+            TaskResultLocation.from_mapping(raw.get("result"))
+            if isinstance(raw.get("result"), Mapping) else None
+        ),
+        error_info=(
+            TaskErrorInfo.from_mapping(raw.get("error_info"))
+            if isinstance(raw.get("error_info"), Mapping) else None
+        ),
+        continuation=(
+            TaskContinuation.from_mapping(raw.get("continuation"))
+            if isinstance(raw.get("continuation"), Mapping) else None
+        ),
+        side_effects=tuple(
+            TaskSideEffectRecord.from_mapping(item)
+            for item in (
+                side_effects_raw
+                if isinstance(side_effects_raw, list) else ()
+            )
+            if isinstance(item, Mapping)
+        ),
+        cancel_mode=str(raw.get("cancel_mode") or "cooperative"),
+        cancel_requested=bool(raw.get("cancel_requested", False)),
+        recovery_decision=_recovery_decision_from_mapping(
+            raw.get("recovery_decision")),
     )
 
 
@@ -464,6 +522,46 @@ def _state_ref_from_mapping(raw: object) -> Optional[RuntimeStateRef]:
         sequence=_int_value(raw.get("sequence"), 0),
         updated_at=_float_value(raw.get("updated_at"), 0.0),
         checkpoint=_checkpoint_from_mapping(raw.get("checkpoint")),
+    )
+
+
+def _recovery_decision_from_mapping(
+    raw: object,
+) -> Optional[TaskRecoveryDecision]:
+    if not isinstance(raw, Mapping):
+        return None
+    checks_raw = raw.get("checks")
+    checks = tuple(
+        _recovery_check_from_mapping(item)
+        for item in (checks_raw if isinstance(checks_raw, list) else ())
+        if isinstance(item, Mapping)
+    )
+    continuation_raw = raw.get("continuation")
+    metadata_raw = raw.get("metadata")
+    return TaskRecoveryDecision(
+        allowed=bool(raw.get("allowed", False)),
+        checks=checks,
+        requires_user=bool(raw.get("requires_user", False)),
+        continuation=(
+            TaskContinuation.from_mapping(continuation_raw)
+            if isinstance(continuation_raw, Mapping) else None
+        ),
+        metadata=(
+            dict(metadata_raw) if isinstance(metadata_raw, Mapping) else {}),
+    )
+
+
+def _recovery_check_from_mapping(
+    raw: Mapping[str, object],
+) -> TaskRecoveryCheck:
+    evidence_raw = raw.get("evidence")
+    return TaskRecoveryCheck(
+        code=str(raw.get("code") or "unknown"),
+        passed=bool(raw.get("passed", False)),
+        reason=str(raw.get("reason") or ""),
+        evidence=(
+            dict(evidence_raw) if isinstance(evidence_raw, Mapping) else {}
+        ),
     )
 
 
@@ -492,6 +590,11 @@ class StateCheckpointStorePort(Protocol):
     def latest_for_session(
         self,
         session_id: str,
+    ) -> Optional[StateCheckpointBundle]: ...
+
+    def latest_for_task(
+        self,
+        task_id: str,
     ) -> Optional[StateCheckpointBundle]: ...
 
 

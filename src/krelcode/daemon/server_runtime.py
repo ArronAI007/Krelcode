@@ -41,6 +41,8 @@ class DaemonAgentRuntime:
     tool_context: Optional[ToolContext] = None
     redactor: Optional[SecretRedactor] = None
     mcp_supervisor: Any = None
+    agent_runtime: Any = None
+    loop: Optional[object] = None
 
 
 DaemonAgentRuntimeFactory = Callable[

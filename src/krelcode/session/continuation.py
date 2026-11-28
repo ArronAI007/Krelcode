@@ -24,6 +24,8 @@ from ..contracts.runtime import (
     RuntimeTaskState,
 )
 from ..contracts.state import StateCheckpointBundle, StateCheckpointStorePort
+from ..contracts.task_lifecycle import TaskContinuation
+from ..agent.context.context_checkpoint_workspace import workspace_fingerprint
 from .restore import refresh_skill_system_prompt, restore_session
 from .state_checkpoint import LocalStateCheckpointStore
 
@@ -80,7 +82,20 @@ class SessionContinuationAdapter(RuntimeContinuationPort):
         if refresh_skills:
             refresh_skill_system_prompt(self.loop)
         task_state = self._record_applied(checkpoint)
-        bundle = self._save_state_bundle(checkpoint, result, task_state)
+        continuation = self._continuation(
+            checkpoint, result, task_state)
+        record_continuation = (
+            getattr(self.task_runtime, "record_continuation", None)
+            if self.task_runtime is not None else None
+        )
+        if checkpoint.task_id and callable(record_continuation):
+            try:
+                task_state = record_continuation(
+                    checkpoint.task_id, continuation)
+            except KeyError:
+                pass
+        bundle = self._save_state_bundle(
+            checkpoint, result, task_state, continuation)
         return RuntimeContinuationResult(
             checkpoint_id=result.checkpoint_id,
             session_id=result.session_id,
@@ -93,6 +108,7 @@ class SessionContinuationAdapter(RuntimeContinuationPort):
             workspace_refresh_pending=result.workspace_refresh_pending,
             state=task_state,
             state_bundle_id=bundle.bundle_id if bundle is not None else "",
+            continuation=continuation,
         )
 
     def resume_session(
@@ -113,7 +129,20 @@ class SessionContinuationAdapter(RuntimeContinuationPort):
                 turn_id=restored.turn_id,
             )
             task_state = self._record_applied(checkpoint)
-            bundle = self._save_state_bundle(checkpoint, restored, task_state)
+            continuation = self._continuation(
+                checkpoint, restored, task_state)
+            record_continuation = (
+                getattr(self.task_runtime, "record_continuation", None)
+                if self.task_runtime is not None else None
+            )
+            if checkpoint.task_id and callable(record_continuation):
+                try:
+                    task_state = record_continuation(
+                        checkpoint.task_id, continuation)
+                except KeyError:
+                    pass
+            bundle = self._save_state_bundle(
+                checkpoint, restored, task_state, continuation)
             return RuntimeContinuationResult(
                 checkpoint_id=restored.checkpoint_id,
                 session_id=restored.session_id,
@@ -126,6 +155,7 @@ class SessionContinuationAdapter(RuntimeContinuationPort):
                 workspace_refresh_pending=restored.workspace_refresh_pending,
                 state=task_state,
                 state_bundle_id=bundle.bundle_id if bundle is not None else "",
+                continuation=continuation,
             )
         return RuntimeContinuationResult(
             checkpoint_id="",
@@ -167,6 +197,7 @@ class SessionContinuationAdapter(RuntimeContinuationPort):
         checkpoint: RuntimeCheckpointRef,
         result: object,
         task_state: Optional[RuntimeTaskState],
+        continuation: Optional[TaskContinuation] = None,
     ) -> Optional[StateCheckpointBundle]:
         plan = self.loop.last_context_plan
         bundle_id = f"state-{checkpoint.checkpoint_id}"
@@ -268,6 +299,10 @@ class SessionContinuationAdapter(RuntimeContinuationPort):
                     if self.loop.agent_contract is not None
                     else {}
                 ),
+                "continuation": (
+                    continuation.to_dict()
+                    if continuation is not None else {}
+                ),
             },
         )
         commit = getattr(self.state_checkpoints, "commit", None)
@@ -277,6 +312,120 @@ class SessionContinuationAdapter(RuntimeContinuationPort):
             except Exception:
                 return None
         return bundle if self.state_checkpoints.save(bundle) else None
+
+    def _continuation(
+        self,
+        checkpoint: RuntimeCheckpointRef,
+        result: object | None,
+        task_state: Optional[RuntimeTaskState],
+    ) -> TaskContinuation:
+        application = self.loop.application_request
+        goal = str(application.goal if application is not None else "")
+        tool_context = self.loop.tool_context
+        plan_control = tool_context.plan_control
+        plan = (
+            plan_control.as_dict()
+            if plan_control is not None and hasattr(plan_control, "as_dict")
+            else {}
+        )
+
+        snapshot = self.loop.working_context_store.snapshot()
+        confirmed = tuple(
+            entry.content
+            for entry in snapshot.entries
+            if entry.status == "active" and entry.content
+        )
+        failed = tuple(
+            f"{entry.kind}:{entry.content}"
+            for entry in snapshot.entries
+            if entry.status in {"failed", "error", "blocked"}
+        )
+        artifacts = tuple(
+            {
+                "id": str(
+                    entry.metadata.get("artifact_id") or entry.id),
+                "kind": entry.kind,
+                "source": entry.source,
+            }
+            for entry in snapshot.entries
+            if entry.metadata.get("artifact_id")
+        )
+        waiting: tuple[str, ...] = ()
+        if task_state is not None and (
+            task_state.wait_reason or task_state.wait_kind
+        ):
+            waiting = (
+                f"{task_state.wait_kind}:{task_state.wait_reason}".rstrip(":"),
+            )
+        budget = None
+        ledger = self.loop.budget_ledger
+        if ledger is not None and hasattr(ledger, "remaining_task_budget"):
+            budget = ledger.remaining_task_budget()
+        if budget is None and application is not None:
+            budget = application.budget
+        permission_mode = ""
+        permission_mode = tool_context.runtime.permission_mode.value
+        workspace = workspace_fingerprint(
+            self.loop.tool_context.workspace_root).as_dict()
+        prompt_plan = self.loop.last_prompt_plan
+        instruction_ids = tuple(
+            fragment.id for fragment in (
+                prompt_plan.fragments if prompt_plan is not None else ())
+            if fragment.metadata.get("instruction")
+        )
+        stored = self._stored_continuation(checkpoint.task_id)
+        return TaskContinuation(
+            objective=goal or stored.objective,
+            plan=plan or dict(stored.plan),
+            confirmed_facts=confirmed or stored.confirmed_facts,
+            failed_attempts=failed or stored.failed_attempts,
+            artifacts=artifacts or stored.artifacts,
+            waiting_items=waiting or stored.waiting_items,
+            remaining_budget=budget or stored.remaining_budget,
+            permission_mode=permission_mode or stored.permission_mode,
+            workspace_version=workspace or dict(stored.workspace_version),
+            recovery_checkpoint_id=checkpoint.checkpoint_id,
+            instruction_ids=instruction_ids or stored.instruction_ids,
+            metadata={
+                "session_id": str(
+                    getattr(result, "session_id", "") or ""),
+                "turn_id": str(getattr(result, "turn_id", "") or ""),
+            },
+        )
+
+    def capture_current(
+        self,
+        *,
+        task_id: str,
+        checkpoint_id: str = "",
+    ) -> TaskContinuation:
+        """Capture the semantic continuation without restoring a checkpoint."""
+        return self._continuation(
+            RuntimeCheckpointRef(
+                checkpoint_id=checkpoint_id,
+                kind="context",
+                task_id=task_id,
+            ),
+            None,
+            (
+                self.task_runtime.inspect(task_id)
+                if self.task_runtime is not None and task_id
+                else None
+            ),
+        )
+
+    def _stored_continuation(self, task_id: str) -> TaskContinuation:
+        if not task_id:
+            return TaskContinuation(objective="")
+        latest = None
+        latest_for_task = getattr(
+            self.state_checkpoints, "latest_for_task", None)
+        if callable(latest_for_task):
+            latest = latest_for_task(task_id)
+        if latest is not None and latest.runtime_state is not None:
+            return latest.runtime_state.continuation or TaskContinuation(
+                objective="")
+        return TaskContinuation(objective="")
 
 
 __all__ = ["SessionContinuationAdapter", "SessionContinuationError"]

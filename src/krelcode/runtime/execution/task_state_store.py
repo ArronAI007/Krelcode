@@ -21,11 +21,22 @@ from krelcode.contracts.runtime import (
     RuntimeTaskState,
     RuntimeTaskStatus,
 )
+from krelcode.contracts.task_lifecycle import (
+    TaskCancelMode,
+    TaskContinuation,
+    TaskErrorInfo,
+    TaskEventCursor,
+    TaskRecoveryDecision,
+    TaskRecoveryCheck,
+    TaskResultLocation,
+    TaskSideEffectRecord,
+)
 from krelcode.core.messages import ImageRef
 from krelcode.core.redact import SecretRedactor
 
-RUNTIME_TASK_STATE_VERSION = 2
+RUNTIME_TASK_STATE_VERSION = 3
 LEGACY_RUNTIME_TASK_STATE_VERSION = 1
+PREVIOUS_RUNTIME_TASK_STATE_VERSION = 2
 
 
 def build_runtime_task_payload(
@@ -82,6 +93,7 @@ def load_runtime_task_records(
         return {}, {}, 1
     if not isinstance(raw, Mapping) or raw.get("version") not in {
         LEGACY_RUNTIME_TASK_STATE_VERSION,
+        PREVIOUS_RUNTIME_TASK_STATE_VERSION,
         RUNTIME_TASK_STATE_VERSION,
     }:
         return {}, {}, 1
@@ -115,6 +127,12 @@ def task_number(task_id: str) -> int:
 
 def task_to_mapping(task: RuntimeTask) -> dict[str, object]:
     return {
+        "task_id": task.task_id,
+        "parent_task_id": task.parent_task_id,
+        "root_task_id": task.root_task_id,
+        "idempotency_key": task.idempotency_key,
+        "creator": task.creator,
+        "executor": task.executor,
         "turn_id": task.turn_id,
         "message": task.message,
         "application": task.application.to_dict(),
@@ -142,6 +160,13 @@ def task_to_mapping(task: RuntimeTask) -> dict[str, object]:
         "agent_contract": (
             task.agent_contract.to_dict()
             if task.agent_contract is not None else None),
+        "input_refs": [
+            checkpoint_to_mapping(item) for item in task.input_refs
+        ],
+        "continuation": (
+            task.continuation.to_dict()
+            if task.continuation is not None else None),
+        "cancel_mode": TaskCancelMode(task.cancel_mode).value,
     }
 
 
@@ -165,6 +190,7 @@ def task_from_mapping(raw: object) -> RuntimeTask:
     )
     allowlist_raw = raw.get("tool_allowlist")
     metadata_raw = raw.get("metadata")
+    input_refs_raw = raw.get("input_refs")
     return RuntimeTask(
         turn_id=str(raw.get("turn_id") or ""),
         message=str(raw.get("message") or ""),
@@ -191,6 +217,25 @@ def task_from_mapping(raw: object) -> RuntimeTask:
                 (contract_raw := raw.get("agent_contract")), Mapping
             ) else None
         ),
+        task_id=str(raw.get("task_id") or ""),
+        parent_task_id=str(raw.get("parent_task_id") or ""),
+        root_task_id=str(raw.get("root_task_id") or ""),
+        idempotency_key=str(raw.get("idempotency_key") or ""),
+        creator=str(raw.get("creator") or ""),
+        executor=str(raw.get("executor") or ""),
+        input_refs=tuple(
+            checkpoint
+            for item in (
+                input_refs_raw
+                if isinstance(input_refs_raw, list) else ()
+            )
+            if (checkpoint := checkpoint_from_mapping(item)) is not None
+        ),
+        continuation=(
+            TaskContinuation.from_mapping(raw.get("continuation"))
+            if isinstance(raw.get("continuation"), Mapping) else None
+        ),
+        cancel_mode=str(raw.get("cancel_mode") or "cooperative"),
     )
 
 
@@ -225,6 +270,26 @@ def state_to_mapping(state: RuntimeTaskState) -> dict[str, object]:
         "resume_token": state.resume_token,
         "waiting_since": state.waiting_since,
         "resumed_at": state.resumed_at,
+        "parent_task_id": state.parent_task_id,
+        "root_task_id": state.root_task_id,
+        "creator": state.creator,
+        "executor": state.executor,
+        "event_cursor": state.event_cursor.to_dict(),
+        "result": state.result.to_dict() if state.result is not None else None,
+        "error_info": (
+            state.error_info.to_dict()
+            if state.error_info is not None else None),
+        "continuation": (
+            state.continuation.to_dict()
+            if state.continuation is not None else None),
+        "side_effects": [
+            item.to_dict() for item in state.side_effects
+        ],
+        "cancel_mode": TaskCancelMode(state.cancel_mode).value,
+        "cancel_requested": state.cancel_requested,
+        "recovery_decision": (
+            state.recovery_decision.to_dict()
+            if state.recovery_decision is not None else None),
     }
 
 
@@ -232,6 +297,7 @@ def state_from_mapping(raw: object) -> RuntimeTaskState:
     if not isinstance(raw, Mapping):
         raise TypeError("runtime task state 缺失")
     lease_raw = raw.get("lease")
+    side_effects_raw = raw.get("side_effects")
     lease = None
     if isinstance(lease_raw, Mapping):
         lease = RuntimeLease(
@@ -261,6 +327,35 @@ def state_from_mapping(raw: object) -> RuntimeTaskState:
         resume_token=str(raw.get("resume_token") or ""),
         waiting_since=_optional_float(raw.get("waiting_since")),
         resumed_at=_optional_float(raw.get("resumed_at")),
+        parent_task_id=str(raw.get("parent_task_id") or ""),
+        root_task_id=str(raw.get("root_task_id") or ""),
+        creator=str(raw.get("creator") or ""),
+        executor=str(raw.get("executor") or ""),
+        event_cursor=TaskEventCursor.from_mapping(raw.get("event_cursor")),
+        result=(
+            TaskResultLocation.from_mapping(raw.get("result"))
+            if isinstance(raw.get("result"), Mapping) else None
+        ),
+        error_info=(
+            TaskErrorInfo.from_mapping(raw.get("error_info"))
+            if isinstance(raw.get("error_info"), Mapping) else None
+        ),
+        continuation=(
+            TaskContinuation.from_mapping(raw.get("continuation"))
+            if isinstance(raw.get("continuation"), Mapping) else None
+        ),
+        side_effects=tuple(
+            TaskSideEffectRecord.from_mapping(item)
+            for item in (
+                side_effects_raw
+                if isinstance(side_effects_raw, list) else ()
+            )
+            if isinstance(item, Mapping)
+        ),
+        cancel_mode=str(raw.get("cancel_mode") or "cooperative"),
+        cancel_requested=bool(raw.get("cancel_requested", False)),
+        recovery_decision=_recovery_decision_from_mapping(
+            raw.get("recovery_decision")),
     )
 
 
@@ -415,6 +510,46 @@ def _optional_int(value: object) -> Optional[int]:
         return None
 
 
+def _recovery_decision_from_mapping(
+    raw: object,
+) -> Optional[TaskRecoveryDecision]:
+    if not isinstance(raw, Mapping):
+        return None
+    checks_raw = raw.get("checks")
+    checks = tuple(
+        _recovery_check_from_mapping(item)
+        for item in (checks_raw if isinstance(checks_raw, list) else ())
+        if isinstance(item, Mapping)
+    )
+    continuation_raw = raw.get("continuation")
+    metadata_raw = raw.get("metadata")
+    return TaskRecoveryDecision(
+        allowed=bool(raw.get("allowed", False)),
+        checks=checks,
+        requires_user=bool(raw.get("requires_user", False)),
+        continuation=(
+            TaskContinuation.from_mapping(continuation_raw)
+            if isinstance(continuation_raw, Mapping) else None
+        ),
+        metadata=(
+            dict(metadata_raw) if isinstance(metadata_raw, Mapping) else {}),
+    )
+
+
+def _recovery_check_from_mapping(
+    raw: Mapping[str, object],
+) -> TaskRecoveryCheck:
+    evidence_raw = raw.get("evidence")
+    return TaskRecoveryCheck(
+        code=str(raw.get("code") or "unknown"),
+        passed=bool(raw.get("passed", False)),
+        reason=str(raw.get("reason") or ""),
+        evidence=(
+            dict(evidence_raw) if isinstance(evidence_raw, Mapping) else {}
+        ),
+    )
+
+
 def _optional_float(value: object) -> Optional[float]:
     if value is None or value == "":
         return None
@@ -426,6 +561,7 @@ def _optional_float(value: object) -> Optional[float]:
 
 __all__ = [
     "LEGACY_RUNTIME_TASK_STATE_VERSION",
+    "PREVIOUS_RUNTIME_TASK_STATE_VERSION",
     "RUNTIME_TASK_STATE_VERSION",
     "build_runtime_task_payload",
     "load_runtime_task_records",

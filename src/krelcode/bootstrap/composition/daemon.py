@@ -8,12 +8,15 @@ from typing import TYPE_CHECKING, cast
 from krelcode.core.redact import SecretRedactor
 
 from ...agent.prompt.prompt_surface_contract import PromptSurfaceExecutor
+from ...agent.turn.runtime import AgentRuntime
 from ...agent.turn.runtime_services import MCPServicePort
 from ...runtime.execution import (
     LocalRuntimeResourceRegistry,
     LocalTaskRuntime,
     RuntimeResourceAdapter,
 )
+from ...session.task_recovery import SessionTaskRecoveryVerifier
+from ...session.continuation import SessionContinuationAdapter
 from ..parser import build_parser as _build_parser
 from .mcp import build_mcp_roots, build_mcp_sampler, compose_mcp_config
 from .runtime import build_loop
@@ -91,18 +94,33 @@ async def build_daemon_agent_runtime(
             "lsp",
             lsp.close,
         ))
-    return DaemonAgentRuntime(
-        task_runtime=LocalTaskRuntime(
-            state_path=(
-                request.workspace_root
-                / ".krelcode" / "runtime" / "daemon-tasks.json"
-            ),
-            redactor=redactor,
+    task_runtime = LocalTaskRuntime(
+        state_path=(
+            request.workspace_root
+            / ".krelcode" / "runtime" / "daemon-tasks.json"
         ),
+        recovery_verifier=SessionTaskRecoveryVerifier(loop),
+        redactor=redactor,
+    )
+    continuation = SessionContinuationAdapter(
+        loop,
+        task_runtime=task_runtime,
+    )
+    agent_runtime = AgentRuntime(
+        loop,
+        subagents=agents,
+        task_runtime=task_runtime,
+        strict_application_request=False,
+        continuation=continuation,
+    )
+    return DaemonAgentRuntime(
+        task_runtime=task_runtime,
         resources=resources,
         bus=loop.services.core.bus,
         agents=agents,
         tool_context=loop.services.core.tool_context,
         redactor=redactor,
         mcp_supervisor=supervisor,
+        agent_runtime=agent_runtime,
+        loop=loop,
     )

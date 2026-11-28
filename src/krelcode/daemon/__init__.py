@@ -5,6 +5,7 @@ from .client import (
     DaemonJobManager,
     DaemonStatus,
     DaemonSubagentManager,
+    DaemonTaskClient,
     DaemonUnavailable,
     RemoteAgentHandle,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "DaemonStateError",
     "DaemonStatus",
     "DaemonSubagentManager",
+    "DaemonTaskClient",
     "DaemonUnavailable",
     "RemoteAgentHandle",
 ]

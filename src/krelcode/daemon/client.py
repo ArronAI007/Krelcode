@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from .client_agents import DaemonSubagentManager, RemoteAgentHandle
 from .client_jobs import DaemonJobManager
+from .client_tasks import DaemonTaskClient
 from .client_transport import DaemonClient, DaemonStatus, DaemonUnavailable
 
 
@@ -16,6 +17,7 @@ __all__ = [
     "DaemonJobManager",
     "DaemonStatus",
     "DaemonSubagentManager",
+    "DaemonTaskClient",
     "DaemonUnavailable",
     "RemoteAgentHandle",
 ]

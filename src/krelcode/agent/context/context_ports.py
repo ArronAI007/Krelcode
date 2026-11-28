@@ -12,6 +12,9 @@ from typing import Mapping, Protocol, Sequence
 
 class WorkingEntryPort(Protocol):
     @property
+    def id(self) -> str: ...
+
+    @property
     def kind(self) -> str: ...
 
     @property
@@ -19,6 +22,12 @@ class WorkingEntryPort(Protocol):
 
     @property
     def metadata(self) -> Mapping[str, object]: ...
+
+    @property
+    def source(self) -> str: ...
+
+    @property
+    def status(self) -> str: ...
 
 
 class WorkingContextPort(Protocol):

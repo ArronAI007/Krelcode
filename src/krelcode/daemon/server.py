@@ -410,6 +410,8 @@ class DaemonServer:
             return await self._dispatch_job(op[4:], params)
         if op.startswith("agent."):
             return await self.agent_service.dispatch(op[6:], params)
+        if op.startswith("task."):
+            return await self.agent_service.dispatch(op, params)
         raise RPCError(f"未知 daemon operation: {op}", code="unknown_operation")
 
     async def _delayed_stop(self) -> None:

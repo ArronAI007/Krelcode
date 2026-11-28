@@ -144,6 +144,7 @@ STREAM_JSON_FIELD_TYPES: Mapping[str, Mapping[str, object]] = {
     "tool": {"type": "string"},
     "system_message": {"type": "string"},
     "agent_id": {"type": "string"},
+    "task_id": {"type": "string"},
     "delegation_id": {"type": "string"},
     "parent_task_id": {"type": "string"},
     "parent_turn_id": {"type": "string"},

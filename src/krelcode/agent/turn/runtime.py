@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 from typing import (
@@ -26,6 +27,7 @@ from krelcode.core.events import (
     ContextCheckpointCreated,
     EventBus,
     LoopPhaseChanged,
+    ToolCallCompleted,
 )
 from krelcode.contracts.loop import WaitCondition, WaitKind
 from krelcode.core.messages import ImageRef, SteeringInput
@@ -46,6 +48,14 @@ from krelcode.contracts.runtime import (
     RuntimeRetryPolicy,
     RuntimeSandboxBinding,
     RuntimeTaskState,
+)
+from krelcode.contracts.task_lifecycle import (
+    SideEffectStatus,
+    TaskAttachment,
+    TaskCancelMode,
+    TaskContinuation,
+    TaskEventCursor,
+    TaskSideEffectRecord,
 )
 from krelcode.agent.turn.loop import AgentLoop
 from krelcode.agent.turn.query import QueryEngine, QuerySession
@@ -147,6 +157,8 @@ class HarnessRuntimeFacade:
             ))
         self._unsubscribe_checkpoints = self.bus.subscribe(
             self._record_checkpoint_event)
+        self._unsubscribe_side_effects = self.bus.subscribe(
+            self._record_side_effect_event)
 
     @property
     def loop(self) -> AgentLoop:
@@ -203,6 +215,11 @@ class HarnessRuntimeFacade:
         reminder_ids: Optional[list[str]] = None,
         application_request: Optional[ApplicationRequest] = None,
         agent_contract: Optional[AgentContract] = None,
+        task_id: str = "",
+        parent_task_id: str = "",
+        idempotency_key: str = "",
+        continuation: Optional[TaskContinuation] = None,
+        cancel_mode: TaskCancelMode | str = TaskCancelMode.COOPERATIVE,
     ) -> str:
         """执行一次完整 turn；供 headless/API 复用。"""
         query = self.start_query(
@@ -212,6 +229,11 @@ class HarnessRuntimeFacade:
             reminder_ids=reminder_ids,
             application_request=application_request,
             agent_contract=agent_contract,
+            task_id=task_id,
+            parent_task_id=parent_task_id,
+            idempotency_key=idempotency_key,
+            continuation=continuation,
+            cancel_mode=cancel_mode,
         )
         async for _ in query.events:
             pass
@@ -245,6 +267,16 @@ class HarnessRuntimeFacade:
                         resume_token=str(wait.get("resume_token") or ""),
                     ),
                 )
+                capture = getattr(
+                    self.query_engine.continuation, "capture_current", None)
+                if callable(capture):
+                    try:
+                        self.task_runtime.record_continuation(
+                            self._query.task_id,
+                            capture(task_id=self._query.task_id),
+                        )
+                    except (KeyError, RuntimeError):
+                        pass
             elif event.previous_phase == "waiting":
                 self.task_runtime.record_resumed(self._query.task_id)
             return
@@ -270,6 +302,66 @@ class HarnessRuntimeFacade:
             return
         self.task_runtime.record_checkpoint(
             self._query.task_id, checkpoint)
+        capture = getattr(self.query_engine.continuation, "capture_current", None)
+        if callable(capture):
+            try:
+                self.task_runtime.record_continuation(
+                    self._query.task_id,
+                    capture(
+                        task_id=self._query.task_id,
+                        checkpoint_id=checkpoint.checkpoint_id,
+                    ),
+                )
+            except (KeyError, RuntimeError):
+                pass
+
+    def _record_side_effect_event(self, event: AgentEvent) -> None:
+        if (
+            self.task_runtime is None
+            or self._query is None
+            or not isinstance(event, ToolCallCompleted)
+            or event.is_error
+        ):
+            return
+        name = event.tool_call.name
+        mutation_tools = {
+            "write_file", "edit_file", "replace_all", "apply_patch",
+            "notebook_edit", "run_command", "run_skill_script",
+            "job_start", "database_migration_apply",
+        }
+        if name not in mutation_tools:
+            return
+        arguments = event.tool_call.arguments
+        resource = str(
+            arguments.get("path")
+            or arguments.get("file_path")
+            or arguments.get("command")
+            or name
+        )
+        kind = "process" if name in {
+            "run_command", "run_skill_script", "job_start",
+        } else "file_mutation"
+        self.task_runtime.record_side_effect(
+            self._query.task_id,
+            TaskSideEffectRecord(
+                effect_id="",
+                task_id=self._query.task_id,
+                kind=kind,
+                resource=resource,
+                status=SideEffectStatus.COMMITTED,
+                compensation=(
+                    "inspect process outcome and compensate if necessary"
+                    if kind == "process" else
+                    "restore prior content from checkpoint or VCS"
+                ),
+                evidence={
+                    "tool_call_id": event.tool_call.id,
+                    "output_digest": hashlib.sha256(
+                        event.content.encode("utf-8")).hexdigest(),
+                    "is_error": event.is_error,
+                },
+            ),
+        )
 
     def start_query(
         self,
@@ -280,6 +372,11 @@ class HarnessRuntimeFacade:
         reminder_ids: Optional[list[str]] = None,
         application_request: Optional[ApplicationRequest] = None,
         agent_contract: Optional[AgentContract] = None,
+        task_id: str = "",
+        parent_task_id: str = "",
+        idempotency_key: str = "",
+        continuation: Optional[TaskContinuation] = None,
+        cancel_mode: TaskCancelMode | str = TaskCancelMode.COOPERATIVE,
     ) -> QuerySession:
         """启动一条可消费 QueryEvent 流；同一 Runtime 不允许并发两轮。"""
         if self.is_running:
@@ -291,6 +388,11 @@ class HarnessRuntimeFacade:
             reminder_ids=reminder_ids,
             application_request=application_request,
             agent_contract=agent_contract,
+            task_id=task_id,
+            parent_task_id=parent_task_id,
+            idempotency_key=idempotency_key,
+            continuation=continuation,
+            cancel_mode=cancel_mode,
         )
         self._task = self._query.task
         return self._query
@@ -357,6 +459,7 @@ class HarnessRuntimeFacade:
         self._closed = True
         await self.stop()
         self._unsubscribe_checkpoints()
+        self._unsubscribe_side_effects()
         self.last_close_errors = await self.resource_registry.close_all()
 
     def inspect_task(self, task_id: Optional[str] = None) -> Optional[RuntimeTaskState]:
@@ -394,6 +497,96 @@ class HarnessRuntimeFacade:
         if not resolved:
             return None
         return self.task_runtime.checkpoint(resolved)
+
+    def detach_task(self, task_id: Optional[str] = None) -> Optional[TaskAttachment]:
+        if self.task_runtime is None:
+            return None
+        resolved = task_id or (
+            self._query.task_id if self._query is not None else "")
+        if not resolved:
+            return None
+        if self._query is not None and self._query.task_id == resolved:
+            return self._query.detach()
+        return self.task_runtime.attach(resolved)
+
+    def task_events(
+        self,
+        task_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 1_000,
+    ) -> Sequence[Mapping[str, object]]:
+        if self.task_runtime is None:
+            return ()
+        return self.task_runtime.read_events(
+            task_id,
+            after_sequence=after_sequence,
+            limit=limit,
+        )
+
+    def attach_task(self, task_id: str) -> Optional[TaskAttachment]:
+        if self.task_runtime is None:
+            return None
+        try:
+            return self.task_runtime.attach(task_id)
+        except KeyError:
+            return None
+
+    async def cancel_task(self, task_id: str) -> bool:
+        if self.task_runtime is None:
+            return False
+        return await self.task_runtime.cancel(task_id)
+
+    async def pause_task(self, task_id: str) -> bool:
+        if self.task_runtime is None:
+            return False
+        return await self.task_runtime.pause(task_id)
+
+    async def resume_task(self, task_id: str) -> bool:
+        if self.task_runtime is None:
+            return False
+        return await self.task_runtime.resume(task_id)
+
+    async def recover_task(
+        self,
+        task_id: str,
+        *,
+        detach: bool = True,
+    ) -> QuerySession:
+        if self.task_runtime is None:
+            raise RuntimeError("Runtime 未配置 task runtime")
+        if self.is_running:
+            raise RuntimeError("已有任务正在运行")
+        self._query = await self.query_engine.recover(
+            task_id, detach=detach)
+        self._task = self._query.task
+        return self._query
+
+    def compensate_side_effect(
+        self,
+        task_id: str,
+        effect_id: str,
+        *,
+        succeeded: bool,
+        compensation: str = "",
+        evidence: Optional[Mapping[str, object]] = None,
+    ) -> bool:
+        if self.task_runtime is None:
+            return False
+        try:
+            self.task_runtime.update_side_effect(
+                task_id,
+                effect_id,
+                (
+                    SideEffectStatus.COMPENSATED
+                    if succeeded else SideEffectStatus.COMPENSATION_FAILED
+                ),
+                compensation=compensation,
+                evidence=evidence,
+            )
+        except KeyError:
+            return False
+        return True
 
 
 # Public compatibility name retained while callers migrate to the explicit

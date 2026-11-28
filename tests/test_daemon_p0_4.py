@@ -12,7 +12,12 @@ from pathlib import Path
 import pytest
 
 from krelcode.app import build_daemon_agent_runtime
-from krelcode.daemon.client import DaemonClient, DaemonJobManager, DaemonSubagentManager
+from krelcode.daemon.client import (
+    DaemonClient,
+    DaemonJobManager,
+    DaemonSubagentManager,
+    DaemonTaskClient,
+)
 from krelcode.daemon.options import resolve_daemon_options
 from krelcode.daemon.paths import (
     DaemonPaths,
@@ -333,6 +338,71 @@ def test_subagent_daemon_spawn_wait_and_restart_audit(tmp_path, monkeypatch):
                 "agent.feed", {"agent_id": "a1", "after_sequence": 0})
             assert feed["latest_sequence"] >= 1
             assert any(item["kind"] == "run_finished" for item in feed["entries"])
+        finally:
+            await restarted.stop()
+
+    asyncio.run(scenario())
+
+
+def test_detached_task_survives_disconnect_and_daemon_restart(
+    tmp_path, monkeypatch,
+):
+    force_file_transport(monkeypatch)
+    (tmp_path / "krelcode.toml").write_text(
+        'default_provider = "mock"\n', encoding="utf-8")
+
+    async def wait_completed(client: DaemonTaskClient, task_id: str):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            attachment = await client.attach(task_id)
+            if attachment.get("status") == "completed":
+                return attachment
+            await asyncio.sleep(0.05)
+        raise AssertionError("detached task did not complete")
+
+    async def scenario():
+        server = DaemonServer(
+            tmp_path,
+            config={"default_provider": "mock"},
+            idle_timeout=0,
+            no_sandbox=True,
+            log=lambda _x: None,
+            agent_runtime_factory=build_daemon_agent_runtime,
+        )
+        await server.start()
+        client = DaemonTaskClient(tmp_path)
+        try:
+            submitted = await client.submit(
+                "durable daemon answer",
+                task_id="durable-task-1",
+                idempotency_key="durable-request-1",
+            )
+            assert submitted["task_id"] == "durable-task-1"
+            completed = await wait_completed(client, "durable-task-1")
+            assert completed["cursor"]["sequence"] > 0
+            events = await client.events("durable-task-1")
+            assert any(
+                item.get("event_type") in {"RunStarted", "RunFinished"}
+                for item in events
+            )
+        finally:
+            await server.stop()
+
+        restarted = DaemonServer(
+            tmp_path,
+            config={"default_provider": "mock"},
+            idle_timeout=0,
+            no_sandbox=True,
+            log=lambda _x: None,
+            agent_runtime_factory=build_daemon_agent_runtime,
+        )
+        await restarted.start()
+        try:
+            client2 = DaemonTaskClient(tmp_path)
+            attached = await client2.attach("durable-task-1")
+            assert attached["status"] == "completed"
+            replayed = await client2.events("durable-task-1")
+            assert replayed
         finally:
             await restarted.stop()
 

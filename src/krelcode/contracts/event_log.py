@@ -15,6 +15,9 @@ class EventLogEntry:
     session_id: str
     turn_id: str
     timestamp: float
+    task_id: str = ""
+    parent_task_id: str = ""
+    root_task_id: str = ""
     payload: Mapping[str, object] = field(default_factory=dict)
     previous_hash: str = ""
     digest: str = ""
@@ -42,6 +45,9 @@ class EventLogPort(Protocol):
         event_type: str = "",
         session_id: str = "",
         turn_id: str = "",
+        task_id: str = "",
+        parent_task_id: str = "",
+        root_task_id: str = "",
     ) -> EventLogAppendResult: ...
 
     def read(

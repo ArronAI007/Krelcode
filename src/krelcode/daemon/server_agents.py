@@ -104,6 +104,18 @@ class DaemonAgentService:
         return self._agents is not None
 
     def has_active_work(self) -> bool:
+        if self._agent_runtime is not None:
+            list_tasks = getattr(
+                self._agent_runtime.task_runtime, "list_tasks", None)
+            if callable(list_tasks):
+                try:
+                    if any(
+                        not state.status.terminal
+                        for state in list_tasks()
+                    ):
+                        return True
+                except Exception:
+                    pass
         if self._agents is None:
             return False
         try:
@@ -116,6 +128,17 @@ class DaemonAgentService:
 
     async def shutdown(self) -> None:
         if self._agent_runtime is not None:
+            preserve = getattr(
+                self._agent_runtime.task_runtime,
+                "preserve_for_restart",
+                None,
+            )
+            if callable(preserve):
+                try:
+                    await preserve()
+                except Exception as exc:
+                    self.log(
+                        f"[daemon:task] preserve for restart failed: {exc}")
             resources: RuntimeResourceRegistryPort = self._agent_runtime.resources
             try:
                 await resources.close_all()
@@ -195,6 +218,8 @@ class DaemonAgentService:
             self.agent_store.issues.append(f"agent event 持久化失败: {exc}")
 
     async def dispatch(self, operation: str, params: Dict[str, Any]) -> Any:
+        if operation.startswith("task."):
+            return await self._dispatch_task(operation, params)
         if operation == "list":
             return self.merged_agents()
         if operation == "definitions":
@@ -337,6 +362,97 @@ class DaemonAgentService:
             )
             return {"action": action, "agent": _handle_dict(handle)}
         raise RPCError(f"未知 agent operation: {operation}", code="unknown_operation")
+
+    async def _dispatch_task(
+        self,
+        operation: str,
+        params: Dict[str, Any],
+    ) -> Any:
+        runtime, _ = await self._ensure_runtime()
+        agent_runtime = runtime.agent_runtime
+        task_runtime = runtime.task_runtime
+        if agent_runtime is None:
+            raise RPCError(
+                "daemon task runtime 未配置", code="task_runtime_unavailable")
+        task_id = str(params.get("task_id") or "").strip()
+        if operation == "task.submit":
+            if task_id:
+                try:
+                    attachment = task_runtime.attach(task_id)
+                except KeyError:
+                    attachment = None
+                if attachment is not None:
+                    return attachment.to_dict()
+            message = _required(params, "message")
+            raw_application = params.get("application")
+            application = (
+                ApplicationRequest.from_mapping(raw_application)
+                if isinstance(raw_application, dict)
+                else ApplicationRequestFactory.from_input_source(
+                    "daemon",
+                    goal=message,
+                    task_shape=TaskShape.MULTI_AGENT,
+                    metadata={"rpc": "task.submit"},
+                )
+            )
+            query = agent_runtime.start_query(
+                message,
+                application_request=application,
+                task_id=task_id,
+                parent_task_id=str(params.get("parent_task_id") or ""),
+                idempotency_key=str(params.get("idempotency_key") or ""),
+            )
+            return query.detach().to_dict()
+        if operation == "task.list":
+            list_tasks = getattr(task_runtime, "list_tasks", None)
+            return [
+                _task_state_dict(item)
+                for item in (list_tasks() if callable(list_tasks) else ())
+            ]
+        if not task_id:
+            raise RPCError("缺少 task_id", code="invalid_request")
+        if operation == "task.attach":
+            return task_runtime.attach(task_id).to_dict()
+        if operation == "task.inspect":
+            state = agent_runtime.inspect_task(task_id)
+            return _task_state_dict(state) if state is not None else {}
+        if operation == "task.events":
+            return {
+                "task_id": task_id,
+                "events": list(agent_runtime.task_events(
+                    task_id,
+                    after_sequence=int(params.get("after_sequence") or 0),
+                    limit=int(params.get("limit") or 1_000),
+                )),
+            }
+        if operation == "task.cancel":
+            return {"cancelled": await agent_runtime.cancel_task(task_id)}
+        if operation == "task.pause":
+            return {"paused": await agent_runtime.pause_task(task_id)}
+        if operation == "task.resume":
+            return {"resumed": await agent_runtime.resume_task(task_id)}
+        if operation == "task.recover":
+            query = await agent_runtime.recover_task(task_id, detach=True)
+            return query.detach().to_dict()
+        if operation == "task.compensate":
+            effect_id = str(params.get("effect_id") or "").strip()
+            if not effect_id:
+                raise RPCError("缺少 effect_id", code="invalid_request")
+            evidence_raw = params.get("evidence")
+            return {
+                "updated": agent_runtime.compensate_side_effect(
+                    task_id,
+                    effect_id,
+                    succeeded=bool(params.get("succeeded", True)),
+                    compensation=str(params.get("compensation") or ""),
+                    evidence=(
+                        dict(evidence_raw)
+                        if isinstance(evidence_raw, dict) else {}
+                    ),
+                )
+            }
+        raise RPCError(
+            f"未知 task operation: {operation}", code="unknown_operation")
 
     def _durable_feed(
         self, agent_id: str, *, after_sequence: int, limit: int,
@@ -495,6 +611,35 @@ def _handle_dict(handle: Any) -> Dict[str, Any]:
         ),
         "budget_usage": dict(getattr(handle, "budget_usage", {}) or {}),
         "retry_count": getattr(handle, "retry_count", 0),
+    }
+
+
+def _task_state_dict(state: Any) -> Dict[str, Any]:
+    return {
+        "task_id": state.task_id,
+        "turn_id": state.turn_id,
+        "parent_task_id": state.parent_task_id,
+        "root_task_id": state.root_task_id,
+        "status": state.status.value,
+        "sequence": state.sequence,
+        "creator": state.creator,
+        "executor": state.executor,
+        "error": state.error,
+        "event_cursor": state.event_cursor.to_dict(),
+        "result": state.result.to_dict() if state.result is not None else None,
+        "error_info": (
+            state.error_info.to_dict()
+            if state.error_info is not None else None),
+        "continuation": (
+            state.continuation.to_dict()
+            if state.continuation is not None else None),
+        "wait_kind": state.wait_kind,
+        "wait_reason": state.wait_reason,
+        "resume_token": state.resume_token,
+        "side_effects": [item.to_dict() for item in state.side_effects],
+        "recovery_decision": (
+            state.recovery_decision.to_dict()
+            if state.recovery_decision is not None else None),
     }
 
 

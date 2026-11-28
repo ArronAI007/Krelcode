@@ -23,6 +23,9 @@ if TYPE_CHECKING:
     )
     from krelcode.agent.context.context_plan import ContextPlanSnapshot
     from krelcode.agent.turn.runtime_ports import CompactCheckpointResultPort
+    from krelcode.agent.turn.budget import BudgetLedger
+    from krelcode.agent.prompt.prompt_models import PromptPlan
+    from krelcode.contracts.application import ApplicationRequest
     from krelcode.contracts.agent import AgentContract
 
 class ContextPlanPort(Protocol):
@@ -205,6 +208,9 @@ class CheckpointLoopPort(Protocol):
     bus: EventBus
     prompt_profile_config: str
     agent_contract: Optional["AgentContract"]
+    application_request: Optional["ApplicationRequest"]
+    budget_ledger: Optional["BudgetLedger"]
+    last_prompt_plan: Optional["PromptPlan"]
 
     def rebuild_working_context(self) -> "WorkingContextSnapshot": ...
     def sync_context_attachments(

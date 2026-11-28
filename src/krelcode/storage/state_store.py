@@ -195,6 +195,25 @@ class LocalTransactionalStateStore(StateCheckpointStorePort):
             key=lambda item: (item.created_at, item.sequence),
         )
 
+    def latest_for_task(
+        self,
+        task_id: str,
+    ) -> Optional[StateCheckpointBundle]:
+        candidates = [
+            bundle for bundle in self._transaction_bundles()
+            if bundle.task_id == task_id
+        ]
+        candidates.extend(
+            bundle for bundle in self._legacy_bundles("")
+            if bundle.task_id == task_id
+        )
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda item: (item.created_at, item.sequence),
+        )
+
     def _write_manifest(
         self,
         path: Path,
